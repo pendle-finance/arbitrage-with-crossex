@@ -1123,13 +1123,14 @@ export function OpportunitiesPanel() {
     [flow, entryMode],
   );
 
-  // Two fixed rows of fields, each a label over one 35px control: the size on
-  // its own row with the clock, the perp assumptions under it. A free wrap
-  // split the two perp knobs across rows at common widths.
+  // One row of fields, each a label over one 35px control, that wraps when
+  // the card is too narrow. The perp knobs sit in their own wrapping group so
+  // a wrap moves them together; a flat wrap split them across rows.
   const field = 'flex flex-col items-start gap-1.5';
+  const row = 'flex flex-wrap items-end gap-x-8 gap-y-4';
   const controls = (
     <div className="mb-5 flex flex-col gap-4 rounded border border-wash/[0.14] bg-wash/[0.07] p-5">
-      <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
+      <div className={row}>
         <div className={field}>
           <div className={microLabelClass}>Size</div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1193,6 +1194,63 @@ export function OpportunitiesPanel() {
           </div>
         </div>
 
+        <div className={row}>
+          <div className={field}>
+            <div className={microLabelClass}>Perp entry</div>
+            <SegmentedToggle<EntryMode>
+              className="seg-info seg-lg"
+              ariaLabel="Perp entry mode"
+              value={entryMode}
+              onChange={(next) => {
+                setEntryMode(next);
+                persist({ entryMode: next });
+              }}
+              options={[
+                { value: 'both-market', label: ENTRY_MODE_LABEL['both-market'] },
+                { value: 'maker-hedge', label: ENTRY_MODE_LABEL['maker-hedge'] },
+              ]}
+            />
+          </div>
+
+          <div className={field}>
+            <div className={microLabelClass}>Perp exit cost</div>
+            <SegmentedToggle<ExitMode>
+              className="seg-info seg-lg"
+              ariaLabel="Perp legs at maturity"
+              value={exitMode}
+              onChange={(next) => {
+                setExitMode(next);
+                persist({ exitMode: next });
+              }}
+              options={[
+                { value: 'close', label: EXIT_MODE_LABEL.close },
+                { value: 'roll', label: EXIT_MODE_LABEL.roll },
+              ]}
+            />
+          </div>
+
+          {hasRebate && (
+            <div className={field}>
+              <div className={microLabelClass}>Settlement rebate</div>
+              <label
+                className="flex h-[35px] cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] text-ink-200"
+                title={`Credit this account's Boros settlement-fee rebate (${rebateAccountLabel(rebate as Rebate)}) into every APR, Return and profit.`}
+              >
+                <input
+                  type="checkbox"
+                  className="chk"
+                  checked={includeRebate}
+                  onChange={(e) => {
+                    setIncludeRebate(e.target.checked);
+                    persist({ includeRebate: e.target.checked });
+                  }}
+                />
+                Include rebate in APR
+              </label>
+            </div>
+          )}
+        </div>
+
         <span className="ml-auto flex h-[35px] items-center gap-2">
           {query.isPlaceholderData && <span className="text-xs text-ink-400">recomputing…</span>}
           <StrategyFreshness
@@ -1201,63 +1259,6 @@ export function OpportunitiesPanel() {
             onRefetch={() => void query.refetch()}
           />
         </span>
-      </div>
-
-      <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
-        <div className={field}>
-          <div className={microLabelClass}>Perp entry</div>
-          <SegmentedToggle<EntryMode>
-            className="seg-info seg-lg"
-            ariaLabel="Perp entry mode"
-            value={entryMode}
-            onChange={(next) => {
-              setEntryMode(next);
-              persist({ entryMode: next });
-            }}
-            options={[
-              { value: 'both-market', label: ENTRY_MODE_LABEL['both-market'] },
-              { value: 'maker-hedge', label: ENTRY_MODE_LABEL['maker-hedge'] },
-            ]}
-          />
-        </div>
-
-        <div className={field}>
-          <div className={microLabelClass}>Perp exit cost</div>
-          <SegmentedToggle<ExitMode>
-            className="seg-info seg-lg"
-            ariaLabel="Perp legs at maturity"
-            value={exitMode}
-            onChange={(next) => {
-              setExitMode(next);
-              persist({ exitMode: next });
-            }}
-            options={[
-              { value: 'close', label: EXIT_MODE_LABEL.close },
-              { value: 'roll', label: EXIT_MODE_LABEL.roll },
-            ]}
-          />
-        </div>
-
-        {hasRebate && (
-          <div className={field}>
-            <div className={microLabelClass}>Settlement rebate</div>
-            <label
-              className="flex h-[35px] cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] text-ink-200"
-              title={`Credit this account's Boros settlement-fee rebate (${rebateAccountLabel(rebate as Rebate)}) into every APR, Return and profit.`}
-            >
-              <input
-                type="checkbox"
-                className="chk"
-                checked={includeRebate}
-                onChange={(e) => {
-                  setIncludeRebate(e.target.checked);
-                  persist({ includeRebate: e.target.checked });
-                }}
-              />
-              Include rebate in APR
-            </label>
-          </div>
-        )}
       </div>
 
       {sizeErr && (
