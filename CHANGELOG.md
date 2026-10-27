@@ -41,6 +41,11 @@ Opportunities sizes every card by the capital you put in.
   type any amount, or pick a preset. Open this strategy fills the ticket at the
   card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
   another, and a note under the size says so.
+- **Perp legs stop at the largest position CrossEx takes.** CrossEx gives a perp its top
+  leverage only up to a size cap, for example $50M on Gate BTC and $1M on Gate HYPE, and
+  refuses an order past it. Before, Opportunities priced cards past that cap, and an open past
+  it failed after the first leg. Now a card sizes up to the cap and says "This pair takes at
+  most $X of capital". An open or a ticket size past the cap is refused before anything is sent.
 - **Smaller things.** Every leg row shows its venue icon. The open-only roll review names the
   spread market it opens, for example "ETH Spread HL-GATE".
 
