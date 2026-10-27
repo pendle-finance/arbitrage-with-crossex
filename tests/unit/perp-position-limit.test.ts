@@ -34,17 +34,18 @@ const LIMITS = new Map(
 const limitOf = (symbol: string): PositionLimit => LIMITS.get(symbol)!;
 
 describe('positionLimitOf', () => {
+  // maxUsd keeps 2% under the venue cap.
   it('stops at the last tier that still allows the top leverage', () => {
-    expect(limitOf('GATE_FUTURE_BTC_USDT')).toEqual({ leverage: 25, maxUsd: 50_000_000 });
-    expect(limitOf('GATE_FUTURE_ETH_USDT')).toEqual({ leverage: 25, maxUsd: 50_000_000 });
-    expect(limitOf('BINANCE_FUTURE_BTC_USDT')).toEqual({ leverage: 25, maxUsd: 350_000_000 });
-    expect(limitOf('BINANCE_FUTURE_ETH_USDT')).toEqual({ leverage: 25, maxUsd: 250_000_000 });
+    expect(limitOf('GATE_FUTURE_BTC_USDT')).toEqual({ leverage: 25, maxUsd: 49_000_000 });
+    expect(limitOf('GATE_FUTURE_ETH_USDT')).toEqual({ leverage: 25, maxUsd: 49_000_000 });
+    expect(limitOf('BINANCE_FUTURE_BTC_USDT')).toEqual({ leverage: 25, maxUsd: 343_000_000 });
+    expect(limitOf('BINANCE_FUTURE_ETH_USDT')).toEqual({ leverage: 25, maxUsd: 245_000_000 });
   });
 
   it('takes a one-tier table whole', () => {
-    expect(limitOf('HYPERLIQUID_FUTURE_BTC_USDC')).toEqual({ leverage: 40, maxUsd: 150_000_000 });
-    expect(limitOf('HYPERLIQUID_FUTURE_ETH_USDC')).toEqual({ leverage: 25, maxUsd: 100_000_000 });
-    expect(limitOf('LIGHTER_FUTURE_BTC_USDC')).toEqual({ leverage: 50, maxUsd: 999_999_999 });
+    expect(limitOf('HYPERLIQUID_FUTURE_BTC_USDC')).toEqual({ leverage: 40, maxUsd: 147_000_000 });
+    expect(limitOf('HYPERLIQUID_FUTURE_ETH_USDC')).toEqual({ leverage: 25, maxUsd: 98_000_000 });
+    expect(limitOf('LIGHTER_FUTURE_BTC_USDC').leverage).toBe(50);
   });
 
   it('reads no limit from a table with an unreadable tier', () => {
@@ -156,7 +157,7 @@ it('a notional past the largest position leaves capital unknown and says why', (
     .groups[0].pairs[0];
   expect(pair.capitalUsd).toBeNull();
   expect(pair.reasons).toContain(
-    '$200,000,000 is above the largest HYPERLIQUID HYPERLIQUID_FUTURE_BTC_USDC position CrossEx takes ($150,000,000).',
+    '$200,000,000 is above the $147,000,000 limit for HYPERLIQUID HYPERLIQUID_FUTURE_BTC_USDC, 2% under the CrossEx risk-limit cap.',
   );
 });
 

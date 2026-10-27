@@ -21,7 +21,7 @@ import {
   resolveReferencePrice,
   type Side,
 } from './orders';
-import type { PositionLimit } from './positionLimit';
+import { breaksLimit, LIMIT_NOTE, type PositionLimit } from './positionLimit';
 
 // ---------------------------------------------------------------------------
 // Action inputs
@@ -353,11 +353,11 @@ export async function resolveActions(
       if (max > 0 && input.leverage > max) {
         violations.push({ code: 'leverage-exceeds-max', message: `leverage ${input.leverage}x exceeds max ${max}x for ${symbol}` });
       }
-      const afterUsd = positionAfterUsd(positions, symbol, input.side, qty, estNotional);
-      if (limit && afterUsd !== null && afterUsd > limit.maxUsd) {
+      const size = positionSizeUsd(positions, symbol, input.side, qty, estNotional);
+      if (limit && size && !input.reduceOnly && breaksLimit(size.before, size.after, limit)) {
         violations.push({
           code: 'exceeds-max-position',
-          message: `this open takes the ${symbol} position to ${usd(afterUsd)}, above the largest CrossEx takes (${usd(limit.maxUsd)})`,
+          message: `this open takes the ${symbol} position to ${usd(size.after)}, above its ${usd(limit.maxUsd)} limit (${LIMIT_NOTE})`,
         });
       }
     }
@@ -543,18 +543,20 @@ async function resolveClose(
 
 const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
 
-/** USD size of the symbol's position once this open fills: the held signed qty
- * plus the order's, at the order's price. Null when the order has no size yet. */
-function positionAfterUsd(
+/** USD size of the symbol's position before and after this open fills, at the
+ * order's price. Null when the order has no size yet. */
+function positionSizeUsd(
   positions: Array<{ symbol?: string; positionQty?: string; positionSide?: string }>,
   symbol: string,
   side: Side,
   qty: string,
   estNotional: number,
-): number | null {
+): { before: number; after: number } | null {
   const q = Number(qty);
   if (!(q > 0) || !(estNotional > 0)) return null;
-  return Math.abs(heldQty(positions, symbol) + (side === 'BUY' ? q : -q)) * (estNotional / q);
+  const price = estNotional / q;
+  const held = heldQty(positions, symbol);
+  return { before: Math.abs(held) * price, after: Math.abs(held + (side === 'BUY' ? q : -q)) * price };
 }
 
 function sizingViolationCode(err: unknown): Violation['code'] {

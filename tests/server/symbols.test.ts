@@ -110,9 +110,10 @@ describe('GET /api/symbols', () => {
     expect(data.symbol).toBe('GATE_FUTURE_ETH_USDT');
     expect(data.exchange).toBe('GATE');
     expect(data.tickSize).toBe('0.01');
-    // 25x on tiers 1-4 (to $50M), 5x on tiers 5-6: CrossEx never reaches the 5x tiers.
+    // 25x on tiers 1-4 (to $50M), 5x on tiers 5-6: CrossEx never reaches the 5x
+    // tiers. The terminal stops 2% under $50M.
     expect(data.leverageMax).toBe(25);
-    expect(data.positionMaxUsd).toBe(50_000_000);
+    expect(data.positionMaxUsd).toBe(49_000_000);
   });
 
   it('GET /api/symbols/:symbol returns leverageMax 0 on no tiers, and does not cache that 0', async () => {

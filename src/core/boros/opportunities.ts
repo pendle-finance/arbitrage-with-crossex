@@ -38,7 +38,7 @@ import { walkBook } from '../estimate/fill';
 import { resolveFeeRates, resolveVenueFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
 import { prettyVenue } from '../../../web/src/lib/fmt';
-import type { PositionLimit } from '../positionLimit';
+import { LIMIT_NOTE, type PositionLimit } from '../positionLimit';
 import { isSpreadMarket, type SpreadSide } from './spread';
 import { normalizeVenue, SECONDS_IN_YEAR } from './venue';
 
@@ -266,7 +266,7 @@ const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
  * book walk only adds to N × rate — so there is exactly one answer, and
  * halving a bracket around it converges on it. `capitalAt` is the pair's own
  * pricing, so the capital the solve lands on IS the capital the pair reports.
- * `maxNotional`, the largest position CrossEx takes on a perp leg, is the
+ * `maxNotional`, the smaller perp leg's position limit, is the
  * answer when the target needs more.
  * Null when the pair's capital can't be modelled (a missing leverage cap or
  * margin coefficient — nothing that depends on size).
@@ -311,7 +311,7 @@ export function priceAtSize<P extends { capitalUsd: number | null; reasons: stri
       ...pair,
       reasons: [
         ...pair.reasons,
-        `This pair takes at most ${usd(pair.capitalUsd)} of capital, not ${usd(size.capitalUsd)}. CrossEx takes no perp position above ${usd(notional)} on one of its legs.`,
+        `This pair takes at most ${usd(pair.capitalUsd)} of capital, not ${usd(size.capitalUsd)}. One of its perps stops at ${usd(notional)}, ${LIMIT_NOTE}.`,
       ],
     };
   }
@@ -940,7 +940,7 @@ function buildPair(
     }
     if (notionalUsd > limit.maxUsd) {
       reasons.push(
-        `${usd(notionalUsd)} is above the largest ${leg.crossexVenue} ${leg.crossexSymbol} position CrossEx takes (${usd(limit.maxUsd)}).`,
+        `${usd(notionalUsd)} is above the ${usd(limit.maxUsd)} limit for ${leg.crossexVenue} ${leg.crossexSymbol}, ${LIMIT_NOTE}.`,
       );
       return null;
     }

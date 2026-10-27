@@ -54,6 +54,19 @@ function simRules(): unknown[] {
   return [row(A_CONTRACT), row(B_CONTRACT)];
 }
 
+/**
+ * Fallbacks for the reads the position-cap check makes on every leg that grows
+ * a position: a cap far above any test size, no position, no resting order.
+ * nock answers with the first stub that matches, so call this after a test's
+ * own stubs.
+ */
+function capReads(): void {
+  const cap = (symbol: string) => ({ symbol, tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '50' }] });
+  gate().get('/api/v4/crossex/rule/risk_limits').query(true).times(20).reply(200, [cap(A_CONTRACT), cap(B_CONTRACT)]);
+  gate().get('/api/v4/crossex/positions').query(true).times(20).reply(200, []);
+  gate().get('/api/v4/crossex/open_orders').query(true).times(20).reply(200, []);
+}
+
 function mkApp(): { app: FastifyInstance; store: Store; venue: FakeVenue; clock: VirtualClock; loop: LoopDeps } {
   const store = new Store(':memory:');
   const venue = new FakeVenue();
@@ -81,6 +94,7 @@ describe('POST /api/deals', () => {
     mockGateGet('/rule/symbols', { body: simRules() });
     mockGateGet('/accounts', { fixture: 'account.json' });
 
+    capReads();
     const res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
     expect(res.statusCode, res.body).toBe(202);
     expect(res.json().data).toEqual({ id: 'deal-000001' });
@@ -114,6 +128,7 @@ describe('POST /api/deals', () => {
     const running = runningJob();
     jobs.write(running);
 
+    capReads();
     let res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
@@ -201,6 +216,7 @@ describe('POST /api/deals', () => {
         return fixture('account.json');
       });
 
+    capReads();
     const res = await t.post();
 
     expect(res.statusCode, res.body).toBe(202);
@@ -231,6 +247,7 @@ describe('POST /api/deals', () => {
     t.clock.advance(1);
     mockGateGet('/rule/symbols', { body: simRules() });
     mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
 
     const res = await t.post();
 
@@ -243,6 +260,7 @@ describe('POST /api/deals', () => {
     app = w.app;
     mockGateGet('/rule/symbols', { body: simRules() });
     mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
     await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
     const dup = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
     expect(dup.statusCode).toBe(202);
@@ -258,6 +276,7 @@ describe('POST /api/deals', () => {
     mockGateGet('/rule/symbols', { body: simRules() });
     mockGateGet('/accounts', { fixture: 'account.json' });
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -271,6 +290,7 @@ describe('POST /api/deals', () => {
   it('refuses a coin outside the supported set before it ever reads a venue rule', async () => {
     const w = mkApp();
     app = w.app;
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -292,6 +312,7 @@ describe('POST /api/deals', () => {
   it('refuses when only the hedge leg is on an unsupported coin', async () => {
     const w = mkApp();
     app = w.app;
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -313,6 +334,7 @@ describe('POST /api/deals', () => {
     ];
     for (const payload of bads) {
       mockGateGet('/rule/symbols', { body: simRules() });
+      capReads();
       const res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload });
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
     }
@@ -328,6 +350,7 @@ describe('POST /api/deals', () => {
     const w = mkApp();
     app = w.app;
     mockGateGet('/rule/symbols', { body: simRules() });
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -360,6 +383,7 @@ describe('POST /api/deals', () => {
     ];
     for (const c of cases) {
       mockGateGet('/rule/symbols', { body: rulesWithB(c.over) });
+      capReads();
       const res = await app.inject({
         method: 'POST',
         url: '/api/deals',
@@ -391,6 +415,7 @@ describe('POST /api/deals', () => {
     ];
     for (const c of cases) {
       mockGateGet('/rule/symbols', { body: withCaps(c.over, c.symbol) });
+      capReads();
       const res = await app.inject({
         method: 'POST',
         url: '/api/deals',
@@ -423,6 +448,7 @@ describe('POST /api/deals', () => {
         if (levSets.length === 1) jobs.write(runningJob());
         return [200, body];
       });
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -469,6 +495,7 @@ describe('POST /api/deals', () => {
         }
         return [200, body];
       });
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -491,6 +518,7 @@ describe('POST /api/deals', () => {
     mockGateGet('/rule/risk_limits', { body: [{ symbol: A_CONTRACT, tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '50' }] }] });
     gate().get(/positions\/leverage/).reply(200, { [A_CONTRACT]: '10' }); // previous value
     gate().post('/api/v4/crossex/positions/leverage').reply(400, { label: 'RISK_LIMIT', message: 'too high' });
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -512,6 +540,7 @@ describe('POST /api/deals', () => {
       mockGateGet('/accounts', { fixture: 'account.json' });
       mockGateGet('/positions', { body: [], times: 5 });
       mockGateGet('/rule/risk_limits', { body: [{ symbol: A_CONTRACT, tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '20' }] }] });
+      capReads();
       const res = await app.inject({
         method: 'POST',
         url: '/api/deals',
@@ -555,6 +584,7 @@ describe('POST /api/deals', () => {
         return sets.length === 2 ? [400, { label: 'RISK_LIMIT', message: 'too high' }] : [200, reqBody];
       });
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -583,6 +613,7 @@ describe('POST /api/deals', () => {
         return [200, {}];
       });
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -619,6 +650,7 @@ describe('POST /api/deals', () => {
     });
     gate().get(/positions\/leverage/).reply(200, { [A_CONTRACT]: '10' });
     gate().post('/api/v4/crossex/positions/leverage').reply(200, { symbol: A_CONTRACT, leverage: '50' });
+    capReads();
 
     const second = await post();
     expect(second.statusCode, second.body).toBe(202);
@@ -651,6 +683,7 @@ describe('POST /api/deals', () => {
         return [200, { symbol: body.symbol, leverage: sets.length === 2 ? '10' : body.leverage }];
       });
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -684,6 +717,7 @@ describe('POST /api/deals', () => {
         return [200, {}];
       });
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -715,6 +749,7 @@ describe('POST /api/deals', () => {
       });
     gate().post('/api/v4/crossex/positions/leverage').reply(200, {});
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -739,7 +774,7 @@ describe('POST /api/deals', () => {
     },
   ];
 
-  it.each([50, 10])('refuses a deal that takes the position past the largest CrossEx takes (%dx)', async (lev) => {
+  it.each([50, 10])('refuses a deal that takes the position past its limit (%dx)', async (lev) => {
     const w = mkApp();
     app = w.app;
     mockGateGet('/rule/symbols', { body: simRules() });
@@ -749,6 +784,7 @@ describe('POST /api/deals', () => {
     mockGateGet('/positions', { body: [{ symbol: A_CONTRACT, position_qty: '0.3' }], times: 5 });
     mockGateGet('/rule/risk_limits', { body: tieredLimits });
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -758,7 +794,7 @@ describe('POST /api/deals', () => {
 
     expect(res.statusCode, res.body).toBe(400);
     expect(res.json().error.message).toBe(
-      `this deal takes the ${A_CONTRACT} position to $1,130, above the largest CrossEx takes ($1,000) — nothing was sent`,
+      `this deal takes the ${A_CONTRACT} position to $1,130, above its $980 limit (2% under the CrossEx risk-limit cap) — nothing was sent`,
     );
     expect(w.store.listPairs()).toHaveLength(0);
   });
@@ -774,6 +810,7 @@ describe('POST /api/deals', () => {
     gate().get(/positions\/leverage/).times(2).reply(200, { [A_CONTRACT]: '50' });
     gate().post('/api/v4/crossex/positions/leverage').reply(200, { symbol: A_CONTRACT, leverage: '50' });
 
+    capReads();
     const res = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -782,6 +819,92 @@ describe('POST /api/deals', () => {
     });
 
     expect(res.statusCode, res.body).toBe(202);
+  });
+
+  // The venue counts resting orders, so a deal still working counts too. Neither
+  // deal sends a leverage: the cap is checked on every leg that grows a position.
+  it('counts the unfilled part of a working deal on the same contract', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules(), times: 2 });
+    mockGateGet('/accounts', { fixture: 'account.json', times: 2 });
+    mockGateGet('/rule/risk_limits', { body: tieredLimits });
+    capReads();
+    const post = (id: string) =>
+      app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload({ id, qty: '0.24' }) });
+
+    expect((await post('deal-000001')).statusCode).toBe(202);
+    const second = await post('deal-000002');
+
+    expect(second.statusCode, second.body).toBe(400);
+    expect(second.json().error.message).toBe(
+      `this deal takes the ${A_CONTRACT} position to $1,200, above its $980 limit (2% under the CrossEx risk-limit cap) — nothing was sent`,
+    );
+    expect(w.store.listPairs()).toHaveLength(1);
+  });
+
+  it('counts an order resting on the contract that no deal placed', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/rule/risk_limits', { body: tieredLimits });
+    // 0.2 BUY resting ($500) counts; the SELL and the reduce-only BUY do not.
+    mockGateGet('/open_orders', {
+      body: [
+        { symbol: A_CONTRACT, text: 'web', side: 'BUY', qty: '0.2', executed_qty: '0', reduce_only: 'false' },
+        { symbol: A_CONTRACT, text: 'web', side: 'SELL', qty: '5', executed_qty: '0', reduce_only: 'false' },
+        { symbol: A_CONTRACT, text: 'web', side: 'BUY', qty: '5', executed_qty: '0', reduce_only: 'true' },
+      ],
+    });
+    capReads();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({ qty: '0.24' }),
+    });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error.message).toMatch(/position to \$1,100, above its \$980 limit/);
+  });
+
+  it('lets a trade that shrinks a position above the cap through', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/rule/risk_limits', { body: tieredLimits });
+    // Holding 0.6 long ($1,500, above the cap): selling 0.152 leaves $1,120.
+    mockGateGet('/positions', { body: [{ symbol: A_CONTRACT, position_qty: '0.6' }], times: 5 });
+    capReads();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: { id: 'deal-000001', a: { symbol: A_CONTRACT, side: 'SELL' }, qty: '0.152', execution: 'taker' },
+    });
+
+    expect(res.statusCode, res.body).toBe(202);
+  });
+
+  it('refuses when no price can size the check', async () => {
+    const w = mkApp();
+    app = w.app;
+    w.venue.refPrices.delete(A_CONTRACT);
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+
+    const res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error.message).toBe(
+      `no price for ${A_CONTRACT} to check the position size — nothing was sent; try again`,
+    );
+    expect(w.store.listPairs()).toHaveLength(0);
   });
 
   it('creates a reduce-only close deal validated against the live position', async () => {
@@ -793,6 +916,7 @@ describe('POST /api/deals', () => {
       times: 2,
     });
     // Wrong side → 400
+    capReads();
     const bad = await app.inject({
       method: 'POST',
       url: '/api/deals',
@@ -846,6 +970,7 @@ describe('deal commands + alerts', () => {
     app = w.app;
     mockGateGet('/rule/symbols', { body: simRules() });
     mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
     await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
     await tickPair(w.loop, 'deal-000001'); // maker resting
     return { ...w, id: 'deal-000001' };
