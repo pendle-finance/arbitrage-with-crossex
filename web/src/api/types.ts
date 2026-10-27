@@ -735,6 +735,8 @@ export interface SymbolRule {
 /** GET /api/symbols/:symbol — the rule plus the max settable leverage. */
 export interface SymbolDetail extends SymbolRule {
   leverageMax: number;
+  /** The largest position CrossEx takes in this symbol, in USD; 0 = unknown. */
+  positionMaxUsd: number;
 }
 
 /** GET/PUT /api/leverage/:symbol. */
@@ -846,6 +848,7 @@ export interface Violation {
     | 'price-missing'
     | 'price-invalid'
     | 'leverage-exceeds-max'
+    | 'exceeds-max-position'
     | 'slippage-invalid'
     | 'ref-price-unavailable'
     | 'no-position'

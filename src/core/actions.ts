@@ -13,13 +13,15 @@ import type { Clients } from './clients';
 import { DEFAULT_STEP, formatLimitPrice, formatRestPrice, parseSymbol, roundToStep } from './numbers';
 import {
   direction,
-  getLeverageMax,
+  getPositionLimits,
+  heldQty,
   isMultipleOf,
   marketableClosePrice,
   resolveQty,
   resolveReferencePrice,
   type Side,
 } from './orders';
+import type { PositionLimit } from './positionLimit';
 
 // ---------------------------------------------------------------------------
 // Action inputs
@@ -132,6 +134,7 @@ export interface Violation {
     | 'price-missing'
     | 'price-invalid'
     | 'leverage-exceeds-max'
+    | 'exceeds-max-position'
     | 'slippage-invalid'
     | 'ref-price-unavailable'
     | 'no-position'
@@ -211,13 +214,13 @@ export async function resolveActions(
     : { body: [] as RuleSymbol[] };
   const rules = new Map((ruleList ?? []).map((r) => [r.symbol, r]));
 
-  const needsPositions = actions.some((a) => a.kind === 'close-position');
+  const needsPositions = actions.some((a) => a.kind === 'close-position' || ('leverage' in a && a.leverage));
   const positions = needsPositions ? ((await crossEx.listCrossexPositions()).body ?? []) : [];
 
   const levSymbols = [
     ...new Set(actions.filter((a) => 'leverage' in a && a.leverage).map((a) => a.symbol.toUpperCase())),
   ];
-  const levMax = levSymbols.length ? await getLeverageMax(crossEx, levSymbols) : new Map<string, number>();
+  const limits = levSymbols.length ? await getPositionLimits(crossEx, levSymbols) : new Map<string, PositionLimit | null>();
 
   // Reference prices per distinct pair, resolved lazily (only when sizing needs one).
   const refCache = new Map<string, { value: number; source: string } | null>();
@@ -340,13 +343,22 @@ export async function resolveActions(
       qty = input.qty; // symbol unknown — keep input for display; violations already block execution
     }
 
-    // Leverage.
+    // Leverage, and the largest position CrossEx takes at it: an order past
+    // that size is refused at any leverage.
     let leverage: ResolvedAction['leverage'];
     if (input.leverage) {
-      const max = levMax.get(symbol) ?? 0;
+      const limit = limits.get(symbol);
+      const max = limit?.leverage ?? 0;
       leverage = { requested: input.leverage, max };
       if (max > 0 && input.leverage > max) {
         violations.push({ code: 'leverage-exceeds-max', message: `leverage ${input.leverage}x exceeds max ${max}x for ${symbol}` });
+      }
+      const afterUsd = positionAfterUsd(positions, symbol, input.side, qty, estNotional);
+      if (limit && afterUsd !== null && afterUsd > limit.maxUsd) {
+        violations.push({
+          code: 'exceeds-max-position',
+          message: `this open takes the ${symbol} position to ${usd(afterUsd)}, above the largest CrossEx takes (${usd(limit.maxUsd)})`,
+        });
       }
     }
 
@@ -527,6 +539,22 @@ async function resolveClose(
     violations,
     warnings,
   };
+}
+
+const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
+
+/** USD size of the symbol's position once this open fills: the held signed qty
+ * plus the order's, at the order's price. Null when the order has no size yet. */
+function positionAfterUsd(
+  positions: Array<{ symbol?: string; positionQty?: string; positionSide?: string }>,
+  symbol: string,
+  side: Side,
+  qty: string,
+  estNotional: number,
+): number | null {
+  const q = Number(qty);
+  if (!(q > 0) || !(estNotional > 0)) return null;
+  return Math.abs(heldQty(positions, symbol) + (side === 'BUY' ? q : -q)) * (estNotional / q);
 }
 
 function sizingViolationCode(err: unknown): Violation['code'] {

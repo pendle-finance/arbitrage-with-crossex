@@ -28,6 +28,7 @@ import {
 } from '../../src/core/boros/opportunities';
 import { SECONDS_IN_YEAR } from '../../src/core/boros/venue';
 import type { NormalizedBook } from '../../src/core/estimate/books';
+import type { PositionLimit } from '../../src/core/positionLimit';
 import { imInputs } from '../helpers/boros-fixtures';
 
 const NOW = 1_752_000_000;
@@ -42,6 +43,9 @@ const FLOOR = 1.00005 ** (770 * 2) - 1;
 /** Venue max leverage, deliberately different per venue. */
 const HL_LEVERAGE = 10;
 const BN_LEVERAGE = 20;
+/** Venue max leverage per symbol, with no practical cap on the position. */
+const limits = (rows: [string, number][]): Map<string, PositionLimit> =>
+  new Map(rows.map(([symbol, leverage]) => [symbol, { leverage, maxUsd: 1e15 }]));
 
 const HL_SYMBOL = 'HYPERLIQUID_FUTURE_ETH_USDC';
 const BN_SYMBOL = 'BINANCE_FUTURE_ETH_USDT';
@@ -113,7 +117,7 @@ function input(over: Partial<BuildOpportunitiesInput> = {}): BuildOpportunitiesI
       ['BINANCE:ETH', BN_SYMBOL],
     ]),
     crossexVenues: new Set(['BINANCE', 'BYBIT', 'GATE', 'HYPERLIQUID', 'KRAKEN', 'LIGHTER', 'OKX']),
-    leverageMaxBySymbol: new Map([
+    positionLimitBySymbol: limits([
       [HL_SYMBOL, HL_LEVERAGE],
       [BN_SYMBOL, BN_LEVERAGE],
     ]),
@@ -477,7 +481,7 @@ describe('buildOpportunities — capital and the APR on capital', () => {
 
   it('a missing leverage row nulls capital only, naming the venue and symbol', () => {
     const out = buildOpportunities(
-      input({ leverageMaxBySymbol: new Map([[HL_SYMBOL, HL_LEVERAGE]]) }),
+      input({ positionLimitBySymbol: limits([[HL_SYMBOL, HL_LEVERAGE]]) }),
       opts(),
     );
     const pair = out.groups[0].pairs[0];
@@ -769,7 +773,7 @@ describe('buildOpportunities — degraded modes', () => {
           ['HYPERLIQUID:ETH', HL_SYMBOL],
           ['LIGHTER:ETH', LT_SYMBOL],
         ]),
-        leverageMaxBySymbol: new Map([
+        positionLimitBySymbol: limits([
           [HL_SYMBOL, HL_LEVERAGE],
           [LT_SYMBOL, 50],
         ]),
@@ -805,7 +809,7 @@ describe('buildOpportunities — degraded modes', () => {
           ['BINANCE:ETH', BN_SYMBOL],
           ['LIGHTER:ETH', LT_SYMBOL],
         ]),
-        leverageMaxBySymbol: new Map([
+        positionLimitBySymbol: limits([
           [HL_SYMBOL, HL_LEVERAGE],
           [BN_SYMBOL, BN_LEVERAGE],
           [LT_SYMBOL, 50],
@@ -865,7 +869,7 @@ describe('buildOpportunities — degraded modes', () => {
     const out = buildOpportunities(
       input({
         symbolsByVenueBase: new Map(),
-        leverageMaxBySymbol: new Map(),
+        positionLimitBySymbol: new Map(),
         venueBooks: new Map([
           ['HYPERLIQUID:ETH', perpBook(0.1)],
           ['BINANCE:ETH', perpBook(0.1)],
@@ -997,7 +1001,7 @@ describe('buildOpportunities — ranking keys on the capital basis', () => {
       ]),
       // OKX has no risk-limit row → every pair touching it prices on notional
       // only, even though its notional spread is the widest in the group.
-      leverageMaxBySymbol: new Map([
+      positionLimitBySymbol: limits([
         [HL_SYMBOL, HL_LEVERAGE],
         [BN_SYMBOL, BN_LEVERAGE],
       ]),
@@ -1047,7 +1051,7 @@ describe('buildOpportunities — ranking keys on the capital basis', () => {
           ['HYPERLIQUID:SOL', HL_SOL],
           ['BINANCE:SOL', BN_SOL],
         ]),
-        leverageMaxBySymbol: new Map([
+        positionLimitBySymbol: limits([
           [HL_SYMBOL, HL_LEVERAGE],
           [BN_SYMBOL, BN_LEVERAGE],
           [HL_SOL, 100],
@@ -1135,7 +1139,7 @@ describe('buildOpportunities — capital target', () => {
 
   it('a pair whose capital cannot be modelled says it cannot be sized', () => {
     const pair = buildOpportunities(
-      input({ leverageMaxBySymbol: new Map([[HL_SYMBOL, HL_LEVERAGE]]) }),
+      input({ positionLimitBySymbol: limits([[HL_SYMBOL, HL_LEVERAGE]]) }),
       opts({ capitalUsd: 100_000 }),
     ).groups[0].pairs[0];
     expect(pair.capitalUsd).toBeNull();

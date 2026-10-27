@@ -9,7 +9,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { CoreError } from '../../core/errors';
 import { formatRestPrice, parseSymbol } from '../../core/numbers';
-import { setLeverage } from '../../core/orders';
+import { heldQty, setLeverage } from '../../core/orders';
 import { resolveDeal, type DealRequest } from '../../engine/create';
 import { project } from '../../engine/decide';
 import { commands } from '../../engine/loop';
@@ -18,11 +18,13 @@ import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { refuse } from '../errorReply';
-import { leverageMaxFor } from './leverage';
+import { positionLimitFor } from './leverage';
 import { conflict } from './rebalance';
 
 const TRANSFER_SETTLE_MS = 5_000;
 const TRANSFER_SETTLING_TEXT = 'Deals wait until Gate takes the transfer. Try again in a few seconds.';
+
+const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
 
 // deps.engine is non-null here: the deals routes are registered only when the
 // engine exists (never in the credential-free public mode — see buildApp).
@@ -101,9 +103,9 @@ export function dealsRoutes(deps: AppDeps) {
 
       // Leverage phase: applied BEFORE the intent exists — a failure aborts with
       // nothing created and nothing sent (mirrors the abort-pre-send semantics).
-      const levs: Array<{ contract: string; lev: unknown }> = [];
-      if (body.leverage?.a) levs.push({ contract: row.a.contract, lev: body.leverage.a });
-      if (body.leverage?.b && row.b) levs.push({ contract: row.b.contract, lev: body.leverage.b });
+      const levs: Array<{ contract: string; side: 'BUY' | 'SELL'; lev: unknown }> = [];
+      if (body.leverage?.a) levs.push({ contract: row.a.contract, side: row.a.side, lev: body.leverage.a });
+      if (body.leverage?.b && row.b) levs.push({ contract: row.b.contract, side: row.b.side, lev: body.leverage.b });
 
       // Validate EVERY leg before touching the venue, with the same rules the
       // sibling PUT /leverage/:symbol enforces. These arrived as raw JSON: with
@@ -112,14 +114,26 @@ export function dealsRoutes(deps: AppDeps) {
       // CLAMPED by the venue while create.ts's preflight sized initial margin
       // against the number we asked for — under-reserving, which is exactly how
       // a hedge leg gets rejected for margin and leaves the other leg naked.
-      for (const { contract, lev } of levs) {
+      //
+      // CrossEx also refuses an order that takes the position past the symbol's
+      // largest size, at any leverage — and it does so after the order call
+      // succeeds, when the other leg may already have filled. So the position
+      // the deal leaves is checked here, priced like the venue prices it.
+      for (const { contract, side, lev } of levs) {
         if (typeof lev !== 'number' || !Number.isFinite(lev)) {
           throw new CoreError(`leverage for ${contract} must be a number`, 'validation');
         }
-        const leverageMax = await leverageMaxFor(deps, contract, false);
-        if (lev < 1 || lev > leverageMax) {
+        const limit = await positionLimitFor(deps, contract, false);
+        if (lev < 1 || lev > limit.leverage) {
+          throw new CoreError(`leverage ${lev}x must be between 1 and ${limit.leverage}x for ${contract}`, 'leverage');
+        }
+        // No price reads as 0: the check passes and the venue's own stays.
+        const price = Number(await deps.engine!.venue.refPrice(contract).catch(() => null));
+        const qty = Number(row.targetQty);
+        const afterUsd = Math.abs(heldQty(await getPositions(), contract) + (side === 'BUY' ? qty : -qty)) * price;
+        if (afterUsd > limit.maxUsd) {
           throw new CoreError(
-            `leverage ${lev}x must be between 1 and ${leverageMax}x for ${contract}`,
+            `this deal takes the ${contract} position to ${usd(afterUsd)}, above the largest CrossEx takes (${usd(limit.maxUsd)}) — nothing was sent`,
             'leverage',
           );
         }

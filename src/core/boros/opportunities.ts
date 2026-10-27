@@ -38,6 +38,7 @@ import { walkBook } from '../estimate/fill';
 import { resolveFeeRates, resolveVenueFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
 import { prettyVenue } from '../../../web/src/lib/fmt';
+import type { PositionLimit } from '../positionLimit';
 import { isSpreadMarket, type SpreadSide } from './spread';
 import { normalizeVenue, SECONDS_IN_YEAR } from './venue';
 
@@ -233,9 +234,9 @@ export interface BuildOpportunitiesInput {
   /** `VENUE:BASE` → live CrossEx symbol. */
   symbolsByVenueBase: Map<string, string>;
   crossexVenues: ReadonlySet<string>;
-  /** CrossEx symbol → venue max leverage; absent = the risk-limit read failed
-   * or wasn't attempted, which nulls that pair's capital. */
-  leverageMaxBySymbol: Map<string, number>;
+  /** CrossEx symbol → venue max leverage and largest position; absent = the
+   * risk-limit read failed or wasn't attempted, which nulls that pair's capital. */
+  positionLimitBySymbol: Map<string, PositionLimit>;
   /** /crossex/fee rows; null = the schedule is unavailable. */
   feeRows: VenueFeeRow[] | null;
   nowSec: number;
@@ -265,21 +266,25 @@ const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
  * book walk only adds to N × rate — so there is exactly one answer, and
  * halving a bracket around it converges on it. `capitalAt` is the pair's own
  * pricing, so the capital the solve lands on IS the capital the pair reports.
+ * `maxNotional`, the largest position CrossEx takes on a perp leg, is the
+ * answer when the target needs more.
  * Null when the pair's capital can't be modelled (a missing leverage cap or
  * margin coefficient — nothing that depends on size).
  */
 export function notionalForCapital(
   capitalAt: (notionalUsd: number) => number | null,
   targetCapital: number,
+  maxNotional = Infinity,
 ): number | null {
-  if (capitalAt(targetCapital) === null) return null;
+  let hi = Math.min(targetCapital, maxNotional);
+  if (capitalAt(hi) === null) return null;
   const below = (n: number): boolean => (capitalAt(n) ?? Infinity) < targetCapital;
   let lo = 0;
-  let hi = targetCapital;
-  for (let i = 0; i < 60 && below(hi); i += 1) {
+  for (let i = 0; i < 60 && below(hi) && hi < maxNotional; i += 1) {
     lo = hi;
-    hi *= 2;
+    hi = Math.min(hi * 2, maxNotional);
   }
+  if (below(hi)) return hi;
   for (let i = 0; i < 60 && hi - lo > hi * 1e-9; i += 1) {
     const mid = (lo + hi) / 2;
     if (below(mid)) lo = mid;
@@ -295,10 +300,21 @@ export function notionalForCapital(
 export function priceAtSize<P extends { capitalUsd: number | null; reasons: string[] }>(
   at: (notionalUsd: number) => P,
   size: { notionalUsd: number; capitalUsd?: number },
+  maxNotional = Infinity,
 ): P {
   if (size.capitalUsd === undefined) return at(size.notionalUsd);
-  const notional = notionalForCapital((n) => at(n).capitalUsd, size.capitalUsd);
-  if (notional !== null) return at(notional);
+  const notional = notionalForCapital((n) => at(n).capitalUsd, size.capitalUsd, maxNotional);
+  if (notional !== null) {
+    const pair = at(notional);
+    if (pair.capitalUsd === null || pair.capitalUsd >= size.capitalUsd * (1 - 1e-6)) return pair;
+    return {
+      ...pair,
+      reasons: [
+        ...pair.reasons,
+        `This pair takes at most ${usd(pair.capitalUsd)} of capital, not ${usd(size.capitalUsd)}. CrossEx takes no perp position above ${usd(notional)} on one of its legs.`,
+      ],
+    };
+  }
   const pair = at(size.capitalUsd);
   return {
     ...pair,
@@ -915,14 +931,20 @@ function buildPair(
       );
       return null;
     }
-    const lev = input.leverageMaxBySymbol.get(leg.crossexSymbol);
-    if (lev === undefined || !Number.isFinite(lev) || lev <= 0) {
+    const limit = input.positionLimitBySymbol.get(leg.crossexSymbol);
+    if (!limit) {
       reasons.push(
         `No max leverage for ${leg.crossexVenue} ${leg.crossexSymbol} — that perp leg's initial margin can't be modelled, so the capital and the APR on capital are unknown.`,
       );
       return null;
     }
-    return lev;
+    if (notionalUsd > limit.maxUsd) {
+      reasons.push(
+        `${usd(notionalUsd)} is above the largest ${leg.crossexVenue} ${leg.crossexSymbol} position CrossEx takes (${usd(limit.maxUsd)}).`,
+      );
+      return null;
+    }
+    return limit.leverage;
   };
 
   const shortLeverageMax = leverageMaxOf(shortLeg);
@@ -1063,7 +1085,12 @@ export function buildOpportunities(
         }));
         return buildPair(ctx, shortLeg, longLeg, sized, input, o);
       };
-      return priceAtSize(at, options);
+      const maxNotional = Math.min(
+        ...[shortLeg, longLeg].map(
+          (leg) => (leg.crossexSymbol && input.positionLimitBySymbol.get(leg.crossexSymbol)?.maxUsd) || Infinity,
+        ),
+      );
+      return priceAtSize(at, options, maxNotional);
     };
 
     const pairs: OpportunityPair[] = [];

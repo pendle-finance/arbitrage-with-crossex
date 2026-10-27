@@ -202,13 +202,15 @@ export function SingleTicket() {
   /**
    * The biggest order the account can carry at the venue max: the notional
    * whose initial margin (with the preflight's buffer and fee reserve — the
-   * gate ExecuteControl enforces) equals the available margin. Stated in the
-   * box's unit, so clicking it fills the box with a number that will pass.
+   * gate ExecuteControl enforces) equals the available margin, and no more
+   * than the largest position CrossEx takes. Stated in the box's unit, so
+   * clicking it fills the box with a number that will pass.
    */
   const available = Number(account.data?.availableMargin ?? NaN);
+  const positionMaxUsd = detail.data?.positionMaxUsd || Infinity;
   const maxNotional =
     Number.isFinite(available) && available > 0 && levMax > 0
-      ? available / (PREFLIGHT_MARGIN_BUFFER / levMax + TAKER_FEE_RESERVE)
+      ? Math.min(positionMaxUsd, available / (PREFLIGHT_MARGIN_BUFFER / levMax + TAKER_FEE_RESERVE))
       : null;
   const maxSize =
     maxNotional === null ? null : sizeMode === 'usdt' ? maxNotional : ref && ref > 0 ? maxNotional / ref : null;
