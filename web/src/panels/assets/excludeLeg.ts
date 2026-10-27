@@ -1,6 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
-import { useToastOptional } from '../../components/Toast';
-import { fmtDateShort, prettyVenue, sigGrouped } from '../../lib/fmt';
+import { prettyVenue } from '../../lib/fmt';
 import { spreadPlatform, type SpreadVenues } from '../../lib/spread';
 import type { AssetBorosOpen } from '../../api/types';
 import {
@@ -14,7 +12,7 @@ import {
 
 const WHOLE_TOLERANCE = 1e-9;
 
-export const isPartOf = (part: number, whole: number): boolean => part < whole * (1 - WHOLE_TOLERANCE);
+const isPartOf = (part: number, whole: number): boolean => part < whole * (1 - WHOLE_TOLERANCE);
 
 export function exclusionAfter(
   prev: ExclusionEntry | undefined,
@@ -46,41 +44,3 @@ export function sizesForWholeExclusions(
 
 export const legVenueName = (leg: { venue: string; spreadVenues?: readonly string[] | null }): string =>
   leg.spreadVenues ? `Spread ${spreadPlatform(leg.spreadVenues as SpreadVenues)}` : prettyVenue(leg.venue);
-
-export function excludeToastText(
-  leg: { venue: string; side: 'LONG' | 'SHORT'; spreadVenues: readonly string[] | null; maturity: number },
-  rowSize: number,
-  legSize: number,
-  unitLabel: string,
-): string {
-  const who = legVenueName(leg);
-  const isPart = isPartOf(rowSize, legSize);
-  const size = isPart ? `${sigGrouped(rowSize)} of ${sigGrouped(legSize)}` : sigGrouped(rowSize);
-  const date = fmtDateShort(leg.maturity);
-  return `${who} ${leg.side} ${size} ${unitLabel} · ${date} excluded.`;
-}
-
-export function useExcludeWithUndo(
-  exclusions: Exclusions,
-  onExclude: (key: string, value: ExclusionEntry | undefined) => void,
-): (key: string, value: ExclusionEntry, text: string) => void {
-  const toast = useToastOptional();
-  const pending = useRef(new Map<string, ExclusionEntry | undefined>());
-
-  useEffect(() => {
-    pending.current.clear();
-  }, [exclusions]);
-
-  return useCallback(
-    (key, value, text) => {
-      const before = pending.current.has(key) ? pending.current.get(key) : exclusions[key];
-      pending.current.set(key, value);
-      onExclude(key, value);
-      toast?.push('info', text, {
-        key,
-        action: { label: 'Undo', onClick: () => onExclude(key, before) },
-      });
-    },
-    [exclusions, onExclude, toast],
-  );
-}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useMemo, useState } from 'react';
@@ -100,9 +100,15 @@ const closeRow = (name: string) => screen.getByRole('button', { name }).closest(
 const menuButton = (within_: HTMLElement) => within(within_).getByRole('button', { name: 'More actions' });
 const excludedBlock = () => screen.getByText('Excluded').parentElement?.parentElement as HTMLElement;
 
-async function clickExclude(user: User, row: HTMLElement) {
+async function openExclude(user: User, row: HTMLElement) {
   await user.click(menuButton(row));
-  await user.click(await screen.findByRole('menuitem', { name: /^Exclude/ }));
+  await user.click(await screen.findByRole('menuitem', { name: 'Exclude' }));
+  return screen.findByRole('dialog');
+}
+
+async function clickExclude(user: User, row: HTMLElement) {
+  const popup = await openExclude(user, row);
+  await user.click(within(popup).getByRole('button', { name: 'Save' }));
 }
 
 async function openBundle(user: User, name: RegExp) {
@@ -160,11 +166,25 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(PART_FILL), {}, spy);
     await showPairs(user);
-    const card = await pickBorosCard(/Boros leg missing/);
-    await user.click(menuButton(card));
-    await user.click(await screen.findByRole('menuitem', { name: 'Exclude 4 ETH' }));
+    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]).toEqual([KEY_101, { qty: 4 }]);
+  });
+
+  it('Exclude opens the leg popup with the row size, and saves nothing until Save', async () => {
+    const spy = vi.fn();
+    const user = userEvent.setup();
+    renderCard(groupOf(PART_FILL), {}, spy);
+    await showPairs(user);
+    const popup = await openExclude(user, await pickBorosCard(/Boros leg missing/));
+    expect(within(popup).getByText(/^Edit leg — Gate LONG YU · /)).toBeInTheDocument();
+    expect(within(popup).getByRole('radio', { name: 'Exclude a portion' })).toBeChecked();
+    expect(within(popup).getByLabelText('Quantity to exclude (ETH)')).toHaveValue('4');
+    expect(within(popup).getByText(/Farm keeps/)).toHaveTextContent('Farm keeps 6 ETH');
+    expect(spy).not.toHaveBeenCalled();
+    await user.click(within(popup).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('part exclude keeps the hedged card', async () => {
@@ -253,17 +273,6 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     const card = await pickBorosCard(/Boros legs missing/);
     expect(await within(card).findByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
-  });
-
-  it('exclude toast offers Undo', async () => {
-    const user = userEvent.setup();
-    renderCard(groupOf(B9));
-    await showPairs(user);
-    await openUngrouped(user);
-    await clickExclude(user, closeRow('Close Hyperliquid SHORT YU'));
-    const toast = await screen.findByRole('alert');
-    expect(toast).toHaveTextContent('Hyperliquid SHORT 1 ETH · 27 Nov excluded.');
-    expect(within(toast).getByRole('button', { name: 'Undo' })).toBeInTheDocument();
   });
 
   it('tab bar shows the excluded count', async () => {
@@ -360,40 +369,6 @@ describe('Exclude from the card, by the DoD', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it('undo toast closes after 5 s', async () => {
-    vi.useRealTimers();
-    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
-    vi.setSystemTime(new Date('2026-10-23T00:00:00Z'));
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderCard(groupOf(B9));
-    await showPairs(user);
-    await openUngrouped(user);
-    await clickExclude(user, closeRow('Close Hyperliquid SHORT YU'));
-    await screen.findByRole('alert');
-    act(() => vi.advanceTimersByTime(4_000));
-    expect(screen.getByRole('alert')).toBeInTheDocument();
-    act(() => vi.advanceTimersByTime(1_000));
-    expect(screen.queryByRole('alert')).toBeNull();
-  });
-
-  it('a newer exclude on the key closes the older toast', async () => {
-    const spy = vi.fn();
-    const user = userEvent.setup();
-    renderCard(groupOf(['H S 1', 'LI S 1', 'G LONG 2 N', 'H SHORT 1 N', 'LI SHORT 1 N']), {}, spy, true);
-    await showPairs(user);
-    await waitFor(() => expect(cardsTitled(/Perp leg missing/)).toHaveLength(2));
-    const gateRows = () => screen.getAllByRole('row').filter((r) => /GateBorosLONG/.test(textOf(r)) && r.querySelector('[aria-label="More actions"]'));
-    expect(gateRows()).toHaveLength(2);
-    await clickExclude(user, gateRows()[0]);
-    expect(await screen.findAllByRole('alert')).toHaveLength(1);
-    await clickExclude(user, gateRows()[1]);
-    expect(screen.getAllByRole('alert')).toHaveLength(1);
-    expect(spy).toHaveBeenCalledTimes(2);
-    expect(spy.mock.calls[1][0]).toBe(KEY_101);
-    await user.click(within(screen.getByRole('alert')).getByRole('button', { name: 'Undo' }));
-    expect(spy).toHaveBeenLastCalledWith(KEY_101, spy.mock.calls[0][1]);
-  });
-
   it('adding to a part exclude', async () => {
     const book = ['G L 10', 'H S 10', 'G LONG 12 N', 'H SHORT 6 N'];
     const patch = { 101: { entryApr: 400 } };
@@ -401,16 +376,14 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     const first = renderCard(groupOf(book, patch), { [KEY_101]: { qty: 2, at: 100 } }, spy);
     await showPairs(user);
-    await user.click(menuButton(await pickBorosCard(/Boros leg missing/)));
-    await user.click(await screen.findByRole('menuitem', { name: 'Exclude 4 ETH' }));
+    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
     expect(spy).toHaveBeenLastCalledWith(KEY_101, { qty: 6, at: 300 });
     first.unmount();
 
     const legacy = vi.fn();
     renderCard(groupOf(book, patch), { [KEY_101]: 2 }, legacy);
     await showPairs(user);
-    await user.click(menuButton(await pickBorosCard(/Boros leg missing/)));
-    await user.click(await screen.findByRole('menuitem', { name: 'Exclude 4 ETH' }));
+    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
     expect(legacy).toHaveBeenLastCalledWith(KEY_101, { qty: 6 });
   });
 
@@ -821,27 +794,28 @@ describe('Exclude through the saved prefs', () => {
     await waitFor(() => expect(patches).toHaveLength(1));
   }
 
-  it('Undo restores the old value (#74)', async () => {
+  it('the row popup saves one PATCH, and Restore takes it back', async () => {
     const user = userEvent.setup();
     renderHome();
     await excludeHyperliquidShort(user);
     expect(patches[0]).toEqual({ exclusions: { [KEY_104]: { qty: 1 } } });
-    await waitFor(() => expect(screen.queryByRole('button', { name: /Ungrouped legs/ })).toBeNull());
-    await user.click(within(await screen.findByRole('alert')).getByRole('button', { name: 'Undo' }));
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(within(await waitFor(() => excludedBlock())).getByRole('button', { name: 'Restore' }));
     await waitFor(() => expect(patches).toHaveLength(2));
     expect(patches[1]).toEqual({ exclusions: { [KEY_104]: null } });
     await openUngrouped(user);
     expect(closeRow('Close Hyperliquid SHORT YU')).toBeInTheDocument();
   });
 
-  it('failed undo says so (#74)', async () => {
+  it('a failed save from the row popup says so and keeps the leg', async () => {
+    patchStatus = 500;
     const user = userEvent.setup();
     renderHome();
     await excludeHyperliquidShort(user);
-    patchStatus = 500;
-    await user.click(within(await screen.findByRole('alert')).getByRole('button', { name: 'Undo' }));
     expect(await screen.findByText('Could not save. Try again.')).toBeInTheDocument();
-    await waitFor(() => expect(textOf(excludedBlock())).toContain('whole leg'));
-    expect(stored.exclusions[KEY_104]).toEqual({ qty: 1 });
+    await openUngrouped(user);
+    expect(closeRow('Close Hyperliquid SHORT YU')).toBeInTheDocument();
+    expect(stored.exclusions[KEY_104]).toBeUndefined();
   });
+
 });

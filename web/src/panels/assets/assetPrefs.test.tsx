@@ -1,5 +1,5 @@
 import { focusManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,7 +29,7 @@ const DEC = Date.UTC(2026, 11, 25, 8) / 1000;
 const EXCLUDED_TITLE = 'Part of this leg is excluded.';
 const INCLUDED_TITLE = 'Exclude some or all of this leg from the farm';
 
-const PART = { qty: 4, at: 0.08 };
+const PART = { qty: 4 };
 
 const empty = (): AssetViewPrefs => ({ sinceByAsset: {}, exclusions: {}, legSince: {} });
 
@@ -471,40 +471,15 @@ async function rowMenuExclude(): Promise<HTMLElement> {
   return screen.findByRole('menuitem', { name: /^Exclude/ });
 }
 
-const excludedToast = () => screen.queryAllByRole('alert').find((a) => /excluded\.$/.test(a.textContent ?? '') || /excluded\.Undo$/.test(a.textContent ?? ''));
-
-describe('the exclude toast', () => {
-  it('a failed save replaces the excluded toast', async () => {
-    patchStatus = 500;
+describe('the row menu popup', () => {
+  it('a double click on Save sends one PATCH', async () => {
     renderHome();
     await userEvent.click(await rowMenuExclude());
-    expect(await screen.findByText('Could not save. Try again.')).toBeInTheDocument();
-    await waitFor(() => expect(excludedToast()).toBeUndefined());
-    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
-  });
-
-  it('Restore clears the excluded toast', async () => {
-    renderHome();
-    await userEvent.click(await rowMenuExclude());
-    await waitFor(() => expect(excludedToast()).toBeDefined());
-    const hide = screen.getByRole('checkbox', { name: /Hide inactive pairs/ });
-    if ((hide as HTMLInputElement).checked) fireEvent.click(hide);
-    await userEvent.click(await screen.findByRole('button', { name: 'Restore' }));
-    expect(excludedToast()).toBeUndefined();
-    await waitFor(() => expect(patches().map((p) => p.body)).toEqual([{ exclusions: { [LEG]: { qty: 10 } } }, { exclusions: { [LEG]: null } }]));
-  });
-
-  it('a double click sends one PATCH', async () => {
-    renderHome();
-    const item = await rowMenuExclude();
-    act(() => {
-      fireEvent.click(item);
-      fireEvent.click(item);
-    });
-    await waitFor(() => expect(patches()).toHaveLength(1));
+    const popup = await screen.findByRole('dialog');
+    await userEvent.dblClick(within(popup).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(stored[BOOK_A]?.exclusions[LEG]).toEqual({ qty: 10 }));
     expect(patches()).toHaveLength(1);
-    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 

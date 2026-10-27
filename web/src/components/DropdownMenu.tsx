@@ -125,7 +125,7 @@ export function DropdownMenu({
     const at = list.indexOf(document.activeElement as HTMLElement);
     if ((e.key === 'Enter' || e.key === ' ') && at >= 0) {
       e.preventDefault();
-      select(items[at]);
+      if (!e.repeat) select(items[at]);
       return;
     }
     const next =
