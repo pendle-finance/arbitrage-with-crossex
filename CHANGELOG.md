@@ -3,6 +3,43 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.8 — 2026-10-27
+
+TLDR: Fixed Rate Pairs pairs your legs by venue at any Boros date. You can exclude part of a
+Boros leg from the arbitrage. A Boros send that times out no longer reads as "nothing traded".
+
+- **Fixed Rate Pairs pairs legs by venue at any date.** Each card pairs your perps and Boros
+  legs by venue and side, at any Boros date. After a half roll, the new date gets its card and
+  the old leg goes to Ungrouped. A leg on the wrong side shows a `Wrong side` tag at any date,
+  and its row has a faint red tint. A USDC perp shows `USDC perp · no Boros hedge`, because no
+  Boros leg can hedge it.
+- **Exclude part of a Boros leg.** The `⋯` menu on a Boros row has one item, Exclude. It opens
+  the same size popup as Edit on Funding Bundles. Nothing saves until you press Save. The
+  excluded part moves to an Excluded list on both tabs, with Restore and Edit. Exclusions now
+  live on the terminal, so a new browser keeps them. The first load moves the exclusions your
+  browser saved to the terminal.
+- **A blocked open says why.** An open that cannot go is a grey button. Its hover gives the
+  reason with exact sizes, for example "Close 4 ETH of it to open here". On Funding Bundles,
+  Open more no longer opens into a Boros leg that you hold the wrong way.
+- **Close perps closes the card's size.** On a card that shares a venue position with another
+  card, Close perps sends only that card's size.
+- **The pair ticket warns about an uneven fill.** On a thin book the two legs can fill to
+  different sizes. The ticket now says how much would be left unhedged. A Use button sets the
+  size that fills on both legs.
+- **A Boros send that times out is checked.** Before, a 408 from Boros read as "rejected,
+  nothing traded" while Boros was still sending the batch. Sending again could double the
+  position. Now the terminal asks Boros for the batch and reads each leg's fill. It says "may
+  or may not have filled" only when Boros has no answer after 30 seconds.
+- **A close at a few cents of gas goes through.** Before, Boros refused it for gas on every
+  try. Now the terminal sends it once more with a $1 gas top-up.
+- **Opportunities prices cards at $1M per leg.** This is the new default size, with a $1M
+  button. A size you already picked stays. Above $1M per leg, the perp slippage assumes $1M
+  orders sent one after another, and a note under the size says so.
+- **Smaller things.** Every leg row shows its venue icon. The open-only roll review names the
+  spread market it opens, for example "ETH Spread HL-GATE".
+
+Existing installs get this through the in-app Update.
+
 ## 1.7.7 — 2026-10-21
 
 TLDR: Boros login works when the page is not opened at localhost. A login that Boros does
