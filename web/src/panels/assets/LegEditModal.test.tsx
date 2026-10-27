@@ -1,7 +1,7 @@
 /**
  * LegEditModal — the save rules behind the per-leg "edit" popup: include
- * all clears the entry, a slice saves {qty, at}, and a slice the size of the
- * leg IS 'all'. The arithmetic behind the preview is assetModel's keptSlice
+ * all clears the entry, a slice saves {qty, at} or {qty}, and a slice the size
+ * of the leg saves the leg's size. The arithmetic behind the preview is assetModel's keptSlice
  * (tested there); this pins what the popup HANDS BACK.
  */
 import { render, screen } from '@testing-library/react';
@@ -19,6 +19,16 @@ const base = {
 };
 
 describe('LegEditModal', () => {
+  it('a slice with the rate left empty saves {qty}, split at the leg average', async () => {
+    const onExclude = vi.fn();
+    render(<LegEditModal {...base} current={undefined} onExclude={onExclude} onClose={() => {}} />);
+    await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
+    await userEvent.type(screen.getByLabelText('Quantity to exclude (ETH)'), '250');
+    expect(screen.getByText(/Farm keeps/)).toHaveTextContent('750 ETH at $1,900.00');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(onExclude).toHaveBeenCalledWith('perp:HL', { qty: 250 });
+  });
+
   it('a slice at its own price saves {qty, at}; the preview shows the residual remainder', async () => {
     const onExclude = vi.fn();
     render(<LegEditModal {...base} current={undefined} onExclude={onExclude} onClose={() => {}} />);
@@ -33,14 +43,14 @@ describe('LegEditModal', () => {
     expect(onExclude).toHaveBeenCalledWith('perp:HL', { qty: 250, at: 1800 });
   });
 
-  it("a slice the size of the leg saves 'all'", async () => {
+  it("a slice the size of the leg saves the leg's size", async () => {
     const onExclude = vi.fn();
     render(<LegEditModal {...base} current={undefined} onExclude={onExclude} onClose={() => {}} />);
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
     await userEvent.click(screen.getByRole('button', { name: 'all' }));
     expect(screen.getByText(/whole leg is excluded/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(onExclude).toHaveBeenCalledWith('perp:HL', 'all');
+    expect(onExclude).toHaveBeenCalledWith('perp:HL', { qty: 1000 });
   });
 
   it('include all clears an existing exclusion', async () => {
@@ -89,8 +99,8 @@ describe('LegEditModal', () => {
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
     await userEvent.type(screen.getByLabelText('Quantity to exclude (ETH)'), '250');
     const at = screen.getByLabelText('Rate the excluded slice was locked at');
-    expect(at).toHaveValue('8'); // defaults to the leg's own rate, shown in %
-    await userEvent.clear(at);
+    expect(at).toHaveValue('');
+    expect(at).toHaveAttribute('placeholder', '8');
     await userEvent.type(at, '12');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onExclude).toHaveBeenCalledWith('boros:1', { qty: 250, at: 0.12 });

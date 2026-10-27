@@ -112,8 +112,8 @@ import {
   sizeIn,
 } from './assetModel';
 import { DUST_USD, sameSize } from './grouping';
-import { BorosRowMenu } from './BorosRowMenu';
-import { exclusionAfter, excludeToastText, isPartOf, legVenueName, useExcludeWithUndo } from './excludeLeg';
+import { DropdownMenu } from '../../components/DropdownMenu';
+import { exclusionAfter, legVenueName } from './excludeLeg';
 import { daysToMaturity, knownRate } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
@@ -121,7 +121,7 @@ import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
 import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
-import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, RotateCw, Share } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
 
 interface Props {
   group: AssetGroup;
@@ -239,6 +239,8 @@ const BlockedOpen = ({ reason, children }: { reason?: string; children: React.Re
 const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
 const blockingWrongSide = (legs: PendingLeg[], venue: string, side: 'LONG' | 'SHORT') =>
   legs.find((w) => w.wrongSide?.blocks && venueLegsOf(w, 1).some((l) => l.venue.toLowerCase() === venue.toLowerCase() && l.side !== side));
+const borosLegLabel = (l: AssetBorosOpen): string =>
+  `${legVenueName(l)} ${l.side}${l.spreadVenues ? '' : ' YU'} · ${fmtDateLocal(l.maturity)}`;
 const closeWrongSideText = (y: PendingLeg) => `Close the Wrong side ${legVenueName(y)} ${y.side} at ${fmtDateShort(y.maturity)} to open here.`;
 const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !text-ink-500';
 
@@ -4118,7 +4120,7 @@ export function LegEditModal({
   const [mode, setMode] = useState<'all' | 'portion'>(current === undefined ? 'all' : 'portion');
   const [qtyStr, setQtyStr] = useState(curQty !== null ? String(curQty) : '');
   const fmtAt = (v: number) => (entryKind === 'rate' ? String(+(v * 100).toFixed(4)) : String(+v.toFixed(2)));
-  const startAt = curAt ?? entry;
+  const startAt = curAt;
   const [atStr, setAtStr] = useState(startAt !== null ? fmtAt(startAt) : '');
   const qty = Number(qtyStr);
   const qtyOk = Number.isFinite(qty) && qty > 0;
@@ -4126,17 +4128,14 @@ export function LegEditModal({
   // A rate may be negative (negative funding); a price may not.
   const at = atStr.trim() !== '' && Number.isFinite(atRaw) && (entryKind === 'rate' || atRaw >= 0) ? (entryKind === 'rate' ? atRaw / 100 : atRaw) : null;
   const whole = mode === 'all' ? false : qtyOk && qty >= legQty;
+  const slice: ExclusionEntry = whole ? (legQty > 0 ? { qty: legQty } : 'all') : at !== null ? { qty, at } : { qty };
   // Live preview of what the farm keeps.
-  const preview =
-    mode === 'portion' && qtyOk && !whole
-      ? keptSlice({ [exKey]: at !== null ? { qty, at } : qty }, exKey, legQty, entry)
-      : null;
+  const preview = mode === 'portion' && qtyOk && !whole ? keptSlice({ [exKey]: slice }, exKey, legQty, entry) : null;
   const showEntry = (v: number | null) => (v === null ? 'pending' : entryKind === 'rate' ? fmtPct(v) : fmtUsd(v));
   const save = () => {
     if (mode === 'all') onExclude(exKey, undefined);
     else if (!qtyOk) return;
-    else if (whole) onExclude(exKey, 'all');
-    else onExclude(exKey, at !== null ? { qty, at } : qty);
+    else onExclude(exKey, slice);
     if (onLegSince) {
       const sec = sinceStr ? parseDateLocal(sinceStr) : 0;
       onLegSince(Number.isFinite(sec) && sec > 0 ? sec : undefined);
@@ -4200,9 +4199,10 @@ export function LegEditModal({
               className="num h-9 w-full rounded border border-ink-800/50 bg-wash/[0.05] px-2.5 text-[14px] font-semibold text-ink-50 outline-none focus:border-info/70"
               inputMode="decimal"
               value={atStr}
+              placeholder={entry !== null ? fmtAt(entry) : undefined}
               onChange={(e) => setAtStr(e.target.value)}
               aria-label={entryKind === 'rate' ? 'Rate the excluded slice was locked at' : 'Price the excluded slice was opened at'}
-              title="The level the excluded slice was opened at. The rest of the leg re-averages around it."
+              title="The level the excluded slice was opened at. The rest of the leg re-averages around it. Empty splits at the leg's average."
             />
           </label>
         </div>
@@ -4324,6 +4324,21 @@ function EditCell({
       )}
       {open && <LegEditModal {...props} onClose={() => setOpen(false)} />}
     </span>
+  );
+}
+
+function RowExcludeMenu(props: Omit<React.ComponentProps<typeof LegEditModal>, 'onClose'>) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <DropdownMenu
+        label="More actions"
+        trigger={<MoreHorizontal size={12} aria-hidden />}
+        triggerClassName="btn-ghost-xs !px-1.5"
+        items={[{ label: 'Exclude', onSelect: () => setOpen(true) }]}
+      />
+      {open && <LegEditModal {...props} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 
@@ -5367,7 +5382,7 @@ export function AssetCard({
     ...borosVisible.map((l) => ({
       leg: l,
       key: borosKey(l.marketId),
-      label: `${legVenueName(l)} ${l.side}${l.spreadVenues ? '' : ' YU'} · ${fmtDateLocal(l.maturity)}`,
+      label: borosLegLabel(l),
       unit: l.collateral,
       legQty: l.sizeToken,
       entry: l.entryApr,
@@ -5648,25 +5663,20 @@ export function AssetCard({
   };
   const ungroupedCount = derived.unpairedPerps.length + derived.pendingLegs.length;
   const looseIds = new Set(derived.pendingLegs.map((y) => y.marketId));
-  const excludeWithUndo = useExcludeWithUndo(exclusions, onExclude);
   const excludeMenu = (y: PendingLeg): React.ReactNode => {
     const leg = group.borosOpen.find((b) => b.marketId === y.marketId);
     if (!leg || !(y.rowSizeToken > 0)) return null;
     const key = borosKey(leg.marketId);
-    const keptToken = leg.sizeToken * (1 - excludedFraction(exclusions, key, leg.sizeToken));
-    const rowSize = sizeIn(y, y.unit);
-    const isPart = isPartOf(y.rowSizeToken, keptToken);
-    const keptSize = isPart ? (rowSize * keptToken) / y.rowSizeToken : rowSize;
     return (
-      <BorosRowMenu
-        label={isPart ? `Exclude ${exactSize(rowSize, y.unit, group.base)}` : 'Exclude'}
-        onExclude={() =>
-          excludeWithUndo(
-            key,
-            exclusionAfter(exclusions[key], y.rowSizeToken, leg.sizeToken, leg.entryApr),
-            excludeToastText(leg, rowSize, keptSize, y.unit === 'base' ? group.base : 'USD'),
-          )
-        }
+      <RowExcludeMenu
+        exKey={key}
+        label={borosLegLabel(leg)}
+        unit={leg.collateral}
+        legQty={leg.sizeToken}
+        entry={leg.entryApr}
+        entryKind="rate"
+        current={exclusionAfter(exclusions[key], y.rowSizeToken, leg.sizeToken, leg.entryApr)}
+        onExclude={onExclude}
       />
     );
   };

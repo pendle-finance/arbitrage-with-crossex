@@ -27,7 +27,6 @@ import type { AssetViewPrefs } from '../../api/types';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
-import { useToast } from '../../components/Toast';
 import { SignedNumber } from '../../components/SignedNumber';
 import { fmtPct, fmtUsd, num } from '../../lib/fmt';
 import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
@@ -66,7 +65,6 @@ export function AssetsHome() {
 
   const prefsQuery = useAssetPrefs(book, legacy !== 'moving' && address !== null);
   const savePrefs = usePatchAssetPrefs(book);
-  const toast = useToast();
   const [legacyRev, bumpLegacy] = useReducer((n: number) => n + 1, 0);
   const legacyExclusions = useMemo(
     () => (legacy === 'failed' ? legacyExclusionsFor(book) : {}),
@@ -76,14 +74,13 @@ export function AssetsHome() {
     const saved = prefsQuery.data ?? NO_PREFS;
     return legacy === 'failed' ? { ...saved, exclusions: { ...legacyExclusions, ...saved.exclusions } } : saved;
   }, [prefsQuery.data, legacy, legacyExclusions]);
-  const save = (patch: AssetPrefsPatch, onError?: () => void) =>
+  const save = (patch: AssetPrefsPatch) =>
     savePrefs.mutate(patch, {
       onSuccess: () => {
         if (legacy !== 'failed') return;
         dropLegacyKeys(book, patch);
         bumpLegacy();
       },
-      onError,
     });
 
   const legSince = legSinceParam(prefs.legSince);
@@ -404,10 +401,7 @@ export function AssetsHome() {
               }
               liquidation={lineFor(group.base)}
               exclusions={prefs.exclusions}
-              onExclude={(key, value) => {
-                if (value === undefined) toast.clear(key);
-                save({ exclusions: { [key]: value ?? null } }, () => toast.clear(key));
-              }}
+              onExclude={(key, value) => save({ exclusions: { [key]: value ?? null } })}
               legSince={prefs.legSince}
               onLegSince={(key, sec) =>
                 save({ legSince: { [key]: sec !== undefined && sec > 0 ? sec : null } })

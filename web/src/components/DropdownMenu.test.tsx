@@ -178,6 +178,18 @@ describe('DropdownMenu', () => {
     expect(screen.getByRole('menu')).toBeInTheDocument();
   });
 
+  it('a held Enter opens the menu and selects nothing', async () => {
+    const { trigger, spies } = renderMenu();
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'Enter' });
+    await screen.findByRole('menu');
+    expect(item('Alpha')).toHaveFocus();
+    fireEvent.keyDown(item('Alpha'), { key: 'Enter', repeat: true });
+    fireEvent.keyDown(item('Alpha'), { key: 'Enter', repeat: true });
+    expect(spies.a).not.toHaveBeenCalled();
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
   it('a double click fires once', async () => {
     const { trigger, spies } = renderMenu();
     await userEvent.click(trigger);
