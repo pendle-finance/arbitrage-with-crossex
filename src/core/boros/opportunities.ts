@@ -157,6 +157,10 @@ export interface OpportunityPair {
   borosImpactApr: number | null;
   /** Which leg rests as the maker order under `maker-hedge`; null otherwise. */
   makerLeg: 'short' | 'long' | null;
+  /** The notional per leg THIS pair was priced at. Equal to the request's on a
+   * notional request; under a capital target each pair solves its own, so
+   * every per-pair USD figure must be read against this one. */
+  notionalUsd: number;
   costs: OpportunityCostBreakdown;
   capital: OpportunityCapitalBreakdown;
   /** Σ of the four capital components; null when any one of them is. */
@@ -193,7 +197,11 @@ export interface OpportunitiesResult {
   groups: OpportunityGroup[];
   meta: {
     asOfSec: number;
-    notionalUsd: number;
+    /** The shared notional per leg; null under a capital target, where every
+     * pair carries its own (`OpportunityPair.notionalUsd`). */
+    notionalUsd: number | null;
+    /** Echoes the capital target when one was requested. */
+    capitalUsd?: number;
     borosEntry: BorosEntryMode;
     entryMode: EntryMode;
     exitMode: ExitMode;
@@ -234,7 +242,11 @@ export interface BuildOpportunitiesInput {
 }
 
 export interface BuildOpportunitiesOptions {
+  /** Every pair's notional per leg. Ignored when `capitalUsd` is set. */
   notionalUsd: number;
+  /** When set, every pair is priced at ITS OWN notional: the one whose
+   * modelled capital equals this (`notionalForCapital`). */
+  capitalUsd?: number;
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
   exitMode: ExitMode;
@@ -244,6 +256,58 @@ export interface BuildOpportunitiesOptions {
 }
 
 const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
+
+/**
+ * The notional at which a pair's modelled capital equals `targetCapital`.
+ *
+ * Capital only grows with notional — perp margin is N / leverage, and Boros
+ * margin is N × max(|locked rate|, floor) × days × kIM / 365, where a deeper
+ * book walk only adds to N × rate — so there is exactly one answer, and
+ * halving a bracket around it converges on it. `capitalAt` is the pair's own
+ * pricing, so the capital the solve lands on IS the capital the pair reports.
+ * Null when the pair's capital can't be modelled (a missing leverage cap or
+ * margin coefficient — nothing that depends on size).
+ */
+export function notionalForCapital(
+  capitalAt: (notionalUsd: number) => number | null,
+  targetCapital: number,
+): number | null {
+  if (capitalAt(targetCapital) === null) return null;
+  const below = (n: number): boolean => (capitalAt(n) ?? Infinity) < targetCapital;
+  let lo = 0;
+  let hi = targetCapital;
+  for (let i = 0; i < 60 && below(hi); i += 1) {
+    lo = hi;
+    hi *= 2;
+  }
+  for (let i = 0; i < 60 && hi - lo > hi * 1e-9; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (below(mid)) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/** Price one pair at the requested size: at `notionalUsd`, or — under a
+ * capital target — at the notional whose capital equals it. A pair whose
+ * capital can't be modelled has no such notional: it is priced at notional =
+ * capital and says so; its null APR on capital keeps it off the list. */
+export function priceAtSize<P extends { capitalUsd: number | null; reasons: string[] }>(
+  at: (notionalUsd: number) => P,
+  size: { notionalUsd: number; capitalUsd?: number },
+): P {
+  if (size.capitalUsd === undefined) return at(size.notionalUsd);
+  const notional = notionalForCapital((n) => at(n).capitalUsd, size.capitalUsd);
+  if (notional !== null) return at(notional);
+  const pair = at(size.capitalUsd);
+  return {
+    ...pair,
+    reasons: [
+      ...pair.reasons,
+      `This pair's capital can't be modelled, so it can't be sized to ${usd(size.capitalUsd)} of capital.`,
+    ],
+  };
+}
 
 /**
  * VWAP over the FILLED portion of one Boros book side, walking levels in order
@@ -477,11 +541,15 @@ interface MarketRowBuild {
   long: SideExec | null;
 }
 
+/** One market's row and its two exec sides, walked at `sizeUsd`. Null size —
+ * a capital target, where each pair walks at its own notional — leaves the
+ * row's exec rates empty rather than quoting a size no pair trades at. */
 function buildMarketRow(
   market: BorosMarket,
   input: BuildOpportunitiesInput,
   options: BuildOpportunitiesOptions,
   collateralPriceUsd: number | null,
+  sizeUsd: number | null,
 ): MarketRowBuild {
   const venue = normalizeVenue(market.venue);
   const crossexVenue = input.crossexVenues.has(venue) ? venue : null;
@@ -493,7 +561,9 @@ function buildMarketRow(
   let short: SideExec | null = null;
   let long: SideExec | null = null;
   let bookStatus: BookStatus;
-  if (options.borosEntry === 'mark') {
+  if (sizeUsd === null) {
+    bookStatus = 'not-fetched';
+  } else if (options.borosEntry === 'mark') {
     short = { apr: market.markApr, filledUsd: null, insufficient: false };
     long = { apr: market.markApr, filledUsd: null, insufficient: false };
     bookStatus = 'not-fetched';
@@ -501,8 +571,8 @@ function buildMarketRow(
     const book = input.borosBooks.get(market.marketId) ?? null;
     const px = collateralPriceUsd;
     if (book && px !== null) {
-      const bidWalk = walkBorosBook(book.bids, options.notionalUsd, px);
-      const askWalk = walkBorosBook(book.asks, options.notionalUsd, px);
+      const bidWalk = walkBorosBook(book.bids, sizeUsd, px);
+      const askWalk = walkBorosBook(book.asks, sizeUsd, px);
       short = bidWalk && { apr: bidWalk.execApr, filledUsd: bidWalk.filledUsd, insufficient: bidWalk.insufficient };
       long = askWalk && { apr: askWalk.execApr, filledUsd: askWalk.filledUsd, insufficient: askWalk.insufficient };
     }
@@ -893,6 +963,7 @@ function buildPair(
     execSpreadApr,
     borosImpactApr,
     makerLeg: entry.makerLeg,
+    notionalUsd,
     costs: {
       borosTakerFeeUsd,
       borosSettleFeeUsd,
@@ -962,10 +1033,13 @@ export function buildOpportunities(
       );
     }
 
-    const builds = plan.markets.map((m) => buildMarketRow(m, input, options, collateralPriceUsd));
+    // Walked once at the shared notional; under a capital target each pair
+    // walks its own books at its own notional (`price` below).
+    const rowSize = options.capitalUsd !== undefined ? null : options.notionalUsd;
+    const builds = plan.markets.map((m) => buildMarketRow(m, input, options, collateralPriceUsd, rowSize));
     const spreadBuilds = plan.spreads
       .filter((m) => m.state === 'Normal')
-      .map((m) => buildMarketRow(m, input, options, collateralPriceUsd));
+      .map((m) => buildMarketRow(m, input, options, collateralPriceUsd, rowSize));
     for (const build of builds) {
       if (!build.row.crossexVenue) {
         groupWarnings.push(
@@ -977,6 +1051,20 @@ export function buildOpportunities(
         );
       }
     }
+
+    // Every Boros book is walked at the notional the pair is PRICED at: the
+    // rate a leg locks moves with size.
+    const price = (shortLeg: OpportunityLeg, longLeg: OpportunityLeg, boros: BorosLegBuild[]): OpportunityPair => {
+      const at = (notionalUsd: number) => {
+        const o = { ...options, notionalUsd };
+        const sized = boros.map((l) => ({
+          ...l,
+          build: buildMarketRow(l.build.market, input, o, collateralPriceUsd, notionalUsd),
+        }));
+        return buildPair(ctx, shortLeg, longLeg, sized, input, o);
+      };
+      return priceAtSize(at, options);
+    };
 
     const pairs: OpportunityPair[] = [];
     // A mapped venue pairs even without a live CrossEx symbol (Gate down or
@@ -998,7 +1086,7 @@ export function buildOpportunities(
           { build: a, side: 'SHORT' },
           { build: b, side: 'LONG' },
         ];
-        pairs.push(buildPair(ctx, toLeg(a), toLeg(b), boros, input, options));
+        pairs.push(price(toLeg(a), toLeg(b), boros));
       }
     }
     for (const build of spreadBuilds) {
@@ -1018,7 +1106,7 @@ export function buildOpportunities(
           );
         }
       }
-      pairs.push(buildPair(ctx, shortLeg, longLeg, [{ build, side }], input, options));
+      pairs.push(price(shortLeg, longLeg, [{ build, side }]));
     }
     pairs.sort(
       (x, y) =>
@@ -1062,7 +1150,8 @@ export function buildOpportunities(
     groups,
     meta: {
       asOfSec: input.nowSec,
-      notionalUsd: options.notionalUsd,
+      notionalUsd: options.capitalUsd !== undefined ? null : options.notionalUsd,
+      capitalUsd: options.capitalUsd,
       borosEntry: options.borosEntry,
       entryMode: options.entryMode,
       exitMode: options.exitMode,

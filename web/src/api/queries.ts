@@ -79,8 +79,13 @@ export const qk = {
   borosAgent: ['boros', 'agent'] as const,
   rebate: ['boros', 'rebate'] as const,
   borosPairContext: (address: string) => ['boros', 'pair', 'context', address] as const,
-  opportunities: (notionalUsd: number, borosEntry: BorosEntryMode, entryMode: EntryMode, exitMode: ExitMode) =>
-    ['opportunities', notionalUsd, borosEntry, entryMode, exitMode] as const,
+  opportunities: (
+    sizeBy: OpportunitySizeBy,
+    sizeUsd: number,
+    borosEntry: BorosEntryMode,
+    entryMode: EntryMode,
+    exitMode: ExitMode,
+  ) => ['opportunities', sizeBy, sizeUsd, borosEntry, entryMode, exitMode] as const,
   deal: (id: string) => ['deal', id] as const,
   activeDeals: ['deals', 'active'] as const,
   alerts: ['alerts'] as const,
@@ -310,8 +315,13 @@ export function useAssetViewWindows(
   return { bySince, errorBySince, results, distinct };
 }
 
+/** What the size knob sets: each leg's notional, or the capital every pair
+ * is sized to (the server solves each pair's own notional from it). */
+export type OpportunitySizeBy = 'capital' | 'notional';
+
 export interface OpportunitiesParams {
-  notionalUsd: number;
+  sizeBy: OpportunitySizeBy;
+  sizeUsd: number;
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
   exitMode: ExitMode;
@@ -321,6 +331,8 @@ export interface OpportunitiesParams {
  * a 400, so the hook must not send it. */
 export const OPPORTUNITY_NOTIONAL_MIN = 1_000;
 export const OPPORTUNITY_NOTIONAL_MAX = 100_000_000;
+export const OPPORTUNITY_CAPITAL_MIN = 100;
+export const OPPORTUNITY_CAPITAL_MAX = 100_000_000;
 
 /** Mirror of PERP_SLIPPAGE_CLIP_USD (src/core/boros/opportunities.ts): above
  * this per-leg notional, perp slippage is priced at this order size's rate. */
@@ -334,12 +346,14 @@ export const OPPORTUNITY_FEE_TIERS = Array.from(
 ) as readonly `vip${number}`[];
 export type OpportunityFeeTier = (typeof OPPORTUNITY_FEE_TIERS)[number];
 
-export function isValidOpportunityNotional(notionalUsd: number): boolean {
-  return (
-    Number.isFinite(notionalUsd) &&
-    notionalUsd >= OPPORTUNITY_NOTIONAL_MIN &&
-    notionalUsd <= OPPORTUNITY_NOTIONAL_MAX
-  );
+export const opportunitySizeBounds = (sizeBy: OpportunitySizeBy): { min: number; max: number } =>
+  sizeBy === 'capital'
+    ? { min: OPPORTUNITY_CAPITAL_MIN, max: OPPORTUNITY_CAPITAL_MAX }
+    : { min: OPPORTUNITY_NOTIONAL_MIN, max: OPPORTUNITY_NOTIONAL_MAX };
+
+export function isValidOpportunitySize(sizeBy: OpportunitySizeBy, usd: number): boolean {
+  const { min, max } = opportunitySizeBounds(sizeBy);
+  return Number.isFinite(usd) && usd >= min && usd <= max;
 }
 
 /** Forward-looking fixed-return opportunities across the Boros arb groups.
@@ -349,12 +363,13 @@ export function isValidOpportunityNotional(notionalUsd: number): boolean {
  * `isPlaceholderData` to dim them). */
 export function useOpportunities(p: OpportunitiesParams) {
   const search =
-    `?notionalUsd=${p.notionalUsd}&borosEntry=${p.borosEntry}` + `&entryMode=${p.entryMode}&exitMode=${p.exitMode}`;
+    `?${p.sizeBy === 'capital' ? 'capitalUsd' : 'notionalUsd'}=${p.sizeUsd}&borosEntry=${p.borosEntry}` +
+    `&entryMode=${p.entryMode}&exitMode=${p.exitMode}`;
   const shown = useTabActive();
   return useQuery({
-    queryKey: qk.opportunities(p.notionalUsd, p.borosEntry, p.entryMode, p.exitMode),
+    queryKey: qk.opportunities(p.sizeBy, p.sizeUsd, p.borosEntry, p.entryMode, p.exitMode),
     queryFn: () => fetchJson<OpportunitiesResult>(`/opportunities${search}`),
-    enabled: (query) => isValidOpportunityNotional(p.notionalUsd) && canFetch(shown, query),
+    enabled: (query) => isValidOpportunitySize(p.sizeBy, p.sizeUsd) && canFetch(shown, query),
     refetchInterval: shown ? 12_000 : false,
     placeholderData: keepPreviousData,
   });

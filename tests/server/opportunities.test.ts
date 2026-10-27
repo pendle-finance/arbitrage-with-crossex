@@ -223,6 +223,22 @@ describe('GET /api/opportunities', () => {
     expect(pair.reasons).toEqual([]);
   });
 
+  it('sizes every pair to a capital target, each at its own notional', async () => {
+    app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
+    mockGate();
+    mockVenueBooks();
+
+    const res = await app.inject({ method: 'GET', url: '/api/opportunities?capitalUsd=5000', headers: HOST });
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json();
+    expect(data.meta).toMatchObject({ notionalUsd: null, capitalUsd: 5_000 });
+    const pair = data.groups[0].bestPair;
+    expect(pair.capitalUsd / 5_000).toBeCloseTo(1, 8);
+    // ~10.3× effective leverage on this book turns $5k of capital into ~$51.7k a leg.
+    expect(pair.notionalUsd).toBeCloseTo(pair.effectiveLeverage * 5_000, 2);
+    expect(pair.notionalUsd).toBeGreaterThan(50_000);
+  });
+
   it('degrades a pair whose venue has no risk-limit row to null capital only', async () => {
     app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
     mockGate(1, [riskLimits[0]]); // Binance has no tiers to read
@@ -288,6 +304,9 @@ describe('GET /api/opportunities', () => {
       'notionalUsd=abc',
       'notionalUsd=999',
       'notionalUsd=100000001',
+      'capitalUsd=abc',
+      'capitalUsd=99',
+      'capitalUsd=100000001',
       'borosEntry=midpoint',
       'entryMode=both',
       'exitMode=rollover',

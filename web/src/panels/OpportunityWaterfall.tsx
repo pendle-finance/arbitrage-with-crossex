@@ -272,8 +272,8 @@ export function OpportunityWaterfall({
   notionalUsd,
 }: {
   pair: OpportunityPair;
-  /** The notional the RESPONSE priced — meta.notionalUsd, not the live control,
-   * so the USD conversion matches the costs it is charted against. */
+  /** The notional the pair was priced at — pair.notionalUsd, not the live
+   * control, so the USD conversion matches the costs it is charted against. */
   notionalUsd: number;
 }) {
   // The roll is read off the DATA, not the live exitMode control (which moves
