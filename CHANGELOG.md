@@ -41,6 +41,13 @@ Opportunities sizes every card by the capital you put in.
   type any amount, or pick a preset. Open this strategy fills the ticket at the
   card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
   another, and a note under the size says so.
+- **Perp legs stop at the largest position CrossEx takes.** CrossEx refuses a Gate position
+  over $50M per leg at any leverage, and it refuses after the order call returns, so the other
+  leg could fill alone. Now an open past a venue's largest position is refused before anything
+  is sent: in the ticket, on the max button, and on the server. An Opportunities card stops at
+  the smaller leg's largest position and says "This pair takes at most $X of capital". Up to $1M
+  of capital nothing changes. Today's largest positions: Gate $50M, Hyperliquid $150M BTC and
+  $100M ETH, Binance $350M BTC and $250M ETH, Lighter about $1B.
 - **Smaller things.** Every leg row shows its venue icon. The open-only roll review names the
   spread market it opens, for example "ETH Spread HL-GATE".
 
