@@ -1034,7 +1034,7 @@ export function OpportunitiesPanel() {
 
   useEffect(() => {
     const n = Number(debouncedSize);
-    if (sizeChoice !== 'custom' || !isValidOpportunitySize(sizeBy, n)) return;
+    if (!isValidOpportunitySize(sizeBy, n)) return;
     setCustomSize(n);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSize]);
@@ -1135,7 +1135,7 @@ export function OpportunitiesPanel() {
         // size change `keepPreviousData` shows cards costed at the OLD size,
         // and arming the ticket at the new one would stage a trade none of the
         // numbers on screen describe.
-        notionalUsd: pair.notionalUsd,
+        notionalUsd: Math.round(pair.notionalUsd),
         // Present only for token-margined cohorts, where the collateral IS the
         // base coin and every leg can be sized in the same unit.
         ...(sizeBase !== undefined && sizeBase > 0 ? { sizeBase } : {}),
@@ -1145,178 +1145,92 @@ export function OpportunitiesPanel() {
     [flow, entryMode],
   );
 
+  // Two fixed rows of fields, each a label over one 35px control: the size on
+  // its own row with the clock, the perp assumptions under it. A free wrap
+  // split the two perp knobs across rows at common widths.
+  const field = 'flex flex-col items-start gap-1.5';
   const controls = (
-    <div className="mb-5 flex flex-wrap items-end gap-x-8 gap-y-5 rounded border border-wash/[0.14] bg-wash/[0.07] p-5">
-      {/* One row, nothing folded away: the size every card is priced at, the
-          two execution assumptions, the clock. With the account connected
-          there is no fee tier to simulate, and two knobs do not earn a panel
-          of their own. */}
-      <div className="flex flex-col items-start gap-1.5">
-        {/* The label is the switch: it names what the figure below is. */}
-        <SegmentedToggle<OpportunitySizeBy>
-          className="seg-info seg-xs"
-          ariaLabel="Size by"
-          value={sizeBy}
-          onChange={(next) => {
-            setSizeBy(next);
-            setSizeStr(String(next === 'capital' ? customCapital : customNotional));
-            persist({ sizeBy: next });
-          }}
-          options={[
-            {
-              value: 'capital',
-              label: 'Capital',
-              title: "Margin you post on all legs. Each pair's notional is set to use this amount.",
-            },
-            { value: 'notional', label: 'Notional per leg', title: 'The size of each leg.' },
-          ]}
-        />
-        <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`flex h-9 items-center gap-1 rounded border border-ink-800/50 bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
-            sizeBad ? 'border-guava/60' : 'border-ink-600'
-          }`}
-        >
-          <span className="text-[11.5px] text-ink-400">$</span>
-          {sizeChoice === 'custom' ? (
-            <input
-              id={sizeId}
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              aria-label={byCapital ? 'Custom capital (USD)' : 'Custom notional (USD)'}
-              value={sizeStr}
-              onChange={(e) => setSizeStr(e.target.value)}
-              ref={(el) => {
-                if (!el || !focusSizeRef.current) return;
-                focusSizeRef.current = false;
-                el.focus();
-                el.select();
+    <div className="mb-5 flex flex-col gap-4 rounded border border-wash/[0.14] bg-wash/[0.07] p-5">
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
+        <div className={field}>
+          <div className={microLabelClass}>Size</div>
+          <div className="flex flex-wrap items-center gap-2">
+            <SegmentedToggle<OpportunitySizeBy>
+              className="seg-info seg-lg"
+              ariaLabel="Size by"
+              value={sizeBy}
+              onChange={(next) => {
+                setSizeBy(next);
+                setSizeStr(String(next === 'capital' ? customCapital : customNotional));
+                persist({ sizeBy: next });
               }}
-              title={byCapital ? 'The capital each pair is sized to.' : 'The notional each leg is priced at.'}
-              className="num w-24 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
+              options={[
+                {
+                  value: 'capital',
+                  label: 'Capital',
+                  title: "Margin you post on all legs. Each pair's notional is set to use this amount.",
+                },
+                { value: 'notional', label: 'Notional per leg', title: 'The size of each leg.' },
+              ]}
             />
-          ) : (
             <span
-              className="num cursor-text select-none text-sm font-semibold text-ink-50"
-              title="Double-click to edit"
-              onDoubleClick={() => {
-                // Edit from the amount on screen, not the last custom size.
-                focusSizeRef.current = true;
-                setSizeStr(String(sizeUsd));
-                if (byCapital) {
-                  setCustomCapital(sizeUsd);
-                  setCapitalChoice('custom');
-                  persist({ capitalChoice: 'custom', customCapitalUsd: sizeUsd });
-                } else {
-                  setCustomNotional(sizeUsd);
-                  setNotionalChoice('custom');
-                  persist({ notionalChoice: 'custom', customNotionalUsd: sizeUsd });
-                }
-              }}
+              className={`flex h-[35px] w-[7.5rem] items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
+                sizeBad ? 'border-guava/60' : 'border-ink-700'
+              }`}
             >
-              {sizeUsd.toLocaleString('en-US')}
+              <span className="text-[11.5px] text-ink-400">$</span>
+              {sizeChoice === 'custom' ? (
+                <input
+                  id={sizeId}
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  aria-label={byCapital ? 'Custom capital (USD)' : 'Custom notional (USD)'}
+                  value={sizeStr}
+                  onChange={(e) => setSizeStr(e.target.value)}
+                  ref={(el) => {
+                    if (!el || !focusSizeRef.current) return;
+                    focusSizeRef.current = false;
+                    el.focus();
+                    el.select();
+                  }}
+                  title={byCapital ? 'The capital each pair is sized to.' : 'The notional each leg is priced at.'}
+                  className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
+                />
+              ) : (
+                <span
+                  className="num cursor-text select-none text-sm font-semibold text-ink-50"
+                  title="Double-click to edit"
+                  onDoubleClick={() => {
+                    // Edit from the amount on screen, not the last custom size.
+                    focusSizeRef.current = true;
+                    setSizeStr(String(sizeUsd));
+                    if (byCapital) {
+                      setCustomCapital(sizeUsd);
+                      setCapitalChoice('custom');
+                      persist({ capitalChoice: 'custom', customCapitalUsd: sizeUsd });
+                    } else {
+                      setCustomNotional(sizeUsd);
+                      setNotionalChoice('custom');
+                      persist({ notionalChoice: 'custom', customNotionalUsd: sizeUsd });
+                    }
+                  }}
+                >
+                  {sizeUsd.toLocaleString('en-US')}
+                </span>
+              )}
             </span>
-          )}
-        </span>
-        {/* The one and only size control. It used to be repeated inside
-            the advanced panel as a second segmented toggle. */}
-        <span role="radiogroup" aria-label={byCapital ? 'Capital' : 'Notional'} className="inline-flex items-center">
-          {NOTIONAL_OPTIONS.map((o) => {
-            const on = sizeChoice === o.value;
-            return (
-              <button
-                key={o.value}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => setSizeChoice(o.value)}
-                className={`num -mr-px inline-flex h-[35px] items-center whitespace-nowrap border px-5 text-[12px] transition-colors first:rounded-l last:mr-0 last:rounded-r ${
-                  on
-                    ? 'relative z-[1] border-ink-700 bg-wash/[0.15] font-medium text-ink-300'
-                    : 'border-ink-700 text-ink-500 hover:bg-wash/[0.05]'
-                }`}
-              >
-                {o.label}
-              </button>
-            );
-          })}
-        </span>
-        </div>
-        {sizeErr && (
-          <span role="alert" className="text-[10.5px] text-guava">
-            {sizeErr}
-          </span>
-        )}
-        {/* Above one clip the cards price perp slippage as a TWAP in $1M
-            orders (src/core/boros/opportunities.ts). The open ticket still
-            walks the full book. */}
-        {slippageClipped && (
-          <span className="flex max-w-[26rem] items-start gap-1.5 text-[10.5px] text-ink-400">
-            <Info size={12} aria-hidden className="mt-px flex-none text-amber-400" />
-            <span>
-              Perp slippage is estimated at a $1M notional size. Above that, TWAP the perp side to
-              keep slippage close to this estimate.
-            </span>
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col items-start gap-1.5">
-        <div className={microLabelClass}>Perp entry</div>
-        <SegmentedToggle<EntryMode>
-          className="seg-info seg-lg"
-          ariaLabel="Perp entry mode"
-          value={entryMode}
-          onChange={(next) => {
-            setEntryMode(next);
-            persist({ entryMode: next });
-          }}
-          options={[
-            { value: 'both-market', label: ENTRY_MODE_LABEL['both-market'] },
-            { value: 'maker-hedge', label: ENTRY_MODE_LABEL['maker-hedge'] },
-          ]}
-        />
-      </div>
-
-      <div className="flex flex-col items-start gap-1.5">
-        <div className={microLabelClass}>Perp exit cost</div>
-        <SegmentedToggle<ExitMode>
-          className="seg-info seg-lg"
-          ariaLabel="Perp legs at maturity"
-          value={exitMode}
-          onChange={(next) => {
-            setExitMode(next);
-            persist({ exitMode: next });
-          }}
-          options={[
-            { value: 'close', label: EXIT_MODE_LABEL.close },
-            { value: 'roll', label: EXIT_MODE_LABEL.roll },
-          ]}
-        />
-      </div>
-
-      {hasRebate && (
-        <div className="flex flex-col items-start gap-1.5">
-          <div className={microLabelClass}>Settlement rebate</div>
-          <label
-            className="flex h-9 cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] text-ink-200"
-            title={`Credit this account's Boros settlement-fee rebate (${rebateAccountLabel(rebate as Rebate)}) into every APR, Return and profit.`}
-          >
-            <input
-              type="checkbox"
-              className="chk"
-              checked={includeRebate}
-              onChange={(e) => {
-                setIncludeRebate(e.target.checked);
-                persist({ includeRebate: e.target.checked });
-              }}
+            <SegmentedToggle<NotionalChoice>
+              className="seg-info seg-lg max-sm:[&_.seg-btn]:px-3"
+              ariaLabel={byCapital ? 'Capital' : 'Notional'}
+              value={sizeChoice}
+              onChange={setSizeChoice}
+              options={NOTIONAL_OPTIONS}
             />
-            Include rebate in APR
-          </label>
+          </div>
         </div>
-      )}
 
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex h-[35px] items-center gap-2">
           {query.isPlaceholderData && <span className="text-xs text-ink-400">recomputing…</span>}
           <StrategyFreshness
             dataUpdatedAt={query.dataUpdatedAt || 0}
@@ -1324,6 +1238,80 @@ export function OpportunitiesPanel() {
             onRefetch={() => void query.refetch()}
           />
         </span>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-4">
+        <div className={field}>
+          <div className={microLabelClass}>Perp entry</div>
+          <SegmentedToggle<EntryMode>
+            className="seg-info seg-lg"
+            ariaLabel="Perp entry mode"
+            value={entryMode}
+            onChange={(next) => {
+              setEntryMode(next);
+              persist({ entryMode: next });
+            }}
+            options={[
+              { value: 'both-market', label: ENTRY_MODE_LABEL['both-market'] },
+              { value: 'maker-hedge', label: ENTRY_MODE_LABEL['maker-hedge'] },
+            ]}
+          />
+        </div>
+
+        <div className={field}>
+          <div className={microLabelClass}>Perp exit cost</div>
+          <SegmentedToggle<ExitMode>
+            className="seg-info seg-lg"
+            ariaLabel="Perp legs at maturity"
+            value={exitMode}
+            onChange={(next) => {
+              setExitMode(next);
+              persist({ exitMode: next });
+            }}
+            options={[
+              { value: 'close', label: EXIT_MODE_LABEL.close },
+              { value: 'roll', label: EXIT_MODE_LABEL.roll },
+            ]}
+          />
+        </div>
+
+        {hasRebate && (
+          <div className={field}>
+            <div className={microLabelClass}>Settlement rebate</div>
+            <label
+              className="flex h-[35px] cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] text-ink-200"
+              title={`Credit this account's Boros settlement-fee rebate (${rebateAccountLabel(rebate as Rebate)}) into every APR, Return and profit.`}
+            >
+              <input
+                type="checkbox"
+                className="chk"
+                checked={includeRebate}
+                onChange={(e) => {
+                  setIncludeRebate(e.target.checked);
+                  persist({ includeRebate: e.target.checked });
+                }}
+              />
+              Include rebate in APR
+            </label>
+          </div>
+        )}
+      </div>
+
+      {sizeErr && (
+        <span role="alert" className="text-[11px] text-guava">
+          {sizeErr}
+        </span>
+      )}
+      {/* Above one clip the cards price perp slippage as a TWAP in $1M
+          orders (src/core/boros/opportunities.ts). The open ticket still
+          walks the full book. */}
+      {slippageClipped && (
+        <span className="flex items-start gap-1.5 text-[11px] text-ink-400">
+          <Info size={12} aria-hidden className="mt-px flex-none text-amber-400" />
+          Perp slippage is estimated at a $1M notional size. Above that, TWAP the perp side to keep
+          slippage close to this estimate.
+        </span>
+      )}
     </div>
   );
 
