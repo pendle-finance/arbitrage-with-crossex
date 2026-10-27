@@ -87,14 +87,14 @@ const feeRows = [
   { exchange_type: 'BINANCE', future_maker_fee: '0.0002', future_taker_fee: '0.00048' },
 ];
 
-/** Risk-limit tiers behind the capital model's perp legs: the cap is the HIGHEST
- * `leverage_max` across a symbol's tiers, so Hyperliquid is 20x and Binance 25x. */
+/** Risk-limit tiers behind the capital model's perp legs: Hyperliquid runs at
+ * 20x to $1B (its 10x tier is never reached), Binance at 25x. */
 const riskLimits = [
   {
     symbol: 'HYPERLIQUID_FUTURE_ETH_USDC',
-    tiers: [{ leverage_max: '20' }, { leverage_max: '10' }],
+    tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '20' }, { max_risk_limit_value: '2000000000', leverage_max: '10' }],
   },
-  { symbol: 'BINANCE_FUTURE_ETH_USDT', tiers: [{ leverage_max: '25' }] },
+  { symbol: 'BINANCE_FUTURE_ETH_USDT', tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '25' }] },
 ];
 
 /** Deep, tight public books on both venues so slippage never blocks a quote. */
@@ -110,7 +110,7 @@ function mockVenueBooks(times = 1): void {
     .reply(200, { bids: [['1899', '5000']], asks: [['1901', '5000']] });
 }
 
-/** One risk-limits interceptor per request: `getLeverageMax` is comma-joined, so
+/** One risk-limits interceptor per request: `getPositionLimits` is comma-joined, so
  * the whole symbol universe must cost a single call — a per-symbol read would
  * miss the mock on its second hedge symbol. */
 function mockGate(times = 1, limits: unknown = riskLimits): void {
@@ -455,7 +455,7 @@ describe('GET /api/opportunities', () => {
       ],
     });
     mockGateGet('/rule/risk_limits', {
-      body: [riskLimits[0], { symbol: 'LIGHTER_FUTURE_ETH_USDC', tiers: [{ leverage_max: '50' }] }],
+      body: [riskLimits[0], { symbol: 'LIGHTER_FUTURE_ETH_USDC', tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '50' }] }],
     });
     mockGateGet('/fee', {
       body: [feeRows[0], { exchange_type: 'LIGHTER', future_maker_fee: '0.0002', future_taker_fee: '0.0005' }],

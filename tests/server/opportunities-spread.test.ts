@@ -67,7 +67,7 @@ const feeRows = ['HYPERLIQUID', 'GATE', 'OKX', 'LIGHTER'].map((exchange_type) =>
   future_maker_fee: '0.0002',
   future_taker_fee: '0.00048',
 }));
-const riskLimits = ruleSymbols.map(({ symbol }) => ({ symbol, tiers: [{ leverage_max: '20' }] }));
+const riskLimits = ruleSymbols.map(({ symbol }) => ({ symbol, tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '20' }] }));
 
 let app: FastifyInstance | undefined;
 

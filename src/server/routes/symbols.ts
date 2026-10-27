@@ -5,7 +5,7 @@ import { CoreError } from '../../core/errors';
 import { isQuoteTwin, parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { leverageMaxFor } from './leverage';
+import { positionLimitFor } from './leverage';
 
 interface SymbolInfo {
   symbol: string;
@@ -110,11 +110,11 @@ export function symbolsRoutes(deps: AppDeps) {
       const { list, stale } = await livePerps(deps, fresh);
       const info = list.find((s) => s.symbol === symbol);
       if (!info) throw new CoreError(`symbol ${symbol} not found on CrossEx`, 'symbol-invalid');
-      const leverageMax = await leverageMaxFor(deps, symbol, fresh).catch((err: unknown) => {
-        if (err instanceof CoreError && err.category === 'leverage') return 0;
+      const limit = await positionLimitFor(deps, symbol, fresh).catch((err: unknown) => {
+        if (err instanceof CoreError && err.category === 'leverage') return null;
         throw err;
       });
-      return reply.ok({ ...info, leverageMax }, { stale });
+      return reply.ok({ ...info, leverageMax: limit?.leverage ?? 0, positionMaxUsd: limit?.maxUsd ?? 0 }, { stale });
     });
   };
 }

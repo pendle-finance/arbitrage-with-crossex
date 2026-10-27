@@ -1,22 +1,23 @@
 import { CoreError } from '../../core/errors';
-import { getLeverageMax } from '../../core/orders';
+import { getPositionLimits } from '../../core/orders';
+import type { PositionLimit } from '../../core/positionLimit';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 
-export function requireLeverageMax(map: Map<string, number>, symbol: string): number {
-  const max = map.get(symbol) ?? 0;
-  if (!(max > 0)) {
+export function requirePositionLimit(map: Map<string, PositionLimit | null>, symbol: string): PositionLimit {
+  const limit = map.get(symbol);
+  if (!limit) {
     throw new CoreError(`CrossEx returned no leverage limit for ${symbol} — nothing was sent; try again`, 'leverage');
   }
-  return max;
+  return limit;
 }
 
-/** Max settable leverage for one symbol, from the cached risk-limit tiers. */
-export async function leverageMaxFor(deps: AppDeps, symbol: string, fresh: boolean): Promise<number> {
+/** One symbol's max leverage and largest position, from the cached risk-limit tiers. */
+export async function positionLimitFor(deps: AppDeps, symbol: string, fresh: boolean): Promise<PositionLimit> {
   const { value } = await deps.cache.get(
     `risk:${symbol}`,
     TTL.static,
-    async () => requireLeverageMax(await getLeverageMax(deps.getClients().crossEx, [symbol]), symbol),
+    async () => requirePositionLimit(await getPositionLimits(deps.getClients().crossEx, [symbol]), symbol),
     { fresh },
   );
   return value;

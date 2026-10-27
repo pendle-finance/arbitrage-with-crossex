@@ -41,10 +41,11 @@ import {
 import type { VenueFeeRow } from '../../core/estimate/fees';
 import { classifyGateError, CoreError } from '../../core/errors';
 import { parseSymbol } from '../../core/numbers';
-import { getLeverageMax } from '../../core/orders';
+import { getPositionLimits } from '../../core/orders';
+import type { PositionLimit } from '../../core/positionLimit';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { requireLeverageMax } from './leverage';
+import { requirePositionLimit } from './leverage';
 
 const DEFAULT_NOTIONAL_USD = 10_000;
 const MIN_NOTIONAL_USD = 1_000;
@@ -143,28 +144,28 @@ function ruleClient(deps: AppDeps): CrossExApi {
 }
 
 /**
- * CrossEx symbol → venue max leverage, the divisor the capital model sizes each
- * perp leg's initial margin by. Cached on the same `risk:<symbol>` keys
+ * CrossEx symbol → venue max leverage and largest position, which size each
+ * perp leg's initial margin and cap its notional. Cached on the same `risk:<symbol>` keys
  * `/api/leverage` and `/api/symbols` read (so a scan warms the ticket flow), but
- * filled from ONE comma-joined `getLeverageMax` rather than a call per symbol.
+ * filled from ONE comma-joined `getPositionLimits` rather than a call per symbol.
  *
  * A failed read or a symbol with no row leaves that symbol absent, which nulls
  * only that pair's capital — the notional-basis numbers still price.
  *
  * Returns a warning when the read failed for EVERY symbol. One shared
- * `getLeverageMax` call backs them all, so a single outage empties the whole
+ * `getPositionLimits` call backs them all, so a single outage empties the whole
  * map — and with no leverage cap anywhere, no pair can model its capital, no
  * pair prices an APR on capital, and the terminal shows an empty list. Silence
  * there reads as "no opportunities at this notional", sending the reader to
  * re-tune a size that was never the problem.
  */
-async function loadLeverageMax(
+async function loadPositionLimits(
   deps: AppDeps,
   symbols: string[],
   fresh: boolean,
-  out: Map<string, number>,
+  out: Map<string, PositionLimit>,
 ): Promise<string | null> {
-  let batch: Promise<Map<string, number>> | undefined;
+  let batch: Promise<Map<string, PositionLimit | null>> | undefined;
   let failure: unknown;
   await Promise.all(
     symbols.map(async (symbol) => {
@@ -173,12 +174,12 @@ async function loadLeverageMax(
           `risk:${symbol}`,
           TTL.static,
           async () => {
-            batch ??= getLeverageMax(ruleClient(deps), symbols);
-            return requireLeverageMax(await batch, symbol);
+            batch ??= getPositionLimits(ruleClient(deps), symbols);
+            return requirePositionLimit(await batch, symbol);
           },
           { fresh },
         );
-        if (value > 0) out.set(symbol, value);
+        out.set(symbol, value);
       } catch (err) {
         // Omit the symbol; the math turns that into a reason naming the venue.
         failure ??= err;
@@ -319,7 +320,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
 
       const borosBooks = new Map<number, BorosOrderBook | null>();
       const venueBooks = new Map<string, NormalizedBook | null>();
-      const leverageMaxBySymbol = new Map<string, number>();
+      const positionLimitBySymbol = new Map<string, PositionLimit>();
       await Promise.all([
         ...(borosEntry === 'market' ? bookMarketIds : []).map(async (marketId) => {
           try {
@@ -361,7 +362,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
           );
           venueBooks.set(key, value);
         }),
-        loadLeverageMax(deps, [...perpSymbols], fresh, leverageMaxBySymbol).then((warning) => {
+        loadPositionLimits(deps, [...perpSymbols], fresh, positionLimitBySymbol).then((warning) => {
           if (warning !== null) warnings.push(warning);
         }),
       ]);
@@ -374,7 +375,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
           venueBooks,
           symbolsByVenueBase,
           crossexVenues,
-          leverageMaxBySymbol,
+          positionLimitBySymbol,
           feeRows,
           nowSec,
         },

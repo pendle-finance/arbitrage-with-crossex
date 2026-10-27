@@ -2,6 +2,7 @@
 import { CrossexLeverageRequest } from 'gate-api';
 import type { CrossExApi } from 'gate-api';
 import type { Clients } from './clients';
+import { positionLimitOf, type PositionLimit } from './positionLimit';
 import { coarsestLot, formatCrossPrice, roundToStep } from './numbers';
 
 export type Side = 'BUY' | 'SELL';
@@ -12,6 +13,19 @@ export function direction(side: string | undefined, qty: number | string): 'LONG
   const s = (side ?? '').toUpperCase();
   if (s === 'LONG' || s === 'SHORT') return s;
   return Number(qty) >= 0 ? 'LONG' : 'SHORT';
+}
+
+/** Net signed size held in `symbol`: longs positive, shorts negative. */
+export function heldQty(
+  positions: ReadonlyArray<{ symbol?: string; positionQty?: string; positionSide?: string }>,
+  symbol: string,
+): number {
+  return positions
+    .filter((p) => (p.symbol ?? '').toUpperCase() === symbol)
+    .reduce((sum, p) => {
+      const size = Math.abs(Number(p.positionQty ?? 0)) || 0;
+      return sum + (direction(p.positionSide, p.positionQty ?? 0) === 'LONG' ? size : -size);
+    }, 0);
 }
 
 /** A reference price for notional→qty sizing: Gate spot last, else futures mark/last. */
@@ -141,15 +155,15 @@ export function marketableClosePrice(
   return formatCrossPrice(markPrice * factor, closeSide, symbol, tickSize);
 }
 
-/** Max settable leverage per symbol (highest `leverage_max` across risk tiers).
- * One call covers many symbols (comma-joined). */
-export async function getLeverageMax(crossEx: CrossExApi, symbols: string[]): Promise<Map<string, number>> {
+/** Position limit per symbol; one call covers many symbols (comma-joined).
+ * A symbol whose table is unreadable maps to null. */
+export async function getPositionLimits(
+  crossEx: CrossExApi,
+  symbols: string[],
+): Promise<Map<string, PositionLimit | null>> {
   const { body } = await crossEx.listCrossexRuleRiskLimits(symbols.join(','));
-  const map = new Map<string, number>();
-  for (const r of body ?? []) {
-    const max = Math.max(0, ...(r.tiers ?? []).map((t) => Number(t.leverageMax) || 0));
-    if (r.symbol) map.set(r.symbol, max);
-  }
+  const map = new Map<string, PositionLimit | null>();
+  for (const r of body ?? []) if (r.symbol) map.set(r.symbol, positionLimitOf(r.tiers));
   return map;
 }
 

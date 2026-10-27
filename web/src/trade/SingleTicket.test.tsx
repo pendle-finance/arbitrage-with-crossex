@@ -304,3 +304,21 @@ describe('SingleTicket — the size unit follows the coin', () => {
     expect(screen.getByPlaceholderText(/notional/)).toBeInTheDocument();
   });
 });
+
+describe('SingleTicket — the max size', () => {
+  it('stops at the largest position CrossEx takes, even when margin allows more', async () => {
+    // $4,200 available at 50x carries $190,909; CrossEx takes $100,000.
+    server.use(
+      http.get('/api/symbols/:symbol', () =>
+        HttpResponse.json(env({ ...BTC_HYPERLIQUID, leverageMax: 50, positionMaxUsd: 100_000 })),
+      ),
+      ...baseHandlers(),
+      ...btcSymbolHandlers(),
+      echoPreviewHandler(),
+    );
+    renderWithClient(<SingleTicket />);
+    await pickHyperliquidBtc();
+
+    expect(screen.getByRole('button', { name: /^max / })).toHaveTextContent('max $100,000');
+  });
+});
