@@ -500,8 +500,12 @@ type ExcludeMenu = (leg: Pick<PendingLeg, 'marketId' | 'rowSizeToken'>) => React
 
 const MENU_CELL = 'w-7 !pl-0 text-right';
 
-function MenuHead() {
-  return <th className={`th ${MENU_CELL}`} />;
+function MenuHead({ show }: { show: boolean }) {
+  return show ? <th className={`th ${MENU_CELL}`} /> : null;
+}
+
+function MenuCell({ show, cell, children }: { show: boolean; cell: string; children?: React.ReactNode }) {
+  return show ? <td className={`${cell} ${MENU_CELL}`}>{children}</td> : null;
 }
 
 function PairCard({
@@ -666,6 +670,10 @@ function PairCard({
   const lockedSpread = pairLockedSpread(pair);
 
   const cell = 'border-b border-ink-850 px-2.5 py-2';
+  const menus = pair.legs.map((l) =>
+    l.kind === 'yu' && l.marketId !== undefined ? excludeMenu({ marketId: l.marketId, rowSizeToken: l.sizeToken }) : null,
+  );
+  const hasMenu = menus.some((m) => m != null);
 
   /** One switch of the charge row — a setting, not a figure: the amounts
    * live in the ladder below, next to the carry they come out of. */
@@ -863,7 +871,7 @@ function PairCard({
                   <th className="th text-right">Size</th>
                   <th className="th text-right">Locked</th>
                   <th className="th text-right">Initial margin</th>
-                  <MenuHead />
+                  <MenuHead show={hasMenu} />
                 </tr>
               </thead>
               <tbody>
@@ -901,9 +909,9 @@ function PairCard({
                         {fmtUsdCompact(l.imUsd)}
                       </span>
                     </td>
-                    <td className={`${cell} ${MENU_CELL}`}>
-                      {l.kind === 'yu' && l.marketId !== undefined && excludeMenu({ marketId: l.marketId, rowSizeToken: l.sizeToken })}
-                    </td>
+                    <MenuCell show={hasMenu} cell={cell}>
+                      {menus[i]}
+                    </MenuCell>
                   </tr>
                 ))}
               </tbody>
@@ -3253,6 +3261,12 @@ function PerpOnlyPairCard({
   const held = pair.longYu ?? pair.shortYu;
   const rowMissing = (yu: PendingLeg | null, missing: number) => !yu || missing > 0;
   const cell = 'border-b border-ink-850 px-2.5 py-2';
+  const heldMenus = {
+    LONG: !spread && pair.longYu && !(pair.missingLong > 0) ? excludeMenu(pair.longYu) : null,
+    SHORT: !spread && pair.shortYu && !(pair.missingShort > 0) ? excludeMenu(pair.shortYu) : null,
+  };
+  const otherWayMenus = pair.otherWay.map(excludeMenu);
+  const hasMenu = [heldMenus.LONG, heldMenus.SHORT, ...otherWayMenus].some((m) => m != null);
   // The mock's row actions: the house outline at the compact size. The old
   // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
   // on every button, and reserves colour for what the action does.
@@ -3307,7 +3321,9 @@ function PerpOnlyPairCard({
           )}
         </td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(yu.imUsd)}</td>
-        <td className={`${cell} ${MENU_CELL}`}>{excludeMenu(yu)}</td>
+        <MenuCell show={hasMenu} cell={cell}>
+          {heldMenus[side]}
+        </MenuCell>
       </tr>
     ) : (
       <tr key={`yu-${venue}`} className="bg-amber-500/[0.04]">
@@ -3338,7 +3354,7 @@ function PerpOnlyPairCard({
             </BlockedOpen>
           )}
         </td>
-        <td className={`${cell} ${MENU_CELL}`} />
+        <MenuCell show={hasMenu} cell={cell} />
       </tr>
     );
   };
@@ -3417,7 +3433,7 @@ function PerpOnlyPairCard({
                   <th className="th text-right">Size</th>
                   <th className="th text-right">Locked</th>
                   <th className="th text-right">Initial margin</th>
-                  <MenuHead />
+                  <MenuHead show={hasMenu} />
                 </tr>
               </thead>
               <tbody>
@@ -3427,7 +3443,7 @@ function PerpOnlyPairCard({
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(l, l.unit))}</td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(l.imUsd)}</td>
-                    <td className={`${cell} ${MENU_CELL}`} />
+                    <MenuCell show={hasMenu} cell={cell} />
                   </tr>
                 ))}
                 {spread ? (
@@ -3454,7 +3470,7 @@ function PerpOnlyPairCard({
                     ) : (
                       <td className={`${cell} num text-right text-ink-600`}>—</td>
                     )}
-                    <td className={`${cell} ${MENU_CELL}`} />
+                    <MenuCell show={hasMenu} cell={cell} />
                   </tr>
                 ) : (
                   <>
@@ -3462,7 +3478,7 @@ function PerpOnlyPairCard({
                     {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort, pair.blockedShort, excludedNet.short, pair.heldElsewhereShort)}
                   </>
                 )}
-                {pair.otherWay.map((y) => {
+                {pair.otherWay.map((y, i) => {
                   const size = sizeText(sizeIn(y, y.unit));
                   return (
                     <tr key={`ow-${y.marketId}`} className={WRONG_SIDE_TINT}>
@@ -3484,7 +3500,9 @@ function PerpOnlyPairCard({
                           Close
                         </button>
                       </td>
-                      <td className={`${cell} ${MENU_CELL}`}>{excludeMenu(y)}</td>
+                      <MenuCell show={hasMenu} cell={cell}>
+                        {otherWayMenus[i]}
+                      </MenuCell>
                     </tr>
                   );
                 })}
@@ -3567,6 +3585,8 @@ function BorosOnlyPairCard({
   // gaps match; a part-covered side opens from its own row.
   const bothEven = both && gapsEven(pair);
   const cell = 'border-b border-ink-850 px-2.5 py-2';
+  const borosMenus = pair.borosLegs.map(excludeMenu);
+  const hasMenu = borosMenus.some((m) => m != null);
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
   const sizeText = (n: number) => exactSize(n, pair.unit, base);
   const legName = (venue: string, kind: 'perp' | 'yu', side: 'LONG' | 'SHORT', spreadVenues?: [string, string] | null) => (
@@ -3584,7 +3604,7 @@ function BorosOnlyPairCard({
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
-        <td className={`${cell} ${MENU_CELL}`} />
+        <MenuCell show={hasMenu} cell={cell} />
       </tr>
     ),
     missing > 0 && (
@@ -3610,7 +3630,7 @@ function BorosOnlyPairCard({
             Open leg
           </button>
         </td>
-        <td className={`${cell} ${MENU_CELL}`} />
+        <MenuCell show={hasMenu} cell={cell} />
       </tr>
     ),
   ];
@@ -3693,13 +3713,13 @@ function BorosOnlyPairCard({
                   <th className="th text-right">Size</th>
                   <th className="th text-right">Locked</th>
                   <th className="th text-right">Initial margin</th>
-                  <MenuHead />
+                  <MenuHead show={hasMenu} />
                 </tr>
               </thead>
               <tbody>
                 {perpRows(pair.longVenue, 'LONG', pair.longPerp, pair.missingLong)}
                 {perpRows(pair.shortVenue, 'SHORT', pair.shortPerp, pair.missingShort)}
-                {pair.borosLegs.map((y) => (
+                {pair.borosLegs.map((y, i) => (
                   <tr key={`y-${y.marketId}`}>
                     <td className={`${cell} whitespace-nowrap`}>{legName(y.venue, 'yu', y.side, y.spreadVenues)}</td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
@@ -3719,7 +3739,9 @@ function BorosOnlyPairCard({
                       <BorosLiqAprLine leg={borosOpen.find((b) => b.marketId === y.marketId)} />
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(y.imUsd)}</td>
-                    <td className={`${cell} ${MENU_CELL}`}>{excludeMenu(y)}</td>
+                    <MenuCell show={hasMenu} cell={cell}>
+                      {borosMenus[i]}
+                    </MenuCell>
                   </tr>
                 ))}
               </tbody>
