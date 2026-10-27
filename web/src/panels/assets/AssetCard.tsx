@@ -496,6 +496,14 @@ function BorosLiqAprLine({ leg }: { leg: Pick<AssetBorosOpen, 'liquidationApr' |
  * share and close actions. All slices are proportional estimates (shares
  * by TODAY'S sizes, not historical pairing) — stated in the footer.
  */
+type ExcludeMenu = (leg: Pick<PendingLeg, 'marketId' | 'rowSizeToken'>) => React.ReactNode;
+
+const MENU_CELL = 'w-7 !pl-0 text-right';
+
+function MenuHead() {
+  return <th className={`th ${MENU_CELL}`} />;
+}
+
 function PairCard({
   pair,
   base,
@@ -509,6 +517,7 @@ function PairCard({
   onRollOver,
   onRollSignal,
   focusOnShow = false,
+  excludeMenu,
 }: {
   pair: PairEstimate;
   base: string;
@@ -532,6 +541,7 @@ function PairCard({
    * fifth of this pair could roll into at a better rate than it earns now,
    * or null. Reported whenever it changes. */
   onRollSignal?: (opportunities: RollOpportunity[]) => void;
+  excludeMenu: ExcludeMenu;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   // The roll is OFFERED on any live pair; everything that reminds — the
@@ -853,6 +863,7 @@ function PairCard({
                   <th className="th text-right">Size</th>
                   <th className="th text-right">Locked</th>
                   <th className="th text-right">Initial margin</th>
+                  <MenuHead />
                 </tr>
               </thead>
               <tbody>
@@ -889,6 +900,9 @@ function PairCard({
                       <span title={l.kind === 'yu' ? "Initial margin this leg ties up today." : 'Initial margin this slice consumes'}>
                         {fmtUsdCompact(l.imUsd)}
                       </span>
+                    </td>
+                    <td className={`${cell} ${MENU_CELL}`}>
+                      {l.kind === 'yu' && l.marketId !== undefined && excludeMenu({ marketId: l.marketId, rowSizeToken: l.sizeToken })}
                     </td>
                   </tr>
                 ))}
@@ -3215,7 +3229,7 @@ function PerpOnlyPairCard({
   nowSec: number;
   listedSpread: [string, string] | null;
   excludedNet: ExcludedNets;
-  excludeMenu: (leg: PendingLeg) => React.ReactNode;
+  excludeMenu: ExcludeMenu;
   looseIds: Set<number>;
   wrongSideLegs: PendingLeg[];
   /** Opens the close form on one Boros leg. */
@@ -3292,10 +3306,8 @@ function PerpOnlyPairCard({
             <span className="text-ink-500">pending</span>
           )}
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
-          {fmtUsdCompact(yu.imUsd)}
-          <span className="ml-1">{excludeMenu(yu)}</span>
-        </td>
+        <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(yu.imUsd)}</td>
+        <td className={`${cell} ${MENU_CELL}`}>{excludeMenu(yu)}</td>
       </tr>
     ) : (
       <tr key={`yu-${venue}`} className="bg-amber-500/[0.04]">
@@ -3326,6 +3338,7 @@ function PerpOnlyPairCard({
             </BlockedOpen>
           )}
         </td>
+        <td className={`${cell} ${MENU_CELL}`} />
       </tr>
     );
   };
@@ -3404,6 +3417,7 @@ function PerpOnlyPairCard({
                   <th className="th text-right">Size</th>
                   <th className="th text-right">Locked</th>
                   <th className="th text-right">Initial margin</th>
+                  <MenuHead />
                 </tr>
               </thead>
               <tbody>
@@ -3413,6 +3427,7 @@ function PerpOnlyPairCard({
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(l, l.unit))}</td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(l.imUsd)}</td>
+                    <td className={`${cell} ${MENU_CELL}`} />
                   </tr>
                 ))}
                 {spread ? (
@@ -3439,6 +3454,7 @@ function PerpOnlyPairCard({
                     ) : (
                       <td className={`${cell} num text-right text-ink-600`}>—</td>
                     )}
+                    <td className={`${cell} ${MENU_CELL}`} />
                   </tr>
                 ) : (
                   <>
@@ -3467,8 +3483,8 @@ function PerpOnlyPairCard({
                         >
                           Close
                         </button>
-                        <span className="ml-1">{excludeMenu(y)}</span>
                       </td>
+                      <td className={`${cell} ${MENU_CELL}`}>{excludeMenu(y)}</td>
                     </tr>
                   );
                 })}
@@ -3536,7 +3552,7 @@ function BorosOnlyPairCard({
   nowSec: number;
   /** The asset's open Boros legs, for the per-leg liquidation APR. */
   borosOpen: AssetBorosOpen[];
-  excludeMenu: (leg: PendingLeg) => React.ReactNode;
+  excludeMenu: ExcludeMenu;
   /** Arms the perp ticket for the named side(s) at this size; null when there
    * is no trade flow to arm (a provider-less render). */
   onOpenPerps: ((sides: { long: boolean; short: boolean }) => void) | null;
@@ -3568,6 +3584,7 @@ function BorosOnlyPairCard({
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
+        <td className={`${cell} ${MENU_CELL}`} />
       </tr>
     ),
     missing > 0 && (
@@ -3593,6 +3610,7 @@ function BorosOnlyPairCard({
             Open leg
           </button>
         </td>
+        <td className={`${cell} ${MENU_CELL}`} />
       </tr>
     ),
   ];
@@ -3675,6 +3693,7 @@ function BorosOnlyPairCard({
                   <th className="th text-right">Size</th>
                   <th className="th text-right">Locked</th>
                   <th className="th text-right">Initial margin</th>
+                  <MenuHead />
                 </tr>
               </thead>
               <tbody>
@@ -3699,10 +3718,8 @@ function BorosOnlyPairCard({
                       )}
                       <BorosLiqAprLine leg={borosOpen.find((b) => b.marketId === y.marketId)} />
                     </td>
-                    <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
-                      {fmtUsdCompact(y.imUsd)}
-                      <span className="ml-1">{excludeMenu(y)}</span>
-                    </td>
+                    <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(y.imUsd)}</td>
+                    <td className={`${cell} ${MENU_CELL}`}>{excludeMenu(y)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -3779,7 +3796,7 @@ function UngroupedCard({
   nowSec: number;
   defaultOpen: boolean;
   livePositions: Map<string, CrossexPosition>;
-  excludeMenu: (leg: PendingLeg) => React.ReactNode;
+  excludeMenu: ExcludeMenu;
   onCloseLeg: (target: CloseLegTarget) => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -5663,7 +5680,7 @@ export function AssetCard({
   };
   const ungroupedCount = derived.unpairedPerps.length + derived.pendingLegs.length;
   const looseIds = new Set(derived.pendingLegs.map((y) => y.marketId));
-  const excludeMenu = (y: PendingLeg): React.ReactNode => {
+  const excludeMenu: ExcludeMenu = (y) => {
     const leg = group.borosOpen.find((b) => b.marketId === y.marketId);
     if (!leg || !(y.rowSizeToken > 0)) return null;
     const key = borosKey(leg.marketId);
@@ -6139,6 +6156,7 @@ export function AssetCard({
                 nowSec={nowSec}
                 timelineAxis={timelineAxis}
                 borosOpen={group.borosOpen}
+                excludeMenu={excludeMenu}
                 // A pair due a roll opens expanded: its Roll over action
                 // lives in the expansion, and the flag on the summary row
                 // is the reason the user came to this tab.
