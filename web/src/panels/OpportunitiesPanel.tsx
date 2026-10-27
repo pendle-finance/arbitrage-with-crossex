@@ -18,7 +18,6 @@ import {
   memo,
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -93,24 +92,15 @@ export const OPPORTUNITIES_STORAGE_KEY = 'crossex.opportunities.v2';
  * them into two independent knobs, so v1 blobs are migrated once and dropped. */
 const LEGACY_STORAGE_KEY = 'crossex.opportunities.v1';
 
-/** The size every card is priced at: four presets or a typed size. Capital and
- * notional each keep their own pick, because the same figure means a ~7× larger
- * trade as capital. */
-type NotionalChoice = '10k' | '100k' | '500k' | '1m' | 'custom';
+/** Shortcuts that fill the size box. The box is the size; a preset is lit only
+ * while the box holds exactly its amount. */
+type SizePreset = '10k' | '100k' | '500k' | '1m';
 
-const NOTIONAL_PRESETS: Record<Exclude<NotionalChoice, 'custom'>, number> = {
-  '10k': 10_000,
-  '100k': 100_000,
-  '500k': 500_000,
-  '1m': 1_000_000,
-};
-
-const NOTIONAL_OPTIONS: { value: NotionalChoice; label: string }[] = [
-  { value: '10k', label: '$10k' },
-  { value: '100k', label: '$100k' },
-  { value: '500k', label: '$500k' },
-  { value: '1m', label: '$1M' },
-  { value: 'custom', label: 'Custom…' },
+const SIZE_PRESETS: { value: SizePreset; label: string; usd: number }[] = [
+  { value: '10k', label: '$10k', usd: 10_000 },
+  { value: '100k', label: '$100k', usd: 100_000 },
+  { value: '500k', label: '$500k', usd: 500_000 },
+  { value: '1m', label: '$1M', usd: 1_000_000 },
 ];
 
 const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
@@ -137,11 +127,10 @@ const EXIT_MODE_PROSE: Record<ExitMode, string> = {
 
 export interface StoredControls {
   sizeBy: OpportunitySizeBy;
-  notionalChoice: NotionalChoice;
-  /** The size behind "Custom…" (USD). */
-  customNotionalUsd: number;
-  capitalChoice: NotionalChoice;
-  customCapitalUsd: number;
+  /** Each kind keeps its own size, because the same figure means a ~7× larger
+   * trade as capital. */
+  notionalUsd: number;
+  capitalUsd: number;
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
   exitMode: ExitMode;
@@ -154,10 +143,8 @@ export interface StoredControls {
 const DEFAULTS: StoredControls = {
   // Capital first: it is what the APR is on, and what a trader budgets.
   sizeBy: 'capital',
-  notionalChoice: '1m',
-  customNotionalUsd: 1_000_000,
-  capitalChoice: '100k',
-  customCapitalUsd: 100_000,
+  notionalUsd: 1_000_000,
+  capitalUsd: 100_000,
   borosEntry: 'market',
   entryMode: 'both-market',
   // 'roll' by default: an assumed exit cost is a decision the user has not
@@ -173,15 +160,26 @@ const validExitMode = (v: unknown): ExitMode =>
   v === 'close' || v === 'roll' ? v : DEFAULTS.exitMode;
 
 const validSize = (v: unknown): number =>
-  typeof v === 'number' && isValidOpportunitySize('notional', v) ? v : DEFAULTS.customNotionalUsd;
+  typeof v === 'number' && isValidOpportunitySize('notional', v) ? v : DEFAULTS.notionalUsd;
 
-/** A preset-sized custom size reads back as that preset, so a v1 user lands on
- * the same button they left. */
-const snapToPreset = (usd: number): NotionalChoice =>
-  (Object.entries(NOTIONAL_PRESETS).find(([, n]) => n === usd)?.[0] as NotionalChoice | undefined) ??
-  'custom';
+/** One kind's saved size. Saves from 1.7.7 hold a preset name beside a separate
+ * custom size, and the preset name wins, as it did on screen. */
+const storedSize = (
+  kind: OpportunitySizeBy,
+  usd: unknown,
+  legacyChoice: unknown,
+  legacyCustom: unknown,
+  fallback: number,
+): number => {
+  if (typeof usd === 'number' && isValidOpportunitySize(kind, usd)) return usd;
+  const preset = SIZE_PRESETS.find((o) => o.value === legacyChoice);
+  if (preset) return preset.usd;
+  if (legacyChoice === 'custom' && typeof legacyCustom === 'number' && isValidOpportunitySize(kind, legacyCustom))
+    return legacyCustom;
+  return fallback;
+};
 
-/** v1 → v2: split the coupled `choice` into {notionalChoice, borosEntry}. */
+/** v1 → v2: split the coupled `choice` into {notionalUsd, borosEntry}. */
 function migrateLegacy(): StoredControls | null {
   const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
   if (raw === null) return null;
@@ -192,16 +190,15 @@ function migrateLegacy(): StoredControls | null {
   const choice = p?.choice;
   return {
     ...DEFAULTS,
-    notionalChoice:
+    notionalUsd:
       choice === 'market-10k'
-        ? '10k'
+        ? 10_000
         : choice === 'market-100k'
-          ? '100k'
+          ? 100_000
           : choice === 'market-500k'
-            ? '500k'
+            ? 500_000
             : // 'mark' and 'market-custom' both carried their size in customSize.
-              snapToPreset(size),
-    customNotionalUsd: size,
+              size,
     // v1's 'mark' choice has no home any more — every card is priced
     // market-at-size — so the size migrates and the entry lands on market.
     borosEntry: 'market',
@@ -229,6 +226,8 @@ export function loadControls(base: StoredControls = DEFAULTS): StoredControls {
     const p = parsed as
       | {
           sizeBy?: unknown;
+          notionalUsd?: unknown;
+          capitalUsd?: unknown;
           notionalChoice?: unknown;
           customNotionalUsd?: unknown;
           capitalChoice?: unknown;
@@ -239,20 +238,10 @@ export function loadControls(base: StoredControls = DEFAULTS): StoredControls {
           includeRebate?: unknown;
         }
       | null;
-    const choiceOf = (v: unknown, fallback: NotionalChoice): NotionalChoice =>
-      NOTIONAL_OPTIONS.some((o) => o.value === v) ? (v as NotionalChoice) : fallback;
     return {
       sizeBy: p?.sizeBy === 'capital' || p?.sizeBy === 'notional' ? p.sizeBy : base.sizeBy,
-      notionalChoice: choiceOf(p?.notionalChoice, base.notionalChoice),
-      customNotionalUsd:
-        typeof p?.customNotionalUsd === 'number' && isValidOpportunitySize('notional', p.customNotionalUsd)
-          ? p.customNotionalUsd
-          : base.customNotionalUsd,
-      capitalChoice: choiceOf(p?.capitalChoice, base.capitalChoice),
-      customCapitalUsd:
-        typeof p?.customCapitalUsd === 'number' && isValidOpportunitySize('capital', p.customCapitalUsd)
-          ? p.customCapitalUsd
-          : base.customCapitalUsd,
+      notionalUsd: storedSize('notional', p?.notionalUsd, p?.notionalChoice, p?.customNotionalUsd, base.notionalUsd),
+      capitalUsd: storedSize('capital', p?.capitalUsd, p?.capitalChoice, p?.customCapitalUsd, base.capitalUsd),
       borosEntry:
         p?.borosEntry === 'mark' || p?.borosEntry === 'market' ? p.borosEntry : base.borosEntry,
       entryMode:
@@ -971,8 +960,6 @@ function RateNote({ midApr, execApr }: { midApr: number; execApr: number | null 
 export function OpportunitiesPanel() {
   const [stored] = useState<StoredControls>(() => loadControls());
   const [sizeBy, setSizeBy] = useState<OpportunitySizeBy>(stored.sizeBy);
-  const [notionalChoice, setNotionalChoice] = useState<NotionalChoice>(stored.notionalChoice);
-  const [capitalChoice, setCapitalChoice] = useState<NotionalChoice>(stored.capitalChoice);
   // Always market-at-size. The "at mark rate" alternative priced cards at a
   // number no order could get, so the knob only made a card disagree with the
   // book under it. The stored value is still read for compatibility.
@@ -981,12 +968,13 @@ export function OpportunitiesPanel() {
   const [exitMode, setExitMode] = useState<ExitMode>(stored.exitMode);
   const [includeRebate, setIncludeRebate] = useState<boolean>(stored.includeRebate);
   const [sizeStr, setSizeStr] = useState(
-    String(stored.sizeBy === 'capital' ? stored.customCapitalUsd : stored.customNotionalUsd),
+    String(stored.sizeBy === 'capital' ? stored.capitalUsd : stored.notionalUsd),
   );
-  // The last VALID custom size of each kind: a half-typed entry must never
-  // blank the list.
-  const [customNotional, setCustomNotional] = useState(stored.customNotionalUsd);
-  const [customCapital, setCustomCapital] = useState(stored.customCapitalUsd);
+  const [sizeFocused, setSizeFocused] = useState(false);
+  // The last VALID size of each kind: a half-typed entry must never blank the
+  // list.
+  const [notionalUsd, setNotionalUsd] = useState(stored.notionalUsd);
+  const [capitalUsd, setCapitalUsd] = useState(stored.capitalUsd);
   const debouncedSize = useDebounced(sizeStr, 400);
   // Persisted, like the assumptions. A filter is the louder of the two — it
   // changes what is MISSING rather than how it is priced — so restoring one
@@ -1000,18 +988,12 @@ export function OpportunitiesPanel() {
   }, []);
   const shownKeysRef = useRef<ReadonlySet<string>>(new Set());
   const flow = useTradeFlowOptional();
-  const sizeId = useId();
-  // Set by a double-click on the preset amount, so the custom input that
-  // replaces it takes focus with its digits selected.
-  const focusSizeRef = useRef(false);
 
   const persist = (next: Partial<StoredControls>) =>
     writeJson(OPPORTUNITIES_STORAGE_KEY, {
       sizeBy,
-      notionalChoice,
-      customNotionalUsd: customNotional,
-      capitalChoice,
-      customCapitalUsd: customCapital,
+      notionalUsd,
+      capitalUsd,
       borosEntry,
       entryMode,
       exitMode,
@@ -1020,29 +1002,25 @@ export function OpportunitiesPanel() {
     } satisfies StoredControls);
 
   const byCapital = sizeBy === 'capital';
-  const sizeChoice = byCapital ? capitalChoice : notionalChoice;
-  const setSizeChoice = (choice: NotionalChoice) => {
-    if (byCapital) setCapitalChoice(choice);
-    else setNotionalChoice(choice);
-    persist(byCapital ? { capitalChoice: choice } : { notionalChoice: choice });
-  };
-  const setCustomSize = (usd: number) => {
-    if (byCapital) setCustomCapital(usd);
-    else setCustomNotional(usd);
-    persist(byCapital ? { customCapitalUsd: usd } : { customNotionalUsd: usd });
+  const setSize = (usd: number) => {
+    if (byCapital) setCapitalUsd(usd);
+    else setNotionalUsd(usd);
+    persist(byCapital ? { capitalUsd: usd } : { notionalUsd: usd });
   };
 
   useEffect(() => {
     const n = Number(debouncedSize);
     if (!isValidOpportunitySize(sizeBy, n)) return;
-    setCustomSize(n);
+    setSize(n);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSize]);
 
-  const sizeUsd =
-    sizeChoice === 'custom' ? (byCapital ? customCapital : customNotional) : NOTIONAL_PRESETS[sizeChoice];
-  const sizeErr = sizeChoice === 'custom' ? amountError(sizeStr, opportunitySizeBounds(sizeBy)) : null;
-  const sizeBad = sizeChoice === 'custom' && !isValidOpportunitySize(sizeBy, Number(sizeStr));
+  const sizeUsd = byCapital ? capitalUsd : notionalUsd;
+  const sizeErr = amountError(sizeStr, opportunitySizeBounds(sizeBy));
+  const sizeBad = !isValidOpportunitySize(sizeBy, Number(sizeStr));
+  // Grouped digits while the box is at rest; raw digits while typing, since
+  // amountError refuses commas.
+  const sizeShown = sizeFocused || sizeBad ? sizeStr : Number(sizeStr).toLocaleString('en-US');
 
   const query = useOpportunities({
     sizeBy,
@@ -1160,9 +1138,17 @@ export function OpportunitiesPanel() {
               ariaLabel="Size by"
               value={sizeBy}
               onChange={(next) => {
+                // A size typed less than one debounce ago still counts.
+                const typed = Number(sizeStr);
+                const kept = isValidOpportunitySize(sizeBy, typed) ? typed : sizeUsd;
+                const sizes = byCapital
+                  ? { capitalUsd: kept, notionalUsd }
+                  : { capitalUsd, notionalUsd: kept };
+                setCapitalUsd(sizes.capitalUsd);
+                setNotionalUsd(sizes.notionalUsd);
                 setSizeBy(next);
-                setSizeStr(String(next === 'capital' ? customCapital : customNotional));
-                persist({ sizeBy: next });
+                setSizeStr(String(next === 'capital' ? sizes.capitalUsd : sizes.notionalUsd));
+                persist({ sizeBy: next, ...sizes });
               }}
               options={[
                 {
@@ -1179,53 +1165,30 @@ export function OpportunitiesPanel() {
               }`}
             >
               <span className="text-[11.5px] text-ink-400">$</span>
-              {sizeChoice === 'custom' ? (
-                <input
-                  id={sizeId}
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  aria-label={byCapital ? 'Custom capital (USD)' : 'Custom notional (USD)'}
-                  value={sizeStr}
-                  onChange={(e) => setSizeStr(e.target.value)}
-                  ref={(el) => {
-                    if (!el || !focusSizeRef.current) return;
-                    focusSizeRef.current = false;
-                    el.focus();
-                    el.select();
-                  }}
-                  title={byCapital ? 'The capital each pair is sized to.' : 'The notional each leg is priced at.'}
-                  className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
-                />
-              ) : (
-                <span
-                  className="num cursor-text select-none text-sm font-semibold text-ink-50"
-                  title="Double-click to edit"
-                  onDoubleClick={() => {
-                    // Edit from the amount on screen, not the last custom size.
-                    focusSizeRef.current = true;
-                    setSizeStr(String(sizeUsd));
-                    if (byCapital) {
-                      setCustomCapital(sizeUsd);
-                      setCapitalChoice('custom');
-                      persist({ capitalChoice: 'custom', customCapitalUsd: sizeUsd });
-                    } else {
-                      setCustomNotional(sizeUsd);
-                      setNotionalChoice('custom');
-                      persist({ notionalChoice: 'custom', customNotionalUsd: sizeUsd });
-                    }
-                  }}
-                >
-                  {sizeUsd.toLocaleString('en-US')}
-                </span>
-              )}
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                aria-label={byCapital ? 'Capital (USD)' : 'Notional per leg (USD)'}
+                value={sizeShown}
+                onChange={(e) => setSizeStr(e.target.value)}
+                onFocus={() => setSizeFocused(true)}
+                onBlur={() => setSizeFocused(false)}
+                title={byCapital ? 'The capital each pair is sized to.' : 'The notional each leg is priced at.'}
+                className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
+              />
             </span>
-            <SegmentedToggle<NotionalChoice>
+            <SegmentedToggle<SizePreset | ''>
               className="seg-info seg-lg max-sm:[&_.seg-btn]:px-3"
-              ariaLabel={byCapital ? 'Capital' : 'Notional'}
-              value={sizeChoice}
-              onChange={setSizeChoice}
-              options={NOTIONAL_OPTIONS}
+              ariaLabel={byCapital ? 'Capital presets' : 'Notional presets'}
+              value={SIZE_PRESETS.find((o) => o.usd === sizeUsd)?.value ?? ''}
+              onChange={(v) => {
+                const usd = SIZE_PRESETS.find((o) => o.value === v)?.usd;
+                if (usd === undefined) return;
+                setSizeStr(String(usd));
+                setSize(usd);
+              }}
+              options={SIZE_PRESETS}
             />
           </div>
         </div>

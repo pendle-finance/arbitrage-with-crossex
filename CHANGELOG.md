@@ -36,8 +36,9 @@ Opportunities sizes every card by the capital you put in.
 - **Opportunities sizes by capital.** The size box now sets Capital by default: the margin you
   post on all legs, which is what the APR is on. Each card finds the notional per leg that uses
   exactly that capital, walks the Boros and perp books at that size, and shows it. The default
-  is $100k of capital. A switch above the box goes back to Notional per leg, which keeps its
-  own size, now $1M by default with a $1M button. Open this strategy fills the ticket at the
+  is $100k of capital. A switch beside the box goes back to Notional per leg, which keeps its
+  own size, now $1M by default with a $1M button. The Custom button is gone: click the box and
+  type any amount, or pick a preset. Open this strategy fills the ticket at the
   card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
   another, and a note under the size says so.
 - **Smaller things.** Every leg row shows its venue icon. The open-only roll review names the
