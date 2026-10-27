@@ -254,25 +254,41 @@ describe('Exclude from the card, by the DoD', () => {
     expect(spy.mock.calls[0][1]).toEqual({ qty: 1 });
   });
 
-  it('every leg table on Fixed Rate Pairs keeps the margin column clear of the menu', async () => {
+  const legTables = () => screen.getAllByRole('table').filter((t) => within(t).queryByRole('columnheader', { name: 'Initial margin' }));
+  const expectLegTable = (table: HTMLElement, menuColumn: boolean) => {
+    const heads = within(table).getAllByRole('columnheader');
+    expect(heads).toHaveLength(menuColumn ? 5 : 4);
+    if (menuColumn) expect(heads[4].textContent).toBe('');
+    for (const row of within(table).getAllByRole('row').slice(1)) {
+      const cells = row.querySelectorAll('td');
+      expect(cells).toHaveLength(heads.length);
+      expect(cells[3].querySelector('[aria-label="More actions"]')).toBeNull();
+    }
+  };
+
+  it('a leg table with a menu gives it its own column, clear of the margin', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(PART_FILL));
     await showPairs(user);
     await waitFor(() => expect(hedgedCards()).toHaveLength(1));
     await expand(user, hedgedCards()[0]);
     await pickBorosCard(/Boros leg missing/);
-    const legTables = screen.getAllByRole('table').filter((t) => within(t).queryByRole('columnheader', { name: 'Initial margin' }));
-    expect(legTables.length).toBeGreaterThanOrEqual(2);
-    for (const table of legTables) {
-      const heads = within(table).getAllByRole('columnheader');
-      expect(heads).toHaveLength(5);
-      expect(heads[4].textContent).toBe('');
-      for (const row of within(table).getAllByRole('row').slice(1)) {
-        const cells = row.querySelectorAll('td');
-        expect(cells).toHaveLength(5);
-        expect(cells[3].querySelector('[aria-label="More actions"]')).toBeNull();
-      }
-    }
+    const tables = legTables();
+    expect(tables).toHaveLength(2);
+    for (const table of tables) expectLegTable(table, true);
+  });
+
+  it('a leg table with no menu has no empty menu column', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(['G L 1', 'H S 1']));
+    await showPairs(user);
+    const [table] = await waitFor(() => {
+      const found = legTables();
+      expect(found).toHaveLength(1);
+      return found;
+    });
+    expect(within(table).queryByRole('button', { name: 'More actions' })).toBeNull();
+    expectLegTable(table, false);
   });
 
   it('excluded single leaves the grouping', async () => {
