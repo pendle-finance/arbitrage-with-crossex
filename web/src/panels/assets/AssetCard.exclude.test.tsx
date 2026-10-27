@@ -235,9 +235,10 @@ describe('Exclude from the card, by the DoD', () => {
     expect(within(card).queryAllByRole('button', { name: 'More actions' })).toHaveLength(0);
   });
 
-  it('no Exclude on Hedged', async () => {
+  it('a hedged card offers Exclude on its Boros row only, sized to the card', async () => {
+    const spy = vi.fn();
     const user = userEvent.setup();
-    renderCard(groupOf(['G L 1', 'H S 1', 'G LONG 1 N', 'H SHORT 1 N']));
+    renderCard(groupOf(['G L 1', 'H S 1', 'G LONG 1 N', 'H SHORT 1 N']), {}, spy);
     await showPairs(user);
     const [card] = await waitFor(() => {
       const found = hedgedCards();
@@ -245,7 +246,33 @@ describe('Exclude from the card, by the DoD', () => {
       return found;
     });
     await expand(user, card);
-    expect(within(card).queryAllByRole('button', { name: 'More actions' })).toHaveLength(0);
+    expect(within(card).getAllByRole('button', { name: 'More actions' })).toHaveLength(2);
+    const popup = await openExclude(user, within(card).getAllByRole('button', { name: 'More actions' })[0].closest('tr') as HTMLElement);
+    expect(within(popup).getByLabelText('Quantity to exclude (ETH)')).toHaveValue('1');
+    await user.click(within(popup).getByRole('button', { name: 'Save' }));
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][1]).toEqual({ qty: 1 });
+  });
+
+  it('every leg table on Fixed Rate Pairs keeps the margin column clear of the menu', async () => {
+    const user = userEvent.setup();
+    renderCard(groupOf(PART_FILL));
+    await showPairs(user);
+    await waitFor(() => expect(hedgedCards()).toHaveLength(1));
+    await expand(user, hedgedCards()[0]);
+    await pickBorosCard(/Boros leg missing/);
+    const legTables = screen.getAllByRole('table').filter((t) => within(t).queryByRole('columnheader', { name: 'Initial margin' }));
+    expect(legTables.length).toBeGreaterThanOrEqual(2);
+    for (const table of legTables) {
+      const heads = within(table).getAllByRole('columnheader');
+      expect(heads).toHaveLength(5);
+      expect(heads[4].textContent).toBe('');
+      for (const row of within(table).getAllByRole('row').slice(1)) {
+        const cells = row.querySelectorAll('td');
+        expect(cells).toHaveLength(5);
+        expect(cells[3].querySelector('[aria-label="More actions"]')).toBeNull();
+      }
+    }
   });
 
   it('excluded single leaves the grouping', async () => {
