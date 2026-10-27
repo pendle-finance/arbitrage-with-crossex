@@ -49,6 +49,8 @@ import { requireLeverageMax } from './leverage';
 const DEFAULT_NOTIONAL_USD = 10_000;
 const MIN_NOTIONAL_USD = 1_000;
 const MAX_NOTIONAL_USD = 100_000_000;
+const MIN_CAPITAL_USD = 100;
+const MAX_CAPITAL_USD = 100_000_000;
 
 /** Quote ranking for a hedge symbol. Venues list several quotes per base
  * (Hyperliquid is USDC-quoted) and the pick decides which fee row and book
@@ -57,6 +59,7 @@ const QUOTE_PREFERENCE = ['USDT', 'USDC', 'USD'];
 
 interface OpportunitiesQuery {
   notionalUsd?: string;
+  capitalUsd?: string;
   borosEntry?: string;
   entryMode?: string;
   exitMode?: string;
@@ -77,6 +80,19 @@ function parseNotionalUsd(raw: string | undefined): number {
   if (!Number.isFinite(n) || n < MIN_NOTIONAL_USD || n > MAX_NOTIONAL_USD) {
     throw new CoreError(
       `invalid notionalUsd (expected ${MIN_NOTIONAL_USD}–${MAX_NOTIONAL_USD})`,
+      'validation',
+    );
+  }
+  return n;
+}
+
+/** The capital every pair is sized to; absent = size by `notionalUsd`. */
+function parseCapitalUsd(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < MIN_CAPITAL_USD || n > MAX_CAPITAL_USD) {
+    throw new CoreError(
+      `invalid capitalUsd (expected ${MIN_CAPITAL_USD}–${MAX_CAPITAL_USD})`,
       'validation',
     );
   }
@@ -185,6 +201,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
     app.get('/opportunities', async (req, reply) => {
       const query = req.query as OpportunitiesQuery;
       const notionalUsd = parseNotionalUsd(query.notionalUsd);
+      const capitalUsd = parseCapitalUsd(query.capitalUsd);
       const borosEntry = parseMode<BorosEntryMode>(
         query.borosEntry,
         ['mark', 'market'],
@@ -361,7 +378,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
           feeRows,
           nowSec,
         },
-        { notionalUsd, borosEntry, entryMode, exitMode, takerFeeOverride },
+        { notionalUsd, capitalUsd, borosEntry, entryMode, exitMode, takerFeeOverride },
       );
       return reply.ok(
         { ...result, warnings: [...new Set([...warnings, ...result.warnings])] },

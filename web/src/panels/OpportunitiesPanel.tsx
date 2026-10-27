@@ -8,7 +8,7 @@
  *               stats, Details + Execute.
  *   Expanded  — the four legs the trade opens, the spread it locks, and the
  *               profit + capital waterfalls.
- * Owns the persisted assumptions — notional, Boros entry, perp entry, exit and
+ * Owns the persisted assumptions — size (capital or notional), Boros entry, perp entry, exit and
  * the simulated VIP tier, each an independent knob — and the single query they
  * drive. Executing only PREFILLS the pair ticket — submission stays behind its
  * hold-to-confirm control.
@@ -27,10 +27,10 @@ import {
 } from 'react';
 import { amountError } from '../lib/amount';
 import {
-  isValidOpportunityNotional,
-  OPPORTUNITY_NOTIONAL_MAX,
-  OPPORTUNITY_NOTIONAL_MIN,
+  isValidOpportunitySize,
+  opportunitySizeBounds,
   PERP_SLIPPAGE_CLIP_USD,
+  type OpportunitySizeBy,
   useBorosPairContext,
   useOpportunities,
   usePositions,
@@ -93,7 +93,9 @@ export const OPPORTUNITIES_STORAGE_KEY = 'crossex.opportunities.v2';
  * them into two independent knobs, so v1 blobs are migrated once and dropped. */
 const LEGACY_STORAGE_KEY = 'crossex.opportunities.v1';
 
-/** The notional every card is priced at: four presets or a typed size. */
+/** The size every card is priced at: four presets or a typed size. Capital and
+ * notional each keep their own pick, because the same figure means a ~7× larger
+ * trade as capital. */
 type NotionalChoice = '10k' | '100k' | '500k' | '1m' | 'custom';
 
 const NOTIONAL_PRESETS: Record<Exclude<NotionalChoice, 'custom'>, number> = {
@@ -134,9 +136,12 @@ const EXIT_MODE_PROSE: Record<ExitMode, string> = {
 };
 
 export interface StoredControls {
+  sizeBy: OpportunitySizeBy;
   notionalChoice: NotionalChoice;
   /** The size behind "Custom…" (USD). */
   customNotionalUsd: number;
+  capitalChoice: NotionalChoice;
+  customCapitalUsd: number;
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
   exitMode: ExitMode;
@@ -147,8 +152,12 @@ export interface StoredControls {
 }
 
 const DEFAULTS: StoredControls = {
+  // Capital first: it is what the APR is on, and what a trader budgets.
+  sizeBy: 'capital',
   notionalChoice: '1m',
   customNotionalUsd: 1_000_000,
+  capitalChoice: '100k',
+  customCapitalUsd: 100_000,
   borosEntry: 'market',
   entryMode: 'both-market',
   // 'roll' by default: an assumed exit cost is a decision the user has not
@@ -164,7 +173,7 @@ const validExitMode = (v: unknown): ExitMode =>
   v === 'close' || v === 'roll' ? v : DEFAULTS.exitMode;
 
 const validSize = (v: unknown): number =>
-  typeof v === 'number' && isValidOpportunityNotional(v) ? v : DEFAULTS.customNotionalUsd;
+  typeof v === 'number' && isValidOpportunitySize('notional', v) ? v : DEFAULTS.customNotionalUsd;
 
 /** A preset-sized custom size reads back as that preset, so a v1 user lands on
  * the same button they left. */
@@ -182,6 +191,7 @@ function migrateLegacy(): StoredControls | null {
   const size = validSize(p?.customSize);
   const choice = p?.choice;
   return {
+    ...DEFAULTS,
     notionalChoice:
       choice === 'market-10k'
         ? '10k'
@@ -218,22 +228,31 @@ export function loadControls(base: StoredControls = DEFAULTS): StoredControls {
   return readJson<StoredControls>(OPPORTUNITIES_STORAGE_KEY, base, (parsed) => {
     const p = parsed as
       | {
+          sizeBy?: unknown;
           notionalChoice?: unknown;
           customNotionalUsd?: unknown;
+          capitalChoice?: unknown;
+          customCapitalUsd?: unknown;
           borosEntry?: unknown;
           entryMode?: unknown;
           exitMode?: unknown;
           includeRebate?: unknown;
         }
       | null;
+    const choiceOf = (v: unknown, fallback: NotionalChoice): NotionalChoice =>
+      NOTIONAL_OPTIONS.some((o) => o.value === v) ? (v as NotionalChoice) : fallback;
     return {
-      notionalChoice: NOTIONAL_OPTIONS.some((o) => o.value === p?.notionalChoice)
-        ? (p?.notionalChoice as NotionalChoice)
-        : base.notionalChoice,
+      sizeBy: p?.sizeBy === 'capital' || p?.sizeBy === 'notional' ? p.sizeBy : base.sizeBy,
+      notionalChoice: choiceOf(p?.notionalChoice, base.notionalChoice),
       customNotionalUsd:
-        typeof p?.customNotionalUsd === 'number' && isValidOpportunityNotional(p.customNotionalUsd)
+        typeof p?.customNotionalUsd === 'number' && isValidOpportunitySize('notional', p.customNotionalUsd)
           ? p.customNotionalUsd
           : base.customNotionalUsd,
+      capitalChoice: choiceOf(p?.capitalChoice, base.capitalChoice),
+      customCapitalUsd:
+        typeof p?.customCapitalUsd === 'number' && isValidOpportunitySize('capital', p.customCapitalUsd)
+          ? p.customCapitalUsd
+          : base.customCapitalUsd,
       borosEntry:
         p?.borosEntry === 'mark' || p?.borosEntry === 'market' ? p.borosEntry : base.borosEntry,
       entryMode:
@@ -451,7 +470,6 @@ function VenueBox({
 const OpportunityCard = memo(function OpportunityCard({
   group,
   pair: served,
-  notionalUsd,
   rebate = null,
   includeRebate = false,
   onOpenStrategy,
@@ -465,8 +483,6 @@ const OpportunityCard = memo(function OpportunityCard({
   /** THE trade this card is about. One group serves several: every viable venue
    * combination in it is its own card. */
   pair: OpportunityPair;
-  /** The notional the RESPONSE priced — the waterfall converts APRs with it. */
-  notionalUsd: number;
   /** The account's settlement-fee rebate config — drives the "fee rebate" chip
    * (shown when it reaches either leg) and, with `includeRebate`, the reprice.
    * Null = no rebate, chip hidden. */
@@ -493,6 +509,8 @@ const OpportunityCard = memo(function OpportunityCard({
    * turns the default on (his call 2026-09-20).
    */
   const [hasPerpsChoice, setHasPerpsChoice] = useState<boolean | null>(null);
+  // THIS pair's own notional: under a capital target each pair solves its own.
+  const notionalUsd = served.notionalUsd;
   const hasPerps = hasPerpsChoice ?? held === 'rollover';
   // repriceHeld first (drops perp entry cost), then applyRebate (credits the
   // settlement-fee rebate) — both pure OpportunityPair → OpportunityPair, so
@@ -952,7 +970,9 @@ function RateNote({ midApr, execApr }: { midApr: number; execApr: number | null 
 
 export function OpportunitiesPanel() {
   const [stored] = useState<StoredControls>(() => loadControls());
+  const [sizeBy, setSizeBy] = useState<OpportunitySizeBy>(stored.sizeBy);
   const [notionalChoice, setNotionalChoice] = useState<NotionalChoice>(stored.notionalChoice);
+  const [capitalChoice, setCapitalChoice] = useState<NotionalChoice>(stored.capitalChoice);
   // Always market-at-size. The "at mark rate" alternative priced cards at a
   // number no order could get, so the knob only made a card disagree with the
   // book under it. The stored value is still read for compatibility.
@@ -960,9 +980,13 @@ export function OpportunitiesPanel() {
   const [entryMode, setEntryMode] = useState<EntryMode>(stored.entryMode);
   const [exitMode, setExitMode] = useState<ExitMode>(stored.exitMode);
   const [includeRebate, setIncludeRebate] = useState<boolean>(stored.includeRebate);
-  const [sizeStr, setSizeStr] = useState(String(stored.customNotionalUsd));
-  // The last VALID size: a half-typed entry must never blank the list.
-  const [size, setSize] = useState(stored.customNotionalUsd);
+  const [sizeStr, setSizeStr] = useState(
+    String(stored.sizeBy === 'capital' ? stored.customCapitalUsd : stored.customNotionalUsd),
+  );
+  // The last VALID custom size of each kind: a half-typed entry must never
+  // blank the list.
+  const [customNotional, setCustomNotional] = useState(stored.customNotionalUsd);
+  const [customCapital, setCustomCapital] = useState(stored.customCapitalUsd);
   const debouncedSize = useDebounced(sizeStr, 400);
   // Persisted, like the assumptions. A filter is the louder of the two — it
   // changes what is MISSING rather than how it is priced — so restoring one
@@ -983,8 +1007,11 @@ export function OpportunitiesPanel() {
 
   const persist = (next: Partial<StoredControls>) =>
     writeJson(OPPORTUNITIES_STORAGE_KEY, {
+      sizeBy,
       notionalChoice,
-      customNotionalUsd: size,
+      customNotionalUsd: customNotional,
+      capitalChoice,
+      customCapitalUsd: customCapital,
       borosEntry,
       entryMode,
       exitMode,
@@ -992,26 +1019,34 @@ export function OpportunitiesPanel() {
       ...next,
     } satisfies StoredControls);
 
+  const byCapital = sizeBy === 'capital';
+  const sizeChoice = byCapital ? capitalChoice : notionalChoice;
+  const setSizeChoice = (choice: NotionalChoice) => {
+    if (byCapital) setCapitalChoice(choice);
+    else setNotionalChoice(choice);
+    persist(byCapital ? { capitalChoice: choice } : { notionalChoice: choice });
+  };
+  const setCustomSize = (usd: number) => {
+    if (byCapital) setCustomCapital(usd);
+    else setCustomNotional(usd);
+    persist(byCapital ? { customCapitalUsd: usd } : { customNotionalUsd: usd });
+  };
+
   useEffect(() => {
     const n = Number(debouncedSize);
-    if (!isValidOpportunityNotional(n)) return;
-    setSize(n);
-    persist({ customNotionalUsd: n });
+    if (sizeChoice !== 'custom' || !isValidOpportunitySize(sizeBy, n)) return;
+    setCustomSize(n);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSize]);
 
-  const notionalUsd = notionalChoice === 'custom' ? size : NOTIONAL_PRESETS[notionalChoice];
-  const sizeErr =
-    notionalChoice === 'custom'
-      ? amountError(sizeStr, {
-          min: OPPORTUNITY_NOTIONAL_MIN,
-          max: OPPORTUNITY_NOTIONAL_MAX,
-        })
-      : null;
-  const sizeBad = notionalChoice === 'custom' && !isValidOpportunityNotional(Number(sizeStr));
+  const sizeUsd =
+    sizeChoice === 'custom' ? (byCapital ? customCapital : customNotional) : NOTIONAL_PRESETS[sizeChoice];
+  const sizeErr = sizeChoice === 'custom' ? amountError(sizeStr, opportunitySizeBounds(sizeBy)) : null;
+  const sizeBad = sizeChoice === 'custom' && !isValidOpportunitySize(sizeBy, Number(sizeStr));
 
   const query = useOpportunities({
-    notionalUsd,
+    sizeBy,
+    sizeUsd,
     borosEntry,
     entryMode,
     exitMode,
@@ -1051,21 +1086,18 @@ export function OpportunitiesPanel() {
     }));
     return heldPerpsOf(books);
   }, [exposure, borosMarkets, spreadMarkets]);
-  const pricedAtUsd = data?.meta.notionalUsd;
   const rows = useMemo(
     () =>
       toRows(
         data?.groups ?? [],
         shownKeysRef.current,
-        held && pricedAtUsd !== undefined ? { held, notionalUsd: pricedAtUsd } : undefined,
+        held,
         // Fold the rebate into ranking AND the viability cutoff exactly when the
         // cards credit it, so a pair only profitable after the rebate is neither
         // hidden nor mis-ranked against the discounted APR it displays.
-        hasRebate && includeRebate && rebate && pricedAtUsd !== undefined
-          ? { config: rebate, notionalUsd: pricedAtUsd }
-          : null,
+        hasRebate && includeRebate ? rebate : null,
       ),
-    [data?.groups, held, pricedAtUsd, hasRebate, includeRebate, rebate],
+    [data?.groups, held, hasRebate, includeRebate, rebate],
   );
   const visible = useMemo(() => applyFilters(rows, filters), [rows, filters]);
 
@@ -1075,11 +1107,8 @@ export function OpportunitiesPanel() {
     shownKeysRef.current = new Set(rows.map((r) => r.key));
   }, [rows]);
 
-  // The notional the RESPONSE priced, never the live control: during a size
-  // change `keepPreviousData` shows cards costed at the OLD notional, and
-  // arming the ticket at the new one would stage a trade none of the numbers
-  // on screen describe. The cards read from this too.
-  const pricedNotionalUsd = data?.meta.notionalUsd ?? notionalUsd;
+  // Any card past one perp clip has its slippage priced at the clip's rate.
+  const slippageClipped = visible.some((r) => r.pair.notionalUsd > PERP_SLIPPAGE_CLIP_USD);
 
   // Stable identity, or every card re-renders on each keystroke and the memo
   // above buys nothing.
@@ -1102,14 +1131,18 @@ export function OpportunitiesPanel() {
         maturity: maturitySec,
         crossexLongVenue: pair.longLeg.crossexVenue,
         crossexShortVenue: pair.shortLeg.crossexVenue,
-        notionalUsd: pricedNotionalUsd,
+        // The pair's own priced notional, never the live control: during a
+        // size change `keepPreviousData` shows cards costed at the OLD size,
+        // and arming the ticket at the new one would stage a trade none of the
+        // numbers on screen describe.
+        notionalUsd: pair.notionalUsd,
         // Present only for token-margined cohorts, where the collateral IS the
         // base coin and every leg can be sized in the same unit.
         ...(sizeBase !== undefined && sizeBase > 0 ? { sizeBase } : {}),
         perpMode: entryMode === 'maker-hedge' ? 'maker' : 'market',
       });
     },
-    [flow, pricedNotionalUsd, entryMode],
+    [flow, entryMode],
   );
 
   const controls = (
@@ -1119,7 +1152,25 @@ export function OpportunitiesPanel() {
           there is no fee tier to simulate, and two knobs do not earn a panel
           of their own. */}
       <div className="flex flex-col items-start gap-1.5">
-        <div className={microLabelClass}>Notional per leg</div>
+        {/* The label is the switch: it names what the figure below is. */}
+        <SegmentedToggle<OpportunitySizeBy>
+          className="seg-info seg-xs"
+          ariaLabel="Size by"
+          value={sizeBy}
+          onChange={(next) => {
+            setSizeBy(next);
+            setSizeStr(String(next === 'capital' ? customCapital : customNotional));
+            persist({ sizeBy: next });
+          }}
+          options={[
+            {
+              value: 'capital',
+              label: 'Capital',
+              title: "Margin you post on all legs. Each pair's notional is set to use this amount.",
+            },
+            { value: 'notional', label: 'Notional per leg', title: 'The size of each leg.' },
+          ]}
+        />
         <div className="flex flex-wrap items-center gap-2">
         <span
           className={`flex h-9 items-center gap-1 rounded border border-ink-800/50 bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
@@ -1127,13 +1178,13 @@ export function OpportunitiesPanel() {
           }`}
         >
           <span className="text-[11.5px] text-ink-400">$</span>
-          {notionalChoice === 'custom' ? (
+          {sizeChoice === 'custom' ? (
             <input
               id={sizeId}
               type="text"
               inputMode="numeric"
               autoComplete="off"
-              aria-label="Custom notional (USD)"
+              aria-label={byCapital ? 'Custom capital (USD)' : 'Custom notional (USD)'}
               value={sizeStr}
               onChange={(e) => setSizeStr(e.target.value)}
               ref={(el) => {
@@ -1142,7 +1193,7 @@ export function OpportunitiesPanel() {
                 el.focus();
                 el.select();
               }}
-              title="The notional each leg is priced at."
+              title={byCapital ? 'The capital each pair is sized to.' : 'The notional each leg is priced at.'}
               className="num w-24 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
             />
           ) : (
@@ -1152,31 +1203,34 @@ export function OpportunitiesPanel() {
               onDoubleClick={() => {
                 // Edit from the amount on screen, not the last custom size.
                 focusSizeRef.current = true;
-                setSizeStr(String(notionalUsd));
-                setSize(notionalUsd);
-                setNotionalChoice('custom');
-                persist({ notionalChoice: 'custom', customNotionalUsd: notionalUsd });
+                setSizeStr(String(sizeUsd));
+                if (byCapital) {
+                  setCustomCapital(sizeUsd);
+                  setCapitalChoice('custom');
+                  persist({ capitalChoice: 'custom', customCapitalUsd: sizeUsd });
+                } else {
+                  setCustomNotional(sizeUsd);
+                  setNotionalChoice('custom');
+                  persist({ notionalChoice: 'custom', customNotionalUsd: sizeUsd });
+                }
               }}
             >
-              {notionalUsd.toLocaleString('en-US')}
+              {sizeUsd.toLocaleString('en-US')}
             </span>
           )}
         </span>
-        {/* The one and only notional control. It used to be repeated inside
+        {/* The one and only size control. It used to be repeated inside
             the advanced panel as a second segmented toggle. */}
-        <span role="radiogroup" aria-label="Notional" className="inline-flex items-center">
+        <span role="radiogroup" aria-label={byCapital ? 'Capital' : 'Notional'} className="inline-flex items-center">
           {NOTIONAL_OPTIONS.map((o) => {
-            const on = notionalChoice === o.value;
+            const on = sizeChoice === o.value;
             return (
               <button
                 key={o.value}
                 type="button"
                 role="radio"
                 aria-checked={on}
-                onClick={() => {
-                  setNotionalChoice(o.value);
-                  persist({ notionalChoice: o.value });
-                }}
+                onClick={() => setSizeChoice(o.value)}
                 className={`num -mr-px inline-flex h-[35px] items-center whitespace-nowrap border px-5 text-[12px] transition-colors first:rounded-l last:mr-0 last:rounded-r ${
                   on
                     ? 'relative z-[1] border-ink-700 bg-wash/[0.15] font-medium text-ink-300'
@@ -1197,7 +1251,7 @@ export function OpportunitiesPanel() {
         {/* Above one clip the cards price perp slippage as a TWAP in $1M
             orders (src/core/boros/opportunities.ts). The open ticket still
             walks the full book. */}
-        {pricedNotionalUsd > PERP_SLIPPAGE_CLIP_USD && (
+        {slippageClipped && (
           <span className="flex max-w-[26rem] items-start gap-1.5 text-[10.5px] text-ink-400">
             <Info size={12} aria-hidden className="mt-px flex-none text-amber-400" />
             <span>
@@ -1321,7 +1375,7 @@ export function OpportunitiesPanel() {
         <EmptyState
           icon="◎"
           title="No fixed-return opportunities"
-          hint={`No Boros arb pair prices out at ${fmtUsd(notionalUsd, 0)} notional at market size, ${ENTRY_MODE_PROSE[entryMode]} perp entry and ${EXIT_MODE_PROSE[exitMode]}. Try another notional or another assumption.`}
+          hint={`No Boros arb pair prices out at ${fmtUsd(sizeUsd, 0)} ${byCapital ? 'capital' : 'notional'} at market size, ${ENTRY_MODE_PROSE[entryMode]} perp entry and ${EXIT_MODE_PROSE[exitMode]}. Try another size or another assumption.`}
         />
       ) : visible.length === 0 ? (
         // Distinct from the one above: the assumptions DO price opportunities,
@@ -1351,7 +1405,6 @@ export function OpportunitiesPanel() {
               group={row.group}
               pair={row.pair}
               held={row.held}
-              notionalUsd={pricedNotionalUsd}
               rebate={hasRebate ? rebate : null}
               includeRebate={includeRebate}
               onOpenStrategy={flow ? openStrategy : null}

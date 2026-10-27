@@ -578,6 +578,9 @@ export interface OpportunityPair {
   borosImpactApr: number | null;
   /** Which leg rests as the maker order under `maker-hedge`; null otherwise. */
   makerLeg: 'short' | 'long' | null;
+  /** The notional per leg THIS pair was priced at. Under a capital target each
+   * pair solves its own, so every per-pair USD figure reads against this. */
+  notionalUsd: number;
   costs: OpportunityCostBreakdown;
   capital: OpportunityCapitalBreakdown;
   /** Σ of the four capital components; null when any one of them is. */
@@ -623,7 +626,9 @@ export interface OpportunitiesResult {
   groups: OpportunityGroup[];
   meta: {
     asOfSec: number;
-    notionalUsd: number;
+    /** Null under a capital target: every pair carries its own. */
+    notionalUsd: number | null;
+    capitalUsd?: number;
     borosEntry: BorosEntryMode;
     entryMode: EntryMode;
     exitMode: ExitMode;

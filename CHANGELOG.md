@@ -7,6 +7,7 @@ in-app update check compares against).
 
 TLDR: Fixed Rate Pairs pairs your legs by venue at any Boros date. You can exclude part of a
 Boros leg from the arbitrage. A Boros send that times out no longer reads as "nothing traded".
+Opportunities sizes every card by the capital you put in.
 
 - **Fixed Rate Pairs pairs legs by venue at any date.** Each card pairs your perps and Boros
   legs by venue and side, at any Boros date. After a half roll, the new date gets its card and
@@ -32,9 +33,13 @@ Boros leg from the arbitrage. A Boros send that times out no longer reads as "no
   or may not have filled" only when Boros has no answer after 30 seconds.
 - **A close at a few cents of gas goes through.** Before, Boros refused it for gas on every
   try. Now the terminal sends it once more with a $1 gas top-up.
-- **Opportunities prices cards at $1M per leg.** This is the new default size, with a $1M
-  button. A size you already picked stays. Above $1M per leg, the perp slippage assumes $1M
-  orders sent one after another, and a note under the size says so.
+- **Opportunities sizes by capital.** The size box now sets Capital by default: the margin you
+  post on all legs, which is what the APR is on. Each card finds the notional per leg that uses
+  exactly that capital, walks the Boros and perp books at that size, and shows it. The default
+  is $100k of capital. A switch above the box goes back to Notional per leg, which keeps its
+  own size, now $1M by default with a $1M button. Open this strategy fills the ticket at the
+  card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
+  another, and a note under the size says so.
 - **Smaller things.** Every leg row shows its venue icon. The open-only roll review names the
   spread market it opens, for example "ETH Spread HL-GATE".
 

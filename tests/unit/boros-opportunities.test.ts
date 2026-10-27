@@ -19,6 +19,7 @@ import {
   crossCostUsd,
   groupBorosMarkets,
   normalizeUnderlying,
+  notionalForCapital,
   PERP_SLIPPAGE_CLIP_USD,
   perpInitialMarginUsd,
   walkBorosBook,
@@ -1074,6 +1075,72 @@ describe('buildOpportunities — meta', () => {
       entryMode: 'maker-hedge',
       exitMode: 'roll',
     });
+  });
+});
+
+// Sizing by capital: each pair is priced at the notional whose modelled
+// capital equals the target, and walks its Boros books at that notional.
+describe('notionalForCapital', () => {
+  it('inverts a linear capital to the exact notional', () => {
+    expect(notionalForCapital((n) => n / 7, 100_000)).toBeCloseTo(700_000, 3);
+  });
+
+  it('is null when the capital cannot be modelled at any size', () => {
+    expect(notionalForCapital(() => null, 100_000)).toBeNull();
+  });
+});
+
+describe('buildOpportunities — capital target', () => {
+  const kIM = imInputs.kIM;
+  /** Canonical fixture's capital per $1 of notional (see the capital block). */
+  const perDollar =
+    (0.0899 * 30 * kIM) / 365 + (FLOOR * 30 * kIM) / 365 + 1 / HL_LEVERAGE + 1 / BN_LEVERAGE;
+
+  it('sizes the pair to the capital typed, and reports the notional it solved', () => {
+    const out = buildOpportunities(input(), opts({ capitalUsd: 100_000 }));
+    const pair = out.groups[0].bestPair!;
+    expect(pair.capitalUsd! / 100_000).toBeCloseTo(1, 8);
+    expect(pair.notionalUsd).toBeCloseTo(100_000 / perDollar, 0);
+    expect(out.meta.notionalUsd).toBeNull();
+    expect(out.meta.capitalUsd).toBe(100_000);
+  });
+
+  it('a notional request prices every pair at that notional', () => {
+    const pair = buildOpportunities(input(), opts()).groups[0].bestPair!;
+    expect(pair.notionalUsd).toBe(N);
+  });
+
+  it('walks each Boros book at the pair notional, not a shared one', () => {
+    // $200k at 8.99%, then deep at 8.50%: past $200k the short leg locks less.
+    const books = new Map(input().borosBooks);
+    books.set(155, { marketId: 155, bids: [[0.0899, 200_000], [0.085, 20_000_000]], asks: [[0.0901, 20_000_000]] });
+    const out = buildOpportunities(input({ borosBooks: books }), opts({ capitalUsd: 100_000 }));
+    const pair = out.groups[0].bestPair!;
+    const n = pair.notionalUsd;
+    expect(n).toBeGreaterThan(200_000);
+    const vwap = (200_000 * 0.0899 + (n - 200_000) * 0.085) / n;
+    expect(pair.borosLegs[0].execApr).toBeCloseTo(vwap, 10);
+    expect(pair.capitalUsd! / 100_000).toBeCloseTo(1, 8);
+    // No shared size: the group rows quote no exec rate.
+    expect(out.groups[0].markets.every((m) => m.execShortApr === null && m.bookStatus === 'not-fetched')).toBe(true);
+  });
+
+  it('a target past the Boros depth leaves the pair with no locked rate', () => {
+    const books = new Map(input().borosBooks);
+    books.set(155, { marketId: 155, bids: [[0.0899, 50_000]], asks: [[0.0901, 20_000_000]] });
+    const pair = buildOpportunities(input({ borosBooks: books }), opts({ capitalUsd: 100_000 })).groups[0].pairs[0];
+    expect(pair.execSpreadApr).toBeNull();
+    expect(pair.netFixedAprOnCapital).toBeNull();
+  });
+
+  it('a pair whose capital cannot be modelled says it cannot be sized', () => {
+    const pair = buildOpportunities(
+      input({ leverageMaxBySymbol: new Map([[HL_SYMBOL, HL_LEVERAGE]]) }),
+      opts({ capitalUsd: 100_000 }),
+    ).groups[0].pairs[0];
+    expect(pair.capitalUsd).toBeNull();
+    expect(pair.netFixedAprOnCapital).toBeNull();
+    expect(pair.reasons.some((r) => r.includes("can't be sized to $100,000 of capital"))).toBe(true);
   });
 });
 

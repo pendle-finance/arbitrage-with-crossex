@@ -4,7 +4,7 @@
  * expectation is hand-derived from the server's identities.
  */
 import { describe, expect, it } from 'vitest';
-import { makeOpportunityGroup, makeOpportunityPair, OPP_NT } from '../test/fixtures';
+import { makeOpportunityGroup, makeOpportunityPair } from '../test/fixtures';
 import { heldBorosOf, heldPerpsOf, heldTagFor, repriceHeld } from './heldPerps';
 import { toRows } from './opportunityFilters';
 
@@ -135,18 +135,16 @@ describe('toRows with holdings', () => {
         boros: [{ venue: 'Binance', maturity: sooner }, { venue: 'Hyperliquid', maturity: sooner }],
       },
     ]);
-    const notionalUsd = OPP_NT / (mine.secondsToMaturity / (365 * 86_400));
-
     const plain = toRows([group]);
     expect(plain.map((r) => r.held)).toEqual([null, null]);
     expect(plain[0].pair).toBe(stranger);
 
-    const rows = toRows([group], undefined, { held, notionalUsd });
+    const rows = toRows([group], undefined, held);
     expect(rows[0].held).toBe('rollover');
     // The card owns the toggle, so it gets the server's own pricing …
     expect(rows[0].pair).toBe(mine);
     // … while the rank (and the viability test) used the zero-entry figure.
-    expect(rows[0].apr).toBeCloseTo(repriceHeld(mine, notionalUsd).netFixedAprOnCapital as number, 12);
+    expect(rows[0].apr).toBeCloseTo(repriceHeld(mine, mine.notionalUsd).netFixedAprOnCapital as number, 12);
     expect(rows[0].apr).toBeGreaterThan(mine.netFixedAprOnCapital as number);
     expect(rows[1].held).toBeNull();
     expect(rows[1].pair).toBe(stranger);

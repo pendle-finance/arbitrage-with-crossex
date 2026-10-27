@@ -180,7 +180,7 @@ describe('toRows', () => {
       marketIds: null,
       active: true,
     };
-    const rows = toRows([group], undefined, undefined, { config: rebate, notionalUsd: OPP_NOTIONAL });
+    const rows = toRows([group], undefined, undefined, rebate);
     expect(rows).toHaveLength(1);
     const creditedNet = execSpreadApr - (totalUsd - 0.016 * OPP_NT) / OPP_NT; // +1.5%
     expect(rows[0].apr).toBeCloseTo((creditedNet * OPP_NT) / ((base.capitalUsd as number) * years), 9);
@@ -224,7 +224,7 @@ describe('toRows', () => {
       [makeOpportunityGroup({ pairs: [losing] })],
       undefined,
       undefined,
-      { config: rebate, notionalUsd: OPP_NOTIONAL },
+      rebate,
     );
     expect(rows).toHaveLength(0);
   });
