@@ -8,7 +8,7 @@
  *               stats, Details + Execute.
  *   Expanded  — the four legs the trade opens, the spread it locks, and the
  *               profit + capital waterfalls.
- * Owns the persisted assumptions — size (capital or notional), Boros entry, perp entry, exit and
+ * Owns the persisted assumptions — capital, Boros entry, perp entry, exit and
  * the simulated VIP tier, each an independent knob — and the single query they
  * drive. Executing only PREFILLS the pair ticket — submission stays behind its
  * hold-to-confirm control.
@@ -29,7 +29,6 @@ import {
   isValidOpportunitySize,
   opportunitySizeBounds,
   PERP_SLIPPAGE_CLIP_USD,
-  type OpportunitySizeBy,
   useBorosPairContext,
   useOpportunities,
   usePositions,
@@ -126,10 +125,8 @@ const EXIT_MODE_PROSE: Record<ExitMode, string> = {
 };
 
 export interface StoredControls {
-  sizeBy: OpportunitySizeBy;
-  /** Each kind keeps its own size, because the same figure means a ~7× larger
-   * trade as capital. */
-  notionalUsd: number;
+  /** Every card is sized by capital: it is what the APR is on, and what a
+   * trader budgets. */
   capitalUsd: number;
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
@@ -141,10 +138,7 @@ export interface StoredControls {
 }
 
 const DEFAULTS: StoredControls = {
-  // Capital first: it is what the APR is on, and what a trader budgets.
-  sizeBy: 'capital',
-  notionalUsd: 1_000_000,
-  capitalUsd: 100_000,
+  capitalUsd: 200_000,
   borosEntry: 'market',
   entryMode: 'both-market',
   // 'roll' by default: an assumed exit cost is a decision the user has not
@@ -159,48 +153,32 @@ const validEntryMode = (v: unknown): EntryMode =>
 const validExitMode = (v: unknown): ExitMode =>
   v === 'close' || v === 'roll' ? v : DEFAULTS.exitMode;
 
-const validSize = (v: unknown): number =>
-  typeof v === 'number' && isValidOpportunitySize('notional', v) ? v : DEFAULTS.notionalUsd;
-
-/** One kind's saved size. Saves from 1.7.7 hold a preset name beside a separate
- * custom size, and the preset name wins, as it did on screen. */
-const storedSize = (
-  kind: OpportunitySizeBy,
+/** The saved capital. Saves from 1.7.7 hold a preset name beside a separate
+ * custom size, and the preset name wins, as it did on screen. A saved notional
+ * size is dropped: the same figure means a ~7× smaller trade as capital. */
+const storedCapital = (
   usd: unknown,
   legacyChoice: unknown,
   legacyCustom: unknown,
   fallback: number,
 ): number => {
-  if (typeof usd === 'number' && isValidOpportunitySize(kind, usd)) return usd;
+  if (typeof usd === 'number' && isValidOpportunitySize('capital', usd)) return usd;
   const preset = SIZE_PRESETS.find((o) => o.value === legacyChoice);
   if (preset) return preset.usd;
-  if (legacyChoice === 'custom' && typeof legacyCustom === 'number' && isValidOpportunitySize(kind, legacyCustom))
+  if (legacyChoice === 'custom' && typeof legacyCustom === 'number' && isValidOpportunitySize('capital', legacyCustom))
     return legacyCustom;
   return fallback;
 };
 
-/** v1 → v2: split the coupled `choice` into {notionalUsd, borosEntry}. */
+/** v1 → v2: keep the entry and exit modes. v1's size was a notional, so the
+ * capital starts at its default, and v1's 'mark' choice has no home any more —
+ * every card is priced market-at-size. */
 function migrateLegacy(): StoredControls | null {
   const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
   if (raw === null) return null;
-  const p = JSON.parse(raw) as
-    | { choice?: unknown; customSize?: unknown; entryMode?: unknown; exitMode?: unknown }
-    | null;
-  const size = validSize(p?.customSize);
-  const choice = p?.choice;
+  const p = JSON.parse(raw) as { entryMode?: unknown; exitMode?: unknown } | null;
   return {
     ...DEFAULTS,
-    notionalUsd:
-      choice === 'market-10k'
-        ? 10_000
-        : choice === 'market-100k'
-          ? 100_000
-          : choice === 'market-500k'
-            ? 500_000
-            : // 'mark' and 'market-custom' both carried their size in customSize.
-              size,
-    // v1's 'mark' choice has no home any more — every card is priced
-    // market-at-size — so the size migrates and the entry lands on market.
     borosEntry: 'market',
     entryMode: validEntryMode(p?.entryMode),
     exitMode: validExitMode(p?.exitMode),
@@ -225,11 +203,7 @@ export function loadControls(base: StoredControls = DEFAULTS): StoredControls {
   return readJson<StoredControls>(OPPORTUNITIES_STORAGE_KEY, base, (parsed) => {
     const p = parsed as
       | {
-          sizeBy?: unknown;
-          notionalUsd?: unknown;
           capitalUsd?: unknown;
-          notionalChoice?: unknown;
-          customNotionalUsd?: unknown;
           capitalChoice?: unknown;
           customCapitalUsd?: unknown;
           borosEntry?: unknown;
@@ -239,9 +213,7 @@ export function loadControls(base: StoredControls = DEFAULTS): StoredControls {
         }
       | null;
     return {
-      sizeBy: p?.sizeBy === 'capital' || p?.sizeBy === 'notional' ? p.sizeBy : base.sizeBy,
-      notionalUsd: storedSize('notional', p?.notionalUsd, p?.notionalChoice, p?.customNotionalUsd, base.notionalUsd),
-      capitalUsd: storedSize('capital', p?.capitalUsd, p?.capitalChoice, p?.customCapitalUsd, base.capitalUsd),
+      capitalUsd: storedCapital(p?.capitalUsd, p?.capitalChoice, p?.customCapitalUsd, base.capitalUsd),
       borosEntry:
         p?.borosEntry === 'mark' || p?.borosEntry === 'market' ? p.borosEntry : base.borosEntry,
       entryMode:
@@ -959,7 +931,6 @@ function RateNote({ midApr, execApr }: { midApr: number; execApr: number | null 
 
 export function OpportunitiesPanel() {
   const [stored] = useState<StoredControls>(() => loadControls());
-  const [sizeBy, setSizeBy] = useState<OpportunitySizeBy>(stored.sizeBy);
   // Always market-at-size. The "at mark rate" alternative priced cards at a
   // number no order could get, so the knob only made a card disagree with the
   // book under it. The stored value is still read for compatibility.
@@ -967,13 +938,9 @@ export function OpportunitiesPanel() {
   const [entryMode, setEntryMode] = useState<EntryMode>(stored.entryMode);
   const [exitMode, setExitMode] = useState<ExitMode>(stored.exitMode);
   const [includeRebate, setIncludeRebate] = useState<boolean>(stored.includeRebate);
-  const [sizeStr, setSizeStr] = useState(
-    String(stored.sizeBy === 'capital' ? stored.capitalUsd : stored.notionalUsd),
-  );
+  const [sizeStr, setSizeStr] = useState(String(stored.capitalUsd));
   const [sizeFocused, setSizeFocused] = useState(false);
-  // The last VALID size of each kind: a half-typed entry must never blank the
-  // list.
-  const [notionalUsd, setNotionalUsd] = useState(stored.notionalUsd);
+  // The last VALID capital: a half-typed entry must never blank the list.
   const [capitalUsd, setCapitalUsd] = useState(stored.capitalUsd);
   const debouncedSize = useDebounced(sizeStr, 400);
   // Persisted, like the assumptions. A filter is the louder of the two — it
@@ -991,8 +958,6 @@ export function OpportunitiesPanel() {
 
   const persist = (next: Partial<StoredControls>) =>
     writeJson(OPPORTUNITIES_STORAGE_KEY, {
-      sizeBy,
-      notionalUsd,
       capitalUsd,
       borosEntry,
       entryMode,
@@ -1001,29 +966,27 @@ export function OpportunitiesPanel() {
       ...next,
     } satisfies StoredControls);
 
-  const byCapital = sizeBy === 'capital';
   const setSize = (usd: number) => {
-    if (byCapital) setCapitalUsd(usd);
-    else setNotionalUsd(usd);
-    persist(byCapital ? { capitalUsd: usd } : { notionalUsd: usd });
+    setCapitalUsd(usd);
+    persist({ capitalUsd: usd });
   };
 
   useEffect(() => {
     const n = Number(debouncedSize);
-    if (!isValidOpportunitySize(sizeBy, n)) return;
+    if (!isValidOpportunitySize('capital', n)) return;
     setSize(n);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSize]);
 
-  const sizeUsd = byCapital ? capitalUsd : notionalUsd;
-  const sizeErr = amountError(sizeStr, opportunitySizeBounds(sizeBy));
-  const sizeBad = !isValidOpportunitySize(sizeBy, Number(sizeStr));
+  const sizeUsd = capitalUsd;
+  const sizeErr = amountError(sizeStr, opportunitySizeBounds('capital'));
+  const sizeBad = !isValidOpportunitySize('capital', Number(sizeStr));
   // Grouped digits while the box is at rest; raw digits while typing, since
   // amountError refuses commas.
   const sizeShown = sizeFocused || sizeBad ? sizeStr : Number(sizeStr).toLocaleString('en-US');
 
   const query = useOpportunities({
-    sizeBy,
+    sizeBy: 'capital',
     sizeUsd,
     borosEntry,
     entryMode,
@@ -1132,34 +1095,8 @@ export function OpportunitiesPanel() {
     <div className="mb-5 flex flex-col gap-4 rounded border border-wash/[0.14] bg-wash/[0.07] p-5">
       <div className={row}>
         <div className={field}>
-          <div className={microLabelClass}>Size</div>
+          <div className={microLabelClass}>Capital</div>
           <div className="flex flex-wrap items-center gap-2">
-            <SegmentedToggle<OpportunitySizeBy>
-              className="seg-info seg-lg"
-              ariaLabel="Size by"
-              value={sizeBy}
-              onChange={(next) => {
-                // A size typed less than one debounce ago still counts.
-                const typed = Number(sizeStr);
-                const kept = isValidOpportunitySize(sizeBy, typed) ? typed : sizeUsd;
-                const sizes = byCapital
-                  ? { capitalUsd: kept, notionalUsd }
-                  : { capitalUsd, notionalUsd: kept };
-                setCapitalUsd(sizes.capitalUsd);
-                setNotionalUsd(sizes.notionalUsd);
-                setSizeBy(next);
-                setSizeStr(String(next === 'capital' ? sizes.capitalUsd : sizes.notionalUsd));
-                persist({ sizeBy: next, ...sizes });
-              }}
-              options={[
-                {
-                  value: 'capital',
-                  label: 'Capital',
-                  title: "Margin you post on all legs. Each pair's notional is set to use this amount.",
-                },
-                { value: 'notional', label: 'Notional per leg', title: 'The size of each leg.' },
-              ]}
-            />
             <span
               className={`flex h-[35px] w-[7.5rem] items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
                 sizeBad ? 'border-guava/60' : 'border-ink-700'
@@ -1170,18 +1107,18 @@ export function OpportunitiesPanel() {
                 type="text"
                 inputMode="numeric"
                 autoComplete="off"
-                aria-label={byCapital ? 'Capital (USD)' : 'Notional per leg (USD)'}
+                aria-label="Capital (USD)"
                 value={sizeShown}
                 onChange={(e) => setSizeStr(e.target.value)}
                 onFocus={() => setSizeFocused(true)}
                 onBlur={() => setSizeFocused(false)}
-                title={byCapital ? 'The capital each pair is sized to.' : 'The notional each leg is priced at.'}
+                title="Margin you post on all legs. Each pair's notional is set to use this amount."
                 className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
               />
             </span>
             <SegmentedToggle<SizePreset | ''>
               className="seg-info seg-lg max-sm:[&_.seg-btn]:px-3"
-              ariaLabel={byCapital ? 'Capital presets' : 'Notional presets'}
+              ariaLabel="Capital presets"
               value={SIZE_PRESETS.find((o) => o.usd === sizeUsd)?.value ?? ''}
               onChange={(v) => {
                 const usd = SIZE_PRESETS.find((o) => o.value === v)?.usd;
@@ -1327,7 +1264,7 @@ export function OpportunitiesPanel() {
         <EmptyState
           icon="◎"
           title="No fixed-return opportunities"
-          hint={`No Boros arb pair prices out at ${fmtUsd(sizeUsd, 0)} ${byCapital ? 'capital' : 'notional'} at market size, ${ENTRY_MODE_PROSE[entryMode]} perp entry and ${EXIT_MODE_PROSE[exitMode]}. Try another size or another assumption.`}
+          hint={`No Boros arb pair prices out at ${fmtUsd(sizeUsd, 0)} capital at market size, ${ENTRY_MODE_PROSE[entryMode]} perp entry and ${EXIT_MODE_PROSE[exitMode]}. Try another size or another assumption.`}
         />
       ) : visible.length === 0 ? (
         // Distinct from the one above: the assumptions DO price opportunities,

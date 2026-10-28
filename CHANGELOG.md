@@ -33,11 +33,11 @@ Opportunities sizes every card by the capital you put in.
   or may not have filled" only when Boros has no answer after 30 seconds.
 - **A close at a few cents of gas goes through.** Before, Boros refused it for gas on every
   try. Now the terminal sends it once more with a $1 gas top-up.
-- **Opportunities sizes by capital.** The size box now sets Capital by default: the margin you
-  post on all legs, which is what the APR is on. Each card finds the notional per leg that uses
-  exactly that capital, walks the Boros and perp books at that size, and shows it. The default
-  is $100k of capital. A switch beside the box goes back to Notional per leg, which keeps its
-  own size, now $1M by default with a $1M button. The Custom button is gone: click the box and
+- **Opportunities sizes by capital.** The size box now sets Capital: the margin you post on all
+  legs, which is what the APR is on. Each card finds the notional per leg that uses exactly
+  that capital, walks the Boros and perp books at that size, and shows it. The default is $200k
+  of capital. The Notional per leg mode is gone; a saved notional pick opens on your saved
+  capital, or on $200k. The presets now include $1M. The Custom button is gone: click the box and
   type any amount, or pick a preset. Open this strategy fills the ticket at the
   card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
   another, and a note under the size says so.

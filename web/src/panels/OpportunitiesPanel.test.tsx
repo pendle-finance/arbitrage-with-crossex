@@ -651,7 +651,7 @@ describe('OpportunitiesPanel — breakdown waterfalls', () => {
 });
 
 describe('OpportunitiesPanel — the assumptions strip', () => {
-  it('defaults to $100k of capital at market, with notional one click away', async () => {
+  it('defaults to $200k of capital at market, with no notional mode', async () => {
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
     renderWithClient(<OpportunitiesPanel />);
@@ -660,16 +660,15 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     const params = paramsOf(urls.at(-1)!);
     expect(params).toMatchObject({
       borosEntry: 'market',
-      capitalUsd: '100000',
+      capitalUsd: '200000',
       entryMode: 'both-market',
       exitMode: 'roll',
     });
     expect(params).not.toHaveProperty('notionalUsd');
-    const sizeBy = screen.getByRole('radiogroup', { name: 'Size by' });
-    expect(within(sizeBy).getByRole('radio', { name: 'Capital' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: '$100k' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('radiogroup', { name: 'Size by' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radio', { name: 'Notional per leg' })).not.toBeInTheDocument();
     // The box is always the size; there is no separate Custom button.
-    expect(screen.getByLabelText('Capital (USD)')).toHaveValue('100,000');
+    expect(screen.getByLabelText('Capital (USD)')).toHaveValue('200,000');
     expect(screen.queryByRole('radio', { name: /^Custom/ })).not.toBeInTheDocument();
     // There is no Boros-entry control any more — every card is priced
     // market-at-size.
@@ -677,7 +676,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Boros entry' })).not.toBeInTheDocument();
   });
 
-  it('re-prices on the presets, and each size kind keeps its own pick', async () => {
+  it('re-prices on the presets', async () => {
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
     renderWithClient(<OpportunitiesPanel />);
@@ -685,17 +684,8 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await waitFor(() => expect(urls).toHaveLength(1));
     await userEvent.click(screen.getByRole('radio', { name: '$500k' }));
     await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ capitalUsd: '500000' }));
-
-    // Notional starts on its own default, not on the capital figure.
-    await userEvent.click(screen.getByRole('radio', { name: 'Notional per leg' }));
-    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ notionalUsd: '1000000' }));
-    expect(screen.getByRole('radio', { name: '$1M' })).toHaveAttribute('aria-checked', 'true');
-    await userEvent.click(screen.getByRole('radio', { name: '$100k' }));
-    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ notionalUsd: '100000' }));
-
-    await userEvent.click(screen.getByRole('radio', { name: 'Capital' }));
-    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ capitalUsd: '500000' }));
     expect(screen.getByRole('radio', { name: '$500k' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByLabelText('Capital (USD)')).toHaveValue('500,000');
   });
 
   it('labels the perp entry modes as "2 market orders" and "Limit + hedge"', async () => {
@@ -727,7 +717,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     const size = screen.getByLabelText('Capital (USD)');
     await userEvent.click(size);
     // Raw digits while typing: amountError refuses commas.
-    expect(size).toHaveValue('100000');
+    expect(size).toHaveValue('200000');
     await userEvent.clear(size);
     await userEvent.type(size, '25000');
     await waitFor(
@@ -764,21 +754,19 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ capitalUsd: '1000000' }));
   });
 
-  it('keeps a size typed just before switching between capital and notional', async () => {
+  it('sizes by the saved capital when an older save picked notional', async () => {
+    localStorage.setItem(
+      OPPORTUNITIES_STORAGE_KEY,
+      JSON.stringify({ sizeBy: 'notional', notionalUsd: 1_000_000, capitalUsd: 30_000 }),
+    );
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(urls).toHaveLength(1));
-    const size = screen.getByLabelText('Capital (USD)');
-    await userEvent.clear(size);
-    await userEvent.type(size, '30000');
-    await userEvent.click(screen.getByRole('radio', { name: 'Notional per leg' }));
-    expect(screen.getByLabelText('Notional per leg (USD)')).toHaveValue('1,000,000');
-    await userEvent.click(screen.getByRole('radio', { name: 'Capital' }));
-
+    expect(paramsOf(urls[0]!)).toMatchObject({ capitalUsd: '30000' });
+    expect(paramsOf(urls[0]!)).not.toHaveProperty('notionalUsd');
     expect(screen.getByLabelText('Capital (USD)')).toHaveValue('30,000');
-    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ capitalUsd: '30000' }));
   });
 
   it('notes the $1M perp slippage assumption only when a card is above $1M per leg', async () => {
@@ -823,7 +811,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     // Well past the debounce: no request carries the empty (or a 0) size, and
     // the cards still render off the last good one.
     await new Promise((r) => setTimeout(r, 600));
-    expect(urls.every((u) => paramsOf(u).capitalUsd === '100000')).toBe(true);
+    expect(urls.every((u) => paramsOf(u).capitalUsd === '200000')).toBe(true);
     expect(toggles()).toHaveLength(1);
   });
 
@@ -833,7 +821,6 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
     await openAssumptions();
-    await userEvent.click(screen.getByRole('radio', { name: 'Notional per leg' }));
     await userEvent.click(screen.getByRole('radio', { name: '$100k' }));
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
     await userEvent.click(screen.getByRole('radio', { name: /Roll over/ }));
@@ -843,49 +830,48 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     // The strip itself is deliberately NOT persisted — it folds away again.
     await openAssumptions();
-    for (const name of ['Notional per leg', '$100k', /Limit \+ hedge/, /Roll over/] as const) {
+    for (const name of ['$100k', /Limit \+ hedge/, /Roll over/] as const) {
       expect(screen.getByRole('radio', { name })).toHaveAttribute('aria-checked', 'true');
     }
   });
 
   it.each([
-    [{ notionalChoice: '500k', customNotionalUsd: 25_000 }, '500,000', '500000'],
-    [{ notionalChoice: 'custom', customNotionalUsd: 25_000 }, '25,000', '25000'],
+    [{ capitalChoice: '500k', customCapitalUsd: 25_000 }, '500,000', '500000'],
+    [{ capitalChoice: 'custom', customCapitalUsd: 25_000 }, '25,000', '25000'],
   ])('reads a 1.7.7 save %j as the size it showed', async (saved, shown, sent) => {
-    localStorage.setItem(OPPORTUNITIES_STORAGE_KEY, JSON.stringify({ sizeBy: 'notional', ...saved }));
+    localStorage.setItem(OPPORTUNITIES_STORAGE_KEY, JSON.stringify({ sizeBy: 'capital', ...saved }));
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(urls).toHaveLength(1));
-    expect(paramsOf(urls[0]!)).toMatchObject({ notionalUsd: sent });
-    expect(screen.getByLabelText('Notional per leg (USD)')).toHaveValue(shown);
+    expect(paramsOf(urls[0]!)).toMatchObject({ capitalUsd: sent });
+    expect(screen.getByLabelText('Capital (USD)')).toHaveValue(shown);
   });
 
-  it('migrates a v1 "mark" blob to market-at-size at its own notional', async () => {
-    // v1's 'mark' carried its size in customSize, and the size survives. The
-    // mark entry has no home any more: every card is priced market-at-size.
-    localStorage.setItem(LEGACY_KEY, JSON.stringify({ choice: 'mark', customSize: 25_000 }));
+  it('migrates a v1 "mark" blob to market-at-size at the default capital', async () => {
+    // v1's size was a notional, which has no home any more; nor has the mark
+    // entry: every card is priced market-at-size.
+    localStorage.setItem(
+      LEGACY_KEY,
+      JSON.stringify({ choice: 'mark', customSize: 25_000, entryMode: 'maker-hedge' }),
+    );
     const urls: string[] = [];
     server.use(opportunitiesHandler(makeOpportunitiesResult(), { urls }));
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(urls).toHaveLength(1));
     expect(paramsOf(urls.at(-1)!)).toMatchObject({
-      capitalUsd: '100000',
+      capitalUsd: '200000',
       borosEntry: 'market',
-      entryMode: 'both-market',
+      entryMode: 'maker-hedge',
       exitMode: 'roll',
     });
     expect(localStorage.getItem(LEGACY_KEY)).toBeNull();
     expect(JSON.parse(localStorage.getItem(OPPORTUNITIES_STORAGE_KEY)!)).toMatchObject({
-      notionalUsd: 25_000,
+      capitalUsd: 200_000,
       borosEntry: 'market',
     });
-
-    await userEvent.click(screen.getByRole('radio', { name: 'Notional per leg' }));
-    expect(screen.getByLabelText('Notional per leg (USD)')).toHaveValue('25,000');
-    await waitFor(() => expect(paramsOf(urls.at(-1)!)).toMatchObject({ notionalUsd: '25000' }));
   });
 });
 
@@ -897,7 +883,7 @@ describe('OpportunitiesPanel — empty and error states', () => {
     expect(await screen.findByText('No fixed-return opportunities')).toBeInTheDocument();
     expect(
       screen.getByText(
-        /\$100,000 capital at market size, both legs market perp entry and roll over/,
+        /\$200,000 capital at market size, both legs market perp entry and roll over/,
       ),
     ).toBeInTheDocument();
   });
