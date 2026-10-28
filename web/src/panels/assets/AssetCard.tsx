@@ -5451,6 +5451,9 @@ export function AssetCard({
               `${prettyVenue(v.venue)}\t${v.gapUsd > 0 ? 'LONG' : 'SHORT'} ${fmtUsdCompact(Math.abs(v.gapUsd))} · ${fmtPct(v.fundingApr)}${v.source === 'current' ? ' now' : ''}`,
           ),
           "* Floating = unhedged size × funding (7-day average, or today's where marked now).",
+          ...(estimate.leftOutCapitalUsd > 0
+            ? [`* Leaves out legs with no hedge and their ${fmtUsd(estimate.leftOutCapitalUsd)} margin.`]
+            : []),
           '* Excludes price moves.',
         ].join('\n');
   // Pairs inside the roll window — the banner's count, and the cards it

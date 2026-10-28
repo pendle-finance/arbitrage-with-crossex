@@ -598,6 +598,55 @@ describe('the estimated APR of a book that is not fully locked', () => {
     expect(gate.fundingApr).toBeCloseTo(-0.01, 12);
   });
 
+  // Perps rolled from the October spread to November; October runs out unhedged.
+  const rolled = (octSize: number) =>
+    group({
+      priceUsd: PX,
+      perpOpen: [
+        perp({ symbol: 'GATE_FUTURE_ETH_USDT', venue: 'GATE', side: 'LONG', qty: 30, notionalUsd: 30 * PX, imUsd: 2_000, fundingApr7d: -0.1 }),
+        perp({ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', venue: 'HYPERLIQUID', side: 'SHORT', qty: 30, notionalUsd: 30 * PX, imUsd: 2_000, fundingApr7d: 0.07 }),
+      ],
+      borosOpen: [
+        boros({ marketId: 58, venue: 'GATE', spreadVenues: ['GATE', 'HYPERLIQUID'], side: 'LONG', sizeToken: 30, notionalUsd: 30 * PX, entryApr: -0.0342, floatingApr: -0.03, imUsd: 150, maturity: NOW + 30 * DAY }),
+        boros({ marketId: 57, venue: 'GATE', spreadVenues: ['GATE', 'HYPERLIQUID'], side: 'LONG', sizeToken: octSize, notionalUsd: octSize * PX, entryApr: -0.0318, floatingApr: -0.03, imUsd: 5 * octSize / 30, maturity: NOW + 2 * DAY }),
+      ],
+    });
+
+  it('a rate leg whose perps rolled away is left out with its margin', () => {
+    const d = deriveAsset(rolled(30), {}, 0, NOW);
+    expect(d.pairs).toHaveLength(1);
+    expect(d.borosOnly).toHaveLength(1);
+    const e = d.unlockedEstimate!;
+    const pair = d.pairs[0];
+    expect(e.leftOutCapitalUsd).toBeCloseTo(d.borosOnly[0].imUsd, 9);
+    expect(e.floatingCarryPerYearUsd).toBeCloseTo(0, 6);
+    expect(e.apr).toBeCloseTo(pair.lockedAprFwd!, 9);
+    expect(e.apr * (d.totals.capitalUsd - e.leftOutCapitalUsd)).toBeCloseTo(pair.lockedAprFwd! * pair.capitalUsd, 6);
+  });
+
+  it('a rate leg larger than its perps leaves out only the part with no perp', () => {
+    // One November market of 50 ETH behind 30 ETH of perps: 20 ETH has no hedge.
+    const g = rolled(30);
+    g.borosOpen = [{ ...g.borosOpen[0], sizeToken: 50, notionalUsd: 50 * PX, imUsd: 250 }];
+    const d = deriveAsset(g, {}, 0, NOW);
+    const e = d.unlockedEstimate!;
+    expect(e.leftOutCapitalUsd).toBeCloseTo(100, 6);
+    expect(e.fixedCarryPerYearUsd).toBeCloseTo(0.0342 * 30 * PX, 6);
+    expect(e.floatingCarryPerYearUsd).toBeCloseTo(0, 6);
+    expect(e.apr).toBeCloseTo((0.0342 * 30 * PX) / (2_000 + 2_000 + 150), 9);
+  });
+
+  it('a book with no hedged unit keeps the whole-book estimate', () => {
+    const g = group({
+      priceUsd: PX,
+      borosOpen: [boros({ marketId: 1, venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 6, notionalUsd: 6 * PX, entryApr: 0.08, floatingApr: 0.05, imUsd: 300 })],
+    });
+    const e = deriveAsset(g, {}, 0, NOW).unlockedEstimate!;
+    expect(e.leftOutCapitalUsd).toBe(0);
+    // SHORT receives 8% fixed and pays the 5% floating.
+    expect(e.apr).toBeCloseTo(((0.08 - 0.05) * 6 * PX) / 300, 9);
+  });
+
   it('no estimate when a gap has no rate at all, or a rate leg has no entry', () => {
     const noRate = book(6, { gate7d: null });
     noRate.borosOpen = noRate.borosOpen.filter((b) => b.venue !== 'GATE');
