@@ -614,15 +614,14 @@ export interface PerpOnlyPair {
    * first, so its output never holds both. */
   longYu: PendingLeg | null;
   shortYu: PendingLeg | null;
-  /** What each side still has to open, in the asset's unit (0 = covered),
-   * capped at what the venue lacks: its perps on that side minus every
-   * single it holds there, at any date (owner 2026-10-16). */
+  /** What each side still has to open, in the asset's unit (0 = covered). */
   missingLong: number;
   missingShort: number;
-  /** Set when that cap cut the side: the venue's singles on it, largest
-   * first — what the card names as the reason. */
-  heldElsewhereLong?: PendingLeg[];
-  heldElsewhereShort?: PendingLeg[];
+  /** Set when Boros the venue holds at another date already covers part of
+   * that perp: those legs, largest first, and how much of the open (in the
+   * asset's unit) covers nothing twice. The ticket warns past `room`. */
+  heldElsewhereLong?: HeldElsewhere;
+  heldElsewhereShort?: HeldElsewhere;
   blockedLong: boolean;
   blockedShort: boolean;
   excludedNetsLong: ExcludedNet[];
@@ -630,6 +629,8 @@ export interface PerpOnlyPair {
   otherWay: PendingLeg[];
   offerMaturity: number | null;
 }
+
+export type HeldElsewhere = { legs: PendingLeg[]; room: number };
 
 export type ExcludedNet = { marketId: number; venue: string; side: 'LONG' | 'SHORT'; maturity: number };
 
@@ -1463,10 +1464,10 @@ export function deriveAsset(
       continue;
     }
     if (!longPerp || !shortPerp) continue;
-    const cut = (side: 'LONG' | 'SHORT', offer: number, blocked: boolean) =>
-      card.holds !== side && !blocked && residueOf(card.size, offer) > 0 ? heldElsewhereOf(side === 'LONG' ? card.longVenue : card.shortVenue, side) : [];
-    const heldLong = cut('LONG', card.offer.long, card.blocked.long);
-    const heldShort = cut('SHORT', card.offer.short, card.blocked.short);
+    const cut = (side: 'LONG' | 'SHORT', offer: number, room: number) =>
+      residueOf(offer, room) > 0 ? heldElsewhereOf(side === 'LONG' ? card.longVenue : card.shortVenue, side) : [];
+    const heldLong = cut('LONG', card.offer.long, card.room.long);
+    const heldShort = cut('SHORT', card.offer.short, card.room.short);
     const heldTotal = borosLegs.reduce((t, y) => t + sizeIn(y, y.unit), 0);
     const parts = borosLegs.length > 0 ? borosLegs.map((y) => ({ y, f: heldTotal > 0 ? sizeIn(y, y.unit) / heldTotal : 1 })) : [{ y: null, f: 1 }];
     parts.forEach(({ y, f }, i) => {
@@ -1502,8 +1503,8 @@ export function deriveAsset(
               })
             : [],
         offerMaturity: y ? y.maturity : latestCardDate,
-        ...(heldLong.length > 0 ? { heldElsewhereLong: heldLong } : {}),
-        ...(heldShort.length > 0 ? { heldElsewhereShort: heldShort } : {}),
+        ...(heldLong.length > 0 ? { heldElsewhereLong: { legs: heldLong, room: card.room.long * f } } : {}),
+        ...(heldShort.length > 0 ? { heldElsewhereShort: { legs: heldShort, room: card.room.short * f } } : {}),
       });
     });
   }

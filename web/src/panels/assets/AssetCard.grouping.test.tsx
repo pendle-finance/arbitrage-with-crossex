@@ -11,6 +11,7 @@ import { STRATEGY_STORAGE_KEY } from '../HomeControls';
 import { AssetCard } from './AssetCard';
 import { blockedReason, blockedReasons } from '../../test/blockedReason';
 import { deriveAsset } from './assetModel';
+import type { BorosOpenPrefill } from '../../trade/TradeFlow';
 
 function renderCard(group: AssetGroup) {
   return renderWithClient(
@@ -74,7 +75,7 @@ beforeEach(() => {
 });
 
 describe('the card, by the grouping DoD', () => {
-  it('half roll: no open while the old leg is held', async () => {
+  it('half roll: the open goes while the old leg is held, and the ticket learns of it', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(B15_HELD_TEN));
     await showPairs(user);
@@ -84,13 +85,21 @@ describe('the card, by the grouping DoD', () => {
       return found;
     });
     const open = within(card).getByRole('button', { name: 'Open leg' });
-    expect(open).toHaveAttribute('aria-disabled', 'true');
-    expect(await blockedReason(user, open)).toBe('Hyperliquid SHORT holds 10 ETH at 30 Oct. Close 4 ETH of it to open here.');
-    expect(textOf(open.closest('tr') as HTMLElement)).not.toContain(' holds ');
-    expect(textOf(card)).not.toContain('to open here');
+    expect(open).not.toHaveAttribute('aria-disabled', 'true');
+    expect(textOf(card)).not.toContain(' holds ');
     await user.click(open);
-    expect(prefill.current).toBeNull();
-    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
+    await waitFor(() => expect(prefill.current).not.toBeNull());
+    expect(prefill.current).toMatchObject({ shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: 4 });
+    expect((prefill.current as BorosOpenPrefill | null)?.overlaps).toEqual([
+      {
+        venue: 'HYPERLIQUID',
+        side: 'SHORT',
+        held: 'Hyperliquid SHORT holds 10 ETH at 30 Oct.',
+        room: 0,
+        roomBase: 0,
+        legs: [{ size: expect.any(Number), sizeBase: expect.closeTo(10, 9), maturity: DATES.O }],
+      },
+    ]);
   });
 
   it('half roll: open after the old leg is closed', async () => {
@@ -106,6 +115,7 @@ describe('the card, by the grouping DoD', () => {
     await user.click(within(card).getByRole('button', { name: 'Open leg' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ base: 'ETH', longVenue: null, shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: 4 });
+    expect((prefill.current as BorosOpenPrefill | null)?.overlaps).toEqual([]);
   });
 
   it('offer date after a half roll', async () => {
@@ -421,7 +431,7 @@ describe('the card, by the grouping DoD', () => {
     expect(textOf(card)).not.toContain('is in Ungrouped');
     const ungrouped = cardList().find((el) => /Ungrouped legs/.test(textOf(el))) as HTMLElement;
     await expand(user, ungrouped);
-    expect(textOf(ungrouped)).toContain('USDC perp · no Boros hedge');
+    expect(textOf(ungrouped)).toContain('no Boros hedge');
   });
 
   it('close-first hover only when it blocks', async () => {

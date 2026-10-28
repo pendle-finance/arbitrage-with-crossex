@@ -13,7 +13,6 @@ import { renderWithClient } from '../../test/utils';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
 import { STRATEGY_STORAGE_KEY } from '../HomeControls';
 import { AssetCard } from './AssetCard';
-import { blockedReason } from '../../test/blockedReason';
 import { deriveAsset } from './assetModel';
 import { fmtDateShort } from '../../lib/fmt';
 
@@ -340,26 +339,26 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
   });
 });
 
-describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
+describe('an open past what the venue lacks: the ticket learns of the held leg', () => {
   const capBook = (perps: number) =>
     book(
       'BTC',
       [perp('BTC', 'GATE', 'LONG', perps), perp('BTC', 'HYPERLIQUID', 'SHORT', perps)],
       [leg('BTC', 'GATE', 'LONG', 3, NOV), leg('BTC', 'HYPERLIQUID', 'SHORT', 3, DEC)],
     );
-  const reason = (close: number) => `Gate LONG holds 3 BTC at ${fmtDateShort(NOV)}. Close ${close} BTC of it to open here.`;
+  const held = `Gate LONG holds 3 BTC at ${fmtDateShort(NOV)}.`;
 
-  it('perps 3: the card takes the later HL leg (score date term), says why and what to close (#48), and offers no Gate open', async () => {
+  it('perps 3: the card takes the later HL leg (score date term) and opens the whole Gate leg', async () => {
     const user = userEvent.setup();
     renderCard(capBook(3));
     await showPairs(user);
     const open = await screen.findByRole('button', { name: 'Open leg' });
-    expect(open).toHaveAttribute('aria-disabled', 'true');
-    expect(await blockedReason(user, open)).toBe(reason(3));
-    expect(screen.queryByText(reason(3))).toBeNull();
+    expect(open).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByText(/ holds /)).toBeNull();
     await user.click(open);
-    expect(flow?.borosOpenPrefill ?? null).toBeNull();
-    expect(screen.queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
+    await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
+    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: 'GATE', shortVenue: null, maturity: DEC, sizeBase: 3 });
+    expect(flow?.borosOpenPrefill?.overlaps).toMatchObject([{ venue: 'GATE', side: 'LONG', held, roomBase: 0, legs: [{ sizeBase: 3, maturity: NOV }] }]);
   });
 
   it('perps 3: a held leg reads its size, a missing one held / target (the card holds the later HL leg)', async () => {
@@ -374,22 +373,20 @@ describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
     expect(row('Gate')?.textContent).not.toMatch(/\/ 3 BTCopen /);
   });
 
-  it('perps 4: Gate opens the 1 BTC it lacks, at the held single date; the line names the 2 BTC to close (#48)', async () => {
+  it('perps 4: Gate opens all 3 BTC at the held single date; 1 BTC of it is room', async () => {
     const user = userEvent.setup();
     renderCard(capBook(4));
     await showPairs(user);
     const opens = await screen.findAllByRole('button', { name: 'Open leg' });
     expect(opens.map((b) => b.getAttribute('title'))).toEqual([
-      `Open only the Gate LONG Boros leg, at 1 BTC. ${reason(2)}`,
+      'Open only the Gate LONG Boros leg, at 3 BTC',
       'Open only the Hyperliquid SHORT Boros leg, at 1 BTC',
     ]);
     expect(opens.some((b) => b.getAttribute('aria-disabled') === 'true')).toBe(false);
-    expect(screen.queryByText(reason(2))).toBeNull();
-    const gate = screen.getAllByRole('row').find((r) => /^GateBoros.*0 \/ 3 BTC/.test(r.textContent ?? ''));
-    expect(gate?.textContent).toMatch(/0 \/ 3 BTCopen 1 BTC/);
     await user.click(opens[0]);
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
-    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: 'GATE', shortVenue: null, maturity: DEC, sizeBase: 1, size: 80_000 });
+    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: 'GATE', shortVenue: null, maturity: DEC, sizeBase: 3 });
+    expect(flow?.borosOpenPrefill?.overlaps).toMatchObject([{ venue: 'GATE', side: 'LONG', held, roomBase: 1 }]);
   });
 
   // Live 16 Oct: a $0.01 cut said "already holds" and "open 0.143" under "0 / 0.143".

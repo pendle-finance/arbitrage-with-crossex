@@ -1069,8 +1069,9 @@ describe('market-blind grouping in the model', () => {
     expect(ungroupedOf(d)).toEqual(['3 4']);
     expect(d.pendingLegs[0]).toMatchObject({ venue: 'HYPERLIQUID', side: 'SHORT', maturity: OCT });
     expect(card.missingLong).toBe(0);
-    expect(card.missingShort).toBe(0);
-    expect(card.heldElsewhereShort?.map((l) => `${l.marketId} ${r6(l.sizeBase)}`)).toEqual(['3 10']);
+    expect(card.missingShort).toBeCloseTo(4, 9);
+    expect(card.heldElsewhereShort?.legs.map((l) => `${l.marketId} ${r6(l.sizeBase)}`)).toEqual(['3 10']);
+    expect(card.heldElsewhereShort?.room).toBe(0);
     expect(card.offerMaturity).toBe(NOV);
     expect(perpOnlyCloseLegs(card).map((l) => `${l.venue} ${r6(l.qty)} ${l.partial}`)).toEqual(['GATE 4 true', 'HYPERLIQUID 4 true']);
   });
@@ -1082,7 +1083,7 @@ describe('market-blind grouping in the model', () => {
     expect(ungroupedOf(d)).toEqual(['3 2']);
   });
 
-  it('half roll at a $6M book keeps the same cards and offer cut', () => {
+  it('half roll at a $6M book keeps the same cards, offer and room', () => {
     const g = b15();
     const k = 240;
     const big = {
@@ -1093,8 +1094,9 @@ describe('market-blind grouping in the model', () => {
     const d = deriveAsset(big, {}, 0, NOW);
     expect(cardsOf(d)).toEqual([`BM GATE/HYPERLIQUID 2 ${4 * k}`, `H GATE/HYPERLIQUID ${OCT} ${6 * k}`]);
     expect(ungroupedOf(d)).toEqual([`3 ${4 * k}`]);
-    expect(d.perpOnly[0].missingShort).toBe(0);
-    expect(d.perpOnly[0].heldElsewhereShort?.map((l) => r6(l.sizeBase))).toEqual([10 * k]);
+    expect(d.perpOnly[0].missingShort).toBeCloseTo(4 * k, 6);
+    expect(d.perpOnly[0].heldElsewhereShort?.legs.map((l) => r6(l.sizeBase))).toEqual([10 * k]);
+    expect(d.perpOnly[0].heldElsewhereShort?.room).toBe(0);
   });
 
   it('half roll after the old date', () => {
@@ -1212,11 +1214,12 @@ describe('market-blind grouping in the model', () => {
     expect(pairPerpCloseLegs(d.pairs[0]).map((l) => `${l.venue} ${r6(l.qty)} ${l.partial}`)).toEqual(['GATE 6 true', 'HYPERLIQUID 6 false']);
   });
 
-  it('B24 the open beside a tiny Boros leg offers the rest', () => {
+  it('B24 the open beside a tiny Boros leg offers it all, with the rest as room', () => {
     const d = deriveAsset(book([gp('GATE', 'LONG', 1), gp('HYPERLIQUID', 'SHORT', 1)], [yu(1, 'GATE', 'LONG', 0.008, NOV)]), {}, 0, NOW);
     expect(cardsOf(d)).toEqual(['BM GATE/HYPERLIQUID - 1']);
     expect(ungroupedOf(d)).toEqual(['1 0.008']);
-    expect(r6(d.perpOnly[0].missingLong)).toBe(0.992);
+    expect(d.perpOnly[0].missingLong).toBe(1);
+    expect(r6(d.perpOnly[0].heldElsewhereLong?.room ?? NaN)).toBe(0.992);
     expect(d.perpOnly[0].missingShort).toBe(1);
   });
 

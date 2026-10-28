@@ -44,6 +44,7 @@ import { CloseBorosForm } from '../../trade/CloseBorosForm';
 import { pickOpenMarkets } from '../../trade/BorosPairTicket';
 import { ClosePopover } from '../../trade/ClosePopover';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
+import type { BorosOverlap } from '../../trade/borosOverlap';
 import { useActiveWallet, useTrackedAddressOptional } from '../trackedAddress';
 import {
   useBorosAgent,
@@ -3226,7 +3227,6 @@ function PerpOnlyPairCard({
   listedSpread,
   excludedNet,
   excludeMenu,
-  looseIds,
   wrongSideLegs,
   onOpenBoros,
   onCloseBoros,
@@ -3238,7 +3238,6 @@ function PerpOnlyPairCard({
   listedSpread: [string, string] | null;
   excludedNet: ExcludedNets;
   excludeMenu: ExcludeMenu;
-  looseIds: Set<number>;
   wrongSideLegs: PendingLeg[];
   /** Opens the close form on one Boros leg. */
   onCloseBoros: (leg: PendingLeg) => void;
@@ -3275,11 +3274,6 @@ function PerpOnlyPairCard({
   const legName = (venue: string, kind: 'perp' | 'yu', side: 'LONG' | 'SHORT', spreadVenues?: [string, string] | null) => (
     <LegName venue={venue} kind={kind} side={side} base={base} spreadVenues={spreadVenues} />
   );
-  /** One rate-leg row: the leg that is there, or the gap where one belongs. */
-  const heldText = (legs: PendingLeg[], close: number) => {
-    const named = legs.find((y) => looseIds.has(y.marketId)) ?? legs[0];
-    return `${legVenueName(named)} ${named.side} holds ${sizeText(sizeIn(named, named.unit))} at ${fmtDateShort(named.maturity)}. Close ${sizeText(close)} of it to open here.`;
-  };
   const blockedText = (venue: string, side: 'LONG' | 'SHORT') => {
     const y = blockingWrongSide([...pair.otherWay, ...wrongSideLegs], venue, side);
     return y
@@ -3289,22 +3283,10 @@ function PerpOnlyPairCard({
   const pairNet = (side: 'long' | 'short') => (bothEven && !held ? excludedNet.pair[side] : null);
   const eitherNet = pairNet('long') ?? pairNet('short');
   const ofTarget = (held: number) => heldOfTarget(held, pair.size, pair.unit, base);
-  /**
-   * The S1 cap cut the open by an amount the trader can read. Live 16 Oct: a
-   * $0.01 cut said "Gate already holds 0.205 ETH at 30 Oct" and "open 0.143"
-   * under "0 / 0.143".
-   */
-  const capShows = (held: number, missing: number) => gapUsd(pair, Math.max(0, pair.size - held) - Math.max(0, missing)) >= DUST_USD;
-  /** The open the S1 cap allows, when it is less than the leg's gap. */
-  const cappedOpen = (held: number, missing: number) =>
-    missing > 0 && capShows(held, missing) ? (
-      <div className="text-[11px] text-ink-400">open {sizeText(missing)}</div>
-    ) : null;
-  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, blocked: boolean, net: NamedNet | null, heldElsewhere?: PendingLeg[]) => {
+  /** One rate-leg row: the leg that is there, or the gap where one belongs. */
+  const yuRow = (venue: string, side: 'LONG' | 'SHORT', yu: PendingLeg | null, missing: number, blocked: boolean, net: NamedNet | null) => {
     const heldHere = yu ? sizeIn(yu, yu.unit) : 0;
-    const heldLine = heldElsewhere && capShows(heldHere, missing) ? heldText(heldElsewhere, Math.max(0, pair.size - heldHere - missing)) : null;
     const why = [
-      heldLine,
       blocked && !(missing > 0) ? blockedText(venue, side) : null,
       net && missing > 0 ? excludedNetText(net) : null,
     ].filter((s): s is string => s !== null);
@@ -3335,7 +3317,6 @@ function PerpOnlyPairCard({
         </td>
         <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={HELD_OF_TARGET_TITLE}>
           {ofTarget(heldHere)}
-          {cappedOpen(heldHere, missing)}
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
@@ -3346,7 +3327,7 @@ function PerpOnlyPairCard({
                 className={`btn-ghost-xs !py-[5px] ${canOpen ? '!text-grass hover:!border-grass/60' : BLOCKED_OPEN}`}
                 disabled={!onOpenBoros}
                 aria-disabled={!canOpen}
-                title={canOpen ? `Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}${heldLine ? `. ${heldLine}` : ''}` : undefined}
+                title={canOpen ? `Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}` : undefined}
                 onClick={canOpen ? () => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' }) : undefined}
               >
                 Open leg
@@ -3456,7 +3437,6 @@ function PerpOnlyPairCard({
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
                       {ofTarget(0)}
-                      {cappedOpen(0, Math.min(pair.missingLong, pair.missingShort))}
                     </td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
                     {eitherNet ? (
@@ -3474,8 +3454,8 @@ function PerpOnlyPairCard({
                   </tr>
                 ) : (
                   <>
-                    {yuRow(pair.longVenue, 'LONG', pair.longYu, pair.missingLong, pair.blockedLong, excludedNet.long, pair.heldElsewhereLong)}
-                    {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort, pair.blockedShort, excludedNet.short, pair.heldElsewhereShort)}
+                    {yuRow(pair.longVenue, 'LONG', pair.longYu, pair.missingLong, pair.blockedLong, excludedNet.long)}
+                    {yuRow(pair.shortVenue, 'SHORT', pair.shortYu, pair.missingShort, pair.blockedShort, excludedNet.short)}
                   </>
                 )}
                 {pair.otherWay.map((y, i) => {
@@ -3938,7 +3918,7 @@ function UngroupedCard({
                           l.quoteTwin ? (
                             <>
                               {sideChip(l.side)}
-                              <AmberTag tag="USDC perp · no Boros hedge">Boros tracks the USDT perp's funding, not this USDC one, so no Boros leg can hedge it. The terminal never opens USDC perps.</AmberTag>
+                              <AmberTag tag="no Boros hedge">Boros tracks the USDT perp's funding, not this USDC one, so no Boros leg can hedge it. The terminal never opens USDC perps.</AmberTag>
                             </>
                           ) : (
                             sideChip(l.side)
@@ -5704,7 +5684,6 @@ export function AssetCard({
     };
   };
   const ungroupedCount = derived.unpairedPerps.length + derived.pendingLegs.length;
-  const looseIds = new Set(derived.pendingLegs.map((y) => y.marketId));
   const excludeMenu: ExcludeMenu = (y) => {
     const leg = group.borosOpen.find((b) => b.marketId === y.marketId);
     if (!leg || !(y.rowSizeToken > 0)) return null;
@@ -5726,6 +5705,26 @@ export function AssetCard({
     const leg = group.borosOpen.find((b) => b.marketId === y.marketId);
     if (leg) setCloseLeg({ kind: 'boros', leg, slice: rowSlice(leg, y) });
   };
+  /** Boros the venue holds at another date on this side, for the ticket's
+   * double-cover warning. Under the dust line it says nothing. */
+  const overlapOf = (p: PerpOnlyPair, venue: string, side: 'LONG' | 'SHORT'): BorosOverlap[] => {
+    const h = side === 'LONG' ? p.heldElsewhereLong : p.heldElsewhereShort;
+    const usd = (n: number) => (p.unit === 'usd' ? n : n * group.priceUsd);
+    const coin = (n: number) => (p.unit === 'base' ? n : undefined);
+    if (!h || usd((side === 'LONG' ? p.missingLong : p.missingShort) - h.room) < DUST_USD) return [];
+    const total = h.legs.reduce((t, y) => t + sizeIn(y, p.unit), 0);
+    const dates = [...new Set([...h.legs].sort((a, b) => a.maturity - b.maturity).map((y) => fmtDateShort(y.maturity)))];
+    return [
+      {
+        venue,
+        side,
+        held: `${prettyVenue(venue)} ${side} holds ${exactSize(total, p.unit, group.base)} at ${dates.join(' and ')}.`,
+        room: usd(h.room),
+        roomBase: coin(h.room),
+        legs: h.legs.map((y) => ({ size: usd(sizeIn(y, p.unit)), sizeBase: coin(sizeIn(y, p.unit)), maturity: y.maturity })),
+      },
+    ];
+  };
   const openBorosFor = (p: PerpOnlyPair, sides: { long: boolean; short: boolean }) => {
     if (!flow) return;
     const size = sides.long && sides.short ? Math.min(p.missingLong, p.missingShort) : sides.long ? p.missingLong : p.missingShort;
@@ -5734,6 +5733,7 @@ export function AssetCard({
       ...openPrefillFor(p, sides),
       size: perSideUsd,
       sizeBase: p.unit === 'base' ? size : undefined,
+      overlaps: [...(sides.long ? overlapOf(p, p.longVenue, 'LONG') : []), ...(sides.short ? overlapOf(p, p.shortVenue, 'SHORT') : [])],
     });
     flow.openRail();
   };
@@ -6215,7 +6215,6 @@ export function AssetCard({
                   listedSpread={listedSpreadFor(p)}
                   excludedNet={excludedNetFor(p)}
                   excludeMenu={excludeMenu}
-                  looseIds={looseIds}
                   wrongSideLegs={wrongSideLegs}
                   onOpenBoros={flow ? (sides) => openBorosFor(p, sides) : null}
                   onCloseBoros={closeBorosRow}
