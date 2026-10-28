@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
-import { fmtDateLocal } from '../lib/fmt';
+import { fmtDateLocal, fmtDateShort } from '../lib/fmt';
 import { renderWithClient } from '../test/utils';
 import { SPREAD_OPP_MARKET_ID, SPREAD_OPP_MATURITY } from '../test/fixtures';
 import { BorosPairTicket } from './BorosPairTicket';
@@ -1443,6 +1443,47 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
 
     await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(''));
     expect(screen.getByLabelText('Leg B')).toHaveValue('');
+  });
+});
+
+describe('BorosPairTicket — a leg the venue already holds at another date', () => {
+  const EARLY = MATURITY - 30 * 86_400;
+  const held = 'Hyperliquid SHORT holds 10 ETH at 30 Oct.';
+  const prefill = (room: number): Omit<BorosOpenPrefill, 'nonce'> => ({
+    base: 'ETH',
+    longVenue: null,
+    shortVenue: 'Hyperliquid',
+    maturity: MATURITY,
+    size: 4000,
+    overlaps: [{ venue: 'HYPERLIQUID', side: 'SHORT', held, room, roomBase: room / 1000, legs: [{ size: 10_000, sizeBase: 10, maturity: EARLY }] }],
+  });
+  const oneVenue = () =>
+    handlers({ ctx: context({ markets: [marketRow({ marketId: 902, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid' })] }) });
+
+  it('says how much the open covers twice, and until when, at the size typed', async () => {
+    server.use(...oneVenue());
+    const user = userEvent.setup();
+    renderWithClient(<BorosPrefillHarness prefill={prefill(0)} />);
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+    const until = fmtDateShort(EARLY);
+    expect(await screen.findByText(`${held} This open covers $4,000 twice until ${until}.`)).toBeInTheDocument();
+    const box = screen.getByRole('textbox', { name: /size/i });
+    await user.clear(box);
+    await user.type(box, '2500');
+    expect(await screen.findByText(`${held} This open covers $2,500 twice until ${until}.`)).toBeInTheDocument();
+  });
+
+  it('says nothing while the open fits in what the perp still lacks', async () => {
+    server.use(...oneVenue());
+    const user = userEvent.setup();
+    renderWithClient(<BorosPrefillHarness prefill={prefill(4000)} />);
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+    const box = screen.getByRole('textbox', { name: /size/i });
+    await waitFor(() => expect(box).toHaveValue('4000'));
+    expect(screen.queryByText(/twice until/)).not.toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, '5000');
+    expect(await screen.findByText(`${held} This open covers $1,000 twice until ${fmtDateShort(EARLY)}.`)).toBeInTheDocument();
   });
 });
 

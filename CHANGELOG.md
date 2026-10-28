@@ -12,15 +12,19 @@ Opportunities sizes every card by the capital you put in.
 - **Fixed Rate Pairs pairs legs by venue at any date.** Each card pairs your perps and Boros
   legs by venue and side, at any Boros date. After a half roll, the new date gets its card and
   the old leg goes to Ungrouped. A leg on the wrong side shows a `Wrong side` tag at any date,
-  and its row has a faint red tint. A USDC perp shows `USDC perp · no Boros hedge`, because no
-  Boros leg can hedge it.
+  and its row has a faint red tint. A USDC perp shows `no Boros hedge`: Boros tracks the USDT
+  perp's funding, not the USDC one's.
+- **After a half roll, the other leg opens at the new date.** Before, a card refused to open a
+  Boros leg while the venue still held one at the old date. Now it opens, and the Boros ticket
+  says how much of it covers the perp twice and until when, at the size you type. For example:
+  "Hyperliquid SHORT holds 10 ETH at 30 Oct. This open covers 4 ETH twice until 30 Oct."
 - **Exclude part of a Boros leg.** The `⋯` menu on a Boros row has one item, Exclude. It opens
   the same size popup as Edit on Funding Bundles. Nothing saves until you press Save. The
   excluded part moves to an Excluded list on both tabs, with Restore and Edit. Exclusions now
   live on the terminal, so a new browser keeps them. The first load moves the exclusions your
   browser saved to the terminal.
 - **A blocked open says why.** An open that cannot go is a grey button. Its hover gives the
-  reason with exact sizes, for example "Close 4 ETH of it to open here". On Funding Bundles,
+  reason, for example "Close the Wrong side Gate LONG at 30 Oct to open here". On Funding Bundles,
   Open more no longer opens into a Boros leg that you hold the wrong way.
 - **Close perps closes the card's size.** On a card that shares a venue position with another
   card, Close perps sends only that card's size.

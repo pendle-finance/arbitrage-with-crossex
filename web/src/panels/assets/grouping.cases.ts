@@ -107,8 +107,9 @@ export function otherWayOf(result: GroupResult): string[] {
 }
 
 export function offersOf(card: GroupCard): string[] {
-  const long = card.blocked.long ? 'blocked' : card.offer.long > 0 ? String(round6(card.offer.long)) : null;
-  const short = card.blocked.short ? 'blocked' : card.offer.short > 0 ? String(round6(card.offer.short)) : null;
+  const offer = (n: number, room: number) => `${round6(n)}${round6(room) < round6(n) ? ` room ${round6(room)}` : ''}`;
+  const long = card.blocked.long ? 'blocked' : card.offer.long > 0 ? offer(card.offer.long, card.room.long) : null;
+  const short = card.blocked.short ? 'blocked' : card.offer.short > 0 ? offer(card.offer.short, card.room.short) : null;
   return [
     ...(long ? [`${codeOf(card.longVenue)} LONG ${long}`] : []),
     ...(short ? [`${codeOf(card.shortVenue)} SHORT ${short}`] : []),
@@ -309,7 +310,7 @@ export const CASES: GroupCase[] = [
     spec: ['G L 10', 'H S 10', 'G LONG 6 O g1', 'G LONG 4 N g2', 'H SHORT 10 O h'],
     cards: ['BM G/H N holdsL 4', 'H G/H O 6'],
     ug: ['U h 4'],
-    offers: { 'BM G/H N holdsL': [] },
+    offers: { 'BM G/H N holdsL': ['H SHORT 4 room 0'] },
   },
   { title: 'ED-6648 one second before maturity', spec: ['G L 1', 'H S 1', 'G LONG 1 O g', 'H SHORT 1 O h'], cards: ['H G/H O 1'] },
   { title: 'ED-6648 legs matured at the second', spec: ['G L 1', 'H S 1', 'G LONG 1 M g', 'H SHORT 1 M h'], cards: ['BM G/H - 1'] },
@@ -468,7 +469,7 @@ export const CASES: GroupCase[] = [
     spec: ['G L 1', 'H S 1', 'G LONG 0.008 N g'],
     cards: ['BM G/H - 1'],
     ug: ['U g 0.008'],
-    offers: { 'BM G/H -': ['G LONG 0.992', 'H SHORT 1'] },
+    offers: { 'BM G/H -': ['G LONG 1 room 0.992', 'H SHORT 1'] },
   },
   {
     title: 'F39 a $25-a-leg hedged pair keeps its card (#50)',
@@ -549,7 +550,7 @@ export const CASES: GroupCase[] = [
     spec: ['G L 4', 'H S 4', 'G LONG 0.36 O a', 'H SHORT 3.9 N b'],
     cards: ['BM G/H N holdsS 3.9', 'BM G/H O holdsL 0.1'],
     ug: ['U a 0.26'],
-    offers: { 'BM G/H N holdsS': ['G LONG 3.64'] },
+    offers: { 'BM G/H N holdsS': ['G LONG 3.9 room 3.64'] },
     opts: BTC,
   },
   {
@@ -614,11 +615,11 @@ export const CASES: GroupCase[] = [
     rows: { 'PM G/H O': ['H|S 10', 'a1 100', 'b2 100'] },
   },
   {
-    title: '1.7.5 small singles still cut the offer',
+    title: '1.7.5 small singles leave less room',
     spec: ['G L 0.949', 'H S 0.949', 'G LONG 0.004 N a', 'G LONG 0.004 O b', 'G LONG 0.004 A c'],
     cards: ['BM G/H - 0.949'],
     ug: ['U a 0.004', 'U b 0.004', 'U c 0.004'],
-    offers: { 'BM G/H -': ['G LONG 0.937', 'H SHORT 0.949'] },
+    offers: { 'BM G/H -': ['G LONG 0.949 room 0.937', 'H SHORT 0.949'] },
   },
   {
     title: '1.7.6 a Boros leg shared with another card leaves its rest in Ungrouped',

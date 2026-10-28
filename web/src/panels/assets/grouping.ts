@@ -33,6 +33,10 @@ export type GroupCard = {
   holds: Holds;
   spread: boolean;
   offer: { long: number; short: number };
+  /** The part of each offer that covers no perp twice. Boros the venue holds
+   * at another date can already cover this perp; past `room` an open covers
+   * it twice until that leg matures. */
+  room: { long: number; short: number };
   blocked: { long: boolean; short: boolean };
   otherWay: Array<{ marketId: number; blocks: boolean; againstVenue: string }>;
 };
@@ -209,6 +213,7 @@ function cardsOf(legs: Leg[], chosen: Chosen[]): GroupCard[] {
       holds: c.boros.holds,
       spread: c.boros.spread,
       offer: { long: 0, short: 0 },
+      room: { long: 0, short: 0 },
       blocked: { long: false, short: false },
       otherWay: [],
     };
@@ -254,7 +259,7 @@ function setOffers(cards: GroupCard[], ctx: { input: GroupInput; perpLegs: PerpL
     return all - elsewhere;
   };
   const nets = (venue: string, side: Side) => wrongWay.some((w) => w.blocks && holdsLeg(w.position, venue, side));
-  const offerOf = (card: GroupCard, venue: string, side: Side) => {
+  const roomOf = (card: GroupCard, venue: string, side: Side) => {
     const value = Math.max(0, Math.min(card.size, perpSize(venue, side) - heldOn(venue, side)));
     return value <= EPS * Math.max(1, card.size) ? 0 : value;
   };
@@ -262,8 +267,12 @@ function setOffers(cards: GroupCard[], ctx: { input: GroupInput; perpLegs: PerpL
     if (card.kind !== 'borosMissing') continue;
     card.blocked = { long: nets(card.longVenue, 'SHORT'), short: nets(card.shortVenue, 'LONG') };
     card.offer = {
-      long: card.holds === 'LONG' || card.blocked.long ? 0 : offerOf(card, card.longVenue, 'LONG'),
-      short: card.holds === 'SHORT' || card.blocked.short ? 0 : offerOf(card, card.shortVenue, 'SHORT'),
+      long: card.holds === 'LONG' || card.blocked.long ? 0 : card.size,
+      short: card.holds === 'SHORT' || card.blocked.short ? 0 : card.size,
+    };
+    card.room = {
+      long: card.offer.long > 0 ? roomOf(card, card.longVenue, 'LONG') : 0,
+      short: card.offer.short > 0 ? roomOf(card, card.shortVenue, 'SHORT') : 0,
     };
   }
 }

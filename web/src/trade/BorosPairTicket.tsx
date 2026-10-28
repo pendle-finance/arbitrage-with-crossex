@@ -25,6 +25,7 @@
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTradeFlowOptional, type BorosOpenPrefill } from './TradeFlow';
+import { doubledCover, type BorosOverlap } from './borosOverlap';
 import {
   useBorosAgent,
   useBorosPairContext,
@@ -49,7 +50,7 @@ import { SpreadIcon } from '../components/AssetIcon';
 import { amountError } from '../lib/amount';
 import { spreadName } from '../lib/spread';
 import { daysToMaturity, isUsdCollateral } from '../lib/boros';
-import { fieldValue, fmtDateLocal, fmtPct, sigGrouped } from '../lib/fmt';
+import { fieldValue, fmtDateLocal, fmtDateShort, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
@@ -218,6 +219,8 @@ export function BorosPairTicket({
   const [dirA, setDirA] = useState<BorosLegDirection>('short');
   const [dirB, setDirB] = useState<BorosLegDirection>('long');
   const [sizeStr, setSizeStr] = useState('');
+  /** Boros the card's venues hold at other dates, from the last prefill. */
+  const [overlaps, setOverlaps] = useState<BorosOverlap[]>([]);
   const [intentRaw, setIntent] = useState<BorosPairIntent>('open');
   /**
    * The guided form opens the size typed, exactly like the free ticket.
@@ -292,6 +295,7 @@ export function BorosPairTicket({
     }
     if (!spread?.spreadVenues) setBehind(null);
     setIntent('open');
+    setOverlaps(openPrefill.overlaps ?? []);
     /**
      * A Boros size is denominated in the market's COLLATERAL, so the collateral
      * picks which figure to use — no price conversion, and nothing that can be
@@ -394,6 +398,28 @@ export function BorosPairTicket({
   const [slipOpen, setSlipOpen] = useState(false);
   const rowA = marketA !== null ? byId.get(marketA) ?? null : null;
   const rowB = marketB !== null ? byId.get(marketB) ?? null : null;
+  /** An open past what a venue's perp still lacks covers part of it twice
+   * until the venue's older Boros leg matures. Said at the size typed. */
+  const overlapWarnings = (() => {
+    if (intent !== 'open' || onlyLeg !== null || overlaps.length === 0 || !rowA) return [];
+    const flip = (d: BorosLegDirection): BorosLegDirection => (d === 'long' ? 'short' : 'long');
+    const legs: Array<{ venue: string; dir: BorosLegDirection; row: typeof rowA }> = rowA.spreadVenues
+      ? [
+          { venue: rowA.spreadVenues[0], dir: dirA, row: rowA },
+          { venue: rowA.spreadVenues[1], dir: flip(dirA), row: rowA },
+        ]
+      : [{ venue: rowA.venue, dir: dirA, row: rowA }];
+    if (mode === 'pair' && !rowA.spreadVenues && rowB) legs.push({ venue: rowB.venue, dir: dirB, row: rowB });
+    return overlaps.flatMap((o) => {
+      const leg = legs.find((l) => l.venue.toUpperCase() === o.venue.toUpperCase() && l.dir.toUpperCase() === o.side);
+      if (!leg) return [];
+      const usd = isUsdCollateral(leg.row.collateral);
+      const d = doubledCover(o, Number(sizeStr), usd, leg.row.maturity);
+      if (!d) return [];
+      const amount = usd ? `$${sigGrouped(d.size)}` : `${sigGrouped(d.size)} ${leg.row.collateral}`;
+      return [`${o.held} This open covers ${amount} twice until ${fmtDateShort(d.until)}.`];
+    });
+  })();
 
   // §2: the coin first (as the perp ticket picks its coin first), then each
   // leg's MARKET — a venue's market for that coin and collateral, whatever its
@@ -1355,7 +1381,7 @@ export function BorosPairTicket({
       )}
 
       {/* --- §7 warnings + blockers --------------------------------------- */}
-      {gate?.warnings.map((w) => (
+      {[...overlapWarnings, ...(gate?.warnings ?? [])].map((w) => (
         <p
           key={w}
           className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200"
