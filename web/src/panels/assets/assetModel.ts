@@ -707,6 +707,8 @@ export interface UnlockedEstimate {
   floatingApr: number;
   fixedCarryPerYearUsd: number;
   floatingCarryPerYearUsd: number;
+  /** Margin of the unhedged legs the estimate leaves out (0 = none). */
+  leftOutCapitalUsd: number;
   /** One row per venue with an unlocked gap — what the floating part is made of. */
   venues: Array<{
     venue: string;
@@ -1134,18 +1136,32 @@ export function deriveAsset(
     lockedOk && capitalUsd >= MIN_APR_CAPITAL_USD ? lockedCarryPerYearUsd / capitalUsd : null;
 
   // A book whose fixed rate cannot be quoted gets an ESTIMATE instead —
-  // never in place of one that can (see UnlockedEstimate).
-  const unlockedEstimate: UnlockedEstimate | null = (() => {
-    if (lockedAprFwd !== null || capitalUsd < MIN_APR_CAPITAL_USD) return null;
+  // never in place of one that can (see UnlockedEstimate). `dropBoros` and
+  // `dropPerps` are slices left out of it with their margin.
+  const estimateOf = (dropBoros: readonly PendingLeg[], dropPerps: readonly UnpairedPerp[]): UnlockedEstimate | null => {
+    if (lockedAprFwd !== null) return null;
     if (group.perpOpen.length === 0 && group.borosOpen.length === 0) return null;
+    const leftOutCapitalUsd = [...dropBoros, ...dropPerps].reduce((t, l) => t + l.imUsd, 0);
+    const cap = capitalUsd - leftOutCapitalUsd;
+    if (cap < MIN_APR_CAPITAL_USD) return null;
+    const droppedShare = new Map<number, number>();
+    const droppedGap = new Map<string, number>();
+    const addGap = (venue: string, signed: number) => droppedGap.set(venue, (droppedGap.get(venue) ?? 0) + signed);
+    for (const d of dropBoros) {
+      droppedShare.set(d.marketId, (droppedShare.get(d.marketId) ?? 0) + d.share);
+      // gap = perp − rate legs, so a dropped rate leg adds its signed size back.
+      for (const v of venueLegsOf(d, sizeIn(d, unit))) addGap(v.venue, v.side === 'LONG' ? v.size : -v.size);
+    }
+    for (const p of dropPerps) addGap(p.venue, p.side === 'LONG' ? -sizeIn(p, unit) : sizeIn(p, unit));
     let fixedCarry = 0;
     for (const l of group.borosOpen) {
-      const { keep, entry } = keptSlice(exclusions, borosKey(l.marketId), l.sizeToken, l.entryApr);
-      if (keep <= 0) continue;
+      const slice = keptSlice(exclusions, borosKey(l.marketId), l.sizeToken, l.entryApr);
+      const keep = slice.keep * (1 - Math.min(1, droppedShare.get(l.marketId) ?? 0));
+      if (!(keep > 1e-9)) continue;
       // An unknown entry rate leaves the fixed part unknown — no estimate.
-      if (entry === null) return null;
+      if (slice.entry === null) return null;
       fixedCarry +=
-        (l.side === 'SHORT' ? 1 : -1) * entry * l.notionalUsd * keep -
+        (l.side === 'SHORT' ? 1 : -1) * slice.entry * l.notionalUsd * keep -
         rebatedSettleApr(l.settleFeeApr ?? 0, rebate, l.marketId) * l.notionalUsd * keep;
     }
     // Each venue's funding, longs-pay sign: from the perps held there (what
@@ -1190,7 +1206,7 @@ export function deriveAsset(
     const venues: UnlockedEstimate['venues'] = [];
     let floatingCarry = 0;
     for (const v of byVenue.values()) {
-      const gapUsd = v.gap * px;
+      const gapUsd = (v.gap + (droppedGap.get(v.venue) ?? 0)) * px;
       // Dust is a rounding residual, not an exposure.
       if (Math.abs(gapUsd) < 1) continue;
       const f = funding(v.venue);
@@ -1201,14 +1217,15 @@ export function deriveAsset(
       venues.push({ venue: v.venue, fundingApr: f.rate, source: f.source, gapUsd, carryPerYearUsd });
     }
     return {
-      apr: (fixedCarry + floatingCarry) / capitalUsd,
-      fixedApr: fixedCarry / capitalUsd,
-      floatingApr: floatingCarry / capitalUsd,
+      apr: (fixedCarry + floatingCarry) / cap,
+      fixedApr: fixedCarry / cap,
+      floatingApr: floatingCarry / cap,
       fixedCarryPerYearUsd: fixedCarry,
       floatingCarryPerYearUsd: floatingCarry,
+      leftOutCapitalUsd,
       venues,
     };
-  })();
+  };
 
   const keepOf = (l: AssetPerpOpen) => 1 - excludedFraction(exclusions, perpKey(l.symbol), l.qty);
   const borosKeepOf = (l: AssetBorosOpen) =>
@@ -1505,6 +1522,26 @@ export function deriveAsset(
       : perpSharesOf(p.venue, p.side, p.size).map(({ l, share }) => unpairedOf(l, share)),
   );
   unpairedPerps.sort((a, b) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue));
+
+  /**
+   * The estimate counts hedged units only: a rate leg with no perp behind it,
+   * and a perp with no other side, are left out with their margin. A rate leg
+   * whose perps rolled to a later term keeps its fixed rate on little more
+   * than its own margin, which shrinks toward maturity, so counting it puts
+   * the book's APR above every pair's. A quote twin
+   * stays: its margin counted before and its funding never did. A book with
+   * no hedged unit keeps the whole-book estimate.
+   */
+  const hedgedUnits = pairs.length > 0 || perpOnly.length > 0;
+  const unlockedEstimate = hedgedUnits
+    ? estimateOf(
+        [...borosOnly.flatMap((u) => u.borosLegs), ...pendingLegs],
+        [
+          ...borosOnly.flatMap((u) => [u.longPerp, u.shortPerp].filter((p): p is UnpairedPerp => p !== null)),
+          ...unpairedPerps.filter((p) => !p.quoteTwin),
+        ],
+      )
+    : estimateOf([], []);
 
   return {
     base: group.base,
