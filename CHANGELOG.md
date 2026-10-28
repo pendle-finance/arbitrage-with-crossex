@@ -26,6 +26,8 @@ Opportunities sizes every card by the capital you put in.
 - **A blocked open says why.** An open that cannot go is a grey button. Its hover gives the
   reason, for example "Close the Wrong side Gate LONG at 30 Oct to open here". On Funding Bundles,
   Open more no longer opens into a Boros leg that you hold the wrong way.
+- **Current APR counts hedged pairs only.** The asset card's Current APR no longer counts a
+  Boros leg whose perps moved to another pair, nor its margin.
 - **Close perps closes the card's size.** On a card that shares a venue position with another
   card, Close perps sends only that card's size.
 - **The pair ticket warns about an uneven fill.** On a thin book the two legs can fill to
