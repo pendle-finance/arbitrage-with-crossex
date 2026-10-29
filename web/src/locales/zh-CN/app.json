@@ -206,7 +206,7 @@
   },
   "gateSteps": {
     "fundGate": "Gate 入金",
-    "fundGateDetail": "在 <a>gate.com/signup</a> 注册，并充值您要投入的资金。",
+    "fundGateDetail": "在 <a>gate.com/signup</a> 注册，并充值您要投入的本金。",
     "enable": "开通 CrossEx",
     "enableDetail": "在 <a>gate.com/crossex</a> 开通 CrossEx。Cross-Exchange 密钥权限和划转都需要先开通它。",
     "fundCrossex": "CrossEx 入金",
