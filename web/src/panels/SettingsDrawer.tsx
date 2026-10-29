@@ -3,6 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { useVersion } from '../api/queries';
 import { Drawer } from '../components/Drawer';
 import { GithubMark } from '../components/GithubMark';
+import { SegmentedToggle } from '../components/SegmentedToggle';
+import { setLanguage } from '../i18n';
+import { isLanguage, LANGUAGES, type Language } from '../i18n/languages';
 import { REPO_URL } from '../lib/app';
 import type { SetupStep } from './setup/setupState';
 import { SetupRows } from './setup/SetupRows';
@@ -16,7 +19,8 @@ export function SettingsDrawer({
   onClose: () => void;
   focusStep?: SetupStep | null;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const language: Language = isLanguage(i18n.language) ? i18n.language : LANGUAGES[0].code;
   const version = useVersion(); // same query key as the header pill — deduped
   const install = version.data?.install ?? null;
   const [openStep, setOpenStep] = useState<SetupStep | null>(open ? focusStep : null);
@@ -40,6 +44,16 @@ export function SettingsDrawer({
             onOpenStep={setOpenStep}
             onDone={() => setOpenStep(null)}
             variant="settings"
+          />
+        </section>
+        <section>
+          <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">{t('app.language')}</h3>
+          <SegmentedToggle<Language>
+            value={language}
+            options={LANGUAGES.map((l) => ({ value: l.code, label: l.label }))}
+            onChange={setLanguage}
+            ariaLabel={t('app.language')}
+            fill
           />
         </section>
         <section>
