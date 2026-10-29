@@ -188,7 +188,7 @@ async function loadPositionLimits(
   );
   if (symbols.length === 0 || out.size > 0 || failure === undefined) return null;
   const { category } = classifyGateError(failure);
-  return `Couldn't load the CrossEx risk limits right now (${category}) — without a max leverage per venue no opportunity can model the capital it consumes, so none can be ranked. This isn't about your notional; the caps return on the next refresh.`;
+  return `Couldn't load CrossEx leverage limits (${category}), so no pair can be ranked. This fixes itself on the next refresh.`;
 }
 
 export function opportunitiesRoutes(deps: AppDeps) {
@@ -253,7 +253,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
       } catch (err) {
         const { category } = classifyGateError(err);
         warnings.push(
-          `Couldn't load the CrossEx symbol list right now (${category}) — pricing the perp legs from the venues' public books instead; listings and leverage return on the next refresh.`,
+          `Couldn't load the CrossEx market list (${category}). Prices use public books until the next refresh.`,
         );
       }
       const crossexVenues: ReadonlySet<string> = rulesAvailable
@@ -283,7 +283,7 @@ export function opportunitiesRoutes(deps: AppDeps) {
       }
       if (assumedTier !== undefined) {
         warnings.push(
-          `Perp fees assume the ${feeTierLabel(assumedTier)} Gate CrossEx schedule — everything else here is live. Your real rates follow your Gate VIP tier; connect Gate keys to price from them.`,
+          `Perp fees assume ${feeTierLabel(assumedTier)}. Add your Gate API key to use your own fee tier.`,
         );
       }
 

@@ -350,7 +350,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
     levLong !== undefined && levShort !== undefined
       ? t('pairTicket.pair.leverage', { long: levLong, short: levShort })
       : longSym && shortSym
-        ? t('pairTicket.pair.loading')
+        ? t('common.loading')
         : null;
 
   return (

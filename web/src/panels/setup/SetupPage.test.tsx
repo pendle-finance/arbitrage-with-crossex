@@ -125,7 +125,7 @@ describe('SetupPage · Gate API key', () => {
     await user.click(screen.getByRole('button', { name: 'Check key' }));
 
     expect(
-      await screen.findByText('Gate refused this key: INVALID_KEY. Check you pasted the whole key.'),
+      await screen.findByText("Gate refused this key. Check you pasted the whole key and secret, and the key's permissions."),
     ).toBeInTheDocument();
     expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
   });
@@ -181,7 +181,7 @@ describe('SetupPage · Boros wallet', () => {
     const wallet = row('Boros wallet');
     expect(await within(wallet).findByText('0xab18…ed9d')).toBeInTheDocument();
     expect(within(wallet).getByText('Not logged in')).toBeInTheDocument();
-    expect(within(wallet).queryByText('View only')).toBeNull();
+    expect(within(wallet).queryByText('View-only')).toBeNull();
     expect(signAgentApproval).not.toHaveBeenCalled();
     const request = (window as unknown as { ethereum: { request: ReturnType<typeof vi.fn> } }).ethereum.request;
     const methods = request.mock.calls.map(([arg]) => (arg as { method: string }).method);
@@ -264,7 +264,7 @@ describe('SetupPage · Boros wallet', () => {
     renderSetup();
 
     const wallet = row('Boros wallet');
-    expect(await within(wallet).findByText('View only')).toBeInTheDocument();
+    expect(await within(wallet).findByText('View-only')).toBeInTheDocument();
     expect(within(wallet).getByText('0x5c1f…a2e0')).toBeInTheDocument();
     expect(screen.queryByText(/the wallet that trades/)).toBeNull();
   });
@@ -291,7 +291,7 @@ describe('SetupPage · Boros wallet', () => {
     await user.click(await screen.findByRole('button', { name: 'Skip, not recommended' }));
     await user.click(screen.getByRole('button', { name: 'Skip anyway' }));
 
-    expect(within(row('Boros wallet')).getByText('not set up')).toBeInTheDocument();
+    expect(within(row('Boros wallet')).getByText('Not set up')).toBeInTheDocument();
     expect(within(row('Telegram alerts')).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(screen.queryByText('Install Rabby or MetaMask, then reload.')).toBeNull();
   });
@@ -303,8 +303,8 @@ describe('SetupPage · Telegram alerts', () => {
     renderSetup();
     expect(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
     const telegram = row('Telegram alerts');
-    expect(within(telegram).getByText('Close to liquidation')).toBeInTheDocument();
-    expect(within(telegram).getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
+    expect(within(telegram).getByText('Near liquidation')).toBeInTheDocument();
+    expect(within(telegram).getByText('A 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(within(telegram).getByText('Started paying interest')).toBeInTheDocument();
   });
 
@@ -315,9 +315,9 @@ describe('SetupPage · Telegram alerts', () => {
     await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' });
     await user.hover(screen.getByText('borrowing'));
 
-    expect(await screen.findByText('USDT CrossEx wallet · equity under $0')).toBeInTheDocument();
-    expect(screen.getByText('USDC Lighter wallet · equity under $0')).toBeInTheDocument();
-    expect(screen.getByText('USDC Hyperliquid wallet · borrows more than $10,000, the first $10,000 is free')).toBeInTheDocument();
+    expect(await screen.findByText('CrossEx USDT wallet · equity under $0')).toBeInTheDocument();
+    expect(screen.getByText('CrossEx Lighter wallet · equity under $0')).toBeInTheDocument();
+    expect(screen.getByText('CrossEx Hyperliquid wallet · borrows more than $10,000, the first $10,000 is free')).toBeInTheDocument();
   });
 
   it('waiting state', async () => {
@@ -353,11 +353,11 @@ describe('SetupPage · Telegram alerts', () => {
     const { onFinish } = renderSetup();
     await user.click(await within(row('Telegram alerts')).findByRole('button', { name: 'Set up' }));
 
-    expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'true');
+    expect(await screen.findByRole('switch', { name: 'Near liquidation' })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
+    expect(screen.getByText('A 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(screen.getAllByText('borrowing').length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/a wallet starts/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/A wallet starts/).length).toBeGreaterThan(0);
     await user.hover(screen.getByText(/^synced \d+ s ago$/));
     expect(
       await screen.findByText(
@@ -450,9 +450,9 @@ describe('setup rows in Settings', () => {
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: Date.now() - 180_000 }, 'All on · synced 3 min ago'],
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: false, maturity: true, rollover: false }, lastSyncAt: Date.now() - 180_000 }, '2 of 4 on · synced 3 min ago'],
     [{ connected: true, state: 'connected', settings: { liquidation: true, interest: true, maturity: true, rollover: true }, lastSyncAt: at(11, 40), lastSyncError: { at: at(14, 2), message: 'timeout' } }, 'Last sync failed'],
-    [{ state: 'replaced' }, 'not set up'],
-    [{ state: 'removed' }, 'not set up'],
-    [{}, 'not set up'],
+    [{ state: 'replaced' }, 'Not set up'],
+    [{ state: 'removed' }, 'Not set up'],
+    [{}, 'Not set up'],
   ] as [Partial<TelegramInfo>, string][])('telegram state line %#', async (over, line) => {
     mockWorld({ telegram: telegramInfo(over) });
     renderWithClient(<TelegramRow {...settingsRow()} />);
@@ -610,7 +610,7 @@ describe('setup rows in Settings', () => {
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: OTHER, walletUpgraded: true }));
     const world = mockWorld({ agent: agentStatus({ configured: true, root: WALLET, expiry: 2_000_000_000 }) });
     const { unmount } = renderWithClient(<BorosWalletRow {...settingsRow()} />);
-    expect(await within(row('Boros wallet')).findByText('View only')).toBeInTheDocument();
+    expect(await within(row('Boros wallet')).findByText('View-only')).toBeInTheDocument();
     expect(dot('Boros wallet')).toBe('2');
     unmount();
 
@@ -714,7 +714,7 @@ describe('setup rows in Settings', () => {
   it('unknown settings leave both switches off', async () => {
     mockWorld({ telegram: telegramInfo({ connected: true, state: 'connected', settings: null, lastSyncAt: Date.now() }) });
     renderWithClient(<TelegramRow {...settingsRow({ open: true })} />);
-    expect(await screen.findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute('aria-checked', 'false');
+    expect(await screen.findByRole('switch', { name: 'Near liquidation' })).toHaveAttribute('aria-checked', 'false');
     expect(screen.getByRole('switch', { name: 'Started paying interest' })).toHaveAttribute('aria-checked', 'false');
   });
 

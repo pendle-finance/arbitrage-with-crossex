@@ -463,7 +463,7 @@ export function ClosePopover({
             invalid={slipInvalid}
             invalidText={t('trade.close.slipInvalid')}
             inputAriaLabel={t('trade.close.slipAria')}
-            hint={t('trade.close.bandHintShort')}
+            hint={t('trade.close.bandHint')}
             quick={['0.2', '0.5', '1', '2']}
           />
         )}

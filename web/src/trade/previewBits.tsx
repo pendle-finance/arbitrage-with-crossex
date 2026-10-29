@@ -95,7 +95,7 @@ export function PreviewFallback({ isError, error }: { isError: boolean; error: u
   return isError ? (
     <span className="text-rose-400">{t('pairTicket.preview.failed', { message: (error as Error).message })}</span>
   ) : (
-    <span className="text-ink-500">{t('pairTicket.preview.loading')}</span>
+    <span className="text-ink-500">{t('trade.execute.pricing')}</span>
   );
 }
 
@@ -232,7 +232,7 @@ export function ClosePreviewPanel({
   }
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
-      {estimating && <span className="text-amber-400">{t('pairTicket.preview.estimating')}</span>}
+      {estimating && <span className="text-amber-400">{t('trade.execute.pricing')}</span>}
       {previews.map((p, i) => {
         const realized = realizedFor?.(p, i) ?? null;
         return (
@@ -249,7 +249,7 @@ export function ClosePreviewPanel({
               </span>
             ) : (
               <span className="flex justify-between text-ink-400">
-                <span title={t('pairTicket.preview.limitPxHint')}>{t('pairTicket.preview.limitPx')}</span>
+                <span title={t('trade.close.limitPxTitle')}>{t('pairTicket.preview.limitPx')}</span>
                 <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
               </span>
             )}

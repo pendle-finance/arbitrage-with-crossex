@@ -464,7 +464,7 @@ export function SingleTicket() {
                 <EstimateRow label={t('trade.single.estFee')} sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
                 <EstimateRow
                   label={t('trade.single.leverage')}
-                  value={<LeverageValue text={levMax > 0 ? `${levMax}x` : symbol ? t('trade.single.loading') : null} />}
+                  value={<LeverageValue text={levMax > 0 ? `${levMax}x` : symbol ? t('common.loading') : null} />}
                 />
                 <EstimateRow
                   label={t('trade.single.marginRequired')}

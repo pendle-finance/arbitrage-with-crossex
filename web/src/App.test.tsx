@@ -141,7 +141,7 @@ describe('App tab shell', () => {
     // /api/opportunities fixture resolves).
     expect(
       await within(panel('opportunities')).findByRole('button', {
-        name: /^Open this strategy — ETH short/,
+        name: /^Open this strategy — ETH Short/,
       }),
     ).toBeInTheDocument();
     expect(panel('opportunities')).toBeVisible();
@@ -363,7 +363,7 @@ describe('user guide', () => {
     await userEvent.click(screen.getByRole('button', { name: 'User guide' }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/Couldn’t load the guide/);
+    expect(alert).toHaveTextContent(/Could not load the guide/);
     expect(within(alert).getByRole('link', { name: 'docs/USER_GUIDE.md' })).toHaveAttribute(
       'href',
       'https://github.com/pendle-finance/arbitrage-with-crossex/blob/main/docs/USER_GUIDE.md',

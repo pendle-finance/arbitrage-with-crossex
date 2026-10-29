@@ -112,7 +112,7 @@ describe('per-market overrides', () => {
   it('names each leg rate only when the legs differ', () => {
     const short = { marketId: 1, venue: 'Hyperliquid', side: 'SHORT' as const };
     const long = { marketId: 232, venue: 'Gate', side: 'LONG' as const };
-    expect(rebateLegsNote(nayt, [short, long])).toBe('• Hyperliquid short: 40%\n• Gate long: 50%');
+    expect(rebateLegsNote(nayt, [short, long])).toBe('• Hyperliquid Short: 40%\n• Gate Long: 50%');
     expect(rebateLegsNote(nayt, [{ ...short, marketId: 233 }, long])).toBe('');
   });
 

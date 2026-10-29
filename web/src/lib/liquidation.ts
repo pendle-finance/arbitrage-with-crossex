@@ -303,7 +303,7 @@ export function lineLabel(line: LiquidationLine): string {
 /** The losing leg and the model, for the hover on a chip that already shows the price. */
 export function lineDetail(line: LiquidationLine): string {
   if (line.side === null) return t('app.liquidation.detail');
-  const side = t(line.side === 'long' ? 'common.long' : 'common.short').toLowerCase();
+  const side = t(line.side === 'long' ? 'common.long' : 'common.short');
   return t('app.liquidation.detailWithLeg', { venue: line.venue, side });
 }
 

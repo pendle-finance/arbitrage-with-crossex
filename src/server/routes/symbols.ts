@@ -109,7 +109,7 @@ export function symbolsRoutes(deps: AppDeps) {
       const fresh = (req.query as { fresh?: string }).fresh === '1';
       const { list, stale } = await livePerps(deps, fresh);
       const info = list.find((s) => s.symbol === symbol);
-      if (!info) throw new CoreError(`symbol ${symbol} not found on CrossEx`, 'symbol-invalid');
+      if (!info) throw new CoreError(`${symbol} is not on CrossEx`, 'symbol-invalid');
       const limit = await positionLimitFor(deps, symbol, fresh).catch((err: unknown) => {
         if (err instanceof CoreError && err.category === 'leverage') return null;
         throw err;

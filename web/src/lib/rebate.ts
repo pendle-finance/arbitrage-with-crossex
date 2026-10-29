@@ -78,7 +78,7 @@ export function rebateLegsNote(
     .map((leg, i) =>
       t('app.rebate.legLine', {
         venue: leg.venue,
-        side: t(leg.side === 'LONG' ? 'common.long' : 'common.short').toLowerCase(),
+        side: t(leg.side === 'LONG' ? 'common.long' : 'common.short'),
         pct: pcts[i],
       }),
     )

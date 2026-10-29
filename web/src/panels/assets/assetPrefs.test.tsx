@@ -193,7 +193,7 @@ async function switchBook(qc: QueryClient) {
 async function excludePart() {
   await userEvent.click(await editButton());
   await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
-  await userEvent.type(screen.getByLabelText(/Quantity to exclude/), '4');
+  await userEvent.type(screen.getByLabelText(/Size to exclude/), '4');
   await userEvent.click(screen.getByRole('button', { name: 'Save' }));
 }
 
@@ -425,7 +425,7 @@ describe('saves', () => {
     const { qc } = renderHome();
     await userEvent.click(await editButton());
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
-    await userEvent.type(screen.getByLabelText(/Quantity to exclude/), '4');
+    await userEvent.type(screen.getByLabelText(/Size to exclude/), '4');
     fireEvent.change(screen.getByLabelText('Date this position is counted from'), { target: { value: '2026-07-01' } });
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(patches()).toHaveLength(2));

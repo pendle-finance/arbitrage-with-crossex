@@ -1074,13 +1074,13 @@ describe('evaluatePairGate', () => {
   });
 
   it.each([
-    [0.05, 'low, about $0.05'],
+    [0.05, 'low (about $0.05)'],
     [0, 'empty'],
   ])('does not promise a top-up at gas %s when the collateral price is unknown', (gasBalanceUsd, level) => {
     const simulation = { ...gateInput().simulation, collateralPriceUsd: null };
     const g = evaluatePairGate(gateInput({ simulation, account: account({ gasBalanceUsd }) }));
     expect(g.warnings).toContain(
-      `Prepaid gas on this Boros account is ${level}, and the ${simulation.collateral} price is unknown, so this order cannot top it up and may be refused for gas. Top up gas in the Boros app.`,
+      `Boros gas is ${level} and the ${simulation.collateral} price is unknown, so this order can't top it up. It may be refused. Top up gas in the Boros app.`,
     );
     expect(g.warnings.join(' ')).not.toMatch(/tops it up as it sends/);
   });
@@ -1190,10 +1190,10 @@ describe('the no-size blocker on a reduce-only ticket', () => {
   it('names the markets that would ADD rather than asking for a size', () => {
     // Short against a short, long against a long: reduce-only zeroes both.
     const msg = noSize(closeGate('short', 'long', -50_000, 50_000));
-    expect(msg).toMatch(/reduce-only/i);
+    expect(msg).toMatch(/can only reduce/i);
     expect(msg).toContain(hlMarket.name);
     expect(msg).toContain(bnMarket.name);
-    expect(msg).toMatch(/add to it, not reduce it/i);
+    expect(msg).toMatch(/point the same way as your position/i);
     expect(msg).toMatch(/Flip the direction, or switch to Open/i);
     expect(msg).not.toMatch(/Enter a size/i);
   });
@@ -1210,7 +1210,7 @@ describe('the no-size blocker on a reduce-only ticket', () => {
     const g = evaluatePairGate(
       gateInput({ legA, legB, simulation: simulateBorosPair(simInput({ legA, legB, size: 0 })) }),
     );
-    expect(noSize(g)).toBe('Enter a size to trade.');
+    expect(noSize(g)).toBe('Enter a size to trade');
   });
 });
 

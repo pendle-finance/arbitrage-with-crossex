@@ -369,7 +369,7 @@ describe('agent approval on-chain', () => {
     });
     const res = await close({ clientOrderId: 'coid-unapproved' });
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect(res.json().error.message).toMatch(/not approved on-chain/);
+    expect(res.json().error.message).toMatch(/login was rejected or revoked/);
     expect(calls).toEqual([]);
   });
 

@@ -161,7 +161,7 @@ describe('unreadable live order', () => {
     expect(maker.readFailStreak).toBeGreaterThanOrEqual(TUNING.READ_FAIL_ALERT);
 
     const alerts = w.store.listAlerts();
-    const unreadable = alerts.filter((a) => /cannot read live order/.test(a.message));
+    const unreadable = alerts.filter((a) => /Can't read order /.test(a.message));
     expect(unreadable).toHaveLength(1); // escalated, and exactly once — no per-tick nagging
     expect(unreadable[0].level).toBe('error');
   });
@@ -195,7 +195,7 @@ describe('unreadable pending order', () => {
     expect(maker.state).toBe('PENDING'); // a failed read resolves nothing
     expect(maker.readFailStreak).toBeGreaterThanOrEqual(TUNING.READ_FAIL_ALERT);
 
-    const unreadable = w.store.listAlerts().filter((a) => /cannot read pending order/.test(a.message));
+    const unreadable = w.store.listAlerts().filter((a) => /Can't read pending order/.test(a.message));
     expect(unreadable).toHaveLength(1);
     expect(unreadable[0].level).toBe('error');
   });
@@ -360,7 +360,7 @@ describe('wire ambiguity (the tri-state)', () => {
     await stepChecked(w, ticksInWindow + 5);
     expect(w.store.listOrders(w.pairId)[0].state).toBe('PENDING'); // still frozen
     const alerts = w.store.listAlerts({ unackedOnly: true });
-    expect(alerts.some((a) => /could not prove absence/.test(a.message))).toBe(true);
+    expect(alerts.some((a) => /could not be confirmed gone/.test(a.message))).toBe(true);
     // Coverage restored → resolves
     w.venue.sweepCoverage = true;
     await stepChecked(w, 1);
@@ -528,7 +528,7 @@ describe('venue weirdness', () => {
     await stepChecked(w, 3);
     expect(w.venue.createCalls.length).toBe(createsBefore); // frozen: even the hedge waits
     const alerts = w.store.listAlerts({ unackedOnly: true });
-    expect(alerts.some((a) => /unclassifiable venue status/.test(a.message))).toBe(true);
+    expect(alerts.some((a) => /unknown venue status/.test(a.message))).toBe(true);
     // Status resolves → unfreezes → hedges the fill
     w.venue.setRawStatus(maker.clientText, 'OPEN');
     await stepChecked(w, 2);
@@ -647,7 +647,7 @@ describe('review regressions', () => {
     expect(JSON.parse(pair.reportJson!).reason).toMatch(/unhedged 0\.05/);
     // ...and an operator-visible alert says so outright.
     const alerts = w.store.listAlerts({ unackedOnly: true });
-    const naked = alerts.filter((a) => /UNHEDGED/.test(a.message));
+    const naked = alerts.filter((a) => /unhedged on/.test(a.message));
     expect(naked).toHaveLength(1);
     expect(naked[0].level).toBe('error');
   });
@@ -665,7 +665,7 @@ describe('review regressions', () => {
     expect(pair.mode).toBe('DONE');
     expect(JSON.parse(pair.reportJson!).unhedged).toBe('0.052');
     const alerts = w.store.listAlerts({ unackedOnly: true });
-    expect(alerts.filter((a) => /UNHEDGED/.test(a.message))).toHaveLength(0);
+    expect(alerts.filter((a) => /unhedged on/.test(a.message))).toHaveLength(0);
   });
 
   it('[R2] persistent IOC hedge whiffs count toward the wall: backoff, then HALT — never a 1-order-per-tick spin', async () => {
@@ -681,7 +681,7 @@ describe('review regressions', () => {
     const hedgeAttempts = [...w.venue.orders.values()].filter((o) => o.contract === B_CONTRACT);
     expect(hedgeAttempts.length).toBeLessThan(15); // backoff paced, not one per tick
     const alerts = w.store.listAlerts({ unackedOnly: true });
-    expect(alerts.some((a) => /hedge wall/.test(a.message))).toBe(true);
+    expect(alerts.some((a) => /Hedge orders keep failing/.test(a.message))).toBe(true);
   });
 
   it('[R3] stop() on a HALTED pair sticks (the wall no longer re-halts a STOPPING pair)', async () => {
@@ -951,7 +951,7 @@ describe('cutover-review regressions', () => {
     expect(report.reason).toContain('failing repeatedly');
     expect(w.venue.createCalls.length).toBeLessThanOrEqual(6); // budget-bounded, not unbounded
     const alerts = w.store.listAlerts({ unackedOnly: true });
-    expect(alerts.some((a) => /A-leg wall/.test(a.message))).toBe(true);
+    expect(alerts.some((a) => /first leg keep failing/.test(a.message))).toBe(true);
   });
 
   it('[C4] persistent banded-clip whiffs are budget-bounded too (no one-order-per-tick spin)', async () => {

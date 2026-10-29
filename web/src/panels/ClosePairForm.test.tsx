@@ -108,7 +108,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     await userEvent.clear(slip);
     await userEvent.type(slip, '50');
 
-    expect(await screen.findByText(/slippage must be in \(0, 10\]/)).toBeInTheDocument();
+    expect(await screen.findByText('Slippage must be above 0% and at most 10%.')).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Close both/ })).toBeDisabled(),
     );
@@ -125,7 +125,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     const badge = (await screen.findByText(/^Reduce-only$/)).closest('p') as HTMLElement;
     expect(badge).toHaveAttribute(
       'title',
-      expect.stringContaining("the hedge leg is sent at market, inside the venue's own price band"),
+      expect.stringContaining("Second leg: market, inside the venue's price limit."),
     );
   });
 });

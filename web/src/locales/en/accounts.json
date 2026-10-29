@@ -5,12 +5,12 @@
     "venueWallet": "the CrossEx {{name}} wallet",
     "leg": {
       "buyUsdc": "Buy USDC in CrossEx",
-      "toSpot": "CrossEx to Gate spot",
+      "toSpot": "CrossEx Gate wallet to Gate spot",
       "toHyperliquid": "Gate spot to the CrossEx Hyperliquid wallet",
       "toLighter": "Gate spot to the CrossEx Lighter wallet",
       "fromHyperliquid": "CrossEx Hyperliquid wallet to Gate spot",
       "fromLighter": "CrossEx Lighter wallet to Gate spot",
-      "toGate": "Gate spot to CrossEx",
+      "toGate": "Gate spot to the CrossEx Gate wallet",
       "sellUsdc": "Sell USDC for USDT"
     },
     "noLegs": "No open positions. Nothing to rebalance.",
@@ -22,7 +22,7 @@
     "card": {
       "even": "Rebalance",
       "repay": "Clear debt",
-      "custom": "Custom move"
+      "custom": "Custom amount"
     },
     "presetOff": {
       "even": "No open positions",
@@ -63,11 +63,11 @@
       "stepOut": "Move {{move}} USDC out of {{from}}, sell {{arrives}} for USDT",
       "step": "Move {{move}} USDC from {{from}} to {{to}}",
       "convertIn": "Convert {{move}} USDT to USDC in {{to}}",
-      "convertOut": "Convert {{move}} USDC to USDT from {{from}}",
+      "convertOut": "Convert {{move}} USDC from {{from}} to USDT",
       "convertAcross": "Convert {{move}} USDC from {{from}} to {{to}}",
       "and": "{{a}} and {{b}}",
       "loopInto": "Buy USDC in CrossEx, move it through Gate spot into {{wallets}}.",
-      "loopOut": "Move USDC from {{wallets}} through Gate spot into CrossEx. Sell it for USDT.",
+      "loopOut": "Move USDC from {{wallets}} through Gate spot. Sell it for USDT into the CrossEx USDT wallet.",
       "loopAcross": "Move USDC from {{from}} through Gate spot into {{to}}."
     },
     "hover": {
@@ -79,9 +79,9 @@
           "interest": "Borrow interest"
         },
         "interest": {
-          "usdt": "from the first dollar",
-          "hyperliquid": "free up to 10,000 USDC, then about 5% a year",
-          "lighter": "from the first dollar, about 11% a year"
+          "usdt": "From the first dollar",
+          "hyperliquid": "Free up to 10,000 USDC, then about 5% a year",
+          "lighter": "From the first dollar, about 11% a year"
         },
         "borrow": "A negative wallet is a borrow. Gate holds initial margin against each borrow.",
         "rounds": "Spot loop moves in rounds. Free margin caps each round. Time and cost are per round.",
@@ -94,27 +94,27 @@
         "spotLoop": "Spot loop",
         "convert": "Convert",
         "path": {
-          "usdtToHyperliquid": "USDT to Hyperliquid",
-          "hyperliquidToUsdt": "Hyperliquid to USDT",
-          "usdtToLighter": "USDT to Lighter",
-          "lighterToUsdt": "Lighter to USDT",
-          "hyperliquidToLighter": "Hyperliquid to Lighter",
-          "lighterToHyperliquid": "Lighter to Hyperliquid"
+          "usdtToHyperliquid": "USDT · CrossEx → USDC · Hyperliquid",
+          "hyperliquidToUsdt": "USDC · Hyperliquid → USDT · CrossEx",
+          "usdtToLighter": "USDT · CrossEx → USDC · Lighter",
+          "lighterToUsdt": "USDC · Lighter → USDT · CrossEx",
+          "hyperliquidToLighter": "USDC · Hyperliquid → USDC · Lighter",
+          "lighterToHyperliquid": "USDC · Lighter → USDC · Hyperliquid"
         },
         "time": {
-          "min2": "about 2 min",
-          "min6_5": "about 6.5 min",
-          "min4": "about 4 min",
-          "min3": "about 3 min",
-          "min10": "about 10 min",
-          "min5": "about 5 min",
-          "instant": "instant"
+          "min2": "About 2 min",
+          "min6_5": "About 6.5 min",
+          "min4": "About 4 min",
+          "min3": "About 3 min",
+          "min10": "About 10 min",
+          "min5": "About 5 min",
+          "instant": "Instant"
         },
-        "costFrom": "from {{usd}}",
+        "costFrom": "From {{usd}}",
         "twoSwaps": "0.4%, two swaps",
         "recommended": "Recommended: cheapest route that takes 15 min or less."
       },
-      "presets": "Balance positions splits equity by position size. Clear debt moves just enough to bring every negative wallet to zero, from the wallet with the most equity. Custom amount moves what you type.",
+      "presets": "Balance positions: split equity by position size. Clear debt: repay every borrow from the wallet with the most equity. Custom amount: move what you type.",
       "custom": "Moves this amount out of one CrossEx wallet into another. Fees come off what lands.",
       "walletUsdt": "CrossEx wallet. Margin for Gate, Binance, OKX and Bybit legs.",
       "walletUsdc": "CrossEx wallet. Margin for Hyperliquid legs.",
@@ -122,18 +122,18 @@
       "walletGate": "CrossEx wallet. USDC left from a spot buy. Still margin. Rebalance empties it.",
       "now": "Equity = cash + unrealized PnL.",
       "interestNow": {
-        "lead": "Gate charges interest every hour when a CrossEx wallet is negative.",
+        "lead": "Gate charges interest every hour on a CrossEx wallet's borrow.",
         "head": {
           "wallet": "Wallet",
           "interest": "Interest",
           "rate": "Rate now"
         },
-        "usdt": "from the first dollar",
-        "hyperliquid": "free to 10,000 USDC, then on the part over",
-        "lighter": "from the first dollar"
+        "usdt": "From the first dollar",
+        "hyperliquid": "Free to 10,000 USDC, then on the part over",
+        "lighter": "From the first dollar"
       },
-      "borrowing": "A negative wallet is a borrow. The Margin card at the top shows the initial margin it locks.",
-      "route": "How the money moves. The fee includes Gate fees and the spot spread. Spot loop runs until the move is done, however many rounds that takes.",
+      "borrowing": "A negative wallet is a borrow. IM used (initial margin) in the Accounts card above shows the margin it locks.",
+      "route": "How the money moves. Fee includes Gate fees and the spot spread.",
       "mix": "Spot loop for up to {{rounds}}, then Convert the rest.",
       "recommended": "Cheapest route that takes 15 min or less.",
       "noDirectTransfer": "Gate has no direct transfer between CrossEx wallets.",
@@ -148,7 +148,7 @@
       "onTheWay": "In transit through Gate spot. Not margin.",
       "gateSpot": "Not margin.",
       "gateSpotAssets": "Not margin. No equity or PnL.",
-      "abandon": "Stop the run. Funds stay where they are.",
+      "abandon": "End the rebalance for good. Funds stay where they are.",
       "fee": "Gate fee for this move.",
       "time": "Typical time. Moves into or out of the CrossEx Hyperliquid and Lighter wallets can take longer.",
       "minimum": "Gate minimum for moves into or out of the CrossEx Hyperliquid and Lighter wallets. Fee included.",
@@ -156,15 +156,15 @@
       "upToInto": "Your Gate spot balance."
     },
     "verdict": {
-      "noBorrow": "No borrow. No transfer or rebalancing necessary.",
+      "noBorrow": "No borrow. Nothing to move.",
       "balanced": "Wallets match their position share. Nothing to move.",
       "noCashToMove": "Equity unbalanced but no available cash to move.",
-      "noInterest": "No interest payment yet. No transfer or rebalancing necessary.",
+      "noInterest": "No interest yet. Nothing to move.",
       "rateUnknown": "Could not read the borrow interest rate. Check the fee before you move anything.",
       "notWorthIt": "Not worth it yet. The fee is more than 30 days of the interest it saves.",
       "worthIt": "Rebalance recommended.",
       "repayWorthIt": "Clear debt recommended.",
-      "repayNoLegsSub": "Debt prevents you from withdrawing your cash.",
+      "repayNoLegsSub": "You cannot withdraw cash while a wallet borrows.",
       "paysBack": "The fee equals {{days}} of the interest it saves."
     },
     "fact": {
@@ -195,8 +195,8 @@
       "rebalance": "Rebalance running",
       "stoppedRebalance": "Rebalance stopped"
     },
-    "transferCta": "Manual Transfer",
-    "rateUnknown": "rate unknown",
+    "transferCta": "Manual transfer",
+    "rateUnknown": "Rate unknown",
     "interestPerHour": "{{usd}} an hour",
     "ratePerYear": "{{pct}}% a year"
   },
@@ -214,7 +214,7 @@
     "whereCaption": "Where your money is",
     "onTheWay": "On the way",
     "waitsLine": "New deals and transfers wait until it ends.",
-    "started": "Started {{age}} ago. You can close this. The run keeps going.",
+    "started": "Started {{age}} ago. You can close this. The rebalance keeps going.",
     "finishedLead": "Done. This is what each wallet holds now.",
     "abandonTransit": "Abandon leaves {{qty}} {{coin}} in transit. It is not margin until it lands.",
     "abandonSpot": "Abandon leaves the {{qty}} {{coin}} in Gate spot.",
@@ -236,12 +236,12 @@
   "rebalanceHovers": {
     "routeMix": "Spot loop, then Convert",
     "under": "under {{usd}}",
-    "none": "none",
+    "none": "None",
     "lessThanDay": "less than a day",
     "days_one": "{{n}} day",
     "days_other": "{{n}} days",
     "spotHas": "<term></term> has <b>{{amount}}</b>. Move it in to use it.",
-    "lastRunLeft": "Last run left <b>{{amount}}</b> in Gate spot.",
+    "lastRunLeft": "The last rebalance left <b>{{amount}}</b> in Gate spot.",
     "transfer": "Transfer"
   },
   "rebalanceBits": {
@@ -252,12 +252,12 @@
     "buyMoveIt": "Buy {{buy}} USDC, move it to {{wallet}}",
     "buyMove": "Buy {{buy}} USDC, move {{move}} USDC to {{wallet}}",
     "round": "Round {{n}}",
-    "stopped": "stopped",
+    "stopped": "Stopped",
     "elapsedOf": "{{elapsed}} of {{expected}}"
   },
   "rebalanceSection": {
     "loadFailed": "Could not load Rebalance. {{message}}",
-    "readAgain": "Read again",
+    "readAgain": "Refresh",
     "stoppedOpen": "Stopped · open",
     "hours_one": "{{n}} hour",
     "hours_other": "{{n}} hours",
@@ -273,12 +273,12 @@
   "transfer": {
     "fromWallet": "From · CrossEx wallet",
     "toWallet": "To · CrossEx wallet",
-    "balanceHidden": "balance hidden",
-    "free": "free",
+    "balanceHidden": "Balance hidden",
+    "free": "Free",
     "minimum": "Minimum",
     "youGet": "You get",
     "apiManagement": "API Management",
-    "addSpotRead": "Add Spot read permission to see spot balances.",
+    "addSpotRead": "Set Spot Trading to Read Only to see Gate spot balances.",
     "how": "How",
     "lock": {
       "rebalance": "Transfers wait until the rebalance ends.",
@@ -297,12 +297,12 @@
     "started": "Started {{age}} ago. You can close this.",
     "rebalanceWaits": "Rebalance waits until this ends.",
     "gateAllows": "Gate allows",
-    "notKnown": "not known",
-    "cannotReadSpot": "this key cannot read Gate spot",
+    "notKnown": "Not known",
+    "cannotReadSpot": "This key cannot read Gate spot",
     "spotBalance": "Gate spot balance",
-    "freeMarginNow": "free margin, right now",
+    "freeMarginNow": "Free margin now",
     "youAsked": "You asked to move",
-    "nothing": "nothing",
+    "nothing": "Nothing",
     "failed": "Transfer failed.",
     "tryAgain": "Try again",
     "tryAgainWith": "Try again with {{amount}}",
@@ -325,10 +325,10 @@
     "equity": "Equity",
     "balance": "Balance",
     "upnl": "uPnL",
-    "loadFailed": "Couldn't load account",
+    "loadFailed": "Could not load account",
     "title": "CrossEx assets",
     "nonZeroOnly": "· non-zero only",
-    "emptyTitle": "No non-zero balances",
+    "emptyTitle": "No balances",
     "emptyHint": "Deposit collateral to CrossEx to get started."
   },
   "closePair": {
@@ -336,31 +336,29 @@
     "wholePosition": "whole position",
     "ofHeld": "of {{held}} on the venue",
     "sizeLabel": "Close size · both legs",
-    "maxTitle": "Close this pair's whole allocation on both legs",
-    "max": "max",
+    "maxTitle": "Close the whole pair",
+    "max": "Max",
     "sizeAria": "Close size, applied to both legs",
-    "sizeInvalid": "size must be above 0 and at most {{max}} {{base}}",
-    "sizeHint": "each venue floors to its own lot — see the rows above",
-    "pnlToRealise": "PnL to realise",
-    "pnlSub": "both legs · before fees",
+    "sizeInvalid": "Size must be above 0 and at most {{max}} {{base}}.",
+    "sizeHint": "Each venue rounds down to its lot size. See the rows above.",
+    "pnlToRealise": "PnL to realize",
+    "pnlSub": "Both legs · before fees",
     "head": {
-      "leg": "leg",
-      "limitPx": "limit px",
-      "slip": "slip",
-      "pnl": "pnl",
-      "estFee": "est fee"
+      "leg": "Leg",
+      "limitPx": "Limit price",
+      "slip": "Slip",
+      "pnl": "PnL",
+      "estFee": "Est. fee"
     },
-    "buy": "BUY",
-    "sell": "SELL",
-    "marketTitle": "Sent as a market IOC inside the venue's price-limit band.",
-    "marketIoc": "market IOC",
-    "slipInvalid": "slippage must be in (0, 10]",
+    "marketTitle": "Market order, inside the venue's price limit.",
+    "marketIoc": "Market",
+    "slipInvalid": "Slippage must be above 0% and at most 10%.",
     "slipAria": "Slippage %",
-    "slipTitle": "The band on the first leg's limit: mid ± this much. The hedge leg goes at market.",
-    "slipHint": "Max distance from mid the first leg's limit will accept. A wider band may be needed for a large size or a thin book.",
+    "slipTitle": "First leg's limit: mid ± this much.",
+    "slipHint": "Raise it for a large size or a thin book.",
     "closeBoth": "Close both",
-    "pairNote": "The first leg is a reduce-only IOC limit at mid ± slippage; the hedge leg is sent at market, inside the venue's own price band. Neither can increase a position or rest on the book.",
-    "mechanics": "<b>Reduce-only</b> — first leg limit at mid ± slippage; hedge leg at market. Neither can increase a position or rest on the book."
+    "pairNote": "First leg: limit at mid ± slippage. Second leg: market, inside the venue's price limit.",
+    "mechanics": "<b>Reduce-only</b>. Neither leg can add to a position or rest on the book."
   },
   "tracked": {
     "renewLogin": "Renew login for {{address}}",
@@ -387,6 +385,6 @@
     "worstStrip": "{{venue}} {{name}} {{pct}} MM used",
     "healthy": "Healthy",
     "worstAlert": "· {{venue}} {{name}} at {{pct}} MM used",
-    "viewAccounts": "View accounts ›"
+    "viewAccounts": "View Accounts"
   }
 }

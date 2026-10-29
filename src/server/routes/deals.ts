@@ -47,7 +47,7 @@ export function dealsRoutes(deps: AppDeps) {
       refuse(reply, {
         code: 409,
         category: 'validation',
-        message: `a rebalance is still running. Wait for it to finish before ${what}.`,
+        message: `A rebalance is still running. Wait for it to finish, then ${what}.`,
         retryable: true,
       });
     const transferMoving = (): boolean => deps.transfer?.jobs.read()?.status === 'moving';
@@ -80,7 +80,7 @@ export function dealsRoutes(deps: AppDeps) {
           retryable: false,
         });
       }
-      if (rebalanceRunning()) return refuseForRebalance(reply, 'starting a deal');
+      if (rebalanceRunning()) return refuseForRebalance(reply, 'start the deal');
       if (transferSettling()) return conflict(reply, TRANSFER_SETTLING_TEXT);
       const clients = deps.getClients();
       const getAccount = async () =>
@@ -153,7 +153,7 @@ export function dealsRoutes(deps: AppDeps) {
         }
         const limit = await positionLimitFor(deps, contract, false);
         if (lev < 1 || lev > limit.leverage) {
-          throw new CoreError(`leverage ${lev}x must be between 1 and ${limit.leverage}x for ${contract}`, 'leverage');
+          throw new CoreError(`Leverage ${lev}x must be between 1 and ${limit.leverage}x for ${contract}`, 'leverage');
         }
       }
 
@@ -167,7 +167,7 @@ export function dealsRoutes(deps: AppDeps) {
         const limit = await positionLimitFor(deps, leg.contract, false);
         const price = await deps.engine!.venue.refPrice(leg.contract).catch(() => null);
         if (!(Number(price) > 0)) {
-          throw new CoreError(`no price for ${leg.contract} to check the position size — nothing was sent; try again`, 'leverage');
+          throw new CoreError(`No price for ${leg.contract} to check the position size. Nothing was sent. Try again.`, 'leverage');
         }
         const sign = leg.side === 'BUY' ? 1 : -1;
         // Fresh: a fill the cache has not seen yet is already out of the deal's
@@ -177,7 +177,7 @@ export function dealsRoutes(deps: AppDeps) {
         const afterUsd = Math.abs(after) * Number(price);
         if (breaksLimit(Math.abs(before) * Number(price), afterUsd, limit)) {
           throw new CoreError(
-            `this deal takes the ${leg.contract} position to ${usd(afterUsd)}, above its ${usd(limit.maxUsd)} limit (${LIMIT_NOTE}) — nothing was sent`,
+            `This deal takes ${leg.contract} to ${usd(afterUsd)}, above its limit of ${usd(limit.maxUsd)} (${LIMIT_NOTE}). Nothing was sent.`,
             'leverage',
           );
         }
@@ -222,7 +222,7 @@ export function dealsRoutes(deps: AppDeps) {
       } catch (err) {
         await restoreLeverage();
         throw new CoreError(
-          `aborted before creating the deal: leverage set failed — ${(err as Error).message}`,
+          `Couldn't set leverage, so nothing was sent: ${(err as Error).message}`,
         );
       }
 
@@ -232,7 +232,7 @@ export function dealsRoutes(deps: AppDeps) {
       // so the leverage just applied is put back the same way.
       if (rebalanceRunning()) {
         await restoreLeverage();
-        return refuseForRebalance(reply, 'starting a deal');
+        return refuseForRebalance(reply, 'start the deal');
       }
       if (transferSettling()) {
         await restoreLeverage();
@@ -321,7 +321,7 @@ export function dealsRoutes(deps: AppDeps) {
     app.post('/deals/:id/resume', async (req, reply) => {
       const pair = requireDeal((req.params as { id: string }).id);
       if (pair.mode !== 'HALTED') throw new CoreError(`deal ${pair.id} is not halted (mode: ${pair.mode})`);
-      if (rebalanceRunning()) return refuseForRebalance(reply, 'resuming a deal');
+      if (rebalanceRunning()) return refuseForRebalance(reply, 'resume the deal');
       commands.resumeAfterHalt(deps.engine!.store, pair.id);
       deps.engine!.wake?.();
       return reply.ok({ id: pair.id, mode: 'STOPPING' });

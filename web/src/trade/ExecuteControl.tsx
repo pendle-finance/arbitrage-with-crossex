@@ -321,7 +321,7 @@ export function ExecuteControl({
     restingOnlyRef.current = (deal.b ?? null) === null && deal.execution === 'maker';
     placedSummaryRef.current = restingOnlyRef.current
       ? t('trade.execute.placedSummary', {
-          side: deal.a.side === 'BUY' ? t('trade.execute.buyUpper') : t('trade.execute.sellUpper'),
+          side: deal.a.side === 'BUY' ? t('trade.single.buy') : t('trade.single.sell'),
           qty: deal.qty,
           base: parseSymbol(deal.a.symbol).base,
           price: deal.price,
@@ -518,9 +518,9 @@ function HoverCard({
         <span>{t('trade.execute.review')}</span>
         <span className="num">
           {isError
-            ? t('trade.execute.previewFailed')
+            ? t('pairTicket.bits.previewFailed')
             : estimating
-              ? t('trade.execute.previewing')
+              ? t('trade.execute.pricing')
               : Number.isFinite(ageMs)
                 ? t('trade.execute.secondsAgo', { s: Math.floor(ageMs / 1000) })
                 : '—'}

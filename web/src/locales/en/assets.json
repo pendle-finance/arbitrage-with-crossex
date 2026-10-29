@@ -1,7 +1,7 @@
 {
   "spreadVenue": "Spread {{platform}}",
   "bars": {
-    "fixedFundingTitle": "Fixed funding — Boros settlements {{settle}} (net of settle fees) + perp funding {{funding}}, open and completed legs {{amount}}",
+    "fixedFundingTitle": "Fixed funding — Boros settlements {{settle}} (net of settlement fees) + perp funding {{funding}}, open and completed legs {{amount}}",
     "fixedFunding": "Fixed funding",
     "tradeTitle": "Boros trade PnL (gross of trade fees) {{amount}}",
     "trade": "Boros trade",
@@ -9,27 +9,27 @@
     "tradeFee": "Trade fees",
     "perpFeesTitle": "Perp trading fees, open + closed positions {{amount}}",
     "perpFees": "Perp fees",
-    "basisTitle": "Perp price basis — open uPnL + closed realized price PnL (a delta-neutral book expects ≈ 0) {{amount}}",
+    "basisTitle": "Perp basis: open uPnL + closed price PnL (near 0 when hedged) {{amount}}",
     "basis": "Perp basis",
     "rebateTitle": "Boros settlement-fee rebate credited back {{amount}}",
     "rebate": "Settlement rebate",
     "netTitle": "Net PnL {{amount}}",
-    "caption": "Fixed funding (Boros settlements + perp funding) = the locked spread; then Boros trade PnL, trade fees, perp fees and the perp price residual"
+    "caption": "Fixed funding is the locked spread. Then Boros trade PnL, trade fees, perp fees and perp basis."
   },
   "home": {
     "headingTitle": "Every leg grouped by its underlying asset.",
     "heading": "Funding farm by asset",
     "hideInactiveTitle": "Show only assets with an open leg. Account totals still include every asset.",
-    "hideInactive": "Hide inactive pairs",
+    "hideInactive": "Hide inactive assets",
     "connectTitle": "Connect your wallet to see your farm by asset",
     "connectHint": "The asset view groups every perp and Boros leg by its underlying coin and reports the venues' own lifetime numbers.",
     "loadError": "Couldn't load the asset view",
     "prefsUnreadable": "Saved exclusions could not be read. They were kept as a backup file.",
     "legacyFailed": "Could not move this browser's saved exclusions to the terminal. It tries again on the next load.",
-    "viewOnly": "Viewing <addr>{{address}}</addr>, not logged in: view-only. Perps are your connected Gate account's; trading and fee rebates need the logged-in <owner>{{root}}</owner>.",
+    "viewOnly": "Viewing <addr>{{address}}</addr> (not logged in). Perps come from your Gate account. Log in as <owner>{{root}}</owner> to trade and get fee rebates.",
     "totalPnlTitleWithInterest": "What the farm kept, after borrow interest.",
     "totalPnlTitleNoInterest": "The cards summed. Borrow interest could not be read, so it is not subtracted.",
-    "totalPnl": "Total Account PnL",
+    "totalPnl": "Total account PnL",
     "interestPaid": "Borrow interest paid",
     "interestTotal": "Total",
     "afterInterest": "after {{amount}} borrow interest",
@@ -38,7 +38,7 @@
     "capital": "Capital at work",
     "emptyTitle": "No positions or history found for this address",
     "emptyHint": "Open a position (or move the start date back) and the assets will appear here.",
-    "allInactive": "No active pairs — {{n}} inactive hidden."
+    "allInactive": "No active assets — {{n}} hidden."
   },
   "since": {
     "allTime": "All time",

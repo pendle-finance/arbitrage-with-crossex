@@ -35,10 +35,10 @@ type Phase = 'idle' | 'waiting' | 'expired';
 
 type AlertSettings = { liquidation: boolean; interest: boolean; maturity: boolean; rollover: boolean };
 
-const WALLET_NAME: Record<string, string> = { USDT: 'CrossEx', HYPERLIQUID: 'Hyperliquid', LIGHTER: 'Lighter' };
+const WALLET_NAME: Record<string, string> = { USDT: 'USDT', HYPERLIQUID: 'Hyperliquid', LIGHTER: 'Lighter' };
 
 const floorLine = (floor: InterestFloor): string => {
-  const name = t('app.telegram.walletName', { coin: floor.coin, wallet: WALLET_NAME[floor.wallet] ?? floor.wallet });
+  const name = t('app.telegram.walletName', { wallet: WALLET_NAME[floor.wallet] ?? floor.wallet });
   return floor.floorUsd < 0
     ? t('app.telegram.floorBorrow', { name, amount: fmtUsd(-floor.floorUsd, 0) })
     : t('app.telegram.floorEquity', { name, amount: fmtUsd(floor.floorUsd, 0) });

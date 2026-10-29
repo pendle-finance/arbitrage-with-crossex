@@ -228,7 +228,7 @@ export function ClosePairForm({
                     <td className="py-1.5">
                       <span className="inline-flex items-center gap-1.5">
                         <Chip sm tone={p.side === 'BUY' ? 'green' : 'red'} className="font-semibold">
-                          {t(p.side === 'BUY' ? 'accounts.closePair.buy' : 'accounts.closePair.sell')}
+                          {t(p.side === 'BUY' ? 'app.side.buy' : 'app.side.sell')}
                         </Chip>
                         <span className="text-[12px] text-ink-50">{prettyVenue(legs[i]?.venue ?? '')}</span>
                         <span className="num text-[11px] text-ink-400">{p.qty ? sig(p.qty) : ''}</span>

@@ -63,7 +63,7 @@ describe('TransferModal', () => {
     await open();
     await userEvent.type(amountInput(), '150');
 
-    expect(facts()).toEqual({ Fee: 'free', Time: 'about 3s', Minimum: '0.00001', 'You get': '150.00 USDT' });
+    expect(facts()).toEqual({ Fee: 'Free', Time: 'about 3s', Minimum: '0.00001', 'You get': '150.00 USDT' });
   });
 
   it('amount cap is the path max, and Max fills it', async () => {
@@ -115,24 +115,24 @@ describe('TransferModal', () => {
     expect(facts()).toEqual({
       'You asked to move': '442.02 USDC',
       'Gate allows': '292.01 USDC',
-      Moved: 'nothing',
+      Moved: 'Nothing',
     });
-    expect(screen.getByText('free margin, right now')).toBeInTheDocument();
+    expect(screen.getByText('Free margin now')).toBeInTheDocument();
     overCap.unmount();
 
     const fromSpot = await open({ ...transferViews.accountB, transfer: transferViews.failedNoSpotRead.transfer });
-    expect(facts()).toEqual({ 'You asked to move': '500.00 USDT', 'Gate allows': '318.42 USDT', Moved: 'nothing' });
+    expect(facts()).toEqual({ 'You asked to move': '500.00 USDT', 'Gate allows': '318.42 USDT', Moved: 'Nothing' });
     expect(screen.getByText('Gate spot balance')).toBeInTheDocument();
     fromSpot.unmount();
 
     await open(transferViews.failedNoSpotRead);
-    expect(facts()).toEqual({ 'You asked to move': '500.00 USDT', 'Gate allows': 'not known', Moved: 'nothing' });
+    expect(facts()).toEqual({ 'You asked to move': '500.00 USDT', 'Gate allows': 'Not known', Moved: 'Nothing' });
   });
 
   it('failed facts without spot read', async () => {
     await open(transferViews.failedNoSpotRead);
 
-    expect(screen.getByText('this key cannot read Gate spot')).toBeInTheDocument();
+    expect(screen.getByText('This key cannot read Gate spot')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Try again with/ })).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
 
@@ -162,9 +162,9 @@ describe('TransferModal', () => {
   it('no spot read hides the balance instead of showing a zero', async () => {
     await open(transferViews.noSpot);
 
-    expect(within(toTile()).getByText('balance hidden')).toBeInTheDocument();
+    expect(within(toTile()).getByText('Balance hidden')).toBeInTheDocument();
     expect(within(toTile()).queryByText(/0\.00/)).toBeNull();
-    expect(screen.getByText('Add Spot read permission to see spot balances.')).toBeInTheDocument();
+    expect(screen.getByText('Set Spot Trading to Read Only to see Gate spot balances.')).toBeInTheDocument();
   });
 
   it('over max hides you get and marks the input invalid', async () => {
@@ -240,7 +240,7 @@ describe('TransferModal', () => {
     await pickInto();
     await userEvent.type(amountInput(), '150');
 
-    expect(facts()).toHaveProperty('Fee', 'free');
+    expect(facts()).toHaveProperty('Fee', 'Free');
   });
 
   it('hold label and you get have thousands commas', async () => {

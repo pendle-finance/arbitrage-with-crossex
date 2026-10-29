@@ -282,9 +282,9 @@ describe('AssetCard with a spread leg', () => {
     const user = userEvent.setup();
     renderCard({ ...book([spreadLeg]), perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.555)] });
     await showBundles(user);
-    expect(screen.getByRole('button', { name: /^Gate perp leg missing 1 active$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Gate Perp leg missing 1 active$/ })).toBeInTheDocument();
     expect(screen.getAllByRole('tab', { name: 'Funding Bundles (2)' }).length).toBeGreaterThan(0);
-    expect(screen.queryByText('Closed Funding Bundles')).not.toBeInTheDocument();
+    expect(screen.queryByText('Closed funding bundles')).not.toBeInTheDocument();
   });
 
   it('spread sits on the first venue', async () => {
@@ -335,7 +335,7 @@ describe('AssetCard with a spread leg', () => {
     renderCard(book([spreadLeg]));
     await showPairs(user);
     await user.click(screen.getByRole('button', { name: /^Gate\s*LONG/ }));
-    await user.click(await screen.findByRole('button', { name: 'Close Boros' }));
+    await user.click(await screen.findByRole('button', { name: 'Close Boros legs' }));
     const dialog = await screen.findByRole('dialog');
     expect(dialog.textContent).toMatch(/^Close Boros leg/);
     expect(dialog.textContent).not.toContain('Close pair');
@@ -372,7 +372,7 @@ describe('AssetCard with a spread leg', () => {
       [1, 2],
     ] as const) {
       await user.click(screen.getAllByRole('button', { name: /^Gate\s*LONG/ })[i]);
-      const closes = await screen.findAllByRole('button', { name: 'Close Boros' });
+      const closes = await screen.findAllByRole('button', { name: 'Close Boros legs' });
       await user.click(closes[closes.length - 1]);
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getAllByText('Boros')).toHaveLength(legs);
@@ -388,7 +388,7 @@ describe('AssetCard with a spread leg', () => {
     await showPairs(user);
     expect(await screen.findByRole('button', { name: 'Open leg' })).toHaveAttribute(
       'title',
-      expect.stringMatching(/^Open only the Hyperliquid SHORT Boros leg/),
+      expect.stringMatching(/^Open only the Hyperliquid Short Boros leg/),
     );
     expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
   });
@@ -402,7 +402,7 @@ describe('AssetCard with a spread leg', () => {
     await showPairs(user);
     const openLeg = await screen.findAllByRole('button', { name: 'Open leg' });
     expect(openLeg).toHaveLength(1);
-    expect(openLeg[0]).toHaveAttribute('title', expect.stringMatching(/^Open only the Hyperliquid SHORT Boros leg, at 0\.05\b/));
+    expect(openLeg[0]).toHaveAttribute('title', expect.stringMatching(/^Open only the Hyperliquid Short Boros leg, at 0\.05\b/));
     const spread = await screen.findByRole('button', { name: 'Open Boros leg' });
     expect(spread).toHaveAttribute('title', expect.stringMatching(/HL-GATE leg, at 0\.25\b/));
     expect(screen.queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
@@ -430,7 +430,7 @@ describe('AssetCard with a spread leg', () => {
     renderCard({ ...book([spreadLeg]), perpOpen: [] });
     await showPairs(user);
     const close = await screen.findByRole('button', { name: 'Close Boros leg' });
-    expect(close).toHaveAttribute('title', expect.stringMatching(/^Close the Boros leg of this unit/));
+    expect(close).toHaveAttribute('title', expect.stringMatching(/^Close the Boros leg of this pair/));
     expect(screen.queryByRole('button', { name: 'Close Boros legs' })).toBeNull();
   });
 });

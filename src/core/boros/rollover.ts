@@ -560,7 +560,7 @@ export async function submitBorosRoll(
       shortfallSize: size,
       execApr: null,
       feeSize: null,
-      failure: { code: 'unknown', message: `${message} — the roll may or may not have gone through. Check the position on Boros before re-issuing.` },
+      failure: { code: 'unknown', message: `${message} — the roll may or may not have gone through. Check the position on Boros before you send again.` },
     });
     fills = [...plan.closes, ...plan.opens].map((o) => lost(o.marketId, o.direction, o.size));
   }
@@ -590,7 +590,7 @@ export function readRollFills(fills: BorosLegFill[], keys: RollLegKey[]): BorosR
     return {
       status: 'unknown',
       legs,
-      reason: { code: 'unknown', message: 'The venue reported a fill FOK legs cannot produce. Check the position on Boros before re-issuing.', leg: null },
+      reason: { code: 'unknown', message: 'Boros reported a fill that should not happen. Check the position on Boros before you send again.', leg: null },
       rolledSize: 0,
     };
   }

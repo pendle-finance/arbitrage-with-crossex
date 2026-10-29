@@ -23,7 +23,7 @@ describe('LegEditModal', () => {
     const onExclude = vi.fn();
     render(<LegEditModal {...base} current={undefined} onExclude={onExclude} onClose={() => {}} />);
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
-    await userEvent.type(screen.getByLabelText('Quantity to exclude (ETH)'), '250');
+    await userEvent.type(screen.getByLabelText('Size to exclude (ETH)'), '250');
     expect(screen.getByText(/Farm keeps/)).toHaveTextContent('750 ETH at $1,900.00');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onExclude).toHaveBeenCalledWith('perp:HL', { qty: 250 });
@@ -33,8 +33,8 @@ describe('LegEditModal', () => {
     const onExclude = vi.fn();
     render(<LegEditModal {...base} current={undefined} onExclude={onExclude} onClose={() => {}} />);
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
-    await userEvent.type(screen.getByLabelText('Quantity to exclude (ETH)'), '250');
-    const at = screen.getByLabelText('Price the excluded slice was opened at');
+    await userEvent.type(screen.getByLabelText('Size to exclude (ETH)'), '250');
+    const at = screen.getByLabelText('Price the excluded part was opened at');
     await userEvent.clear(at);
     await userEvent.type(at, '1800');
     // (1000×1900 − 250×1800) / 750 = 1,933.33
@@ -47,7 +47,7 @@ describe('LegEditModal', () => {
     const onExclude = vi.fn();
     render(<LegEditModal {...base} current={undefined} onExclude={onExclude} onClose={() => {}} />);
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
-    await userEvent.click(screen.getByRole('button', { name: 'all' }));
+    await userEvent.click(screen.getByRole('button', { name: 'All' }));
     expect(screen.getByText(/whole leg is excluded/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onExclude).toHaveBeenCalledWith('perp:HL', { qty: 1000 });
@@ -60,7 +60,7 @@ describe('LegEditModal', () => {
     );
     // Opens on the portion it was saved with…
     expect(screen.getByRole('radio', { name: 'Exclude a portion' })).toBeChecked();
-    expect(screen.getByLabelText('Quantity to exclude (ETH)')).toHaveValue('250');
+    expect(screen.getByLabelText('Size to exclude (ETH)')).toHaveValue('250');
     // …and "include all" hands back undefined.
     await userEvent.click(screen.getByRole('radio', { name: /Include all/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -97,8 +97,8 @@ describe('LegEditModal', () => {
       />,
     );
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
-    await userEvent.type(screen.getByLabelText('Quantity to exclude (ETH)'), '250');
-    const at = screen.getByLabelText('Rate the excluded slice was locked at');
+    await userEvent.type(screen.getByLabelText('Size to exclude (ETH)'), '250');
+    const at = screen.getByLabelText('Rate the excluded part was locked at');
     expect(at).toHaveValue('');
     expect(at).toHaveAttribute('placeholder', '8');
     await userEvent.type(at, '12');

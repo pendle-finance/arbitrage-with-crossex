@@ -166,7 +166,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     if (!hostOk || !originOk) {
       return reply
         .code(403)
-        .send({ ok: false, error: { category: 'auth', message: 'forbidden host/origin' } });
+        .send({ ok: false, error: { category: 'auth', message: 'Requests from this address are refused. Open the terminal on this computer.' } });
     }
 
     // The token gate. Scoped to /api DELIBERATELY: this hook runs before the
@@ -194,9 +194,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
           ok: false,
           error: {
             category: 'auth',
-            message: 'missing or invalid API token',
+            message: 'This page is out of date. Reload it.',
             retryable: false,
-            hint: 'Reload the page. Scripting the API? Send the x-arb-token header — see the README.',
           },
         });
       }

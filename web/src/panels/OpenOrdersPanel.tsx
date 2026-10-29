@@ -27,7 +27,7 @@ function stateTone(state: string): ChipTone {
   return 'neutral';
 }
 
-/** POC → "post-only"; otherwise "LMT GTC" / "MKT" style. */
+/** POC → "Post-only"; otherwise "LMT GTC" / "MKT" style. */
 function typeLabel(o: OpenOrder): string {
   const type = (o.type ?? '').toUpperCase();
   const tif = (o.timeInForce ?? '').toUpperCase();
@@ -167,7 +167,7 @@ export function OpenOrdersPanel() {
                 if (dealId) {
                   toast.push(
                     'info',
-                    t('opportunities.orders.dealOwned', { deal: dealId.slice(0, 8) }),
+                    t('opportunities.orders.dealOwned'),
                   );
                 }
               },
@@ -177,7 +177,7 @@ export function OpenOrdersPanel() {
                   next.delete(o.orderId);
                   return next;
                 });
-                toast.push('error', t('opportunities.orders.cancelFailed', { id: o.orderId, error: (err as Error).message }));
+                toast.push('error', t('opportunities.orders.cancelFailed', { error: (err as Error).message }));
               },
             });
           }}

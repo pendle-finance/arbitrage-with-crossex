@@ -968,7 +968,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   if (!input.eligibility.eligible) {
     blockers.push({
       code: 'ineligible-pair',
-      message: input.eligibility.reason ?? 'These two markets cannot be paired.',
+      message: input.eligibility.reason ?? 'These two markets cannot be paired',
     });
   }
 
@@ -986,7 +986,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     );
     const flat = clamped.filter((l) => l.sim.sizing.currentSize === 0);
     const adding = clamped.filter((l) => l.sim.sizing.currentSize !== 0);
-    let message = 'Enter a size to trade.';
+    let message = 'Enter a size to trade';
     // `target` with a position on: every leg is already where the target
     // puts it — the guided wizard's "nothing left to do", not a missing size.
     const atTarget = sim.intent === 'target' && legs.some((l) => l.sim.sizing.currentSize !== 0);
@@ -994,11 +994,10 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       message = `${legs.length === 1 ? 'This leg is' : 'Both legs are'} already at this target — there is nothing to send.`;
     } else if (adding.length) {
       message =
-        `Close is reduce-only, and ${adding.map((l) => l.sim.marketName).join(' and ')} ` +
-        `${adding.length > 1 ? 'are' : 'is'} pointed the same way as the position you hold — ` +
-        'this would add to it, not reduce it. Flip the direction, or switch to Open.';
+        `Close can only reduce. ${adding.map((l) => l.sim.marketName).join(' and ')} ` +
+        `${adding.length > 1 ? 'point' : 'points'} the same way as your position. Flip the direction, or switch to Open.`;
     } else if (flat.length) {
-      message = `You hold nothing on ${flat.map((l) => l.sim.marketName).join(' or ')} — there is nothing to close.`;
+      message = `You hold nothing on ${flat.map((l) => l.sim.marketName).join(' or ')} — there is nothing to close`;
     }
     blockers.push({ code: 'no-size', message });
   }
@@ -1006,7 +1005,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   if (sim.legs.length === 2 && sim.receiveLeg === null) {
     blockers.push({
       code: 'legs-do-not-offset',
-      message: 'Both legs point the same way — flip one to trade a spread.',
+      message: 'Both legs point the same way — flip one to trade a spread',
     });
   }
 
@@ -1089,8 +1088,8 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
           leg: index,
           marketId: leg.marketId,
           message:
-            `${leg.marketName}: the rate bound this order carries (${pct(leg.worstApr)}) is outside ` +
-            `the venue's ${pct(lo)}–${pct(hi)} band, so it would be rejected — tighten the tolerance or reduce the size.`,
+            `${leg.marketName}: the order's rate limit (${pct(leg.worstApr)}) is outside ` +
+            `the ${pct(lo)}–${pct(hi)} range Boros accepts. Lower the max slippage or the size.`,
         });
       }
     }
@@ -1208,7 +1207,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     );
   } else if (gas !== undefined && gas < topUpBelowUsd && !((sim.collateralPriceUsd ?? 0) > 0)) {
     warnings.push(
-      `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, and the ${sim.collateral} price is unknown, so this order cannot top it up and may be refused for gas. ` +
+      `Boros gas is ${gas <= 0 ? 'empty' : `low (about $${gas.toFixed(2)})`} and the ${sim.collateral} price is unknown, so this order can't top it up. It may be refused. ` +
         'Top up gas in the Boros app.',
     );
   } else if (gas !== undefined && gas < topUpBelowUsd) {

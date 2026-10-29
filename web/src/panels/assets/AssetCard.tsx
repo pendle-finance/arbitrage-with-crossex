@@ -244,10 +244,11 @@ const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
 const blockingWrongSide = (legs: PendingLeg[], venue: string, side: 'LONG' | 'SHORT') =>
   legs.find((w) => w.wrongSide?.blocks && venueLegsOf(w, 1).some((l) => l.venue.toLowerCase() === venue.toLowerCase() && l.side !== side));
 const borosLegLabel = (l: AssetBorosOpen): string =>
-  `${legVenueName(l)} ${sideUpper(l.side)}${l.spreadVenues ? '' : ' YU'} · ${fmtDateLocal(l.maturity)}`;
+  `${legVenueName(l)} ${sideWord(l.side)}${l.spreadVenues ? '' : ' YU'} · ${fmtDateLocal(l.maturity)}`;
 const sideUpper = (side: string): string => t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper');
+const sideWord = (side: string): string => t(side === 'LONG' ? 'common.long' : 'common.short');
 const closeWrongSideText = (y: PendingLeg) =>
-  t('assetCard.wrongSide.closeToOpen', { venue: legVenueName(y), side: sideUpper(y.side), date: fmtDateShort(y.maturity) });
+  t('assetCard.wrongSide.closeToOpen', { venue: legVenueName(y), side: sideWord(y.side), date: fmtDateShort(y.maturity) });
 const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !text-ink-500';
 
 function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kind: 'perp' | 'yu'; side: 'LONG' | 'SHORT'; base: string; spreadVenues?: [string, string] | null }) {
@@ -2604,7 +2605,7 @@ function RollReview({
         />
         <BatchSection
           label={t('assetCard.roll.reentry')}
-          // Reads as one phrase with the maturity beside it: "Renew to 2026-10-30".
+          // Reads as one phrase with the maturity beside it: "Roll into 2026-10-30".
           heading={t('assetCard.roll.renewTo')}
           step={2}
           sub={fmtDateLocal(target.maturity)}
@@ -3329,7 +3330,7 @@ function PerpOnlyPairCard({
                 className={`btn-ghost-xs !py-[5px] ${canOpen ? '!text-grass hover:!border-grass/60' : BLOCKED_OPEN}`}
                 disabled={!onOpenBoros}
                 aria-disabled={!canOpen}
-                title={canOpen ? t('assetCard.perpOnly.openOnlyLegTitle', { venue: prettyVenue(venue), side: sideUpper(side), size: sizeText(missing) }) : undefined}
+                title={canOpen ? t('assetCard.perpOnly.openOnlyLegTitle', { venue: prettyVenue(venue), side: sideWord(side), size: sizeText(missing) }) : undefined}
                 onClick={canOpen ? () => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' }) : undefined}
               >
                 {t('assetCard.openLeg')}
@@ -3476,7 +3477,7 @@ function PerpOnlyPairCard({
                         <button
                           type="button"
                           className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
-                          title={t(y.wrongSide?.blocks ? 'assetCard.closeSideThenHedge' : 'assetCard.closeSideTitle', { side: sideUpper(y.side), size })}
+                          title={t(y.wrongSide?.blocks ? 'assetCard.closeSideThenHedge' : 'assetCard.closeSideTitle', { side: sideWord(y.side), size })}
                           onClick={() => onCloseBoros(y)}
                         >
                           {t('common.close')}
@@ -3606,7 +3607,7 @@ function BorosOnlyPairCard({
             type="button"
             className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
             disabled={!onOpenPerps}
-            title={t('assetCard.borosOnly.openOnlyPerpTitle', { venue: prettyVenue(venue), side: sideUpper(side), size: sizeText(missing) })}
+            title={t('assetCard.borosOnly.openOnlyPerpTitle', { venue: prettyVenue(venue), side: sideWord(side), size: sizeText(missing) })}
             onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
           >
             {t('assetCard.openLeg')}
@@ -3853,8 +3854,8 @@ function UngroupedCard({
                 </Chip>
                 <span className="num text-[11.5px] leading-none text-ink-400">
                   {[
-                    perps.length > 0 ? t('assetCard.ungrouped.perpCount', { n: perps.length }) : null,
-                    yus.length > 0 ? t('assetCard.ungrouped.yuCount', { n: yus.length }) : null,
+                    perps.length > 0 ? t('assetCard.ungrouped.perpCount', { count: perps.length }) : null,
+                    yus.length > 0 ? t('assetCard.ungrouped.borosCount', { count: yus.length }) : null,
                   ]
                     .filter(Boolean)
                     .join(' · ')}
@@ -3940,7 +3941,7 @@ function UngroupedCard({
                     </td>
                     <td className="whitespace-nowrap text-right">
                       {closeBtn(
-                        t('assetCard.ungrouped.closePerpAria', { venue: prettyVenue(l.venue), side: sideUpper(l.side) }),
+                        t('assetCard.ungrouped.closePerpAria', { venue: prettyVenue(l.venue), side: sideWord(l.side) }),
                         can ? () => onCloseLeg({ kind: 'perp', leg, qty: whole(l.share) ? undefined : l.sizeBase }) : undefined,
                         !live
                           ? t('assetCard.ungrouped.notLoaded')
@@ -4009,7 +4010,7 @@ function UngroupedCard({
                     </td>
                     <td className="whitespace-nowrap text-right">
                       {closeBtn(
-                        t('assetCard.ungrouped.closeYuAria', { venue: prettyVenue(l.venue), side: sideUpper(l.side) }),
+                        t('assetCard.ungrouped.closeYuAria', { venue: prettyVenue(l.venue), side: sideWord(l.side) }),
                         can
                           ? () =>
                               onCloseLeg({
@@ -4035,9 +4036,9 @@ function UngroupedCard({
   );
 }
 
-/** What a gap asks the trader to add, as a phrase: "LONG 120 ETH YU on Boros". */
+/** What a gap asks the trader to add, as a phrase: "Long 120 ETH YU on Boros". */
 function gapAsk(gap: HedgeGapRow, base: string): string {
-  const side = sideUpper(gap.action.startsWith('long') ? 'LONG' : 'SHORT');
+  const side = sideWord(gap.action.startsWith('long') ? 'LONG' : 'SHORT');
   return t(gap.leg === 'boros' ? 'assetCard.gapAsk.boros' : 'assetCard.gapAsk.perp', { side, size: exactSize(gap.size, gap.unit, base) });
 }
 
@@ -4559,7 +4560,7 @@ function PerpRow({
           {deficit && <OpenMoreButton gap={deficit} base={base} onOpen={onOpenMore} />}
           <button
             type="button"
-            aria-label={t('assetCard.ungrouped.closePerpAria', { venue: prettyVenue(leg.venue), side: sideUpper(leg.side) })}
+            aria-label={t('assetCard.ungrouped.closePerpAria', { venue: prettyVenue(leg.venue), side: sideWord(leg.side) })}
             className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
             title={onClose ? t('assetCard.ungrouped.closePerpWhole') : t('assetCard.ungrouped.notLoaded')}
             disabled={!onClose}
@@ -4705,7 +4706,7 @@ function BorosRow({
         <EditCell
           leading={deficit && <OpenMoreButton gap={deficit} base={base} onOpen={onOpenMore} blocked={blocked} />}
           exKey={key}
-          label={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : `${prettyVenue(leg.venue)} ${sideUpper(leg.side)} YU`}
+          label={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : `${prettyVenue(leg.venue)} ${sideWord(leg.side)} YU`}
           unit={leg.collateral}
           legQty={leg.sizeToken}
           entry={leg.entryApr}
@@ -4763,7 +4764,7 @@ function InactiveBorosRow({
           sub={fmtDateLocal(h.maturity)}
           chips={
             <Chip sm tone="neutral" title={matured ? t('assetCard.row.maturedOn', { date: fmtDateLocal(h.maturity) }) : t('assetCard.row.closedEarly', { date: fmtDateLocal(h.maturity) })}>
-              {matured ? t('assetCard.matured') : t('assetCard.row.closed')}
+              {matured ? t('assetCard.maturedChip') : t('assetCard.row.closed')}
             </Chip>
           }
         />
@@ -5179,6 +5180,7 @@ function BundleCard({
                       type="button"
                       className="text-[11px] text-ink-400 underline decoration-dotted underline-offset-2 hover:text-ink-200"
                       aria-expanded={inactiveOpen}
+                      title={t('assetCard.bundle.inactiveTitle')}
                       onClick={() => setInactiveOpen((v) => !v)}
                     >
                       {t(inactiveOpen ? 'assetCard.bundle.hideInactive' : 'assetCard.bundle.showInactive', { count: inactiveCount })}
@@ -5425,7 +5427,7 @@ export function AssetCard({
           ...(estimate.venues.length > 0 ? ['---'] : []),
           ...estimate.venues.map(
             (v) =>
-              `${prettyVenue(v.venue)}\t${sideUpper(v.gapUsd > 0 ? 'LONG' : 'SHORT')} ${fmtUsdCompact(Math.abs(v.gapUsd))} · ${fmtPct(v.fundingApr)}${v.source === 'current' ? ` ${t('assetCard.estimate.now')}` : ''}`,
+              `${prettyVenue(v.venue)}\t${sideWord(v.gapUsd > 0 ? 'LONG' : 'SHORT')} ${fmtUsdCompact(Math.abs(v.gapUsd))} · ${fmtPct(v.fundingApr)}${v.source === 'current' ? ` ${t('assetCard.estimate.now')}` : ''}`,
           ),
           t('assetCard.estimate.floatingNote'),
           ...(estimate.leftOutCapitalUsd > 0
@@ -5644,7 +5646,7 @@ export function AssetCard({
   const named = (n: ExcludedNet | undefined): NamedNet | null => {
     if (!n) return null;
     const leg = group.borosOpen.find((b) => b.marketId === n.marketId);
-    return { ...n, name: leg?.spreadVenues ? `${legVenueName(leg)} ${sideUpper(leg.side)}` : `${prettyVenue(n.venue)} ${sideUpper(n.side)}` };
+    return { ...n, name: leg?.spreadVenues ? `${legVenueName(leg)} ${sideWord(leg.side)}` : `${prettyVenue(n.venue)} ${sideWord(n.side)}` };
   };
   const netsAt = (list: ExcludedNet[], market: BorosPairMarketRow | undefined, maturity: number | undefined): NamedNet | null => {
     if (list.length === 0) return null;
@@ -5715,7 +5717,7 @@ export function AssetCard({
       {
         venue,
         side,
-        held: t('assetCard.overlapHeld', { venue: prettyVenue(venue), side: sideUpper(side), size: exactSize(total, p.unit, group.base), dates: dates.join(t('assetCard.andSep')) }),
+        held: t('assetCard.overlapHeld', { venue: prettyVenue(venue), side: sideWord(side), size: exactSize(total, p.unit, group.base), dates: dates.join(t('assetCard.andSep')) }),
         room: usd(h.room),
         roomBase: coin(h.room),
         legs: h.legs.map((y) => ({ size: usd(sizeIn(y, p.unit)), sizeBase: coin(sizeIn(y, p.unit)), maturity: y.maturity })),
@@ -5805,7 +5807,7 @@ export function AssetCard({
               className={HEAD_CHIP}
               title={
                 derived.grossPerp > 0 && derived.netPerp !== 0
-                  ? `${t('assetCard.head.hedgedWithin', { tol: venues[0]?.unit === 'base' ? '0.1%' : '2%' })}\n${t('assetCard.head.residual')}\t${sideUpper(derived.netPerp > 0 ? 'LONG' : 'SHORT')} ${compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''}`
+                  ? `${t('assetCard.head.hedgedWithin', { tol: venues[0]?.unit === 'base' ? '0.1%' : '2%' })}\n${t('assetCard.head.residual')}\t${sideWord(derived.netPerp > 0 ? 'LONG' : 'SHORT')} ${compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''}`
                   : t('assetCard.head.hedgedExact')
               }
             >
@@ -5995,7 +5997,7 @@ export function AssetCard({
               <span>
                 <Trans
                   i18nKey="assetCard.head.netAcross"
-                  values={{ side: sideUpper(derived.netPerp > 0 ? 'LONG' : 'SHORT'), size: compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base) }}
+                  values={{ side: sideWord(derived.netPerp > 0 ? 'LONG' : 'SHORT'), size: compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base) }}
                   components={{ b: <span className="num font-semibold" /> }}
                 />
               </span>
@@ -6107,7 +6109,7 @@ export function AssetCard({
               {t('assetCard.head.closedCount', { count: closedBundles.length })}
             </span>
             <span className="num ml-auto text-ink-400">
-              {t('assetCard.head.fundingSettlementLower')}{' '}
+              {t('assetCard.bundleHead.funding')}{' '}
               <span className="text-sm font-semibold">
                 <SignedNumber value={closedBundles.reduce((t, b) => t + b.settleUsd, 0)} format={fmtUsd} />
               </span>
@@ -6389,7 +6391,7 @@ export function AssetCard({
                 {/* A spread's title already names the coin. */}
                 {closeLeg.leg.spreadVenues ? '' : `${prettyVenue(closeLeg.leg.venue)} · ${group.base} · `}
                 {closeLeg.leg.maturity ? `${fmtDateLocal(closeLeg.leg.maturity)} · ` : ''}
-                {t(closeLeg.leg.side === 'LONG' ? 'common.long' : 'common.short').toLowerCase()}
+                {sideWord(closeLeg.leg.side)}
               </span>
             </>
           }

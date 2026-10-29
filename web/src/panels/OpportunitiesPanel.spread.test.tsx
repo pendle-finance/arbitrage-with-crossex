@@ -37,8 +37,8 @@ describe('OpportunitiesPanel — spread market', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     await userEvent.click(toggles()[0]);
 
-    expect(screen.getByText(/three legs ·/)).toBeInTheDocument();
-    expect(screen.queryByText(/four legs ·/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Three legs ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/Four legs ·/)).not.toBeInTheDocument();
 
     const borosLinks = screen.getAllByRole('link', { name: /funding on Boros/ });
     expect(borosLinks).toHaveLength(1);
@@ -52,11 +52,11 @@ describe('OpportunitiesPanel — spread market', () => {
     expect(legLabels[0].compareDocumentPosition(legLabels[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(legLabels[1].compareDocumentPosition(legLabels[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('ETH Spread HL-GATE')).toBeInTheDocument();
-    expect(screen.getAllByText(/ Fixed$/)).toHaveLength(1);
+    expect(screen.getAllByText(/ fixed$/)).toHaveLength(1);
 
-    expect(screen.getByText('Boros spread IM')).toBeInTheDocument();
-    expect(screen.queryByText('Boros short IM')).not.toBeInTheDocument();
-    expect(screen.queryByText('Boros long IM')).not.toBeInTheDocument();
+    expect(screen.getByText('Boros spread margin')).toBeInTheDocument();
+    expect(screen.queryByText('Boros short margin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Boros long margin')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -73,10 +73,10 @@ describe('OpportunitiesPanel — spread market', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     await userEvent.click(toggles()[0]);
 
-    const chip = screen.getByText(/ Fixed$/);
-    expect(chip).toHaveTextContent(/^3\.4% Fixed$/);
+    const chip = screen.getByText(/ fixed$/);
+    expect(chip).toHaveTextContent(/^3\.4% fixed$/);
     expect(chip.className).toContain('text-grass');
-    expect(screen.getAllByTitle(/^Modelled minimum capital .+ across the three legs$/)).toHaveLength(2);
+    expect(screen.getAllByTitle(/^Modeled minimum capital .+ across the three legs$/)).toHaveLength(2);
     expect(screen.getByTitle('The minimum capital this trade posts across the three legs.')).toBeInTheDocument();
   });
 
@@ -86,12 +86,12 @@ describe('OpportunitiesPanel — spread market', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     await userEvent.click(toggles()[0]);
 
-    expect(screen.getByText(/four legs ·/)).toBeInTheDocument();
-    expect(screen.getByText('Boros short IM')).toBeInTheDocument();
-    expect(screen.getByText('Boros long IM')).toBeInTheDocument();
-    expect(screen.queryByText('Boros spread IM')).not.toBeInTheDocument();
-    expect(screen.getAllByText(/ Fixed$/)).toHaveLength(2);
-    expect(screen.getAllByTitle(/^Modelled minimum capital .+ across the four legs$/)).toHaveLength(2);
+    expect(screen.getByText(/Four legs ·/)).toBeInTheDocument();
+    expect(screen.getByText('Boros short margin')).toBeInTheDocument();
+    expect(screen.getByText('Boros long margin')).toBeInTheDocument();
+    expect(screen.queryByText('Boros spread margin')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/ fixed$/)).toHaveLength(2);
+    expect(screen.getAllByTitle(/^Modeled minimum capital .+ across the four legs$/)).toHaveLength(2);
     expect(screen.getByTitle('The minimum capital this trade posts across the four legs.')).toBeInTheDocument();
   });
 });
