@@ -3480,7 +3480,7 @@ function PerpOnlyPairCard({
                           title={t(y.wrongSide?.blocks ? 'assetCard.closeSideThenHedge' : 'assetCard.closeSideTitle', { side: sideWord(y.side), size })}
                           onClick={() => onCloseBoros(y)}
                         >
-                          {t('common.close')}
+                          {t('common.closePosition')}
                         </button>
                       </td>
                       <MenuCell show={hasMenu} cell={cell}>

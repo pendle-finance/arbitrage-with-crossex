@@ -67,6 +67,9 @@ reads the same word in both apps.
 | size | 规模 (an amount of coin: 数量) |
 | notional | 名义规模 |
 | capital | 本金 (never 资金: it reads as 资金费, funding) |
+| carry (locked spread earned, before fees) | 息差收益 |
+| profit (after fees) | 净利润 |
+| price PnL, price basis (perp price moves) | 价格盈亏 (never 基差: that is perp vs spot) |
 | margin | 保证金 |
 | cross margin / isolated margin | 全仓保证金 / 逐仓保证金 |
 | maintenance margin | 维持保证金 |
@@ -77,7 +80,7 @@ reads the same word in both apps.
 | unrealized PnL / realized PnL | 未实现盈亏 / 已实现盈亏 |
 | PnL | 盈亏 |
 | fee / trading fee | 手续费 / 交易手续费 |
-| settlement | 结算 |
+| settlement | 结算 (only Boros/funding settlement; a leg that ends on a date 到期; finishing a deal 完成) |
 | rebate | 返佣 |
 | order, limit order, market order | 订单, 限价单, 市价单 |
 | filled, part filled | 已成交, 部分成交 |
@@ -97,6 +100,12 @@ reads the same word in both apps.
 | wallet | 钱包 |
 | agent (Boros signing key) | 代理 |
 | API key | API 密钥 |
+| API secret | Secret Key (never 私钥: that is a wallet private key) |
+| deal (the engine's two-leg perp job) | 交易任务 (交易 alone means trading) |
+| HALTED (deal needs a person) | 已中止 (暂停 is a paused market) |
+| Close (dismiss a dialog) / Close (a position) | 关闭 / 平仓 |
+| exit (close old legs in a roll) | 平仓 |
+| entry price / mark price | 开仓价 / 标记价 |
 | ungrouped | 未分组 |
 
 ## Style
