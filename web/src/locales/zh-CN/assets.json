@@ -9,12 +9,12 @@
     "tradeFee": "交易手续费",
     "perpFeesTitle": "永续交易手续费（含持仓和已平仓）{{amount}}",
     "perpFees": "永续手续费",
-    "basisTitle": "永续价格盈亏：持仓未实现盈亏 + 已平仓已实现价格盈亏（Delta 中性组合应接近 0）{{amount}}",
+    "basisTitle": "永续价格盈亏：持仓未实现盈亏 + 已平仓价格盈亏（对冲时接近 0）{{amount}}",
     "basis": "永续价格盈亏",
     "rebateTitle": "已返还的 Boros 结算手续费返佣 {{amount}}",
     "rebate": "结算返佣",
     "netTitle": "净盈亏 {{amount}}",
-    "caption": "固定资金费（Boros 结算 + 永续资金费）= 锁定的利差；其后是 Boros 交易盈亏、交易手续费、永续手续费和永续价格盈亏"
+    "caption": "固定资金费即锁定的利差。其后是 Boros 交易盈亏、交易手续费、永续手续费和永续价格盈亏。"
   },
   "home": {
     "headingTitle": "所有腿按标的资产分组。",

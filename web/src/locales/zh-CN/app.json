@@ -36,13 +36,13 @@
   },
   "copyCommand": "复制命令",
   "credentials": {
-    "refused": "Gate 拒绝了此密钥。请确认已完整粘贴密钥和私钥，并检查密钥权限。",
+    "refused": "Gate 拒绝了此密钥。请确认已完整粘贴 API 密钥和 Secret Key，并检查密钥权限。",
     "refusedDetail": "Gate 返回：{{reason}}",
     "apiKey": "API 密钥",
     "keyPlaceholder": "Gate API 密钥",
     "apiSecret": "Secret Key",
     "secretPlaceholder": "Gate API Secret Key",
-    "serviceMissing": "凭证服务暂不可用",
+    "serviceMissing": "密钥校验暂不可用。请稍后刷新页面。",
     "saved": "凭证已保存",
     "checking": "正在向 Gate 验证…",
     "save": "保存凭证"

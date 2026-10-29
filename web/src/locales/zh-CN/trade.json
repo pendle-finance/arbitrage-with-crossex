@@ -9,7 +9,7 @@
     "single": "单腿"
   },
   "recovery": {
-    "halted_other": "{{count}} 个交易任务已中止（HALTED），需要人工处理",
+    "halted_other": "{{count}} 个交易任务已中止 — 需要您处理",
     "working": "有一个交易任务仍在执行",
     "workingMore": "有一个交易任务仍在执行（另有 {{count}} 个）",
     "more": "（另有 {{count}} 条）",
@@ -149,7 +149,7 @@
     "bandTitle": "最大滑点：中间价 ± 该值。订单簿在此范围内无法成交的部分保持持仓。",
     "bandHint": "相对中间价的最大滑点。规模较大或订单簿较薄时可放宽。",
     "closeNow": "立即平仓",
-    "reduceOnlyNote": "<b>只减仓</b>：不会增加仓位，也不会在订单簿挂单。其 Boros 腿保持持仓，该资金费分组将显示为未对冲。"
+    "reduceOnlyNote": "<b>只减仓</b>：不会增加仓位，也不会在订单簿挂单。其 Boros 腿保持持仓，并显示为未对冲。"
   },
   "execute": {
     "notSent": "未发送",
@@ -158,10 +158,10 @@
     "executing": "执行中…",
     "viewOnly": "仅查看：请切换到已登录的钱包后交易。",
     "placed": "<b>限价单已下。</b><n>{{summary}}</n> 在交易所挂单，直到成交——见“当前委托”。",
-    "replayed": "此次确认与之前的提交相同：交易任务 <n>{{id}}</n> 已存在，未发送新订单。正在显示该交易任务。",
-    "marginBlocked": "保证金 ≈ {{required}}（含 5% 缓冲和手续费预留）超过可用 {{available}}",
-    "notMappable": "无法作为一个交易任务执行（例如两腿规模不同）：请分别执行各腿",
-    "splitNote": "两腿规模不同，拆成两个交易任务按顺序发送，每条腿单独报告结果",
+    "replayed": "已作为交易任务 <n>{{id}}</n> 发送，未发出新订单。正在显示该交易任务。",
+    "marginBlocked": "需要保证金 ≈ {{required}}（含 5% 缓冲和手续费）。可用仅 {{available}}。",
+    "notMappable": "无法作为一个交易任务发送。请分别发送各腿。",
+    "splitNote": "两腿规模不同，分两个交易任务发送，每腿一个。每条腿单独报告结果。",
     "legClosed": "{{venue}} 腿已平仓",
     "legNotClosed": "{{venue}} 腿未平仓：{{reason}}",
     "legSending": "{{venue}} 腿发送中",
@@ -192,8 +192,7 @@
     "rateChanged": "利率腿已变化。请返回并再次继续，以重新确定对冲规模。",
     "back": "‹ 返回利率腿",
     "submitted": "策略已提交。",
-    "doneThree": "永续腿正在执行，交易任务视图会跟踪成交情况。您的仓位会出现在持仓页面，此后该页面将监控全部三条腿。",
-    "doneFour": "永续腿正在执行，交易任务视图会跟踪成交情况。您的仓位会出现在持仓页面，此后该页面将监控全部四条腿。",
+    "done": "永续腿正在下单。请在持仓标签页跟踪仓位。",
     "viewPosition": "查看我的仓位",
     "close": "关闭",
     "lockRate": "锁定利率",
@@ -203,7 +202,7 @@
     "modeOpening": "挂单中 — 等待成交",
     "modeConverting": "正在按市价执行…",
     "modeStopping": "停止中 — 处理已成交部分",
-    "modeHalted": "已中止（HALTED）— 需要人工处理",
+    "modeHalted": "已中止 — 需要您处理",
     "modeDone": "已完成",
     "statePending": "待确认",
     "stateOpen": "挂单中",

@@ -57,15 +57,15 @@
     "perpEntry": "永续开仓手续费",
     "perpEntrySwitchTitle": "本组合已支付的永续手续费。取消勾选即不计入。",
     "perpExit": "预估永续平仓手续费",
-    "perpExitSwitchTitle": "两条永续腿在到期时按您所在交易所的吃单费率平仓（如有，取自账户费率表）。如果打算保留永续用于展期而非平仓，请取消勾选。",
+    "perpExitSwitchTitle": "两条永续在到期时按您的吃单费率平仓。如果打算保留永续用于展期，请取消勾选。",
     "fixedEarning": "固定收益",
     "onCapital": "按本金计",
     "borosTrade": "Boros 交易手续费",
-    "borosTradeTitle": "开这些腿时吃 Boros 订单簿的成本。结算手续费不在此处：无论如何开仓或展期，它们都会累计到到期，因此已从锁定利率中扣除。",
-    "perpEntryTileTitle": "本组合份额已支付的永续交易手续费。",
-    "perpExitTileTitle": "两条永续腿在到期时按您所在交易所的吃单费率平仓。Boros 腿自行到期，无平仓成本。",
+    "borosTradeTitle": "开这些腿时支付的 Boros 手续费。结算手续费已计入锁定利率。",
+    "perpEntryTileTitle": "本组合已支付的永续交易手续费。",
+    "perpExitTileTitle": "两条永续在到期时按您的吃单费率平仓。Boros 腿到期无平仓成本。",
     "profitTitle": "整个对冲期的息差收益，减去上面计入的手续费。",
-    "profitAtMaturity": "到期净利润（预估）"
+    "profitAtMaturity": "预估到期净利润"
   },
   "roll": {
     "oppTitle": "展期机会",
@@ -96,7 +96,7 @@
     "openInstead": "改为开 {{qty}}",
     "rollInstead": "改为展期 {{qty}}",
     "loadingMaturities": "正在加载这些交易所的到期日…",
-    "noTarget": "没有在两个交易所都上线的更晚到期日，暂时无法展期。",
+    "noTarget": "没有在两个交易所都上线的更晚到期日。",
     "pickMaturity": "选择要展期到的到期日",
     "reviewOpenTitle": "请先检查新腿、最大滑点和保证金。",
     "reviewRollTitle": "请先检查要平的腿、新腿、最大滑点和保证金。",
@@ -187,7 +187,7 @@
     "rolling": "展期中…",
     "quoteFailedLegs": "无法为这些腿报价。"
   },
-  "replayed": "已按之前的提交返回结果，没有重复发送。",
+  "replayed": "这是之前发送的结果，没有重复发送。",
   "estEarnings": "预估到期净利润",
   "openOnly": {
     "newLegs": "新腿",
@@ -230,8 +230,8 @@
     "chipTitle": "这些永续背后没有 Boros 腿，因此未锁定利率。",
     "legsMissing": "缺两条 Boros 腿",
     "legMissing": "缺一条 Boros 腿",
-    "maturityTitle": "该组合仅剩的利率腿在此日到期",
-    "noRateLeg": "无利率腿",
+    "maturityTitle": "本组合的 Boros 腿在此日到期",
+    "noRateLeg": "无 Boros 腿",
     "noRateUntil": "两条 Boros 腿都开仓后才会锁定利率",
     "noRate": "未锁定利率。",
     "closePerpsTitle": "平掉该组合的两条永续 — 每边 {{size}}",
@@ -251,8 +251,8 @@
     "chipTitle": "利率已锁定，但没有永续对冲其价格风险。",
     "perpsMissing": "缺两条永续腿",
     "perpMissing": "缺一条永续腿",
-    "maturityTitle": "该组合的两条利率腿都在此日到期",
-    "notionalTitle": "名义规模（两条利率腿）\t{{notional}}\n每边数量\t{{size}}",
+    "maturityTitle": "本组合的两条 Boros 腿都在此日到期",
+    "notionalTitle": "名义规模（两条 Boros 腿）\t{{notional}}\n每边数量\t{{size}}",
     "noAprTitle": "两条永续都开仓后才有本金 APR",
     "notEstimated": "两条永续都开仓后才会估算。",
     "closeLegTitle": "平掉该组合的 Boros 腿 — {{size}}",
@@ -307,7 +307,7 @@
   "ticketUnavailable": "此处无法使用下单面板",
   "edit": {
     "title": "编辑腿 — {{label}}",
-    "intro": "设定这条腿中哪部分计入资金费套利。其余部分移到“已排除”区，不计入对冲、盈亏和本金。",
+    "intro": "设定这条腿中计入套利的部分。其余部分移到“已排除”区，不计入对冲、盈亏和本金。",
     "includeAria": "计入",
     "includeAll": "全部计入",
     "excludePortion": "排除一部分",
@@ -488,7 +488,7 @@
     "summaryTitle": "息差收益 − 手续费为已结算部分。价格盈亏 = 持仓盯市盈亏 + 已平仓价格盈亏。",
     "carryFees": "息差收益 − 手续费",
     "priceBasis": "价格盈亏",
-    "rebateTitle": "返还的 CrossEx 结算手续费返佣，已计入盈亏。",
+    "rebateTitle": "返还的 Boros 结算手续费返佣，已计入盈亏。",
     "settlementRebate": "结算返佣",
     "mtmTitle": "持仓 Boros 腿的标记价值，不计入盈亏。",
     "borosMtm": "Boros 盯市价值",
@@ -506,6 +506,6 @@
     "rebates": "结算返佣",
     "noBoros": "此时间窗口内无 Boros 活动。",
     "note": "结算已扣除结算手续费，该费用已体现在锁定利率中。手续费指交易手续费。",
-    "rebateNote": "返佣为结算手续费返佣，已计入盈亏，可在您的 Boros 账户页面领取（<a>此处</a>）。"
+    "rebateNote": "Boros 结算手续费返佣已计入盈亏，可在您的 Boros 账户页面领取（<a>此处</a>）。"
   }
 }
