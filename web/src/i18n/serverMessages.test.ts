@@ -478,7 +478,7 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
   ["aborted before creating the deal: leverage set failed — CrossEx set BTC_USDT to 10x, not the 20x asked", "创建交易任务前已中止：设置杠杆失败：CrossEx 把 BTC_USDT 的杠杆设为 10x，而不是请求的 20x"],
   ["stopped (unacquired residual 0.01 — not filled before the stop)", "已停止（未建仓剩余 0.01 — 停止前未成交）"],
   ["hedge failed 3x — stopped acquiring unhedgeable exposure (unacquired residual 0.01 — below the venue minimum or blocked)", "对冲失败 3 次 — 已停止建仓，避免无法对冲的敞口（未建仓剩余 0.01 — 低于交易所最小下单量或无法成交）"],
-  ["converted (unacquired residual 0.002 — below the venue minimum or blocked) (unhedged 0.001 — below ETH_USDT's lot, not submittable)", "已转市价完成（未建仓剩余 0.002 — 低于交易所最小下单量或无法成交）（未对冲 0.001 — 低于 ETH_USDT 的最小手数，无法下单）"],
+  ["converted (unacquired residual 0.002 — below the venue minimum or blocked) (unhedged 0.001 — below ETH_USDT's lot, not submittable)", "已转吃单完成（未建仓剩余 0.002 — 低于交易所最小下单量或无法成交）（未对冲 0.001 — 低于 ETH_USDT 的最小手数，无法下单）"],
   ["target reached (unacquired sub-minimum residual 0.0004 on the maker leg)", "已达目标数量（挂单腿剩余 0.0004 低于最小下单量，未建仓）"],
   ["hedge failed 3x — stopped acquiring unhedgeable exposure", "对冲失败 3 次 — 已停止建仓，避免无法对冲的敞口"],
   ["the limit price kept crossing the market — the venue rejected the post-only maker 5 times in a row", "限价持续穿过市价 — 交易所连续 5 次拒绝只做挂单"],
