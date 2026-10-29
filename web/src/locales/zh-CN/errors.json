@@ -380,7 +380,7 @@
   "dealResidualSuffix": "{{inner}}（未建仓剩余 {{size}} — 低于交易所最小下单量或无法成交）",
   "dealResidualStopped": "{{inner}}（未建仓剩余 {{size}} — 停止前未成交）",
   "dealStopped": "已停止",
-  "dealConverted": "已转市价完成",
+  "dealConverted": "已转吃单完成",
   "dealTargetReached": "已达目标数量",
   "dealTargetResidual": "已达目标数量（挂单腿剩余 {{size}} 低于最小下单量，未建仓）",
   "dealHedgeFailed": "对冲失败 {{count}} 次 — 已停止建仓，避免无法对冲的敞口",
