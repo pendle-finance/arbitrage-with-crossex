@@ -107,7 +107,7 @@
     "spreadTitle": "利差收益 {{usd}}：Boros 价格冲击后锁定 {{apr}}，按名义规模计算至到期。中间利差 {{mid}}。",
     "lockedSpread": "锁定利差",
     "profitTitle": "到期预估利润 {{usd}}：锁定利差减去全部成本",
-    "estProfit": "预估利润",
+    "estProfit": "预估净利润",
     "borosSpreadIm": "Boros 利差保证金",
     "borosShortIm": "Boros 空头保证金",
     "borosLongIm": "Boros 多头保证金",
