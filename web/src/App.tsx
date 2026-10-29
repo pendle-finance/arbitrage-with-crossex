@@ -9,6 +9,7 @@ import { DisclaimerGate } from './components/DisclaimerGate';
 import { FinishSetupPill } from './components/FinishSetupPill';
 import { FreshnessIndicator } from './components/FreshnessIndicator';
 import { TooltipLayer } from './components/TooltipLayer';
+import { LanguageSwitch } from './components/LanguageSwitch';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { markGuideHintDone, UserGuideHint } from './components/UserGuideHint';
 import { TableSkeleton } from './components/Skeleton';
@@ -119,6 +120,7 @@ export default function App() {
       <UpdateIndicator />
       {isTrading && <SetupPrompt onOpen={openSettingsAt} />}
       <FreshnessIndicator />
+      <LanguageSwitch />
       <ActiveWalletChip onOpen={openSettings} showWallet={isTrading} />
     </>
   );

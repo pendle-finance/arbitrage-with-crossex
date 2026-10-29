@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
 import { afterAll, afterEach, beforeAll } from 'vitest';
+import i18n from '../i18n';
 import { server } from './server';
 
 // jsdom implements neither scrollIntoView nor scrollTo — the trade rail and the
@@ -16,6 +17,7 @@ afterEach(() => {
   cleanup();
   server.resetHandlers();
   localStorage.clear(); // basket drafts / recent symbols / active tab must not leak across tests
+  void i18n.changeLanguage('en'); // tests read English copy; a Chinese test must not leak its language
 });
 
 afterAll(() => server.close());
