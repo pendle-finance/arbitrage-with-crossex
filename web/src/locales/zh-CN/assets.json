@@ -33,9 +33,9 @@
     "interestPaid": "已付借款利息",
     "interestTotal": "合计",
     "afterInterest": "已扣 {{amount}} 借款利息",
-    "aprTitle": "至今盈亏 ÷（资金 × 时间），年化。为估算值：资金按当前所需计算。",
+    "aprTitle": "至今盈亏 ÷（本金 × 时间），年化。为估算值：本金按当前所需计算。",
     "apr": "已实现 APR ≈",
-    "capital": "占用资金",
+    "capital": "投入本金",
     "emptyTitle": "此地址没有仓位或历史记录",
     "emptyHint": "开仓（或把开始日期往前调）后，资产会显示在这里。",
     "allInactive": "没有活跃资产，已隐藏 {{n}} 个。"

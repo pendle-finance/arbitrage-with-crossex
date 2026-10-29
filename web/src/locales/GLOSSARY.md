@@ -66,7 +66,7 @@ reads the same word in both apps.
 | close a position | 平仓 |
 | size | 规模 (an amount of coin: 数量) |
 | notional | 名义规模 |
-| capital | 资金 |
+| capital | 本金 (never 资金: it reads as 资金费, funding) |
 | margin | 保证金 |
 | cross margin / isolated margin | 全仓保证金 / 逐仓保证金 |
 | maintenance margin | 维持保证金 |

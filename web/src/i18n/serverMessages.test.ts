@@ -465,7 +465,7 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
   ["invalid notionalUsd (expected 100–10000000)", "名义规模无效（应为 100–10000000）"],
   ["body must be { actions: ActionInput[] } with at least one action", "请求体必须是 { actions: ActionInput[] }，且至少包含一个操作"],
   ["The CrossEx fee schedule is unavailable — perp trading fees are unknown, so net fixed APRs can't be quoted.", "CrossEx 手续费表不可用，永续交易手续费未知，无法给出净固定 APR。"],
-  ["ETHUSDT-31OCT (market #23) has no lockable rate at $200,000 — its Boros initial margin can't be modelled, so the capital and the APR on capital are unknown.", "ETHUSDT-31OCT（市场 #23）在 $200,000 规模下没有可锁定的利率，无法估算其 Boros 初始保证金，所需资金和资金 APR 未知。"],
+  ["ETHUSDT-31OCT (market #23) has no lockable rate at $200,000 — its Boros initial margin can't be modelled, so the capital and the APR on capital are unknown.", "ETHUSDT-31OCT（市场 #23）在 $200,000 规模下没有可锁定的利率，无法估算其 Boros 初始保证金，所需本金和本金 APR 未知。"],
   ["No Boros order book for ETHUSDT-31OCT (market #23) — its receive-fixed rate at $200,000 is unknown.", "ETHUSDT-31OCT（市场 #23）没有 Boros 订单簿，$200,000 规模的收固定利率未知。"],
   ["ETHUSDT-31OCT: the ask side is empty — nothing to cross.", "ETHUSDT-31OCT：卖盘为空，没有可成交的订单。"],
   ["Price rounded to the venue's price step: 3000.123 → 3000.12", "价格已按交易所最小变动价位取整：3000.123 → 3000.12"],
