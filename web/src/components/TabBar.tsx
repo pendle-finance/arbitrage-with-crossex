@@ -3,7 +3,7 @@
  * left sidebar, so narrow viewports spend their width on content.
  *
  * Opportunities and Positions are the primary tabs (what the terminal is FOR)
- * and are rendered large and cyan-highlighted; Balances / Open Orders / Trades /
+ * and are rendered large and cyan-highlighted; Balances / Limit orders / Trades /
  * Fees are reference views, rendered small and dim after a divider. Panels stay
  * MOUNTED while inactive (hidden via the `hidden` attribute) so react-query
  * polling and live count badges keep working off-screen.

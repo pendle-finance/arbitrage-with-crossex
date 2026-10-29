@@ -872,7 +872,7 @@ function PairCard({
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-left">{t('common.position')}</th>
                   <th className="th text-right">{t('common.size')}</th>
                   <th className="th text-right">{t('common.locked')}</th>
                   <th className="th text-right">{t('common.initialMargin')}</th>
@@ -2043,11 +2043,15 @@ function RollLegReport({
   legs,
   collateral,
   tone,
+  nameOf,
 }: {
   label: string;
   legs: BorosLegFill[];
   collateral: string;
   tone: 'green' | 'amber' | 'rose';
+  /** The market each fill traded. A spread is one position, so "Leg A" would
+   * name a second leg that does not exist. */
+  nameOf?: (marketId: number) => string | null;
 }) {
   const box =
     tone === 'green'
@@ -2060,7 +2064,7 @@ function RollLegReport({
       <span className="text-[12px] font-semibold text-ink-100">{label}</span>
       <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
         {legs.map((fill, i) => (
-          <LegFillLine key={fill.marketId} label={t('assetCard.legLetterLabel', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
+          <LegFillLine key={fill.marketId} label={nameOf?.(fill.marketId) ?? t('assetCard.legLetterLabel', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
         ))}
       </div>
     </div>
@@ -2483,8 +2487,8 @@ function RollReview({
       <div className="flex flex-col gap-2">
         {result && (
           <>
-            <RollLegReport label={t('assetCard.roll.exit')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l)} collateral={collateral} tone={tone} />
-            <RollLegReport label={t('assetCard.roll.reentry')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l)} collateral={collateral} tone={tone} />
+            <RollLegReport label={t('assetCard.roll.exit')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l)} collateral={collateral} tone={tone} nameOf={(id) => legMarketName(`exit:${id}`)} />
+            <RollLegReport label={t('assetCard.roll.reentry')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l)} collateral={collateral} tone={tone} nameOf={(id) => legMarketName(`entry:${id}`)} />
           </>
         )}
         {status === 'rolled' && (
@@ -2848,7 +2852,7 @@ function OpenOnlyReview({
     const retryable = 'error' in out || (result?.filledNothing ?? false);
     return (
       <div className="flex flex-col gap-2">
-        {result && <RollLegReport label={t('assetCard.openOnly.newLegs')} legs={result.legs} collateral={collateral} tone={tone} />}
+        {result && <RollLegReport label={t('assetCard.openOnly.newLegs')} legs={result.legs} collateral={collateral} tone={tone} nameOf={(id) => simulation?.legs.find((l) => l.marketId === id)?.marketName ?? ('spreadVenues' in target ? spreadName(base, target.spreadVenues) : null)} />}
         {result && !result.filledNothing && !result.partial && (
           <p className="text-[11.5px] text-ink-300" role="status">
             {t('assetCard.openOnly.opened', { qty: fmtTokenQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity), old: fmtDateLocal(pair.soonestMaturitySec) })}
@@ -3413,7 +3417,7 @@ function PerpOnlyPairCard({
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-left">{t('common.position')}</th>
                   <th className="th text-right">{t('common.size')}</th>
                   <th className="th text-right">{t('common.locked')}</th>
                   <th className="th text-right">{t('common.initialMargin')}</th>
@@ -3692,7 +3696,7 @@ function BorosOnlyPairCard({
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-left">{t('common.position')}</th>
                   <th className="th text-right">{t('common.size')}</th>
                   <th className="th text-right">{t('common.locked')}</th>
                   <th className="th text-right">{t('common.initialMargin')}</th>
@@ -3897,7 +3901,7 @@ function UngroupedCard({
             </colgroup>
             <thead>
               <tr className="bg-ink-900/60 [&>th]:px-3 [&>th]:py-2.5 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
-                <th className="text-left">{t('common.leg')}</th>
+                <th className="text-left">{t('common.position')}</th>
                 <th className="text-right">{t('common.size')}</th>
                 <th className="text-right">{t('common.locked')}</th>
                 <th className="text-right">{t('common.initialMargin')}</th>
@@ -5100,7 +5104,7 @@ function BundleCard({
             <BundleColGroup />
             <thead>
               <tr className="[&>th]:px-3 [&>th]:py-2.5 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-[46px] [&>th:last-child]:pr-4">
-                <th className="text-left">{t('common.leg')}</th>
+                <th className="text-left">{t('common.position')}</th>
                 <th className="text-right">{t('common.size')}</th>
                 <th className="text-right">{t('assetCard.bundle.entryMark')}</th>
                 <th className="text-right">{t('assetCard.bundle.fundingSettled')}</th>
@@ -6262,7 +6266,7 @@ export function AssetCard({
             <table className="w-full border-collapse text-[12.5px] [&_td]:border-b [&_td]:border-ink-850 [&_td]:px-2.5 [&_td]:py-2 [&_tr:last-child_td]:border-b-0">
               <thead>
                 <tr>
-                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-left">{t('common.position')}</th>
                   <th className="th text-right">{t('common.size')}</th>
                   <th className="th text-right">{t('common.locked')}</th>
                   <th className="th text-right">{t('common.initialMargin')}</th>

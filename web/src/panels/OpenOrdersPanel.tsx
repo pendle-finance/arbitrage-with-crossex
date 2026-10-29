@@ -194,15 +194,22 @@ export function OpenOrdersPanel() {
     },
   ];
 
+  // The tab is named "Limit orders"; this line says the list holds only the
+  // ones still open (filled and cancelled orders are under Trades).
   return (
-    <DataTable
-      columns={columns}
-      rows={orders}
-      rowKey={(o) => o.orderId}
-      rowClassName={(o) => (isCancelling(o) ? 'opacity-50' : '')}
-      emptyState={
-        <EmptyState icon="⧖" title={t('opportunities.orders.emptyTitle')} hint={t('opportunities.orders.emptyHint')} />
-      }
-    />
+    <div className="flex flex-col gap-3">
+      {orders.length > 0 && (
+        <span className="num text-xs text-ink-500">{t('app.openOrders', { count: orders.length })}</span>
+      )}
+      <DataTable
+        columns={columns}
+        rows={orders}
+        rowKey={(o) => o.orderId}
+        rowClassName={(o) => (isCancelling(o) ? 'opacity-50' : '')}
+        emptyState={
+          <EmptyState icon="⧖" title={t('opportunities.orders.emptyTitle')} hint={t('opportunities.orders.emptyHint')} />
+        }
+      />
+    </div>
   );
 }

@@ -37,8 +37,8 @@ describe('OpportunitiesPanel — spread market', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     await userEvent.click(toggles()[0]);
 
-    expect(screen.getByText(/Three legs ·/)).toBeInTheDocument();
-    expect(screen.queryByText(/Four legs ·/)).not.toBeInTheDocument();
+    expect(screen.getByText(/2 perps \+ 1 spread position ·/)).toBeInTheDocument();
+    expect(screen.queryByText(/2 perps \+ 2 Boros positions ·/)).not.toBeInTheDocument();
 
     const borosLinks = screen.getAllByRole('link', { name: /funding on Boros/ });
     expect(borosLinks).toHaveLength(1);
@@ -76,8 +76,8 @@ describe('OpportunitiesPanel — spread market', () => {
     const chip = screen.getByText(/ fixed$/);
     expect(chip).toHaveTextContent(/^3\.4% fixed$/);
     expect(chip.className).toContain('text-grass');
-    expect(screen.getAllByTitle(/^Modeled minimum capital .+ across the three legs$/)).toHaveLength(2);
-    expect(screen.getByTitle('The minimum capital this trade posts across the three legs.')).toBeInTheDocument();
+    expect(screen.getAllByTitle(/^Modeled minimum capital .+ across the 2 perps and the spread position$/)).toHaveLength(2);
+    expect(screen.getByTitle('The minimum capital this trade posts across the 2 perps and the spread position.')).toBeInTheDocument();
   });
 
   it('keeps one capital bar per Boros market for two single markets', async () => {
@@ -86,12 +86,12 @@ describe('OpportunitiesPanel — spread market', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     await userEvent.click(toggles()[0]);
 
-    expect(screen.getByText(/Four legs ·/)).toBeInTheDocument();
+    expect(screen.getByText(/2 perps \+ 2 Boros positions ·/)).toBeInTheDocument();
     expect(screen.getByText('Boros short margin')).toBeInTheDocument();
     expect(screen.getByText('Boros long margin')).toBeInTheDocument();
     expect(screen.queryByText('Boros spread margin')).not.toBeInTheDocument();
     expect(screen.getAllByText(/ fixed$/)).toHaveLength(2);
-    expect(screen.getAllByTitle(/^Modeled minimum capital .+ across the four legs$/)).toHaveLength(2);
-    expect(screen.getByTitle('The minimum capital this trade posts across the four legs.')).toBeInTheDocument();
+    expect(screen.getAllByTitle(/^Modeled minimum capital .+ across the 2 perps and the 2 Boros positions$/)).toHaveLength(2);
+    expect(screen.getByTitle('The minimum capital this trade posts across the 2 perps and the 2 Boros positions.')).toBeInTheDocument();
   });
 });

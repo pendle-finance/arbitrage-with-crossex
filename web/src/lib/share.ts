@@ -64,7 +64,6 @@ export function buildTweetText(p: SharePayloadV1): string {
     apr: fmtPct(p.a),
     capital: fmtUsd(p.c, 0),
     term: shareDaysText(p),
-    legs: p.l.length,
     base: p.b,
   });
 }

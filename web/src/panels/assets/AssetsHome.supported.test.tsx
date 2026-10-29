@@ -114,7 +114,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
   it('shows every coin as a card with no dust line, no dust fold', async () => {
     renderWithClient(<AssetsHome />);
     await screen.findByText('ETH');
-    await userEvent.click(screen.getByRole('checkbox', { name: /Hide inactive assets/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Hide assets with no position/ }));
     await screen.findByText('BTC');
     expect(screen.queryByText(/dust asset/)).toBeNull();
   });

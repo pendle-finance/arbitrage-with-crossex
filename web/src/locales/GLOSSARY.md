@@ -47,7 +47,9 @@ reads the same word in both apps.
 | perp, perpetual | 永续合约 (tight space: 永续) |
 | Long / Short (side, tag) | 多头 / 空头 |
 | go long / go short (action) | 做多 / 做空 |
-| leg | 腿 |
+| leg (a perp; or one of two single Boros markets on the pair ticket, Leg A / Leg B) | 腿 |
+| Boros position (the Boros side anywhere else, single or spread) | Boros 仓位 |
+| spread position (one position on a Boros spread market; never a leg) | 利差仓位 |
 | pair (a hedged Boros + perp pair) | 组合 |
 | Fixed Rate Pairs | 固定利率组合 |
 | fixed rate, fixed APR | 固定利率, 固定 APR |
@@ -94,7 +96,7 @@ reads the same word in both apps.
 | maker / taker | 挂单 / 吃单 |
 | post-only | 只做挂单 |
 | reduce-only | 只减仓 |
-| Open Orders (tab) | 当前委托 |
+| Limit orders (tab) | 限价单 (open orders in general stay 当前委托) |
 | convert (USDT ↔ USDC) | 兑换 |
 | withdraw | 提款 |
 | wallet | 钱包 |

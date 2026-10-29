@@ -87,11 +87,11 @@ describe('AssetCard for a held coin the terminal does not support', () => {
     expect(await screen.findByText('The terminal supports ETH, HYPE and BTC.')).toBeInTheDocument();
   });
 
-  it('keeps Close leg on the SOL leg row, close leg stays', async () => {
+  it('keeps Close position on the SOL leg row, close leg stays', async () => {
     renderSol();
-    await userEvent.click(screen.getByRole('button', { name: /^Ungrouped legs/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^Ungrouped positions/ }));
     const close = screen.getByRole('button', { name: /^Close .* Long perp$/ });
-    expect(close).toHaveTextContent('Close leg');
+    expect(close).toHaveTextContent('Close position');
     await vi.waitFor(() =>
       expect(screen.getByRole('button', { name: /^Close .* Long perp$/ })).not.toBeDisabled(),
     );

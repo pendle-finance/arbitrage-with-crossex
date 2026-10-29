@@ -56,9 +56,9 @@ function previewSpy(): ActionInput[][] {
   );
   return seen;
 }
-const deadOpens = (el: HTMLElement) => within(el).queryAllByRole('button', { name: 'Open leg' }).filter((b) => b.getAttribute('aria-disabled') === 'true');
+const deadOpens = (el: HTMLElement) => within(el).queryAllByRole('button', { name: 'Open position' }).filter((b) => b.getAttribute('aria-disabled') === 'true');
 async function openLegTexts(user: ReturnType<typeof userEvent.setup>, el: HTMLElement): Promise<string[]> {
-  const opens = within(el).getAllByRole('button', { name: 'Open leg' });
+  const opens = within(el).getAllByRole('button', { name: 'Open position' });
   const live = opens.filter((b) => b.getAttribute('aria-disabled') !== 'true').map((b) => b.title);
   return [...live, ...(await blockedReasons(user, opens.filter((b) => b.getAttribute('aria-disabled') === 'true')))];
 }
@@ -80,11 +80,11 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(B15_HELD_TEN));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/Boros leg missing/);
+      const found = cardsTitled(/Boros position missing/);
       expect(found).toHaveLength(1);
       return found;
     });
-    const open = within(card).getByRole('button', { name: 'Open leg' });
+    const open = within(card).getByRole('button', { name: 'Open position' });
     expect(open).not.toHaveAttribute('aria-disabled', 'true');
     expect(textOf(card)).not.toContain(' holds ');
     await user.click(open);
@@ -107,12 +107,12 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(B15_CLOSED_FOUR));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/Boros leg missing/);
+      const found = cardsTitled(/Boros position missing/);
       expect(found).toHaveLength(1);
       return found;
     });
     expect(textOf(card)).not.toContain(' holds ');
-    await user.click(within(card).getByRole('button', { name: 'Open leg' }));
+    await user.click(within(card).getByRole('button', { name: 'Open position' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ base: 'ETH', longVenue: null, shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: 4 });
     expect((prefill.current as BorosOpenPrefill | null)?.overlaps).toEqual([]);
@@ -124,12 +124,12 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(['G L 2', 'H S 2', ...B15_CLOSED_FOUR]));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/No Boros leg/);
+      const found = cardsTitled(/No Boros position/);
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(cardsTitled(/Boros leg missing/)).toHaveLength(2);
-    await user.click(await within(card).findByRole('button', { name: 'Open Boros leg' }));
+    expect(cardsTitled(/Boros position missing/)).toHaveLength(2);
+    await user.click(await within(card).findByRole('button', { name: 'Open Boros position' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: 2 });
   });
@@ -139,7 +139,7 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(['G L 10', 'H S 10', 'G LONG 10 N', 'LI SHORT 10 N']));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/Boros legs missing/);
+      const found = cardsTitled(/Boros positions missing/);
       expect(found).toHaveLength(1);
       return found;
     });
@@ -148,7 +148,7 @@ describe('the card, by the grouping DoD', () => {
     const texts = await openLegTexts(user, card);
     expect(texts.length).toBeGreaterThan(0);
     for (const t of texts) expect(t).not.toContain(' holds ');
-    await user.click(await within(card).findByRole('button', { name: 'Open both Boros legs' }));
+    await user.click(await within(card).findByRole('button', { name: 'Open both Boros positions' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', sizeBase: 10 });
   });
@@ -158,7 +158,7 @@ describe('the card, by the grouping DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(['G L 1', 'H S 1']));
     await showPairs(user);
-    await user.click(await screen.findByRole('button', { name: 'Open Boros leg' }));
+    await user.click(await screen.findByRole('button', { name: 'Open Boros position' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ maturity: DATES.O });
   });
@@ -170,11 +170,11 @@ describe('the card, by the grouping DoD', () => {
     const first = renderCard(groupOf(book));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/No Boros leg/);
+      const found = cardsTitled(/No Boros position/);
       expect(found).toHaveLength(1);
       return found;
     });
-    await user.click(await within(card).findByRole('button', { name: 'Open Boros leg' }));
+    await user.click(await within(card).findByRole('button', { name: 'Open Boros position' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ maturity: DATES.D });
     first.unmount();
@@ -184,11 +184,11 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(book));
     await showPairs(user);
     const [again] = await waitFor(() => {
-      const found = cardsTitled(/No Boros leg/);
+      const found = cardsTitled(/No Boros position/);
       expect(found).toHaveLength(1);
       return found;
     });
-    await user.click(await within(again).findByRole('button', { name: 'Open both Boros legs' }));
+    await user.click(await within(again).findByRole('button', { name: 'Open both Boros positions' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ maturity: DATES.O });
   });
@@ -214,16 +214,16 @@ describe('the card, by the grouping DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(['G L 1', 'H S 1', 'LI-G SHORT 1 N']));
     await showPairs(user);
-    await waitFor(() => expect(cardsTitled(/Boros legs missing/)).toHaveLength(1));
+    await waitFor(() => expect(cardsTitled(/Boros positions missing/)).toHaveLength(1));
     const perpMissing = cardsTitled(/Perp legs? missing/);
     expect(perpMissing).toHaveLength(1);
     expect(textOf(perpMissing[0])).toMatch(/Lighter/);
-    const borosMissing = cardsTitled(/Boros legs missing/)[0];
+    const borosMissing = cardsTitled(/Boros positions missing/)[0];
     expect(textOf(borosMissing)).not.toContain(' holds ');
     const texts = await openLegTexts(user, borosMissing);
     expect(texts.length).toBeGreaterThan(0);
     for (const t of texts) expect(t).not.toContain(' holds ');
-    expect(await within(borosMissing).findByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
+    expect(await within(borosMissing).findByRole('button', { name: 'Open both Boros positions' })).toBeInTheDocument();
     expect(textOf(borosMissing)).toMatch(/Gate/);
     expect(textOf(borosMissing)).toMatch(/Hyperliquid/);
   });
@@ -256,7 +256,7 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf([`H L ${hl}`, `G S ${gate}`, `LI S ${lighter}`, `H LONG ${hl} N`, `G SHORT ${gate} N`, `LI SHORT ${lighter} N`]));
     await showPairs(user);
     const card = await waitFor(() => {
-      const found = cardList().filter((el) => /Gate/.test(textOf(el)) && !/Ungrouped legs/.test(textOf(el)));
+      const found = cardList().filter((el) => /Gate/.test(textOf(el)) && !/Ungrouped positions/.test(textOf(el)));
       expect(found).toHaveLength(1);
       return found[0];
     });
@@ -271,7 +271,7 @@ describe('the card, by the grouping DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf([`G L ${Number((size * 1.0003).toPrecision(8))}`, `H S ${size}`]));
     await showPairs(user);
-    await user.click(await screen.findByRole('button', { name: 'Open both Boros legs' }));
+    await user.click(await screen.findByRole('button', { name: 'Open both Boros positions' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     const armed = prefill.current as { size: number; sizeBase: number };
     expect(armed.sizeBase).toBe(size);
@@ -283,7 +283,7 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(B21));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/Boros legs missing/);
+      const found = cardsTitled(/Boros positions missing/);
       expect(found).toHaveLength(1);
       return found;
     });
@@ -298,7 +298,7 @@ describe('the card, by the grouping DoD', () => {
       [...document.querySelectorAll('tbody tr')].filter((tr) => /^(Perp|Boros)?(Gate|Hyperliquid)/.test(tr.querySelector('td')?.textContent ?? '')) as HTMLElement[];
     const iconless = () => legRows().filter((tr) => !tr.querySelector('td img')).map(textOf);
     await showPairs(user);
-    const ungrouped = cardList().find((el) => /Ungrouped legs/.test(textOf(el))) as HTMLElement;
+    const ungrouped = cardList().find((el) => /Ungrouped positions/.test(textOf(el))) as HTMLElement;
     await expand(user, ungrouped);
     expect(legRows().length).toBeGreaterThanOrEqual(6);
     expect(iconless()).toEqual([]);
@@ -310,7 +310,7 @@ describe('the card, by the grouping DoD', () => {
 
   describe('Funding Bundles never opens into a Wrong side leg', () => {
     const FLIP_O = 'Close the Hyperliquid Long tagged "Wrong side" (30 Oct) to open here.';
-    const borosOpens = () => screen.queryAllByRole('button', { name: /^(Open (both )?Boros legs?|Open more)$/ });
+    const borosOpens = () => screen.queryAllByRole('button', { name: /^(Open (both )?Boros (positions?|on both venues)|Open more)$/ });
     const isDead = (b: HTMLElement) => b.getAttribute('aria-disabled') === 'true';
     async function showBundles(user: ReturnType<typeof userEvent.setup>) {
       await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
@@ -339,7 +339,7 @@ describe('the card, by the grouping DoD', () => {
       const user = userEvent.setup();
       renderCard(groupOf(['G L 1', 'H S 1', 'G LONG 1 O', 'H SHORT 0.5 O', 'H LONG 0.5 N']));
       await showBundles(user);
-      const open = await screen.findByRole('button', { name: 'Open Boros leg' });
+      const open = await screen.findByRole('button', { name: 'Open Boros position' });
       expect(open).toHaveAttribute('aria-disabled', 'true');
       expect(await blockedReason(user, open)).toBe('Close the Hyperliquid Long tagged "Wrong side" (27 Nov) to open here.');
       await user.click(open);
@@ -365,7 +365,7 @@ describe('the card, by the grouping DoD', () => {
     await showPairs(user);
     const row = (await screen.findByText('Wrong side')).closest('tr') as HTMLElement;
     expect(row).toHaveClass('bg-guava/[0.04]');
-    const [card] = cardsTitled(/Boros legs missing/);
+    const [card] = cardsTitled(/Boros positions missing/);
     for (const b of deadOpens(card)) expect(b.closest('tr')).not.toHaveClass('bg-guava/[0.04]');
   });
 
@@ -374,7 +374,7 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(['G L 1', 'H S 1', 'H-G LONG 1 N']));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/Boros legs missing/);
+      const found = cardsTitled(/Boros positions missing/);
       expect(found).toHaveLength(1);
       return found;
     });
@@ -388,7 +388,7 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(['G L 2', 'H S 2', 'H LONG 0.008 O', 'H LONG 2 N']));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/Boros legs missing/);
+      const found = cardsTitled(/Boros positions missing/);
       expect(found).toHaveLength(1);
       return found;
     });
@@ -429,7 +429,7 @@ describe('the card, by the grouping DoD', () => {
     });
     expect(textOf(card)).not.toContain('The other ');
     expect(textOf(card)).not.toContain('is in Ungrouped');
-    const ungrouped = cardList().find((el) => /Ungrouped legs/.test(textOf(el))) as HTMLElement;
+    const ungrouped = cardList().find((el) => /Ungrouped positions/.test(textOf(el))) as HTMLElement;
     await expand(user, ungrouped);
     expect(textOf(ungrouped)).toContain('No Boros hedge');
   });

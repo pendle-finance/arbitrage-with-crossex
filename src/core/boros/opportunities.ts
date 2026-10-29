@@ -839,7 +839,7 @@ function depthReason(
   if (!exec) {
     return `No Boros order book for ${build.row.name} (market #${build.row.marketId}) — its ${sideLabel} rate at ${usd(notionalUsd)} is unknown.`;
   }
-  return `The Boros book on ${build.row.name} (market #${build.row.marketId}) only has ${usd(exec.filledUsd ?? 0)} of ${sideLabel} depth — ${usd(notionalUsd)} is needed to lock this leg.`;
+  return `The Boros book on ${build.row.name} (market #${build.row.marketId}) only has ${usd(exec.filledUsd ?? 0)} of ${sideLabel} depth — ${usd(notionalUsd)} is needed to lock this rate.`;
 }
 
 function buildPair(

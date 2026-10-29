@@ -817,7 +817,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
         }
       } catch {
         warnings.push(
-          'Funding ledger unavailable — open-leg funding shows whole-position cumulatives despite the start date.',
+          'Funding ledger unavailable — open perp funding shows whole-position cumulatives despite the start date.',
         );
       }
       try {
@@ -1097,7 +1097,7 @@ export function createAssetViewBuilder(deps: AppDeps) {
     }
     if (unpricedZones > 0) {
       warnings.push(
-        `${unpricedZones} Boros collateral zone(s) hold positions in a token with no live USD price — their legs are excluded from the view.`,
+        `${unpricedZones} Boros collateral zone(s) hold positions in a token with no live USD price — those positions are excluded from the view.`,
       );
     }
 

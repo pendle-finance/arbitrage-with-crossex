@@ -725,7 +725,7 @@ export function CloseBorosForm({
               <table className="w-full">
                 <thead>
                   <tr className="text-[12px] font-normal text-ink-300">
-                    <th className="pb-1 text-left font-medium">{t('pairTicket.bits.colLeg')}</th>
+                    <th className="pb-1 text-left font-medium">{t('common.position')}</th>
                     <th className="pb-1 text-right font-medium">{t('pairTicket.closeBoros.colRate')}</th>
                     <th className="pb-1 text-right font-medium">{t('pairTicket.closeBoros.colPnl')}</th>
                     <th className="pb-1 text-right font-medium">{t('pairTicket.preview.estFee')}</th>

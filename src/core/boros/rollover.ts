@@ -265,7 +265,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     blockers.push({ code: 'maturity-not-later', message: 'The new maturity must be later than the one being left.' });
   }
   if (new Set([...exit.legs, ...entry.legs].map((l) => l.market.tokenId)).size !== 1) {
-    blockers.push({ code: 'collateral-mismatch', message: 'Every leg must post the same collateral.' });
+    blockers.push({ code: 'collateral-mismatch', message: 'Every position must post the same collateral.' });
   }
 
   const oldLegs = exit.simulation.legs.map((sim, i) => ({ sim, market: exit.legs[i].market }));
@@ -285,7 +285,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
         blockers.push({
           code: 'sides-mismatch',
           leg: index,
-          message: `${nextMarket.name}: the new leg must be ${held}, the side ${oldMarket.name} holds.`,
+          message: `${nextMarket.name}: the new position must be ${held}, the side ${oldMarket.name} holds.`,
         });
       }
       if (!same(Math.abs(old.sizing.deltaSize), Math.abs(next.sizing.deltaSize))) {

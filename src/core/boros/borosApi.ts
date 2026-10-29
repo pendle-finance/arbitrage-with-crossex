@@ -705,9 +705,9 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     const marketAccs = await Promise.all(reqs.map((req) => marketAccFor(req.marketId)));
     return reqs.map((req, i) => {
       const txHash = txHashes[i];
-      if (txHash === undefined) return unknownLeg(req, `Boros did not say what became of this leg${MAY_HAVE_FILLED_HINT}`);
+      if (txHash === undefined) return unknownLeg(req, `Boros did not say what became of this order${MAY_HAVE_FILLED_HINT}`);
       // PROCESSED with no transaction for this call: its check before sending failed.
-      if (txHash === null) return neverSentLeg(req, new Error('Boros refused this leg before sending it, so nothing traded.'));
+      if (txHash === null) return neverSentLeg(req, new Error('Boros refused this order before sending it, so nothing traded.'));
       const statuses = byTx.get(txHash);
       // Two legs on one market and side cannot be told apart by their fills.
       const twin = reqs.some((o, j) => j !== i && o.marketId === req.marketId && o.direction === req.direction);
@@ -717,7 +717,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       const executed = [...statuses.values()]
         .flatMap((s) => s.marketOrdersExecuted ?? [])
         .filter((e) => e.marketId === req.marketId && e.side === side && e.user?.toLowerCase() === acc);
-      return filledLeg(req, executed, `Boros sent ${txHash}, and this leg did not trade in it.`);
+      return filledLeg(req, executed, `Boros sent ${txHash}, and this order did not trade in it.`);
     });
   };
 
@@ -1099,7 +1099,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (!byIndex) {
         return unknownLeg(
           req,
-          `Submitted as ${txHash} but no status came back, so this leg may or may not have filled. Check the position on Boros before you send again.`,
+          `Submitted as ${txHash} but no status came back, so this order may or may not have filled. Check the position on Boros before you send again.`,
         );
       }
       const status = byIndex.get(legResponses[i]?.index ?? submissionIndex(i));
@@ -1111,7 +1111,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (!status) {
         return unknownLeg(
           req,
-          `Submitted as ${txHash} but no status came back for this leg, so it may or may not have filled. Check the position on Boros before you send again.`,
+          `Submitted as ${txHash} but no status came back for this order, so it may or may not have filled. Check the position on Boros before you send again.`,
         );
       }
       if (status.error) return failedLeg(req, status.error, 'this-leg');

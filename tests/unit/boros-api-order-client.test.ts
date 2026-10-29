@@ -1426,7 +1426,7 @@ describe('makeBorosApiOrderClient — an unsure send is traced', () => {
     });
     const [fill] = await client(api).placeMarketOrders([leg()]);
     expect(fill.filledSize).toBe(0);
-    expect(fill.failure?.message).toBe('Boros sent 0xtraced, and this leg did not trade in it.');
+    expect(fill.failure?.message).toBe('Boros sent 0xtraced, and this order did not trade in it.');
   });
 
   it('waits out PROCESSING, then reads the transaction', async () => {
