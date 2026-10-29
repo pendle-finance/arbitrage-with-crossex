@@ -6,6 +6,8 @@
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
 import type {
   CrossexPosition,
@@ -122,6 +124,7 @@ import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
 import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
+import { localizeServerText } from '../../i18n/serverMessages';
 import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
 
 interface Props {
@@ -164,15 +167,15 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
   const now = useNow(60_000);
   if (typeof line !== 'string' && 'sinceMs' in line) {
     return (
-      <HoverCard underline={false} icon={false} widthPx={320} label={<Chip className={HEAD_CHIP}>No liquidation estimate</Chip>}>
+      <HoverCard underline={false} icon={false} widthPx={320} label={<Chip className={HEAD_CHIP}>{t('assetCard.liq.noEstimate')}</Chip>}>
         {unknownLabel(line, now)}
       </HoverCard>
     );
   }
   if (line === 'unknown') {
     return (
-      <HoverCard underline={false} icon={false} widthPx={320} label={<Chip className={HEAD_CHIP}>No liquidation estimate</Chip>}>
-        No margin data from Gate.
+      <HoverCard underline={false} icon={false} widthPx={320} label={<Chip className={HEAD_CHIP}>{t('assetCard.liq.noEstimate')}</Chip>}>
+        {t('assetCard.liq.noMarginData')}
       </HoverCard>
     );
   }
@@ -182,9 +185,9 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
         underline={false}
         icon={false}
         widthPx={320}
-        label={<Chip className={HEAD_CHIP}>No liquidation price</Chip>}
+        label={<Chip className={HEAD_CHIP}>{t('assetCard.liq.noPrice')}</Chip>}
       >
-        {`No ${base} price liquidates the Gate account. Assumes other coins do not move.`}
+        {t('assetCard.liq.farDetail', { base })}
       </HoverCard>
     );
   }
@@ -206,7 +209,7 @@ function LiquidationChip({ line, base }: { line: LiquidationLine | StaleLeg | 'f
 }
 
 const listCoins = (coins: string[]): string =>
-  coins.length > 1 ? `${coins.slice(0, -1).join(', ')} and ${coins[coins.length - 1]}` : (coins[0] ?? '');
+  coins.length > 1 ? t('assetCard.listLast', { head: coins.slice(0, -1).join(t('assetCard.listSep')), last: coins[coins.length - 1] }) : (coins[0] ?? '');
 
 const compactSize = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? fmtTokenQty(size, base) : fmtUsdCompact(size);
@@ -215,12 +218,12 @@ const compactSize = (size: number, unit: 'base' | 'usd', base: string): string =
  * (his call 2026-10-16: a missing leg shows its true size, not the gap only). */
 const heldOfTarget = (held: number, target: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? `${sigGrouped(held)} / ${exactSize(target, unit, base)}` : `${exactSize(held, unit, base)} / ${exactSize(target, unit, base)}`;
-const HELD_OF_TARGET_TITLE = 'Held / needed for this card';
+
 /** A missing leg's badge names the gap, so the trader does not work it out
  * from held / needed (mozzarella 2026-10-17). */
 const MissingChip = ({ held, target, unit, base }: { held: number; target: number; unit: 'base' | 'usd'; base: string }) => (
   <Chip sm tone="amber">
-    missing {exactSize(Math.max(0, target - held), unit, base)}
+    {t('assetCard.missingSize', { size: exactSize(Math.max(0, target - held), unit, base) })}
   </Chip>
 );
 
@@ -241,8 +244,10 @@ const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
 const blockingWrongSide = (legs: PendingLeg[], venue: string, side: 'LONG' | 'SHORT') =>
   legs.find((w) => w.wrongSide?.blocks && venueLegsOf(w, 1).some((l) => l.venue.toLowerCase() === venue.toLowerCase() && l.side !== side));
 const borosLegLabel = (l: AssetBorosOpen): string =>
-  `${legVenueName(l)} ${l.side}${l.spreadVenues ? '' : ' YU'} · ${fmtDateLocal(l.maturity)}`;
-const closeWrongSideText = (y: PendingLeg) => `Close the Wrong side ${legVenueName(y)} ${y.side} at ${fmtDateShort(y.maturity)} to open here.`;
+  `${legVenueName(l)} ${sideUpper(l.side)}${l.spreadVenues ? '' : ' YU'} · ${fmtDateLocal(l.maturity)}`;
+const sideUpper = (side: string): string => t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper');
+const closeWrongSideText = (y: PendingLeg) =>
+  t('assetCard.wrongSide.closeToOpen', { venue: legVenueName(y), side: sideUpper(y.side), date: fmtDateShort(y.maturity) });
 const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !text-ink-500';
 
 function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kind: 'perp' | 'yu'; side: 'LONG' | 'SHORT'; base: string; spreadVenues?: [string, string] | null }) {
@@ -263,15 +268,15 @@ function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kin
         {kind === 'yu' ? 'Boros' : 'CrossEx'}
       </span>
       <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
-        {side}
+        {sideUpper(side)}
       </Chip>
     </span>
   );
 }
 
 const WrongSideTag = ({ leg }: { leg: PendingLeg }) => (
-  <AmberTag tag="Wrong side">
-    {`Adds to the ${prettyVenue(leg.wrongSide?.againstVenue ?? leg.venue)} perp's funding risk.${leg.wrongSide?.blocks ? ' Close it, then open the hedge.' : ''}`}
+  <AmberTag tag={t('assetCard.wrongSide.tag')}>
+    {t(leg.wrongSide?.blocks ? 'assetCard.wrongSide.addsBlocks' : 'assetCard.wrongSide.adds', { venue: prettyVenue(leg.wrongSide?.againstVenue ?? leg.venue) })}
   </AmberTag>
 );
 
@@ -288,10 +293,10 @@ const gapsEven = (pair: { size: number; notionalUsd: number; missingLong: number
 const shareTitle = (slice: number, share: number, unit: 'base' | 'usd', base: string, unpaired = false): string => {
   const whole = share > 0 ? slice / share : slice;
   return [
-    unpaired ? `${fmtPct(share)} of the position is unpaired` : `This pair uses ${fmtPct(share)} of the position`,
-    `Whole position\t${exactSize(whole, unit, base)}`,
-    `${unpaired ? 'Unpaired' : 'This pair'}\t${exactSize(slice, unit, base)}`,
-    `${unpaired ? 'In pairs' : 'Other cards'}\t${exactSize(Math.max(0, whole - slice), unit, base)}`,
+    t(unpaired ? 'assetCard.share.unpairedPct' : 'assetCard.share.pairUses', { pct: fmtPct(share) }),
+    `${t('assetCard.share.whole')}\t${exactSize(whole, unit, base)}`,
+    `${t(unpaired ? 'assetCard.share.unpaired' : 'assetCard.share.thisPair')}\t${exactSize(slice, unit, base)}`,
+    `${t(unpaired ? 'assetCard.share.inPairs' : 'assetCard.share.otherCards')}\t${exactSize(Math.max(0, whole - slice), unit, base)}`,
   ].join('\n');
 };
 
@@ -312,7 +317,7 @@ const exactSize = (size: number, unit: 'base' | 'usd', base: string): string =>
 /** "16d left" / "matured" — the term in the unit a trader thinks in. */
 const daysLeftText = (maturitySec: number, nowSec: number): string => {
   const days = daysToMaturity(maturitySec, nowSec);
-  return days > 0 ? `${days}d left` : 'matured';
+  return days > 0 ? t('assetCard.daysLeft', { days }) : t('assetCard.matured');
 };
 
 /** The pair's term as one bar on the asset's shared time axis: it starts when
@@ -329,14 +334,14 @@ function PairTimeline({ pair, nowSec, axis }: { pair: PairEstimate; nowSec: numb
       <div className="relative h-1.5 rounded-full bg-ink-800/60">
         <div className="absolute inset-y-0 rounded-full bg-info/20" style={{ left: `${bar.leftPct}%`, width: `${bar.widthPct}%` }} />
         <div className="absolute inset-y-0 rounded-full bg-info/60" style={{ left: `${bar.leftPct}%`, width: `${bar.elapsedPct}%` }} />
-        <div className="absolute -top-1 h-3.5 w-0.5 -translate-x-1/2 rounded bg-ink-50" style={{ left: `${bar.todayPct}%` }} title="Today" />
+        <div className="absolute -top-1 h-3.5 w-0.5 -translate-x-1/2 rounded bg-ink-50" style={{ left: `${bar.todayPct}%` }} title={t('assetCard.timeline.today')} />
       </div>
       <div className="flex items-baseline justify-between gap-3 text-[11px] text-ink-400">
         <span className="num">
-          {pair.hedgedSinceSec !== null ? fmtDateLocal(pair.hedgedSinceSec) : 'start unknown'}
+          {pair.hedgedSinceSec !== null ? fmtDateLocal(pair.hedgedSinceSec) : t('assetCard.timeline.startUnknown')}
         </span>
         <span className="num">
-          matures {fmtDateLocal(maturitySec)} · {daysToMaturity(maturitySec, nowSec)}d left
+          {t('assetCard.timeline.maturesLeft', { date: fmtDateLocal(maturitySec), days: daysToMaturity(maturitySec, nowSec) })}
         </span>
       </div>
     </div>
@@ -377,21 +382,21 @@ function PairListHeader() {
         <PairColGroup />
         <thead>
           <tr className="[&>th]:h-9 [&>th]:px-3 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
-            <th className="text-left">Pair</th>
-            <th className="text-right">Notional</th>
+            <th className="text-left">{t('common.pair')}</th>
+            <th className="text-right">{t('common.notional')}</th>
             <th className="text-right">
-              <span className="tip-label" title="Today's initial margin across all four legs.">
-                Capital
+              <span className="tip-label" title={t('assetCard.pairHead.capitalTitle')}>
+                {t('common.capital')}
               </span>
             </th>
             <th className="text-right">
-              <span className="tip-label" title="The locked rate net of the fees charged, on the pair's capital. In grey: the same lock as a spread on notional.">
-                Est. fixed APR
+              <span className="tip-label" title={t('assetCard.pairHead.estFixedAprTitle')}>
+                {t('assetCard.pairHead.estFixedApr')}
               </span>
             </th>
             <th className="text-right">
-              <span className="tip-label" title="Carry over the whole hedge at the locked rate, minus the fees charged.">
-                Profit at maturity
+              <span className="tip-label" title={t('assetCard.pairHead.profitTitle')}>
+                {t('assetCard.pairHead.profitAtMaturity')}
               </span>
             </th>
             <th />
@@ -428,7 +433,7 @@ function SectionTabs<T extends string>({
 }) {
   return (
     <div className="flex flex-wrap items-end gap-x-3 gap-y-1 border-b border-ink-700">
-      <div role="tablist" aria-label="Position views" className="flex items-stretch">
+      <div role="tablist" aria-label={t('assetCard.positionViews')} className="flex items-stretch">
         {options.map((o) => {
           const active = o.value === value;
           return (
@@ -465,8 +470,6 @@ function SectionTabs<T extends string>({
 
 /** Hover copy for a Boros leg's venue-reported liquidation rate. NOT the
  * ticket's LIQ_TITLE, which describes the pre-trade IM-floor estimate. */
-const BOROS_LIQ_TITLE =
-  'The mark rate at which this position liquidates, as the venue reports it (reflects the collateral actually in its bucket).';
 
 /** The venue-reported liquidation APR, under a Boros leg's rate. Renders
  * nothing when the venue reports none (flat, unpriced, no coefficients) or on
@@ -477,14 +480,14 @@ function BorosLiqAprLine({ leg }: { leg: Pick<AssetBorosOpen, 'liquidationApr' |
   if (!leg || apr == null || !Number.isFinite(apr)) return null;
   if (Math.abs(apr) > Math.max(2.5, 10 * Math.abs(leg.markApr))) {
     return (
-      <div className="num text-[10px] text-ink-500" title="Position risk is low, so there is no liquidation rate for the time being.">
-        liq N/A
+      <div className="num text-[10px] text-ink-500" title={t('assetCard.liq.lowRiskTitle')}>
+        {t('assetCard.liq.na')}
       </div>
     );
   }
   return (
-    <div className="num text-[10px] text-ink-500" title={BOROS_LIQ_TITLE}>
-      liq {fmtPct(apr)}
+    <div className="num text-[10px] text-ink-500" title={t('assetCard.liq.borosTitle')}>
+      {t('assetCard.liq.apr', { apr: fmtPct(apr) })}
     </div>
   );
 }
@@ -695,15 +698,15 @@ function PairCard({
         <div className={`${statLabel} ${on ? '' : '!text-ink-600'}`}>{label}</div>
         <div className={`${statValue} ${on ? 'text-ink-100' : 'text-ink-600 line-through'}`}>−{fmtUsd(usd)}</div>
         <div className={`${statSub} ${on ? '' : '!text-ink-600'}`}>
-          {!on ? 'not charged' : drag !== null ? `−${fmtPct(drag)} drag` : ' '}
+          {!on ? t('assetCard.fees.notCharged') : drag !== null ? t('assetCard.fees.drag', { pct: fmtPct(drag) }) : ' '}
         </div>
       </div>
     );
   };
   const carryTitle =
     earnedSoFarUsd !== null && carryUsd !== null && earnedSoFarUsd > 0
-      ? `Fixed earning over the hedge's life\nEarned so far\t≈ ${fmtUsd(earnedSoFarUsd)}\nRemaining\t≈ ${fmtUsd(carryUsd - earnedSoFarUsd)}\n---\nTotal\t${fmtUsd(carryUsd)}`
-      : "What the hedge earns at the locked rate, hedged date to maturity.";
+      ? t('assetCard.fees.carryTitleSplit', { earned: fmtUsd(earnedSoFarUsd), remaining: fmtUsd(carryUsd - earnedSoFarUsd), total: fmtUsd(carryUsd) })
+      : t('assetCard.fees.carryTitle');
   const [feesOpen, setFeesOpen] = useState(false);
   // The mock's row actions: the house outline at the compact size. The old
   // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
@@ -713,22 +716,22 @@ function PairCard({
   return (
     <div ref={rootRef} className="scroll-mt-36 overflow-x-auto rounded border border-wash/[0.16] bg-wash/[0.03]">
       {/* The roll probes render nothing; they only quote. */}
-      {probeTargets.map((t) => (
+      {probeTargets.map((tg) => (
         <RollProbe
-          key={t.maturity}
-          target={t}
+          key={tg.maturity}
+          target={tg}
           pair={pair}
           yuLegs={rollYuLegs}
           heldSize={rollHeldSize}
           pairPerpImUsd={rollPerpImUsd}
           address={rollAddress}
           exitSlippageApr={seedSlipPctFor(rollMarkets ?? [], rollYuLegs.map((l) => l.marketId).filter((id): id is number => id !== undefined)) / 100}
-          entrySlippageApr={seedSlipPctFor(rollMarkets ?? [], targetMarketIds(t)) / 100}
+          entrySlippageApr={seedSlipPctFor(rollMarkets ?? [], targetMarketIds(tg)) / 100}
           nowSec={nowSec}
           onResult={(r) =>
             setProbes((prev) => {
-              const cur = prev[t.maturity];
-              return cur && cur.ok === r.ok && cur.rate === r.rate && cur.size === r.size ? prev : { ...prev, [t.maturity]: r };
+              const cur = prev[tg.maturity];
+              return cur && cur.ok === r.ok && cur.rate === r.rate && cur.size === r.size ? prev : { ...prev, [tg.maturity]: r };
             })
           }
         />
@@ -756,13 +759,13 @@ function PairCard({
                 <span className="inline-flex items-center gap-[6px]">
                   <VenueIcon venue={pair.longVenue} size={18} />
                   {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">LONG</span>
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
                 </span>
                 <span className="text-ink-600">/</span>
                 <span className="inline-flex items-center gap-[6px]">
                   <VenueIcon venue={pair.shortVenue} size={18} />
                   {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">SHORT</span>
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
                 </span>
                 {rollDue && opportunity !== null && (
                   <Chip
@@ -770,15 +773,15 @@ function PairCard({
                     tone="green"
                     className="!font-medium"
                     title={[
-                      'Roll opportunity',
-                      `Size\t${fmtTokenQty(opportunity.size, (rollMarkets ?? []).find((m) => rollYuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base)}`,
-                      `Rolls into\t${fmtDateLocal(opportunity.maturity)}`,
-                      `APR after fees\t${fmtPct(opportunity.rate)}`,
-                      `APR now\t${fmtPct(opportunity.current)}`,
-                      `Now matures in\t${daysLeftText(opportunity.currentMaturity, nowSec)}`,
+                      t('assetCard.roll.oppTitle'),
+                      `${t('common.size')}\t${fmtTokenQty(opportunity.size, (rollMarkets ?? []).find((m) => rollYuLegs.some((l) => l.marketId === m.marketId))?.collateral ?? base)}`,
+                      `${t('assetCard.roll.rollsInto')}\t${fmtDateLocal(opportunity.maturity)}`,
+                      `${t('assetCard.roll.aprAfterFees')}\t${fmtPct(opportunity.rate)}`,
+                      `${t('assetCard.roll.aprNow')}\t${fmtPct(opportunity.current)}`,
+                      `${t('assetCard.roll.nowMaturesIn')}\t${daysLeftText(opportunity.currentMaturity, nowSec)}`,
                     ].join('\n')}
                   >
-                    roll opportunity
+                    {t('assetCard.roll.oppChip')}
                   </Chip>
                 )}
                 {rollDue && opportunity === null && (
@@ -786,9 +789,9 @@ function PairCard({
                     sm
                     tone="blue"
                     className="!font-medium"
-                    title={`Matures ${fmtDateLocal(soonest)}, inside the ${EXPIRY_WARN_DAYS}-day roll window.`}
+                    title={t('assetCard.roll.readyTitle', { date: fmtDateLocal(soonest), days: EXPIRY_WARN_DAYS })}
                   >
-                    ready to roll
+                    {t('assetCard.roll.readyChip')}
                   </Chip>
                 )}
                 </span>
@@ -799,19 +802,19 @@ function PairCard({
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
                   {spreadHeld && <>{spreadName(base, spreadHeld)} · </>}
                   {soonest > 0 ? (
-                    <span title="Every leg of this pair settles here">
-                      matures {fmtDateLocal(soonest)} · {daysLeftText(soonest, nowSec)}
+                    <span title={t('assetCard.pair.maturityTitle')}>
+                      {t('assetCard.maturesDot', { date: fmtDateLocal(soonest), left: daysLeftText(soonest, nowSec) })}
                     </span>
                   ) : (
-                    <span className="text-ink-600">no maturity</span>
+                    <span className="text-ink-600">{t('assetCard.pair.noMaturity')}</span>
                   )}
                 </span>
               </button>
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional\t${exactUsd(pair.notionalUsd)}\nPaired size\t${exactSize(pair.size, pair.unit, base)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.pair.notionalTitle', { notional: exactUsd(pair.notionalUsd), size: exactSize(pair.size, pair.unit, base) })}>
               {fmtUsdCompact(pair.notionalUsd)}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin, all four legs\t${exactUsd(pair.capitalUsd)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.pair.capitalCellTitle', { usd: exactUsd(pair.capitalUsd) })}>
               {fmtUsdCompact(pair.capitalUsd)}
             </td>
             {/* The APR on capital, then the same lock as a spread on
@@ -823,8 +826,8 @@ function PairCard({
                 <span className="text-ink-600">—</span>
               )}
               {lockedSpread !== null && (
-                <span className="ml-2 text-[11.5px] text-ink-400" title="Receive leg minus pay leg, on notional, net of settlement fees.">
-                  <SignedNumber value={lockedSpread} format={fmtPct} className="!text-ink-400" /> spread
+                <span className="ml-2 text-[11.5px] text-ink-400" title={t('assetCard.spreadNetTitle')}>
+                  <SignedNumber value={lockedSpread} format={fmtPct} className="!text-ink-400" /> {t('assetCard.spreadWord')}
                 </span>
               )}
             </td>
@@ -840,13 +843,13 @@ function PairCard({
               <button
                 type="button"
                 className="ml-2 text-[11px] text-ink-400 underline decoration-dotted underline-offset-2 hover:text-ink-200"
-                title={`Fees charged\t−${fmtUsd(chargedUsd)}`}
+                title={t('assetCard.pair.feesChargedTitle', { usd: fmtUsd(chargedUsd) })}
                 onClick={(e) => {
                   e.stopPropagation();
                   setFeesOpen(true);
                 }}
               >
-                fees ›
+                {t('assetCard.pair.feesLink')}
               </button>
             </td>
             <td className="whitespace-nowrap pl-3 pr-4 text-right">
@@ -868,10 +871,10 @@ function PairCard({
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="th text-left">Leg</th>
-                  <th className="th text-right">Size</th>
-                  <th className="th text-right">Locked</th>
-                  <th className="th text-right">Initial margin</th>
+                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-right">{t('common.size')}</th>
+                  <th className="th text-right">{t('common.locked')}</th>
+                  <th className="th text-right">{t('common.initialMargin')}</th>
                   <MenuHead show={hasMenu} />
                 </tr>
               </thead>
@@ -906,7 +909,7 @@ function PairCard({
                           it. A Boros leg's margin decays toward maturity;
                           that is the number, not a defect (his call
                           2026-09-09). */}
-                      <span title={l.kind === 'yu' ? "Initial margin this leg ties up today." : 'Initial margin this slice consumes'}>
+                      <span title={l.kind === 'yu' ? t('assetCard.leg.imTitleYu') : t('assetCard.leg.imTitleSlice')}>
                         {fmtUsdCompact(l.imUsd)}
                       </span>
                     </td>
@@ -930,7 +933,7 @@ function PairCard({
                 <button
                   type="button"
                   className="btn-ghost-xs inline-flex items-center gap-1.5 !py-[4px] !text-ink-200"
-                  title="A public link and image. Your wallet address is not included."
+                  title={t('assetCard.share.linkTitle')}
                   onClick={() =>
                     setSharePayload(
                       pairSharePayload(pair, base, {
@@ -945,7 +948,7 @@ function PairCard({
                   }
                 >
                   <Share size={12} aria-hidden />
-                  Share
+                  {t('assetCard.share.button')}
                 </button>
               )}
             </span>
@@ -956,20 +959,20 @@ function PairCard({
                 disabled={pair.unit !== 'base'}
                 title={
                   pair.unit === 'base'
-                    ? "Close both perp legs, reduce-only. A shared leg closes only this pair's share."
-                    : 'This market sizes in USD. Close its perps from the funding bundles.'
+                    ? t('assetCard.actions.closePerpsTitle')
+                    : t('assetCard.actions.closePerpsUsdTitle')
                 }
                 onClick={onClosePerps}
               >
-                Close perps
+                {t('assetCard.actions.closePerps')}
               </button>
               <button
                 type="button"
                 className={`${pill} hover:!border-guava/60 hover:!text-guava`}
-                title="Close this pair's Boros legs. The perps stay open. A shared leg closes only this pair's share."
+                title={t('assetCard.actions.closeBorosTitle')}
                 onClick={onCloseBoros}
               >
-                Close Boros
+                {t('assetCard.actions.closeBoros')}
               </button>
               {canRoll && (
                 <button
@@ -979,11 +982,11 @@ function PairCard({
                       ? `${pill} roll-nudge !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`
                       : `${pill} hover:!border-grass/60 hover:!text-grass`
                   }
-                  title="Move the Boros legs to a later maturity."
+                  title={t('assetCard.actions.rollOverTitle')}
                   onClick={onRollOver}
                 >
                   <RotateCw size={13} aria-hidden />
-                  Roll over
+                  {t('assetCard.actions.rollOver')}
                 </button>
               )}
             </span>
@@ -996,25 +999,25 @@ function PairCard({
           lives in the card, not the popup. */}
       {feesOpen && (
         <Modal
-          title={`Fees — ${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)}`}
+          title={t('assetCard.fees.modalTitle', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}
           onClose={() => setFeesOpen(false)}
           widthClass="w-[640px]"
         >
           <p className="mb-3 text-[11.5px] text-ink-300">
-            What this pair's fixed earning is charged with. The switches change the row's Est. fixed APR and profit at maturity.
+            {t('assetCard.fees.intro')}
           </p>
           <div className="flex flex-col rounded border border-ink-700">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-ink-800 bg-wash/[0.03] px-3 py-2 text-xs">
-              <span className={microLabelClass}>Charge</span>
+              <span className={microLabelClass}>{t('assetCard.fees.charge')}</span>
               {feeSwitch(
-                'Perp Entry Fees',
-                "Perp trading fees already paid on this pair's slices. Untick to see the rate without the perp side's cost.",
+                t('assetCard.fees.perpEntry'),
+                t('assetCard.fees.perpEntrySwitchTitle'),
                 inclPerpFees,
                 setInclPerpFees,
               )}
               {feeSwitch(
-                'Est. Perp Exit Fees',
-                "Both perp legs closed at maturity at YOUR venues' taker rates (from the account's fee schedule where available). Untick if you mean to roll the perps rather than close them.",
+                t('assetCard.fees.perpExit'),
+                t('assetCard.fees.perpExitSwitchTitle'),
                 inclExitFee,
                 setInclExitFee,
               )}
@@ -1023,14 +1026,14 @@ function PairCard({
                 carry, the three fees that come out of it, the net. */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-3 px-3 py-2.5 sm:grid-cols-4">
               <div title={carryTitle}>
-                <div className={statLabel}>Fixed Earning</div>
+                <div className={statLabel}>{t('assetCard.fees.fixedEarning')}</div>
                 <div className={`${statValue} text-ink-100`}>
                   {carryUsd !== null ? <SignedNumber value={carryUsd} format={fmtUsd} /> : '—'}
                 </div>
                 <div className={statSub}>
                   {lockedAprFwd !== null ? (
                     <>
-                      <SignedNumber value={lockedAprFwd} format={fmtPct} className="!text-ink-500" /> on capital
+                      <SignedNumber value={lockedAprFwd} format={fmtPct} className="!text-ink-500" /> {t('assetCard.fees.onCapital')}
                     </>
                   ) : (
                     ' '
@@ -1039,35 +1042,35 @@ function PairCard({
               </div>
               {feeTile(
                 'boros',
-                'Boros Trade Fees',
-                'What crossing the Boros book cost when these legs were opened. Settlement fees are NOT here: they accrue to maturity however you enter or roll, so they are already netted out of the locked rate.',
+                t('assetCard.fees.borosTrade'),
+                t('assetCard.fees.borosTradeTitle'),
                 pair.borosFeesPaidUsd,
                 true,
               )}
               {feeTile(
                 'perp',
-                'Perp Entry Fees',
-                "Perp trading fees already paid on this pair's slices.",
+                t('assetCard.fees.perpEntry'),
+                t('assetCard.fees.perpEntryTileTitle'),
                 pair.perpFeesPaidUsd,
                 inclPerpFees,
               )}
               {feeTile(
                 'exit',
-                'Est. Perp Exit Fees',
-                "Both perp legs closed at maturity at YOUR venues' taker rates. The Boros legs mature on their own, no close cost.",
+                t('assetCard.fees.perpExit'),
+                t('assetCard.fees.perpExitTileTitle'),
                 pair.exitFeeUsd,
                 inclExitFee,
               )}
               <div
                 className="col-span-2 flex items-baseline justify-between gap-3 border-t border-ink-800 pt-3 sm:col-span-4"
-                title="Carry over the whole hedge, minus the fees charged above."
+                title={t('assetCard.fees.profitTitle')}
               >
-                <span className={microLabelClass}>Profit at Maturity (est.)</span>
+                <span className={microLabelClass}>{t('assetCard.fees.profitAtMaturity')}</span>
                 <span className="num text-base font-semibold">
                   {netUsd !== null ? <SignedNumber value={netUsd} format={fmtUsd} /> : '—'}
                   {netApr !== null && (
                     <span className="ml-2 text-[12.5px] font-normal text-ink-300">
-                      (<SignedNumber value={netApr} format={fmtPct} className="!text-ink-400" /> on capital)
+                      (<SignedNumber value={netApr} format={fmtPct} className="!text-ink-400" /> {t('assetCard.fees.onCapital')})
                     </span>
                   )}
                 </span>
@@ -1397,9 +1400,9 @@ function OpenOnlyNote({ oldMaturity, className }: { oldMaturity: number; classNa
   const old = fmtDateLocal(oldMaturity);
   return (
     <ul className={`list-disc pl-4 text-[11.5px] leading-relaxed ${className}`}>
-      <li>Your perps hedge the new legs. The {old} legs stay open, with no perps, until {old}.</li>
-      <li>Until then: rate moves on the {old} legs hit your PnL, and about 2× Boros margin.</li>
-      <li>To end the overlap sooner: close the {old} legs.</li>
+      <li>{t('assetCard.roll.openOnly1', { old })}</li>
+      <li>{t('assetCard.roll.openOnly2', { old })}</li>
+      <li>{t('assetCard.roll.openOnly3', { old })}</li>
     </ul>
   );
 }
@@ -1719,6 +1722,7 @@ export function RollOverModal({
   nowSec: number;
   onClose: () => void;
 }) {
+  useTranslation();
   const soonest = pair.soonestMaturitySec;
   const address = useTrackedAddressOptional()?.address ?? null;
   const ctx = useBorosPairContext(address);
@@ -1850,7 +1854,7 @@ export function RollOverModal({
       // Venues only: the maturity being left heads the Exit card, and the
       // pick page states the days remaining on each option (his call
       // 2026-09-18).
-      title={`Roll over — ${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)}`}
+      title={t('assetCard.roll.modalTitle', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}
       onClose={onClose}
       locked={busy}
       // Wide enough for the review's two batches side by side.
@@ -1896,11 +1900,11 @@ export function RollOverModal({
           {/* Close the old legs and re-open, or open the new maturity and let
               the old legs run to maturity (a double hedge). */}
           <div className="mb-3">
-            <div className="inline-flex rounded-md border border-ink-700 p-0.5 text-[12px]" role="group" aria-label="Roll mode">
+            <div className="inline-flex rounded-md border border-ink-700 p-0.5 text-[12px]" role="group" aria-label={t('assetCard.roll.modeAria')}>
               {(
                 [
-                  ['reopen', 'Close & reopen'],
-                  ['openOnly', 'Open only (keep old legs)'],
+                  ['reopen', t('assetCard.roll.modeReopen')],
+                  ['openOnly', t('assetCard.roll.modeOpenOnly')],
                 ] as const
               ).map(([value, label]) => (
                 <button
@@ -1920,7 +1924,7 @@ export function RollOverModal({
           {/* A slider for the share of the position, a box for the exact
               figure — the same value, two grips. */}
           <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
-            <span className={microLabelClass}>{openOnly ? 'Size to open' : 'Size to roll'}</span>
+            <span className={microLabelClass}>{openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll')}</span>
             <input
               type="range"
               className="min-w-[160px] flex-1 accent-info"
@@ -1929,7 +1933,7 @@ export function RollOverModal({
               step={heldSize > 0 ? heldSize / 200 : 1}
               value={size}
               onChange={(e) => setSize(fmtSize(Number(e.target.value)))}
-              aria-label="Share of the position to roll"
+              aria-label={t('assetCard.roll.shareAria')}
             />
             <span className="num w-10 text-right text-ink-400">{pct}%</span>
             <input
@@ -1937,19 +1941,19 @@ export function RollOverModal({
               inputMode="decimal"
               value={sizeStr}
               onChange={(e) => setSize(e.target.value)}
-              aria-label={`${openOnly ? 'Size to open' : 'Size to roll'} (${collateral})`}
+              aria-label={`${openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll')} (${collateral})`}
             />
             <span className="text-ink-400">{collateral}</span>
             {/* Four grips on the same value: a quarter, half, three
                 quarters, all. Each is a choice, so it counts as touching. */}
-            <span className="inline-flex gap-1" role="group" aria-label="Share shortcuts">
+            <span className="inline-flex gap-1" role="group" aria-label={t('assetCard.roll.shareShortcuts')}>
               {ROLL_SHARE_STEPS.map((share) => (
                 <button
                   key={share}
                   type="button"
                   className={`btn-ghost-xs num ${pct === Math.round(share * 100) && sizeOk ? '!text-ink-50' : ''}`}
                   onClick={() => setSize(fmtSize(heldSize * share))}
-                  title={share === 1 ? 'The whole position' : `${Math.round(share * 100)}% of the position`}
+                  title={share === 1 ? t('assetCard.roll.wholePosition') : t('assetCard.roll.pctOfPosition', { pct: Math.round(share * 100) })}
                 >
                   {Math.round(share * 100)}%
                 </button>
@@ -1962,11 +1966,11 @@ export function RollOverModal({
           {sizeLimit !== null && maxRoll !== null && (
             <p role="alert" className="mb-3 rounded border border-amber-500/40 bg-amber-500/[0.05] px-3 py-2 text-[11.5px] leading-relaxed text-amber-100">
               {sizeLimit.kind === 'liquidity'
-                ? `Size too big: ${sizeLimit.marketName} does not hold this much liquidity.`
-                : `Size too big: ${sizeLimit.marketName} only fills it past the venue's rate limit.`}{' '}
-              The most that {openOnly ? 'opens' : 'rolls'} now is {fmtTokenQty(maxRoll, collateral)}.{' '}
+                ? t('assetCard.roll.tooBigLiquidity', { market: sizeLimit.marketName })
+                : t('assetCard.roll.tooBigRate', { market: sizeLimit.marketName })}{' '}
+              {t(openOnly ? 'assetCard.roll.mostOpens' : 'assetCard.roll.mostRolls', { qty: fmtTokenQty(maxRoll, collateral) })}{' '}
               <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
-                {openOnly ? 'Open' : 'Roll'} {fmtTokenQty(suggestedRollSize(maxRoll, heldSize), collateral)} instead
+                {t(openOnly ? 'assetCard.roll.openInstead' : 'assetCard.roll.rollInstead', { qty: fmtTokenQty(suggestedRollSize(maxRoll, heldSize), collateral) })}
               </button>
             </p>
           )}
@@ -1974,28 +1978,28 @@ export function RollOverModal({
           {targets.length === 0 ? (
             <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
               {ctx.isLoading
-                ? 'Loading the maturities these venues list…'
-                : 'No later maturity lists a market at BOTH venues — there is nothing to roll into yet.'}
+                ? t('assetCard.roll.loadingMaturities')
+                : t('assetCard.roll.noTarget')}
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              {targets.map((t) => (
+              {targets.map((tg) => (
                 <RollOption
-                  key={t.maturity}
-                  target={t}
+                  key={tg.maturity}
+                  target={tg}
                   base={base}
                   pair={pair}
                   yuLegs={yuLegs}
                   size={simSize}
                   perpImUsd={perpImUsd}
                   address={address}
-                  exitSlippageApr={plansFor(t, simSize).exit?.toleranceApr ?? exitSlippageApr}
-                  entrySlippageApr={plansFor(t, simSize).entry?.toleranceApr ?? entrySeedFor(t)}
+                  exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
+                  entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
                   nowSec={nowSec}
                   openOnly={openOnly}
-                  selected={selected === t.maturity}
-                  onSelect={() => setPicked(t.maturity)}
-                  onLegs={(q) => setLegsBy((prev) => (prev[t.maturity]?.key === q.key ? prev : { ...prev, [t.maturity]: q }))}
+                  selected={selected === tg.maturity}
+                  onSelect={() => setPicked(tg.maturity)}
+                  onLegs={(q) => setLegsBy((prev) => (prev[tg.maturity]?.key === q.key ? prev : { ...prev, [tg.maturity]: q }))}
                 />
               ))}
             </div>
@@ -2003,7 +2007,7 @@ export function RollOverModal({
 
           <div className="mt-4 flex items-center justify-end gap-2">
             <button type="button" className="btn" onClick={onClose}>
-              Cancel
+              {t('common.cancel')}
             </button>
             {/* Not the confirm: this opens the review, where the order is
                 checked and held. */}
@@ -2013,14 +2017,14 @@ export function RollOverModal({
               disabled={target === null || !(size > 0) || address === null || !ctx.data}
               title={
                 target === null
-                  ? 'Pick a maturity to roll into'
+                  ? t('assetCard.roll.pickMaturity')
                   : openOnly
-                    ? 'Review the new legs, the tolerance and the margin before confirming'
-                    : 'Review the two batches, the tolerance and the margin before confirming'
+                    ? t('assetCard.roll.reviewOpenTitle')
+                    : t('assetCard.roll.reviewRollTitle')
               }
               onClick={() => setStep('review')}
             >
-              {openOnly ? 'Open new maturity' : 'Roll over'}
+              {openOnly ? t('assetCard.roll.openNewMaturity') : t('assetCard.actions.rollOver')}
               <ArrowRight size={14} aria-hidden />
             </button>
           </div>
@@ -2055,7 +2059,7 @@ function RollLegReport({
       <span className="text-[12px] font-semibold text-ink-100">{label}</span>
       <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
         {legs.map((fill, i) => (
-          <LegFillLine key={fill.marketId} label={`Leg ${legLetter(i)}`} fill={fill} collateral={collateral} />
+          <LegFillLine key={fill.marketId} label={t('assetCard.legLetterLabel', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
         ))}
       </div>
     </div>
@@ -2116,7 +2120,7 @@ function BatchSection({
   /** A quiet label/value line for the folded detail. */
   const Row = ({ label, value, title }: { label: string; value: string; title?: string }) => (
     <div className="flex items-baseline justify-between gap-3" title={title}>
-      <span className="pl-3 text-[11.5px] text-ink-400">{label} margin</span>
+      <span className="pl-3 text-[11.5px] text-ink-400">{t('assetCard.batch.labelMargin', { label })}</span>
       <span className="num text-[12px] text-ink-300">{value}</span>
     </div>
   );
@@ -2130,16 +2134,16 @@ function BatchSection({
       value={slip.str}
       onChange={slip.onChange}
       invalid={slip.invalid}
-      invalidText={`Must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}%.`}
-      inputAriaLabel={`${label} max slippage, % APR`}
-      title={`How far this size moves the two books from mid. Capped at ${slip.str}% per leg.`}
-      hint="Max rate each leg of this batch will accept. A wider tolerance may be needed for a large size or a thin book."
+      invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+      inputAriaLabel={t('assetCard.batch.slipAria', { label })}
+      title={t('assetCard.batch.slipTitle', { max: slip.str })}
+      hint={t('assetCard.batch.slipHint')}
     />
   );
   return (
     <EstimateCard label={heading ?? label} sub={sub} step={step} dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={Boolean(error)}>
       {error ? (
-        <QueryError title={`Couldn’t price the ${label.toLowerCase()}`} error={error} onRetry={onRetry} />
+        <QueryError title={t('assetCard.batch.cantPrice', { label: label.toLowerCase() })} error={error} onRetry={onRetry} />
       ) : sim ? (
         <>
           {exitPnl ? (
@@ -2151,9 +2155,9 @@ function BatchSection({
             <p
               className="alert-amber text-[11px] leading-relaxed text-amber-100"
               role="alert"
-              title="This fill is past the Max, so it would be refused. Widen the tolerance or roll a smaller size."
+              title={t('assetCard.batch.exceededTitle')}
             >
-              Slippage too high on {exceeded.map((l) => prettyVenue(l.venue)).join(' and ')} leg
+              {t('assetCard.batch.slipTooHigh', { venues: exceeded.map((l) => prettyVenue(l.venue)).join(t('assetCard.andSep')) })}
             </p>
           )}
           {/* The batch's headline, its tolerance, the margin it moves and
@@ -2168,7 +2172,7 @@ function BatchSection({
             aria-expanded={more}
             onClick={() => setMore((v) => !v)}
           >
-            {more ? 'Less' : 'Details'} {more ? '‹' : '›'}
+            {more ? t('assetCard.batch.less') : t('assetCard.batch.details')} {more ? '‹' : '›'}
           </button>
           {more && (
             <>
@@ -2178,7 +2182,7 @@ function BatchSection({
                     <Row
                       key={l.marketId}
                       label={l.venue}
-                      title="Initial margin this leg's bucket must carry"
+                      title={t('assetCard.batch.legImTitle')}
                       value={l.marginRequired !== null ? fmtTokenQty(l.marginRequired, sim.collateral) : '—'}
                     />
                   ))}
@@ -2189,7 +2193,7 @@ function BatchSection({
               {sim.reasons.length > 0 && (
                 <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
                   {sim.reasons.map((r) => (
-                    <li key={r}>· {r}</li>
+                    <li key={r}>· {localizeServerText(r)}</li>
                   ))}
                 </ul>
               )}
@@ -2198,7 +2202,7 @@ function BatchSection({
         </>
       ) : (
         <>
-          <span className="text-[11.5px] text-ink-500">{pending ? 'Pricing…' : 'No quote.'}</span>
+          <span className="text-[11.5px] text-ink-500">{pending ? t('assetCard.batch.pricing') : t('assetCard.batch.noQuote')}</span>
           {slipLine}
         </>
       )}
@@ -2243,11 +2247,11 @@ function ExitPnlReadout({
       <div className="flex items-baseline justify-between gap-3">
         <span
           className="cursor-help text-[12.5px] text-ink-50"
-          title={`(locked − execution rate) × size × time to maturity, per leg, before fees.${
+          title={`${t('assetCard.exitPnl.title')}${
             breakdown ? `\n${breakdown}` : ''
           }`}
         >
-          Est. total trade PnL <span className="text-ink-400">ⓘ</span>
+          {t('assetCard.exitPnl.label')} <span className="text-ink-400">ⓘ</span>
         </span>
         <span className="num text-lg font-semibold">{exitPnl.total !== null ? money(exitPnl.total) : <span className="text-ink-500">—</span>}</span>
       </div>
@@ -2404,16 +2408,16 @@ function RollReview({
   const blockers: BorosRollBlocker[] = [
     ...(roll.data?.gate.blockers ?? []),
     ...(slipInvalid
-      ? [{ code: 'slippage-out-of-range', message: `Max slippage must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}% APR — the order would otherwise carry a rate bound you did not choose.` }]
+      ? [{ code: 'slippage-out-of-range', message: t('assetCard.review.slipOutOfRange', { max: ROLL_MAX_SLIP_PCT }) }]
       : []),
-    ...(roll.isError ? [{ code: 'quote-failed', message: 'Could not price this roll.' }] : []),
+    ...(roll.isError ? [{ code: 'quote-failed', message: t('assetCard.review.quoteFailed') }] : []),
     ...(!roll.data
-      ? [{ code: 'no-quote', message: 'Waiting for a quote.' }]
+      ? [{ code: 'no-quote', message: t('assetCard.review.noQuote') }]
       : stale
-        ? [{ code: 'stale-simulation', message: 'The quote is out of date — waiting for a fresh one.' }]
+        ? [{ code: 'stale-simulation', message: t('assetCard.review.stale') }]
         : []),
     ...(agent.data?.expired
-      ? [{ code: 'agent-expired', message: 'Boros login expired.' }]
+      ? [{ code: 'agent-expired', message: t('assetCard.review.agentExpired') }]
       : []),
   ];
 
@@ -2472,50 +2476,49 @@ function RollReview({
     };
     const reason = result?.reason ?? null;
     const namedMarket = reason?.leg != null ? legMarketName(reason.leg) : null;
-    const refusedText = reason ? (namedMarket ? `${namedMarket}: ${reason.message}` : reason.message) : '';
+    const refusedText = reason ? (namedMarket ? `${namedMarket}: ${localizeServerText(reason.message)}` : localizeServerText(reason.message)) : '';
     const canRetry = 'error' in out || status === 'refused';
     return (
       <div className="flex flex-col gap-2">
         {result && (
           <>
-            <RollLegReport label="Exit" legs={Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l)} collateral={collateral} tone={tone} />
-            <RollLegReport label="Re-entry" legs={Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l)} collateral={collateral} tone={tone} />
+            <RollLegReport label={t('assetCard.roll.exit')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l)} collateral={collateral} tone={tone} />
+            <RollLegReport label={t('assetCard.roll.reentry')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l)} collateral={collateral} tone={tone} />
           </>
         )}
         {status === 'rolled' && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            Rolled {fmtTokenQty(result!.rolledSize, collateral)} to {fmtDateLocal(target.maturity)}.
+            {t('assetCard.review.rolled', { qty: fmtTokenQty(result!.rolledSize, collateral), date: fmtDateLocal(target.maturity) })}
           </p>
         )}
         {status === 'refused' && (
           <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            Nothing was traded — {refusedText}
+            {t('assetCard.review.nothingTraded', { reason: refusedText })}
           </p>
         )}
         {status === 'unknown' && (
           <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
-            The venue did not confirm this roll — it may or may not have gone through. Check the position on Boros
-            before sending anything.
+            {t('assetCard.review.unknown')}
           </p>
         )}
         {'error' in out && (
           <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
-            <span className="font-semibold text-rose-200">Roll — not sent.</span>{' '}
+            <span className="font-semibold text-rose-200">{t('assetCard.review.notSent')}</span>{' '}
             <span className="text-rose-200/80">{out.error}</span>
           </p>
         )}
         {payload?.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
-            Answered from the earlier submission — nothing was sent twice.
+            {t('assetCard.replayed')}
           </p>
         )}
         <div className="mt-2 flex items-center justify-end gap-2">
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
-            Close
+            {t('common.close')}
           </button>
           {canRetry && (
-            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title="Press and hold to send the same roll again.">
-              Retry
+            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
+              {t('common.retry')}
             </HoldToConfirmButton>
           )}
         </div>
@@ -2541,28 +2544,28 @@ function RollReview({
       <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
           <div className="min-w-0">
-            <div className={microLabelClass}>You lock</div>
+            <div className={microLabelClass}>{t('assetCard.review.youLock')}</div>
             <div className="num mt-1 text-[26px] font-semibold leading-none tracking-[-0.02em]">
               {fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : <span className="text-ink-600">{pending ? '…' : '—'}</span>}
-              <span className="ml-2 text-[13px] font-normal text-ink-300">{termDays}d</span>
+              <span className="ml-2 text-[13px] font-normal text-ink-300">{t('assetCard.review.days', { days: termDays })}</span>
             </div>
-            <div className="mt-1.5 text-[11.5px] text-ink-400">net of fees and exit P&L</div>
+            <div className="mt-1.5 text-[11.5px] text-ink-400">{t('assetCard.review.netOfFees')}</div>
           </div>
           <div className="grid grid-cols-3 gap-x-5">
-            <div title="The size being rolled: the smaller of the two legs' fills.">
-              <div className={statLabel}>Size</div>
+            <div title={t('assetCard.review.sizeTitle')}>
+              <div className={statLabel}>{t('common.size')}</div>
               <div className={`${statValue} font-semibold text-ink-50`}>{fmtTokenQty(size, collateral)}</div>
             </div>
-            <div title="Carry to the new maturity, minus the round trip's fees.">
-              <div className={statLabel}>Est. earnings by maturity</div>
+            <div title={t('assetCard.review.earnTitle')}>
+              <div className={statLabel}>{t('assetCard.estEarnings')}</div>
               <div className={`${statValue} font-semibold`}>
                 {fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
               </div>
             </div>
             <div
-              title={`Exit fee\t${fig.exitCostUsd !== null ? `−${fmtUsd(fig.exitCostUsd)}` : '—'}\nRe-entry fee\t${fig.entryCostUsd !== null ? `−${fmtUsd(fig.entryCostUsd)}` : '—'}\nExit PnL\t${fig.exitPnlUsd !== null ? `${fig.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(fig.exitPnlUsd))}` : '—'}`}
+              title={`${t('assetCard.review.exitFee')}\t${fig.exitCostUsd !== null ? `−${fmtUsd(fig.exitCostUsd)}` : '—'}\n${t('assetCard.review.entryFee')}\t${fig.entryCostUsd !== null ? `−${fmtUsd(fig.entryCostUsd)}` : '—'}\n${t('assetCard.review.exitPnl')}\t${fig.exitPnlUsd !== null ? `${fig.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(fig.exitPnlUsd))}` : '—'}`}
             >
-              <div className={statLabel}>Cost today</div>
+              <div className={statLabel}>{t('assetCard.review.costToday')}</div>
               <div className={statValue}>
                 {dayOneUsd !== null ? <SignedNumber value={dayOneUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
               </div>
@@ -2574,20 +2577,20 @@ function RollReview({
       {/* The two batches side by side: how the roll executes — what closing
           realises against what re-opening locks, each with its own
           tolerance and the margin it moves. */}
-      <div className={microLabelClass}>How it executes</div>
+      <div className={microLabelClass}>{t('assetCard.review.howExecutes')}</div>
       {/* Cancels are per market: a part roll also drops the kept part's orders. */}
       {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
         <p className="text-[11px] text-ink-400">
           {size < pairRollGeometry(pair).heldSize
-            ? `Your orders on the ${fmtDateLocal(oldMaturity)} markets are cancelled, also for the part you keep. Place them again after the roll.`
-            : `Resting orders on the ${fmtDateLocal(oldMaturity)} markets are cancelled in the same batch.`}
+            ? t('assetCard.review.cancelPart', { date: fmtDateLocal(oldMaturity) })
+            : t('assetCard.review.cancelAll', { date: fmtDateLocal(oldMaturity) })}
         </p>
       )}
       {/* 1 then 2: the order the two batches are sent in, a numbered disc
           on each card. */}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
         <BatchSection
-          label="Exit"
+          label={t('assetCard.roll.exit')}
           step={1}
           sub={fmtDateLocal(oldMaturity)}
           sim={exitSim}
@@ -2600,9 +2603,9 @@ function RollReview({
           slip={exitSlip}
         />
         <BatchSection
-          label="Re-entry"
+          label={t('assetCard.roll.reentry')}
           // Reads as one phrase with the maturity beside it: "Renew to 2026-10-30".
-          heading="Renew to"
+          heading={t('assetCard.roll.renewTo')}
           step={2}
           sub={fmtDateLocal(target.maturity)}
           sim={entrySim}
@@ -2625,13 +2628,13 @@ function RollReview({
       >
         <span className="flex items-center gap-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
           <StepBadge n={3} />
-          Can it fund?
+          {t('assetCard.review.canFund')}
           {marginOk && <Check size={12} aria-hidden className="text-emerald-300" />}
         </span>
         <EstimateRow
-          label="Required margin"
-          sub="for the new legs"
-          title="Initial margin the new legs post, summed."
+          label={t('assetCard.review.requiredMargin')}
+          sub={t('assetCard.review.forNewLegs')}
+          title={t('assetCard.review.requiredTitle')}
           value={
             marginNeed !== null ? (
               <>
@@ -2645,19 +2648,19 @@ function RollReview({
           strong
         />
         <EstimateRow
-          label="Available margin"
+          label={t('assetCard.review.availableMargin')}
           sub={
             availableAfter !== null
-              ? 'before → after, as the venue simulates it'
+              ? t('assetCard.review.availSubAfter')
               : availableAfterExit !== null
-                ? 'before → once the old legs are closed, as the venue simulates it'
+                ? t('assetCard.review.availSubExit')
                 : undefined
           }
           title={
             availableAfter !== null
-              ? 'Initial margin spendable before the batch, and after it — the closes run first, so the new legs are judged on the margin the old ones free.'
+              ? t('assetCard.review.availTitleAfter')
               : availableAfterExit !== null
-                ? 'Initial margin spendable before the batch, and once the closes have run — the figure the new legs were judged on. The batch itself was refused, so there is no after.'
+                ? t('assetCard.review.availTitleExit')
                 : undefined
           }
           value={
@@ -2682,7 +2685,7 @@ function RollReview({
         />
         {marginShort > 0 && (
           <p className="text-[11.5px] leading-relaxed text-amber-100">
-            About {fmtTokenQty(marginShort, collateral)} short — the venue refuses the roll. Top up before rolling, or roll a smaller size.
+            {t('assetCard.review.short', { qty: fmtTokenQty(marginShort, collateral) })}
           </p>
         )}
       </div>
@@ -2694,7 +2697,7 @@ function RollReview({
           key={w}
           className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200"
         >
-          {w}
+          {localizeServerText(w)}
         </p>
       ))}
       {ackShown && entrySim && (
@@ -2711,7 +2714,7 @@ function RollReview({
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
           <ArrowLeft size={14} aria-hidden />
-          Back
+          {t('common.back')}
         </button>
         {loginLabel ? (
           <BorosLogInButton />
@@ -2720,9 +2723,9 @@ function RollReview({
           tone="cyan"
           disabled={!canConfirm}
           onConfirm={run}
-          title="Press and hold to close the two Boros legs and reopen them at the new maturity, in one all-or-nothing batch."
+          title={t('assetCard.review.holdTitle')}
         >
-          {busy ? 'Rolling…' : 'Roll over'}
+          {busy ? t('assetCard.review.rolling') : t('assetCard.actions.rollOver')}
         </HoldToConfirmButton>
         )}
       </div>
@@ -2801,15 +2804,15 @@ function OpenOnlyReview({
   const blockers: BorosPairBlocker[] = [
     ...(sim.data?.gate.blockers ?? []),
     ...(slipInvalid
-      ? [{ code: 'slippage-out-of-range', message: `Max slippage must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}% APR — the order would otherwise carry a rate bound you did not choose.` }]
+      ? [{ code: 'slippage-out-of-range', message: t('assetCard.review.slipOutOfRange', { max: ROLL_MAX_SLIP_PCT }) }]
       : []),
-    ...(sim.isError ? [{ code: 'quote-failed', message: 'Could not price these legs.' }] : []),
+    ...(sim.isError ? [{ code: 'quote-failed', message: t('assetCard.review.quoteFailedLegs') }] : []),
     ...(!sim.data
-      ? [{ code: 'no-quote', message: 'Waiting for a quote.' }]
+      ? [{ code: 'no-quote', message: t('assetCard.review.noQuote') }]
       : stale
-        ? [{ code: 'stale-simulation', message: 'The quote is out of date — waiting for a fresh one.' }]
+        ? [{ code: 'stale-simulation', message: t('assetCard.review.stale') }]
         : []),
-    ...(agent.data?.expired ? [{ code: 'agent-expired', message: 'Boros login expired.' }] : []),
+    ...(agent.data?.expired ? [{ code: 'agent-expired', message: t('assetCard.review.agentExpired') }] : []),
   ];
 
   const [busy, setBusyState] = useState(false);
@@ -2844,40 +2847,39 @@ function OpenOnlyReview({
     const retryable = 'error' in out || (result?.filledNothing ?? false);
     return (
       <div className="flex flex-col gap-2">
-        {result && <RollLegReport label="New legs" legs={result.legs} collateral={collateral} tone={tone} />}
+        {result && <RollLegReport label={t('assetCard.openOnly.newLegs')} legs={result.legs} collateral={collateral} tone={tone} />}
         {result && !result.filledNothing && !result.partial && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            Opened {fmtTokenQty(result.hedgedSize, collateral)} at {fmtDateLocal(target.maturity)}. Your perps now hedge the new legs. The{' '}
-            {fmtDateLocal(pair.soonestMaturitySec)} legs stay open, with no perps, until {fmtDateLocal(pair.soonestMaturitySec)}.
+            {t('assetCard.openOnly.opened', { qty: fmtTokenQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity), old: fmtDateLocal(pair.soonestMaturitySec) })}
           </p>
         )}
         {result?.partial && !result.filledNothing && (
           <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            Only {fmtTokenQty(result.hedgedSize, collateral)} opened — the rest did not fill. Open the rest from Fixed Rate Pairs.
+            {t('assetCard.openOnly.partial', { qty: fmtTokenQty(result.hedgedSize, collateral) })}
           </p>
         )}
         {result?.filledNothing && (
           <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
-            Nothing was opened — the venue refused both legs.
+            {t('assetCard.openOnly.nothing')}
           </p>
         )}
         {'error' in out && (
           <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
-            <span className="font-semibold text-rose-200">Open — not sent.</span> <span className="text-rose-200/80">{out.error}</span>
+            <span className="font-semibold text-rose-200">{t('assetCard.openOnly.notSent')}</span> <span className="text-rose-200/80">{out.error}</span>
           </p>
         )}
         {'payload' in out && out.payload.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
-            Answered from the earlier submission — nothing was sent twice.
+            {t('assetCard.replayed')}
           </p>
         )}
         <div className="mt-2 flex items-center justify-end gap-2">
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
-            Close
+            {t('common.close')}
           </button>
           {retryable && (
-            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title="Press and hold to send the same open again.">
-              Retry
+            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
+              {t('common.retry')}
             </HoldToConfirmButton>
           )}
         </div>
@@ -2896,10 +2898,10 @@ function OpenOnlyReview({
       value={slipStr}
       onChange={setSlipEdited}
       invalid={slipInvalid}
-      invalidText={`Must be greater than 0 and at most ${ROLL_MAX_SLIP_PCT}%.`}
-      inputAriaLabel="Max slippage, % APR"
-      title={`How far this size moves the two books from mid. Capped at ${slipStr}% per leg.`}
-      hint="Max rate each leg will accept. A wider tolerance may be needed for a large size or a thin book."
+      invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+      inputAriaLabel={t('assetCard.openOnly.slipAria')}
+      title={t('assetCard.batch.slipTitle', { max: slipStr })}
+      hint={t('assetCard.openOnly.slipHint')}
     />
   );
 
@@ -2908,12 +2910,12 @@ function OpenOnlyReview({
       <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
         <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
           <div className="min-w-0">
-            <div className={microLabelClass}>Open at {fmtDateLocal(target.maturity)}</div>
+            <div className={microLabelClass}>{t('assetCard.openOnly.openAt', { date: fmtDateLocal(target.maturity) })}</div>
             <div className="num mt-1 text-[22px] font-semibold leading-none tracking-[-0.02em]">
               {fmtTokenQty(size, collateral)}
-              <span className="ml-2 text-[13px] font-normal text-ink-300">{termDays}d</span>
+              <span className="ml-2 text-[13px] font-normal text-ink-300">{t('assetCard.review.days', { days: termDays })}</span>
             </div>
-            <div className="mt-1.5 text-[11.5px] text-ink-400">the old legs keep running</div>
+            <div className="mt-1.5 text-[11.5px] text-ink-400">{t('assetCard.openOnly.oldKeep')}</div>
           </div>
         </div>
       </div>
@@ -2921,14 +2923,14 @@ function OpenOnlyReview({
       <OpenOnlyNote oldMaturity={pair.soonestMaturitySec} className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-amber-200" />
 
       <EstimateCard
-        label="New legs"
+        label={t('assetCard.openOnly.newLegs')}
         sub={`${'spreadVenues' in target ? spreadName(base, target.spreadVenues) : `${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)}`} · ${fmtDateLocal(target.maturity)}`}
         dataUpdatedAt={sim.dataUpdatedAt}
         estimating={sim.isPlaceholderData}
         isError={sim.isError}
       >
         {sim.isError ? (
-          <QueryError title="Couldn’t price these legs" error={sim.error} onRetry={() => sim.refetch()} />
+          <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />
         ) : simulation ? (
           <>
             <SpreadReadout sim={simulation} between={slipLine} compact />
@@ -2936,7 +2938,7 @@ function OpenOnlyReview({
           </>
         ) : (
           <>
-            <span className="text-[11.5px] text-ink-500">{sim.isPending ? 'Pricing…' : 'No quote.'}</span>
+            <span className="text-[11.5px] text-ink-500">{sim.isPending ? t('assetCard.batch.pricing') : t('assetCard.batch.noQuote')}</span>
             {slipLine}
           </>
         )}
@@ -2949,7 +2951,7 @@ function OpenOnlyReview({
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
           <ArrowLeft size={14} aria-hidden />
-          Back
+          {t('common.back')}
         </button>
         {loginLabel ? (
           <BorosLogInButton />
@@ -2958,9 +2960,9 @@ function OpenOnlyReview({
             tone="cyan"
             disabled={!canConfirm}
             onConfirm={run}
-            title="Press and hold to open the two Boros legs at the new maturity, leaving the old legs running."
+            title={t('assetCard.openOnly.holdTitle')}
           >
-            {busy ? 'Opening…' : 'Open new maturity'}
+            {busy ? t('assetCard.openOnly.opening') : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
         )}
       </div>
@@ -3111,15 +3113,15 @@ function RollOption({
             ) : (
               <span className="text-ink-600">{pending ? '…' : '—'}</span>
             )}
-            <span className="ml-1.5 text-[12px] font-normal text-ink-300">fixed</span>
+            <span className="ml-1.5 text-[12px] font-normal text-ink-300">{t('assetCard.option.fixed')}</span>
           </span>
-          <span className="num text-[11.5px] text-ink-400" title="The day the rolled legs settle.">
-            {daysToMaturity(target.maturity, nowSec)}d ({fmtDateLocal(target.maturity)})
+          <span className="num text-[11.5px] text-ink-400" title={t('assetCard.option.dayTitle')}>
+            {t('assetCard.option.daysDate', { days: daysToMaturity(target.maturity, nowSec), date: fmtDateLocal(target.maturity) })}
           </span>
           {/* Spread and singles are separate cards (mozzarella 2026-10-14): say
               which one the roll lands in. */}
           <span className="text-[11px] text-ink-500">
-            → {'spreadMarketId' in target ? <SpreadName base={base} venues={target.spreadVenues} /> : 'singles'}
+            → {'spreadMarketId' in target ? <SpreadName base={base} venues={target.spreadVenues} /> : t('assetCard.option.singles')}
           </span>
         </span>
       </button>
@@ -3131,8 +3133,8 @@ function RollOption({
       {selected && (
         <div className={`border-t border-ink-800 px-3 pb-3 pt-2.5 ${settling}`}>
           <div className="grid grid-cols-3 gap-x-4">
-            <div title="Receive leg minus pay leg, on notional, from the live books.">
-              <div className={statLabel}>Locked spread</div>
+            <div title={t('assetCard.option.spreadTitle')}>
+              <div className={statLabel}>{t('assetCard.option.lockedSpread')}</div>
               <div className={statValue}>
                 {v.spreadApr !== null ? (
                   <SignedNumber value={v.spreadApr} format={fmtPct} />
@@ -3144,13 +3146,13 @@ function RollOption({
             <div
               title={
                 v.grossByMaturityUsd !== null
-                  ? `Carry to ${fmtDateLocal(target.maturity)}\t${fmtUsd(v.grossByMaturityUsd)}\nFees\t${v.totalCostUsd !== null ? `−${fmtUsd(v.totalCostUsd)}` : '—'}${openOnly ? '' : `\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}`}`
+                  ? `${t('assetCard.option.carryTo', { date: fmtDateLocal(target.maturity) })}\t${fmtUsd(v.grossByMaturityUsd)}\n${t('common.fees')}\t${v.totalCostUsd !== null ? `−${fmtUsd(v.totalCostUsd)}` : '—'}${openOnly ? '' : `\n${t('assetCard.review.exitPnl')}\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}`}`
                   : openOnly
-                    ? 'Carry to the new maturity − the opening fee.'
-                    : 'Carry to the new maturity − fees + exit PnL.'
+                    ? t('assetCard.option.earnOpenTitle')
+                    : t('assetCard.option.earnRollTitle')
               }
             >
-              <div className={statLabel}>Est. earnings by maturity</div>
+              <div className={statLabel}>{t('assetCard.estEarnings')}</div>
               <div className={`${statValue} font-semibold`}>
                 {v.netByMaturityUsd !== null ? (
                   <SignedNumber value={v.netByMaturityUsd} format={fmtUsd} />
@@ -3162,11 +3164,11 @@ function RollOption({
             <div
               title={
                 v.newBorosImUsd !== null
-                  ? `Perp margin\t${fmtUsd(v.perpImUsd)}\nNew Boros margin\t${fmtUsd(v.newBorosImUsd)}`
-                  : 'Perp margin + new Boros margin.'
+                  ? `${t('assetCard.option.perpMargin')}\t${fmtUsd(v.perpImUsd)}\n${t('assetCard.option.newBorosMargin')}\t${fmtUsd(v.newBorosImUsd)}`
+                  : t('assetCard.option.capitalTitle')
               }
             >
-              <div className={statLabel}>Capital</div>
+              <div className={statLabel}>{t('common.capital')}</div>
               <div className={`${statValue} text-ink-100`}>{v.capitalUsd !== null ? fmtUsdCompact(v.capitalUsd) : '—'}</div>
             </div>
           </div>
@@ -3178,7 +3180,7 @@ function RollOption({
               locked spread (which can pay for the fees, or add to them). The
               split is behind the ⓘ. */}
           <div className="num mt-2.5 flex items-baseline justify-between gap-3 border-t border-ink-800 pt-2 text-[11px] text-ink-500">
-            <span>{openOnly ? 'Opening cost' : 'Rollover Cost'}</span>
+            <span>{openOnly ? t('assetCard.option.openingCost') : t('assetCard.option.rolloverCost')}</span>
             <span>
               {v.totalCostUsd !== null && v.exitPnlUsd !== null ? (
                 <SignedNumber value={v.exitPnlUsd - v.totalCostUsd} format={fmtUsd} />
@@ -3189,8 +3191,8 @@ function RollOption({
                 className="ml-1 cursor-help text-ink-500"
                 title={
                   openOnly
-                    ? `Opening fee\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n* The old legs stay open: no exit fee, no exit PnL.\n* Counted in the rate and the earnings above.`
-                    : `Exit fee\t${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'}\nRe-entry fee\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\nExit PnL\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}\n* All counted in the rate and the earnings above.`
+                    ? `${t('assetCard.option.openingFee')}\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n${t('assetCard.option.openNotes')}`
+                    : `${t('assetCard.review.exitFee')}\t${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'}\n${t('assetCard.review.entryFee')}\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n${t('assetCard.review.exitPnl')}\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}\n${t('assetCard.option.rollNotes')}`
                 }
               >
                 ⓘ
@@ -3205,7 +3207,7 @@ function RollOption({
 
 type NamedNet = ExcludedNet & { name: string };
 
-const excludedNetText = (n: NamedNet) => `${n.name} at ${fmtDateShort(n.maturity)} is excluded and would net. Pick another date or restore it.`;
+const excludedNetText = (n: NamedNet) => t('assetCard.excludedNet', { name: n.name, date: fmtDateShort(n.maturity) });
 
 type ExcludedNets = {
   long: NamedNet | null;
@@ -3278,7 +3280,7 @@ function PerpOnlyPairCard({
     const y = blockingWrongSide([...pair.otherWay, ...wrongSideLegs], venue, side);
     return y
       ? closeWrongSideText(y)
-      : `A Wrong side ${prettyVenue(venue)} leg blocks this open. Close it first.`;
+      : t('assetCard.perpOnly.blockedByWrong', { venue: prettyVenue(venue) });
   };
   const pairNet = (side: 'long' | 'short') => (bothEven && !held ? excludedNet.pair[side] : null);
   const eitherNet = pairNet('long') ?? pairNet('short');
@@ -3299,7 +3301,7 @@ function PerpOnlyPairCard({
           {yu.lockedApr !== null ? (
             <SignedNumber value={yu.lockedApr} format={fmtPct} />
           ) : (
-            <span className="text-ink-500">pending</span>
+            <span className="text-ink-500">{t('assetCard.pending')}</span>
           )}
         </td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(yu.imUsd)}</td>
@@ -3315,7 +3317,7 @@ function PerpOnlyPairCard({
             <MissingChip held={heldHere} target={pair.size} unit={pair.unit} base={base} />
           </span>
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={HELD_OF_TARGET_TITLE}>
+        <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={t('assetCard.heldOfTargetTitle')}>
           {ofTarget(heldHere)}
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -3327,10 +3329,10 @@ function PerpOnlyPairCard({
                 className={`btn-ghost-xs !py-[5px] ${canOpen ? '!text-grass hover:!border-grass/60' : BLOCKED_OPEN}`}
                 disabled={!onOpenBoros}
                 aria-disabled={!canOpen}
-                title={canOpen ? `Open only the ${prettyVenue(venue)} ${side} Boros leg, at ${sizeText(missing)}` : undefined}
+                title={canOpen ? t('assetCard.perpOnly.openOnlyLegTitle', { venue: prettyVenue(venue), side: sideUpper(side), size: sizeText(missing) }) : undefined}
                 onClick={canOpen ? () => onOpenBoros?.({ long: side === 'LONG', short: side === 'SHORT' }) : undefined}
               >
-                Open leg
+                {t('assetCard.openLeg')}
               </button>
             </BlockedOpen>
           )}
@@ -3359,43 +3361,43 @@ function PerpOnlyPairCard({
                 <span className="inline-flex items-center gap-[6px]">
                   <VenueIcon venue={pair.longVenue} size={18} />
                   {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">LONG</span>
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
                 </span>
                 <span className="text-ink-600">/</span>
                 <span className="inline-flex items-center gap-[6px]">
                   <VenueIcon venue={pair.shortVenue} size={18} />
                   {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">SHORT</span>
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
                 </span>
                 <Chip
                   sm
                   tone="amber"
                   className="!font-medium"
-                  title="No Boros leg behind these perps, so no rate is locked."
+                  title={t('assetCard.perpOnly.chipTitle')}
                 >
-                  {!spread && rowMissing(pair.longYu, pair.missingLong) && rowMissing(pair.shortYu, pair.missingShort) ? 'Boros legs missing' : 'Boros leg missing'}
+                  {!spread && rowMissing(pair.longYu, pair.missingLong) && rowMissing(pair.shortYu, pair.missingShort) ? t('assetCard.perpOnly.legsMissing') : t('assetCard.perpOnly.legMissing')}
                 </Chip>
                 </span>
                 {/* The maturity rides under the venues, as on a full pair. */}
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
                   {held ? (
-                    <span title="The one rate leg this unit still has settles here">
-                      matures {fmtDateLocal(held.maturity)} · {daysLeftText(held.maturity, nowSec)}
+                    <span title={t('assetCard.perpOnly.maturityTitle')}>
+                      {t('assetCard.maturesDot', { date: fmtDateLocal(held.maturity), left: daysLeftText(held.maturity, nowSec) })}
                     </span>
                   ) : (
-                    <span className="text-ink-600">no rate leg</span>
+                    <span className="text-ink-600">{t('assetCard.perpOnly.noRateLeg')}</span>
                   )}
                 </span>
               </button>
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional\t${exactUsd(pair.notionalUsd)}\nSize per side\t${exactSize(pair.size, pair.unit, base)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.notionalPerSide', { notional: exactUsd(pair.notionalUsd), size: exactSize(pair.size, pair.unit, base) })}>
               {fmtUsdCompact(pair.notionalUsd)}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin\t${exactUsd(pair.imUsd)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.imTitle', { usd: exactUsd(pair.imUsd) })}>
               {fmtUsdCompact(pair.imUsd)}
             </td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked until both Boros legs are open">—</td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="No rate is locked.">—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title={t('assetCard.perpOnly.noRateUntil')}>—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title={t('assetCard.perpOnly.noRate')}>—</td>
             <td className="whitespace-nowrap pl-3 pr-4 text-right">
               <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
                 <ChevronDown size={14} aria-hidden />
@@ -3410,10 +3412,10 @@ function PerpOnlyPairCard({
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="th text-left">Leg</th>
-                  <th className="th text-right">Size</th>
-                  <th className="th text-right">Locked</th>
-                  <th className="th text-right">Initial margin</th>
+                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-right">{t('common.size')}</th>
+                  <th className="th text-right">{t('common.locked')}</th>
+                  <th className="th text-right">{t('common.initialMargin')}</th>
                   <MenuHead show={hasMenu} />
                 </tr>
               </thead>
@@ -3435,7 +3437,7 @@ function PerpOnlyPairCard({
                         <MissingChip held={0} target={pair.size} unit={pair.unit} base={base} />
                       </span>
                     </td>
-                    <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
+                    <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={t('assetCard.heldOfTargetTitle')}>
                       {ofTarget(0)}
                     </td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -3443,7 +3445,7 @@ function PerpOnlyPairCard({
                       <td className={`${cell} whitespace-nowrap text-right`}>
                         <BlockedOpen reason={excludedNetText(eitherNet)}>
                           <button type="button" className={`btn-ghost-xs !py-[5px] ${BLOCKED_OPEN}`} aria-disabled>
-                            Open leg
+                            {t('assetCard.openLeg')}
                           </button>
                         </BlockedOpen>
                       </td>
@@ -3474,10 +3476,10 @@ function PerpOnlyPairCard({
                         <button
                           type="button"
                           className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
-                          title={`Close the ${y.side} ${size}${y.wrongSide?.blocks ? ', then open the hedge' : ''}`}
+                          title={t(y.wrongSide?.blocks ? 'assetCard.closeSideThenHedge' : 'assetCard.closeSideTitle', { side: sideUpper(y.side), size })}
                           onClick={() => onCloseBoros(y)}
                         >
-                          Close
+                          {t('common.close')}
                         </button>
                       </td>
                       <MenuCell show={hasMenu} cell={cell}>
@@ -3494,10 +3496,10 @@ function PerpOnlyPairCard({
             <button
               type="button"
               className={`${pill} hover:!border-guava/50 hover:!text-guava`}
-              title={`Close both perps of this unit — ${sizeText(pair.size)} on each side`}
+              title={t('assetCard.perpOnly.closePerpsTitle', { size: sizeText(pair.size) })}
               onClick={onClosePerps}
             >
-              Close perps
+              {t('assetCard.actions.closePerps')}
             </button>
             {/* A held single keeps the unit on singles (rule 5), but a pair
                 ticket routes to a trading spread, so each missing single
@@ -3513,12 +3515,12 @@ function PerpOnlyPairCard({
                     eitherNet
                       ? undefined
                       : spread
-                        ? `Open the ${spreadName(base, spread)} leg, at ${sizeText(Math.min(pair.missingLong, pair.missingShort))}`
-                        : `Open both Boros legs together — long ${prettyVenue(pair.longVenue)}, short ${prettyVenue(pair.shortVenue)}, ${sizeText(Math.min(pair.missingLong, pair.missingShort))} each`
+                        ? t('assetCard.perpOnly.openSpreadTitle', { name: spreadName(base, spread), size: sizeText(Math.min(pair.missingLong, pair.missingShort)) })
+                        : t('assetCard.perpOnly.openBothTitle', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue), size: sizeText(Math.min(pair.missingLong, pair.missingShort)) })
                   }
                   onClick={eitherNet ? undefined : () => onOpenBoros?.({ long: true, short: true })}
                 >
-                  {spread ? 'Open Boros leg' : 'Open both Boros legs'}
+                  {spread ? t('assetCard.perpOnly.openBorosLeg') : t('assetCard.perpOnly.openBothBoros')}
                 </button>
               </BlockedOpen>
             )}
@@ -3595,7 +3597,7 @@ function BorosOnlyPairCard({
             <MissingChip held={perp ? sizeIn(perp, perp.unit) : 0} target={pair.size} unit={pair.unit} base={base} />
           </span>
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={HELD_OF_TARGET_TITLE}>
+        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={t('assetCard.heldOfTargetTitle')}>
           {ofTarget(perp ? sizeIn(perp, perp.unit) : 0)}
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -3604,10 +3606,10 @@ function BorosOnlyPairCard({
             type="button"
             className="btn-ghost-xs !py-[5px] !text-grass hover:!border-grass/60"
             disabled={!onOpenPerps}
-            title={`Open only the ${prettyVenue(venue)} ${side} perp, at ${sizeText(missing)}`}
+            title={t('assetCard.borosOnly.openOnlyPerpTitle', { venue: prettyVenue(venue), side: sideUpper(side), size: sizeText(missing) })}
             onClick={() => onOpenPerps?.({ long: side === 'LONG', short: side === 'SHORT' })}
           >
-            Open leg
+            {t('assetCard.openLeg')}
           </button>
         </td>
         <MenuCell show={hasMenu} cell={cell} />
@@ -3634,47 +3636,47 @@ function BorosOnlyPairCard({
                 <span className="inline-flex items-center gap-[6px]">
                   <VenueIcon venue={pair.longVenue} size={18} />
                   {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">LONG</span>
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
                 </span>
                 <span className="text-ink-600">/</span>
                 <span className="inline-flex items-center gap-[6px]">
                   <VenueIcon venue={pair.shortVenue} size={18} />
                   {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">SHORT</span>
+                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
                 </span>
                 <Chip
                   sm
                   tone="amber"
                   className="!font-medium"
-                  title="The rate is locked, but no perp hedges its price risk."
+                  title={t('assetCard.borosOnly.chipTitle')}
                 >
-                  {both ? 'Perp legs missing' : 'Perp leg missing'}
+                  {both ? t('assetCard.borosOnly.perpsMissing') : t('assetCard.borosOnly.perpMissing')}
                 </Chip>
                 </span>
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
-                  <span title="Both rate legs of this unit settle here">
-                    matures {fmtDateLocal(pair.maturity)} · {daysLeftText(pair.maturity, nowSec)}
+                  <span title={t('assetCard.borosOnly.maturityTitle')}>
+                    {t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturity), left: daysLeftText(pair.maturity, nowSec) })}
                   </span>
                 </span>
               </button>
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional, both rate legs\t${exactUsd(pair.notionalUsd)}\nSize per side\t${exactSize(pair.size, pair.unit, base)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.borosOnly.notionalTitle', { notional: exactUsd(pair.notionalUsd), size: exactSize(pair.size, pair.unit, base) })}>
               {fmtUsdCompact(pair.notionalUsd)}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin\t${exactUsd(pair.imUsd)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.imTitle', { usd: exactUsd(pair.imUsd) })}>
               {fmtUsdCompact(pair.imUsd)}
             </td>
             {/* No APR on capital until the perps are there: their margin is
                 most of the capital. The spread is already locked, though. */}
             <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium">
-              <span className="text-ink-600" title="No APR on capital until both perps are open">—</span>
+              <span className="text-ink-600" title={t('assetCard.borosOnly.noAprTitle')}>—</span>
               {pair.lockedSpread !== null && (
-                <span className="ml-2 text-[11.5px] text-ink-400" title="Receive leg minus pay leg, on notional, net of settlement fees.">
-                  <SignedNumber value={pair.lockedSpread} format={fmtPct} className="!text-ink-400" /> spread
+                <span className="ml-2 text-[11.5px] text-ink-400" title={t('assetCard.spreadNetTitle')}>
+                  <SignedNumber value={pair.lockedSpread} format={fmtPct} className="!text-ink-400" /> {t('assetCard.spreadWord')}
                 </span>
               )}
             </td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="Not estimated until both perps are open.">—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title={t('assetCard.borosOnly.notEstimated')}>—</td>
             <td className="whitespace-nowrap pl-3 pr-4 text-right">
               <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
                 <ChevronDown size={14} aria-hidden />
@@ -3689,10 +3691,10 @@ function BorosOnlyPairCard({
             <table className="w-full border-collapse text-[12.5px]">
               <thead>
                 <tr>
-                  <th className="th text-left">Leg</th>
-                  <th className="th text-right">Size</th>
-                  <th className="th text-right">Locked</th>
-                  <th className="th text-right">Initial margin</th>
+                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-right">{t('common.size')}</th>
+                  <th className="th text-right">{t('common.locked')}</th>
+                  <th className="th text-right">{t('common.initialMargin')}</th>
                   <MenuHead show={hasMenu} />
                 </tr>
               </thead>
@@ -3714,7 +3716,7 @@ function BorosOnlyPairCard({
                       {y.lockedApr !== null ? (
                         <SignedNumber value={y.lockedApr} format={fmtPct} />
                       ) : (
-                        <span className="text-ink-500">pending</span>
+                        <span className="text-ink-500">{t('assetCard.pending')}</span>
                       )}
                       <BorosLiqAprLine leg={borosOpen.find((b) => b.marketId === y.marketId)} />
                     </td>
@@ -3734,22 +3736,22 @@ function BorosOnlyPairCard({
               className={`${pill} hover:!border-guava/50 hover:!text-guava`}
               title={
                 pair.borosLegs.length === 1
-                  ? `Close the Boros leg of this unit — ${sizeText(pair.size)}`
-                  : `Close both Boros legs of this unit — ${sizeText(pair.size)} on each side`
+                  ? t('assetCard.borosOnly.closeLegTitle', { size: sizeText(pair.size) })
+                  : t('assetCard.borosOnly.closeLegsTitle', { size: sizeText(pair.size) })
               }
               onClick={onCloseBoros}
             >
-              {pair.borosLegs.length === 1 ? 'Close Boros leg' : 'Close Boros legs'}
+              {pair.borosLegs.length === 1 ? t('assetCard.borosOnly.closeLeg') : t('assetCard.borosOnly.closeLegs')}
             </button>
             {bothEven && (
               <button
                 type="button"
                 className={`${pill} !border-grass/60 !text-grass hover:!border-grass hover:!bg-grass/10`}
                 disabled={!onOpenPerps}
-                title={`Open both perps together — long ${prettyVenue(pair.longVenue)}, short ${prettyVenue(pair.shortVenue)}, ${sizeText(Math.min(pair.missingLong, pair.missingShort))} each`}
+                title={t('assetCard.borosOnly.openBothTitle', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue), size: sizeText(Math.min(pair.missingLong, pair.missingShort)) })}
                 onClick={() => onOpenPerps?.({ long: true, short: true })}
               >
-                Open both perps
+                {t('assetCard.borosOnly.openBoth')}
               </button>
             )}
           </div>
@@ -3811,7 +3813,7 @@ function UngroupedCard({
   const whole = (share: number) => sameSize(share, 1);
   const sideChip = (side: 'LONG' | 'SHORT') => (
     <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
-      {side}
+      {sideUpper(side)}
     </Chip>
   );
   const closeBtn = (label: string, onClick: (() => void) | undefined, title: string) => (
@@ -3823,7 +3825,7 @@ function UngroupedCard({
       disabled={!onClick}
       onClick={onClick}
     >
-      Close leg
+      {t('assetCard.closeLeg')}
     </button>
   );
   return (
@@ -3845,14 +3847,14 @@ function UngroupedCard({
                   setOpen((v) => !v);
                 }}
               >
-                <span className="text-[13.5px] font-semibold leading-none text-ink-50">Ungrouped legs</span>
-                <Chip sm tone="amber" title="No counterpart at the same venue or maturity to pair with.">
-                  not in a pair
+                <span className="text-[13.5px] font-semibold leading-none text-ink-50">{t('assetCard.ungrouped.title')}</span>
+                <Chip sm tone="amber" title={t('assetCard.ungrouped.chipTitle')}>
+                  {t('assetCard.ungrouped.chip')}
                 </Chip>
                 <span className="num text-[11.5px] leading-none text-ink-400">
                   {[
-                    perps.length > 0 ? `${perps.length} perp` : null,
-                    yus.length > 0 ? `${yus.length} YU` : null,
+                    perps.length > 0 ? t('assetCard.ungrouped.perpCount', { n: perps.length }) : null,
+                    yus.length > 0 ? t('assetCard.ungrouped.yuCount', { n: yus.length }) : null,
                   ]
                     .filter(Boolean)
                     .join(' · ')}
@@ -3860,19 +3862,19 @@ function UngroupedCard({
                 {/* Where the dropped "Matures" column used to say it: these
                     legs share no settlement day, so the fact belongs on the
                     identity's own line, as the pair rows carry theirs. */}
-                <span className="num text-[11.5px] leading-none text-ink-500" title="Each leg matures on its own day.">
-                  no single maturity
+                <span className="num text-[11.5px] leading-none text-ink-500" title={t('assetCard.ungrouped.maturityTitle')}>
+                  {t('assetCard.ungrouped.noSingleMaturity')}
                 </span>
               </button>
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Notional\t${exactUsd(notionalUsd)}\nUnpaired size\t${exactSize(size, unit, base)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.ungrouped.notionalTitle', { notional: exactUsd(notionalUsd), size: exactSize(size, unit, base) })}>
               {fmtUsdCompact(notionalUsd)}
             </td>
-            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={`Initial margin\t${exactUsd(imUsd)}`}>
+            <td className="num whitespace-nowrap px-3 text-right text-[14px] font-medium text-ink-50" title={t('assetCard.imTitle', { usd: exactUsd(imUsd) })}>
               {fmtUsdCompact(imUsd)}
             </td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="Not in a pair, so no rate is locked.">—</td>
-            <td className="px-3 text-right text-[13px] text-ink-600" title="Not in a pair.">—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title={t('assetCard.ungrouped.noRateTitle')}>—</td>
+            <td className="px-3 text-right text-[13px] text-ink-600" title={t('assetCard.ungrouped.notInPair')}>—</td>
             <td className="pl-3 pr-4 text-right">
               <span aria-hidden className={`pp-chevron transition-transform ${open ? 'rotate-180' : ''}`}>
                 <ChevronDown size={14} aria-hidden />
@@ -3894,10 +3896,10 @@ function UngroupedCard({
             </colgroup>
             <thead>
               <tr className="bg-ink-900/60 [&>th]:px-3 [&>th]:py-2.5 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
-                <th className="text-left">Leg</th>
-                <th className="text-right">Size</th>
-                <th className="text-right">Locked</th>
-                <th className="text-right">Initial margin</th>
+                <th className="text-left">{t('common.leg')}</th>
+                <th className="text-right">{t('common.size')}</th>
+                <th className="text-right">{t('common.locked')}</th>
+                <th className="text-right">{t('common.initialMargin')}</th>
                 <th />
               </tr>
             </thead>
@@ -3913,12 +3915,12 @@ function UngroupedCard({
                         kind="perp"
                         venue={l.venue}
                         name={prettyVenue(l.venue)}
-                        sub={whole(l.share) ? 'CrossEx · not in a pair' : `CrossEx · ${fmtPct(l.share)} of the leg unpaired`}
+                        sub={whole(l.share) ? t('assetCard.ungrouped.perpSubWhole') : t('assetCard.ungrouped.perpSubPart', { pct: fmtPct(l.share) })}
                         chips={
                           l.quoteTwin ? (
                             <>
                               {sideChip(l.side)}
-                              <AmberTag tag="no Boros hedge">Boros tracks the USDT perp's funding, not this USDC one, so no Boros leg can hedge it. The terminal never opens USDC perps.</AmberTag>
+                              <AmberTag tag={t('assetCard.ungrouped.noBorosHedge')}>{t('assetCard.ungrouped.usdcTwin')}</AmberTag>
                             </>
                           ) : (
                             sideChip(l.side)
@@ -3930,7 +3932,7 @@ function UngroupedCard({
                       <span title={exactSize(sizeIn(l, l.unit), l.unit, base)}>{exactSize(sizeIn(l, l.unit), l.unit, base)}</span>
                       <span className="ml-1 text-ink-500">({fmtUsdCompact(l.notionalUsd)})</span>
                     </td>
-                    <td className="num text-right text-ink-600" title="A perp locks no rate.">
+                    <td className="num text-right text-ink-600" title={t('assetCard.ungrouped.perpNoRate')}>
                       —
                     </td>
                     <td className="num text-right text-ink-100" title={exactUsd(l.imUsd)}>
@@ -3938,13 +3940,13 @@ function UngroupedCard({
                     </td>
                     <td className="whitespace-nowrap text-right">
                       {closeBtn(
-                        `Close ${prettyVenue(l.venue)} ${l.side} perp`,
+                        t('assetCard.ungrouped.closePerpAria', { venue: prettyVenue(l.venue), side: sideUpper(l.side) }),
                         can ? () => onCloseLeg({ kind: 'perp', leg, qty: whole(l.share) ? undefined : l.sizeBase }) : undefined,
                         !live
-                          ? 'Live position not loaded yet'
+                          ? t('assetCard.ungrouped.notLoaded')
                           : whole(l.share)
-                            ? 'Close this perp leg, reduce-only.'
-                            : 'Close the unpaired slice of this perp leg, reduce-only. The pair keeps its share.',
+                            ? t('assetCard.ungrouped.closePerpWhole')
+                            : t('assetCard.ungrouped.closePerpSlice'),
                       )}
                     </td>
                   </tr>
@@ -3963,12 +3965,12 @@ function UngroupedCard({
                         spreadVenues={l.spreadVenues}
                         name={prettyVenue(l.venue)}
                         sub={
-                          <span title="Maturity. No counterpart settles on this day.">
+                          <span title={t('assetCard.ungrouped.yuMaturityTitle')}>
                             {fmtDateLocal(l.maturity)}
                             {days > 0 && (
                               <>
                                 {' · '}
-                                <span className="text-ink-200">{days}d</span>
+                                <span className="text-ink-200">{t('assetCard.review.days', { days })}</span>
                               </>
                             )}
                           </span>
@@ -3994,11 +3996,11 @@ function UngroupedCard({
                         </span>
                       )}
                     </td>
-                    <td className="num text-right font-semibold" title="The fixed rate this leg locks, net of settlement fees. A minus means the leg pays.">
+                    <td className="num text-right font-semibold" title={t('assetCard.ungrouped.lockedTitle')}>
                       {l.lockedApr !== null ? (
                         <SignedNumber value={l.lockedApr} format={fmtPct} />
                       ) : (
-                        <span className="font-normal text-ink-500">pending</span>
+                        <span className="font-normal text-ink-500">{t('assetCard.pending')}</span>
                       )}
                       <BorosLiqAprLine leg={leg} />
                     </td>
@@ -4007,7 +4009,7 @@ function UngroupedCard({
                     </td>
                     <td className="whitespace-nowrap text-right">
                       {closeBtn(
-                        `Close ${prettyVenue(l.venue)} ${l.side} YU`,
+                        t('assetCard.ungrouped.closeYuAria', { venue: prettyVenue(l.venue), side: sideUpper(l.side) }),
                         can
                           ? () =>
                               onCloseLeg({
@@ -4017,8 +4019,8 @@ function UngroupedCard({
                               })
                           : undefined,
                         !leg || !rowSlice(leg, l)
-                          ? 'Close this Boros leg — market order on Boros'
-                          : 'Close the unpaired slice of this Boros leg — market order on Boros. The pair keeps its share.',
+                          ? t('assetCard.ungrouped.closeYuWhole')
+                          : t('assetCard.ungrouped.closeYuSlice'),
                       )}
                       <span className="ml-1">{excludeMenu(l)}</span>
                     </td>
@@ -4035,9 +4037,8 @@ function UngroupedCard({
 
 /** What a gap asks the trader to add, as a phrase: "LONG 120 ETH YU on Boros". */
 function gapAsk(gap: HedgeGapRow, base: string): string {
-  const dir = gap.action.startsWith('long') ? 'LONG' : 'SHORT';
-  const what = gap.leg === 'boros' ? 'YU on Boros' : 'perp';
-  return `${dir} ${exactSize(gap.size, gap.unit, base)} ${what}`;
+  const side = sideUpper(gap.action.startsWith('long') ? 'LONG' : 'SHORT');
+  return t(gap.leg === 'boros' ? 'assetCard.gapAsk.boros' : 'assetCard.gapAsk.perp', { side, size: exactSize(gap.size, gap.unit, base) });
 }
 
 /** The chip on a leg that exists but is smaller than its partner. */
@@ -4047,9 +4048,9 @@ function DeficitChip({ gap, base }: { gap: HedgeGapRow; base: string }) {
       sm
       tone="amber"
       className="num"
-      title={`This leg is ${exactSize(gap.size, gap.unit, base)} short of its partner (${exactSize(gap.want, gap.unit, base)}) — open ${gapAsk(gap, base)} to cover it`}
+      title={t('assetCard.deficitTitle', { size: exactSize(gap.size, gap.unit, base), want: exactSize(gap.want, gap.unit, base), ask: gapAsk(gap, base) })}
     >
-      missing {exactSize(gap.size, gap.unit, base)}
+      {t('assetCard.missingSize', { size: exactSize(gap.size, gap.unit, base) })}
     </Chip>
   );
 }
@@ -4069,13 +4070,13 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
           name={prettyVenue(gap.venue)}
           kind={gap.leg}
           dim
-          sub="not open yet"
-          chips={<Chip sm tone="amber" className="num">missing {exactSize(gap.size, gap.unit, base)}</Chip>}
+          sub={t('assetCard.missingRow.notOpen')}
+          chips={<Chip sm tone="amber" className="num">{t('assetCard.missingSize', { size: exactSize(gap.size, gap.unit, base) })}</Chip>}
         />
       </td>
       <td className="num text-right text-ink-300">
         {exactSize(gap.want, gap.unit, base)}
-        <span className="ml-1 text-ink-500">needed</span>
+        <span className="ml-1 text-ink-500">{t('assetCard.missingRow.needed')}</span>
       </td>
       <td className="text-right text-ink-600">—</td>
       <td className="text-right text-ink-600">—</td>
@@ -4087,10 +4088,12 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
             className={`btn-ghost-xs ${blocked ? BLOCKED_OPEN : '!text-gold hover:!border-gold/50'}`}
             disabled={!onOpen && !blocked}
             aria-disabled={!!blocked}
-            title={blocked ? undefined : onOpen ? (asPair ? 'Opens the pair ticket with both missing legs.' : `Opens the order ticket with ${gapAsk(gap, base)}.`) : 'Order ticket unavailable here'}
+            title={blocked ? undefined : onOpen ? (asPair ? t('assetCard.missingRow.opensPair') : t('assetCard.opensTicket', { ask: gapAsk(gap, base) })) : t('assetCard.ticketUnavailable')}
             onClick={blocked ? undefined : onOpen}
           >
-            {asPair ? `open both ${boros ? 'Boros' : 'perp'} legs` : `open ${boros ? 'Boros' : 'perp'} leg`}
+            {asPair
+              ? t(boros ? 'assetCard.missingRow.openBothBoros' : 'assetCard.missingRow.openBothPerp')
+              : t(boros ? 'assetCard.missingRow.openBoros' : 'assetCard.missingRow.openPerp')}
             <ArrowRight size={12} aria-hidden />
           </button>
         </BlockedOpen>
@@ -4133,6 +4136,7 @@ export function LegEditModal({
   legSince?: number;
   onLegSince?: (sec: number | undefined) => void;
 }) {
+  useTranslation();
   const [sinceStr, setSinceStr] = useState(legSince && legSince > 0 ? fmtDateLocal(legSince) : '');
   const curQty = current === 'all' ? legQty : exclusionQty(current);
   const curAt = exclusionAt(current);
@@ -4150,7 +4154,7 @@ export function LegEditModal({
   const slice: ExclusionEntry = whole ? (legQty > 0 ? { qty: legQty } : 'all') : at !== null ? { qty, at } : { qty };
   // Live preview of what the farm keeps.
   const preview = mode === 'portion' && qtyOk && !whole ? keptSlice({ [exKey]: slice }, exKey, legQty, entry) : null;
-  const showEntry = (v: number | null) => (v === null ? 'pending' : entryKind === 'rate' ? fmtPct(v) : fmtUsd(v));
+  const showEntry = (v: number | null) => (v === null ? t('assetCard.pending') : entryKind === 'rate' ? fmtPct(v) : fmtUsd(v));
   const save = () => {
     if (mode === 'all') onExclude(exKey, undefined);
     else if (!qtyOk) return;
@@ -4162,16 +4166,15 @@ export function LegEditModal({
     onClose();
   };
   return (
-    <Modal title={`Edit leg — ${label}`} onClose={onClose} widthClass="w-[460px]">
+    <Modal title={t('assetCard.edit.title', { label })} onClose={onClose} widthClass="w-[460px]">
       <p className="mb-5 text-[12px] leading-[1.6] text-ink-300">
-        What part of this leg is the funding farm. Everything else is set aside in the
-        Excluded section and leaves the hedge, PnL and capital.
+        {t('assetCard.edit.intro')}
       </p>
-      <div role="radiogroup" aria-label="Include" className="seg seg-fill seg-lg mb-5 flex w-full">
+      <div role="radiogroup" aria-label={t('assetCard.edit.includeAria')} className="seg seg-fill seg-lg mb-5 flex w-full">
         {(
           [
-            ['all', 'Include all'],
-            ['portion', 'Exclude a portion'],
+            ['all', t('assetCard.edit.includeAll')],
+            ['portion', t('assetCard.edit.excludePortion')],
           ] as const
         ).map(([value, text]) => (
           <label
@@ -4193,7 +4196,7 @@ export function LegEditModal({
       {mode === 'portion' && (
         <div className="mb-5 grid grid-cols-2 gap-3">
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] text-ink-50">Exclude ({unit})</span>
+            <span className="text-[12px] text-ink-50">{t('assetCard.edit.excludeUnit', { unit })}</span>
             <span
               className={`flex h-9 items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
                 qtyStr !== '' && !qtyOk ? 'border-guava/60' : 'border-ink-800/50'
@@ -4205,23 +4208,23 @@ export function LegEditModal({
                 autoFocus
                 value={qtyStr}
                 onChange={(e) => setQtyStr(e.target.value)}
-                aria-label={`Quantity to exclude (${unit})`}
+                aria-label={t('assetCard.edit.qtyAria', { unit })}
               />
-              <button type="button" className="btn-link shrink-0 !text-[12px] font-medium" onClick={() => setQtyStr(String(legQty))} title="Exclude the whole leg">
-                all
+              <button type="button" className="btn-link shrink-0 !text-[12px] font-medium" onClick={() => setQtyStr(String(legQty))} title={t('assetCard.edit.allTitle')}>
+                {t('assetCard.edit.all')}
               </button>
             </span>
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12px] text-ink-50">{entryKind === 'rate' ? 'at fixed rate (%)' : 'at price (USD)'}</span>
+            <span className="text-[12px] text-ink-50">{entryKind === 'rate' ? t('assetCard.edit.atRate') : t('assetCard.edit.atPrice')}</span>
             <input
               className="num h-9 w-full rounded border border-ink-800/50 bg-wash/[0.05] px-2.5 text-[14px] font-semibold text-ink-50 outline-none focus:border-info/70"
               inputMode="decimal"
               value={atStr}
               placeholder={entry !== null ? fmtAt(entry) : undefined}
               onChange={(e) => setAtStr(e.target.value)}
-              aria-label={entryKind === 'rate' ? 'Rate the excluded slice was locked at' : 'Price the excluded slice was opened at'}
-              title="The level the excluded slice was opened at. The rest of the leg re-averages around it. Empty splits at the leg's average."
+              aria-label={entryKind === 'rate' ? t('assetCard.edit.rateAria') : t('assetCard.edit.priceAria')}
+              title={t('assetCard.edit.atTitle')}
             />
           </label>
         </div>
@@ -4233,7 +4236,7 @@ export function LegEditModal({
            from its history — settlements, fees and trade PnL alike. */
         <label className="mb-5 flex flex-col gap-2">
           <span className="text-[12px] text-ink-50">
-            Counted from <span className="text-ink-500">(optional)</span>
+            {t('assetCard.edit.countedFrom')} <span className="text-ink-500">{t('assetCard.edit.optional')}</span>
           </span>
           <span className="flex items-center gap-3">
             <input
@@ -4242,12 +4245,12 @@ export function LegEditModal({
               value={sinceStr}
               max={fmtDateLocal(Math.floor(Date.now() / 1000))}
               onChange={(e) => setSinceStr(e.target.value)}
-              aria-label="Date this position is counted from"
-              title="History before this date is left out. Empty = the asset's start date."
+              aria-label={t('assetCard.edit.sinceAria')}
+              title={t('assetCard.edit.sinceTitle')}
             />
             {sinceStr && (
               <button type="button" className="btn-link !text-ink-300 hover:!text-ink-200" onClick={() => setSinceStr('')}>
-                clear
+                {t('assetCard.edit.clear')}
               </button>
             )}
           </span>
@@ -4256,42 +4259,35 @@ export function LegEditModal({
       <div className="mb-5 rounded bg-wash/[0.05] px-4 py-3 text-[12px] leading-[1.5]">
         {mode === 'all' ? (
           <span className="num text-ink-100">
-            The farm keeps the whole leg — <span className="font-semibold text-ink-50">{fmtTokenQty(legQty, unit)}</span>
-            {entry === null ? (
-              ' · entry pending'
-            ) : (
-              <>
-                {' '}at <span className="font-semibold text-ink-50">{showEntry(entry)}</span>
-              </>
-            )}
-            .
+            <Trans
+              i18nKey={entry === null ? 'assetCard.edit.keepsWhole' : 'assetCard.edit.keepsWholeAt'}
+              values={{ qty: fmtTokenQty(legQty, unit), entry: entry === null ? '' : showEntry(entry) }}
+              components={{ b: <span className="font-semibold text-ink-50" /> }}
+            />
           </span>
         ) : whole ? (
-          <span className="text-gold">The whole leg is excluded — it moves to the Excluded section.</span>
+          <span className="text-gold">{t('assetCard.edit.wholeExcluded')}</span>
         ) : preview ? (
           <span className="num text-ink-100">
-            Farm keeps <span className="font-semibold text-ink-50">{fmtTokenQty(legQty * preview.keep, unit)}</span>
-            {preview.entry === null ? (
-              ' · entry pending'
-            ) : (
-              <>
-                {' '}at <span className="font-semibold text-ink-50">{showEntry(preview.entry)}</span>
-              </>
-            )}
+            <Trans
+              i18nKey={preview.entry === null ? 'assetCard.edit.farmKeeps' : 'assetCard.edit.farmKeepsAt'}
+              values={{ qty: fmtTokenQty(legQty * preview.keep, unit), entry: preview.entry === null ? '' : showEntry(preview.entry) }}
+              components={{ b: <span className="font-semibold text-ink-50" /> }}
+            />
             {preview.at !== null && preview.entry !== entry && (
-              <span className="text-ink-400"> (was {showEntry(entry)})</span>
+              <span className="text-ink-400"> {t('assetCard.edit.was', { entry: showEntry(entry) })}</span>
             )}
           </span>
         ) : (
-          <span className="text-ink-400">Enter how much to exclude.</span>
+          <span className="text-ink-400">{t('assetCard.edit.enterQty')}</span>
         )}
       </div>
       <div className="flex items-center gap-2">
         <button type="button" className="btn flex-1 !border-transparent !bg-wash/10 hover:!bg-wash/[0.15]" onClick={onClose}>
-          Cancel
+          {t('common.cancel')}
         </button>
         <button type="button" className="btn-primary flex-1" disabled={mode === 'portion' && !qtyOk} onClick={save}>
-          Save
+          {t('common.save')}
         </button>
       </div>
     </Modal>
@@ -4322,23 +4318,23 @@ function EditCell({
       {leading}
       <button
         type="button"
-        aria-label={`Edit ${props.label}`}
+        aria-label={t('assetCard.edit.editAria', { label: props.label })}
         className={`btn-ghost-xs !py-[5px] ${has ? '!text-gold' : ''}`}
-        title={has ? 'Part of this leg is excluded.' : 'Exclude some or all of this leg from the farm'}
+        title={has ? t('assetCard.edit.partExcluded') : t('assetCard.edit.excludeTitle')}
         onClick={() => setOpen(true)}
       >
-        Edit
+        {t('common.edit')}
       </button>
       {closeTitle && (
         <button
           type="button"
-          aria-label={`Close ${props.label}`}
+          aria-label={t('assetCard.edit.closeAria', { label: props.label })}
           className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
           title={closeTitle}
           disabled={!onCloseLeg}
           onClick={onCloseLeg}
         >
-          Close leg
+          {t('assetCard.closeLeg')}
         </button>
       )}
       {open && <LegEditModal {...props} onClose={() => setOpen(false)} />}
@@ -4351,10 +4347,10 @@ function RowExcludeMenu(props: Omit<React.ComponentProps<typeof LegEditModal>, '
   return (
     <>
       <DropdownMenu
-        label="More actions"
+        label={t('assetCard.moreActions')}
         trigger={<MoreHorizontal size={12} aria-hidden />}
         triggerClassName="btn-ghost-xs !px-1.5"
-        items={[{ label: 'Exclude', onSelect: () => setOpen(true) }]}
+        items={[{ label: t('assetCard.edit.exclude'), onSelect: () => setOpen(true) }]}
       />
       {open && <LegEditModal {...props} onClose={() => setOpen(false)} />}
     </>
@@ -4369,10 +4365,10 @@ function OpenMoreButton({ gap, base, onOpen, blocked }: { gap: HedgeGapRow; base
         className={`btn-ghost-xs ${blocked ? BLOCKED_OPEN : '!text-gold hover:!border-gold/50'}`}
         disabled={!onOpen && !blocked}
         aria-disabled={!!blocked}
-        title={blocked ? undefined : onOpen ? `Opens the order ticket with ${gapAsk(gap, base)}.` : 'Order ticket unavailable here'}
+        title={blocked ? undefined : onOpen ? t('assetCard.opensTicket', { ask: gapAsk(gap, base) }) : t('assetCard.ticketUnavailable')}
         onClick={blocked ? undefined : onOpen}
       >
-        Open more
+        {t('assetCard.openMore')}
       </button>
     </BlockedOpen>
   );
@@ -4432,7 +4428,7 @@ function LegIdentity({
               : 'bg-crossex/[0.15] text-crossex'
         }`}
       >
-        {boros ? 'Boros' : 'Perp'}
+        {boros ? 'Boros' : t('common.perp')}
       </span>
       <span className="flex min-w-0 flex-col gap-1">
         <span className="flex flex-wrap items-center gap-x-[7px] gap-y-1">
@@ -4461,18 +4457,18 @@ function BundleListHeader() {
         <BundleColGroup />
         <thead>
           <tr className="[&>th]:h-9 [&>th]:px-3 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
-            <th className="text-left">Venue</th>
+            <th className="text-left">{t('common.venue')}</th>
             <th className="text-right">
-              <span className="tip-label" title="Notional of the live perp, or of the Boros legs when there is no perp.">Notional</span>
+              <span className="tip-label" title={t('assetCard.bundleHead.notionalTitle')}>{t('common.notional')}</span>
             </th>
             <th className="text-right">
-              <span className="tip-label" title="The fixed rate this venue is hedged at, blended across its live Boros legs, net of settlement fees.">Fixed APR</span>
+              <span className="tip-label" title={t('assetCard.bundleHead.fixedAprTitle')}>{t('assetCard.bundleHead.fixedApr')}</span>
             </th>
             <th className="text-right">
-              <span className="tip-label" title="Perp funding + Boros settlements, net of settlement fees.">Funding settlement</span>
+              <span className="tip-label" title={t('assetCard.bundleHead.fundingTitle')}>{t('assetCard.bundleHead.funding')}</span>
             </th>
             <th className="text-right">
-              <span className="tip-label" title="Boros realised rate PnL + perp realised price PnL + perp uPnL.">Trade PnL</span>
+              <span className="tip-label" title={t('assetCard.bundleHead.tradeTitle')}>{t('assetCard.bundleHead.tradePnl')}</span>
             </th>
             <th />
           </tr>
@@ -4536,23 +4532,23 @@ function PerpRow({
       </td>
       {/* The KEPT slice: the farm's size and its entry once any excluded
           slice is carved out at its own price. The whole leg is on hover. */}
-      <td className="num text-right" title={exFrac > 0 ? `Whole leg\t${fmtTokenQty(leg.qty, base)} (${fmtUsdCompact(leg.notionalUsd)})\nExcluded\t${fmtTokenQty(exFrac * leg.qty, base)}` : undefined}>
+      <td className="num text-right" title={exFrac > 0 ? t('assetCard.row.wholeLegTitle', { qty: fmtTokenQty(leg.qty, base), usd: fmtUsdCompact(leg.notionalUsd), excluded: fmtTokenQty(exFrac * leg.qty, base) }) : undefined}>
         {fmtTokenQty(leg.qty * slice.keep, base)}
         <span className="ml-1 text-ink-500">({fmtUsdCompact(leg.notionalUsd * slice.keep)})</span>
-        {exFrac > 0 && <span className="ml-1 text-gold" title="Part of this leg is excluded from the farm">of {fmtTokenQty(leg.qty, base)}</span>}
+        {exFrac > 0 && <span className="ml-1 text-gold" title={t('assetCard.row.partExcludedTitle')}>{t('assetCard.row.ofQty', { qty: fmtTokenQty(leg.qty, base) })}</span>}
       </td>
-      <td className="num text-right text-ink-100" title={slice.at !== null && slice.entry !== leg.entryPrice ? `Venue average\t${fmtUsd(leg.entryPrice)}\nExcluded\t${fmtTokenQty(exFrac * leg.qty, base)} at ${fmtUsd(slice.at)}` : undefined}>
+      <td className="num text-right text-ink-100" title={slice.at !== null && slice.entry !== leg.entryPrice ? t('assetCard.row.venueAvgTitle', { avg: fmtUsd(leg.entryPrice), qty: fmtTokenQty(exFrac * leg.qty, base), at: fmtUsd(slice.at) }) : undefined}>
         {leg.entryPrice > 0 && leg.markPrice > 0
           ? `${fmtUsd(slice.entry)} → ${fmtUsd(leg.markPrice)}`
           : '—'}
       </td>
       <td
         className="num text-right"
-        title={`Funding\t${fmtUsd(leg.fundingUsd)}\nFees\t${fmtUsd(leg.feesUsd)}\nInitial margin\t${fmtUsd(leg.imUsd)}`}
+        title={t('assetCard.row.perpFundingTitle', { funding: fmtUsd(leg.fundingUsd), fees: fmtUsd(leg.feesUsd), im: fmtUsd(leg.imUsd) })}
       >
         <SignedNumber value={leg.fundingUsd} format={fmtUsd} />
       </td>
-      <td className="num text-right" title="Unrealised price PnL at today's mark.">
+      <td className="num text-right" title={t('assetCard.row.upnlTitle')}>
         <SignedNumber value={leg.upnlUsd} format={fmtUsd} />
       </td>
       <td className="whitespace-nowrap text-right">
@@ -4563,13 +4559,13 @@ function PerpRow({
           {deficit && <OpenMoreButton gap={deficit} base={base} onOpen={onOpenMore} />}
           <button
             type="button"
-            aria-label={`Close ${prettyVenue(leg.venue)} ${leg.side} perp`}
+            aria-label={t('assetCard.ungrouped.closePerpAria', { venue: prettyVenue(leg.venue), side: sideUpper(leg.side) })}
             className="btn-ghost-xs !py-[5px] hover:!border-guava/50 hover:!text-guava"
-            title={onClose ? 'Close this perp leg, reduce-only.' : 'Live position not loaded yet'}
+            title={onClose ? t('assetCard.ungrouped.closePerpWhole') : t('assetCard.ungrouped.notLoaded')}
             disabled={!onClose}
             onClick={onClose}
           >
-            Close leg
+            {t('assetCard.closeLeg')}
           </button>
         </span>
       </td>
@@ -4633,14 +4629,14 @@ function BorosRow({
             </>
           }
           sub={
-            <span title="Maturity. The leg settles and ends here.">
+            <span title={t('assetCard.row.yuMaturityTitle')}>
               {fmtDateLocal(leg.maturity)}
               {(() => {
                 const days = daysToMaturity(leg.maturity, Date.now() / 1000);
                 return days > 0 ? (
                   <>
                     {' · '}
-                    <span className="text-ink-200">{days}d</span>
+                    <span className="text-ink-200">{t('assetCard.review.days', { days })}</span>
                   </>
                 ) : null;
               })()}
@@ -4648,17 +4644,17 @@ function BorosRow({
           }
         />
       </td>
-      <td className="num text-right" title={exFrac > 0 ? `Whole leg\t${fmtTokenQty(leg.sizeToken, leg.collateral)} (${fmtUsdCompact(leg.notionalUsd)})\nExcluded\t${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)}` : undefined}>
+      <td className="num text-right" title={exFrac > 0 ? t('assetCard.row.wholeLegTitle', { qty: fmtTokenQty(leg.sizeToken, leg.collateral), usd: fmtUsdCompact(leg.notionalUsd), excluded: fmtTokenQty(exFrac * leg.sizeToken, leg.collateral) }) : undefined}>
         {fmtTokenQty(leg.sizeToken * slice.keep, leg.collateral)}
         <span className="ml-1 text-ink-500">({fmtUsdCompact(leg.notionalUsd * slice.keep)})</span>
-        {exFrac > 0 && <span className="ml-1 text-gold" title="Part of this leg is excluded from the farm">of {fmtTokenQty(leg.sizeToken, leg.collateral)}</span>}
+        {exFrac > 0 && <span className="ml-1 text-gold" title={t('assetCard.row.partExcludedTitle')}>{t('assetCard.row.ofQty', { qty: fmtTokenQty(leg.sizeToken, leg.collateral) })}</span>}
       </td>
-      <td className="num text-right text-ink-100" title={leg.entryApr !== null && slice.at !== null && slice.entry !== leg.entryApr ? `Venue average\t${fmtPct(leg.entryApr)}\nExcluded\t${fmtTokenQty(exFrac * leg.sizeToken, leg.collateral)} at ${fmtPct(slice.at)}` : undefined}>
+      <td className="num text-right text-ink-100" title={leg.entryApr !== null && slice.at !== null && slice.entry !== leg.entryApr ? t('assetCard.row.venueAvgTitle', { avg: fmtPct(leg.entryApr), qty: fmtTokenQty(exFrac * leg.sizeToken, leg.collateral), at: fmtPct(slice.at) }) : undefined}>
         {settledIn ? (
-          <span className="text-ink-400">in {settledIn}</span>
+          <span className="text-ink-400">{t('assetCard.row.inSettled', { name: settledIn })}</span>
         ) : (
           <>
-            {slice.entry !== null ? fmtPct(slice.entry) : <span className="text-ink-500">pending</span>} → {fmtPct(leg.markApr)}
+            {slice.entry !== null ? fmtPct(slice.entry) : <span className="text-ink-500">{t('assetCard.pending')}</span>} → {fmtPct(leg.markApr)}
             <BorosLiqAprLine leg={leg} />
           </>
         )}
@@ -4667,12 +4663,12 @@ function BorosRow({
         className="num text-right"
         title={
           windowedGrossUsd === null
-            ? `No settlements in this window\nMtM\t${fmtUsd(leg.mtmUsd)}\nInitial margin\t${fmtUsd(leg.imUsd)}`
-            : `Settled in your window, net of settlement fees\nLifetime settled\t${fmtUsd(leg.settleUsd)}\nMtM\t${fmtUsd(leg.mtmUsd)}\nInitial margin\t${fmtUsd(leg.imUsd)}`
+            ? t('assetCard.row.noSettleTitle', { mtm: fmtUsd(leg.mtmUsd), im: fmtUsd(leg.imUsd) })
+            : t('assetCard.row.settledTitle', { lifetime: fmtUsd(leg.settleUsd), mtm: fmtUsd(leg.mtmUsd), im: fmtUsd(leg.imUsd) })
         }
       >
         {settledIn ? (
-          <span className="text-ink-400">in {settledIn}</span>
+          <span className="text-ink-400">{t('assetCard.row.inSettled', { name: settledIn })}</span>
         ) : windowedGrossUsd === null ? (
           <span className="text-ink-600">—</span>
         ) : (
@@ -4681,24 +4677,24 @@ function BorosRow({
         {windowedFeesUsd !== null && windowedFeesUsd > 0 && (
           <div
             className="text-[10px] text-ink-500"
-            title="Settlement fees charged in your window. Already taken out of the figure above."
+            title={t('assetCard.row.settleFeesTitle')}
           >
-            settle fees −{fmtUsd(windowedFeesUsd)}
+            {t('assetCard.row.settleFees', { usd: fmtUsd(windowedFeesUsd) })}
           </div>
         )}
         {windowedRebateUsd != null && windowedRebateUsd > 0 && (
           <div
             className="text-[10px] text-grass"
-            title="CrossEx settlement-fee rebate credited back in your window. Added into PnL."
+            title={t('assetCard.row.rebateTitle')}
           >
-            rebate +{fmtUsd(windowedRebateUsd)}
+            {t('assetCard.row.rebate', { usd: fmtUsd(windowedRebateUsd) })}
           </div>
         )}
       </td>
       {/* Realised rate PnL from a partial close — its own column, never
           folded into the settlement figure, so the settled column sums to
           the Fixed funding bar and this one to the Boros trade bar. */}
-      <td className="num text-right" title="Realised rate PnL from closing part of this leg early, before its trade fee.">
+      <td className="num text-right" title={t('assetCard.row.tradePartTitle')}>
         {windowedGrossUsd !== null && Math.abs(windowedGrossUsd.trade) >= 0.005 ? (
           <SignedNumber value={windowedGrossUsd.trade} format={fmtUsd} />
         ) : (
@@ -4709,7 +4705,7 @@ function BorosRow({
         <EditCell
           leading={deficit && <OpenMoreButton gap={deficit} base={base} onOpen={onOpenMore} blocked={blocked} />}
           exKey={key}
-          label={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : `${prettyVenue(leg.venue)} ${leg.side} YU`}
+          label={leg.spreadVenues ? spreadName(base, leg.spreadVenues) : `${prettyVenue(leg.venue)} ${sideUpper(leg.side)} YU`}
           unit={leg.collateral}
           legQty={leg.sizeToken}
           entry={leg.entryApr}
@@ -4719,7 +4715,7 @@ function BorosRow({
           legSince={legSince}
           onLegSince={onLegSince}
           onCloseLeg={onClose}
-          closeTitle="Close this Boros leg — market order on Boros"
+          closeTitle={t('assetCard.ungrouped.closeYuWhole')}
         />
       </td>
     </tr>
@@ -4766,13 +4762,13 @@ function InactiveBorosRow({
           dim
           sub={fmtDateLocal(h.maturity)}
           chips={
-            <Chip sm tone="neutral" title={matured ? `Matured ${fmtDateLocal(h.maturity)}` : `Closed early. Was due ${fmtDateLocal(h.maturity)}`}>
-              {matured ? 'matured' : 'closed'}
+            <Chip sm tone="neutral" title={matured ? t('assetCard.row.maturedOn', { date: fmtDateLocal(h.maturity) }) : t('assetCard.row.closedEarly', { date: fmtDateLocal(h.maturity) })}>
+              {matured ? t('assetCard.matured') : t('assetCard.row.closed')}
             </Chip>
           }
         />
       </td>
-      <td className="num text-right" title="Largest size held in the window.">
+      <td className="num text-right" title={t('assetCard.row.peakTitle')}>
         {(h.peakNotionalUsd ?? 0) > 0 ? (
           <>
             {fmtTokenQty((h.peakSizeToken ?? 0) * keep, unit)}
@@ -4785,26 +4781,26 @@ function InactiveBorosRow({
       {/* The rate it was locked at — the number a matured leg is judged by.
           Known while the chain still lists the position; a market closed
           early and gone from the account has no record left to read. */}
-      <td className="num text-right" title={entryApr !== null ? `Locked ${fmtPct(entryApr)} fixed${side ? `, ${side === 'SHORT' ? 'received' : 'paid'}` : ''}.` : 'No opening fill in this window.'}>
+      <td className="num text-right" title={entryApr !== null ? t(side ? (side === 'SHORT' ? 'assetCard.row.lockedFixedReceived' : 'assetCard.row.lockedFixedPaid') : 'assetCard.row.lockedFixed', { pct: fmtPct(entryApr) }) : t('assetCard.row.noOpenFill')}>
         {entryApr !== null ? (
           <>
             {fmtPct(entryApr)}
-            <div className="text-[10px] text-ink-500">locked{side ? ` · ${side === 'SHORT' ? 'receive' : 'pay'}` : ''}</div>
+            <div className="text-[10px] text-ink-500">{t(side ? (side === 'SHORT' ? 'assetCard.row.lockedReceive' : 'assetCard.row.lockedPay') : 'assetCard.row.locked')}</div>
           </>
         ) : (
           <span className="text-ink-600">—</span>
         )}
       </td>
-      <td className="num text-right" title="Settlements, net of settlement fees.">
+      <td className="num text-right" title={t('assetCard.row.settleNetTitle')}>
         <SignedNumber value={h.settleUsd * keep} format={fmtUsd} />
         {h.settleFeeUsd * keep > 0 && (
-          <div className="text-[10px] text-ink-500">settle fees −{fmtUsd(h.settleFeeUsd * keep)}</div>
+          <div className="text-[10px] text-ink-500">{t('assetCard.row.settleFees', { usd: fmtUsd(h.settleFeeUsd * keep) })}</div>
         )}
         {(h.rebateUsd ?? 0) * keep > 0 && (
-          <div className="text-[10px] text-grass">rebate +{fmtUsd((h.rebateUsd ?? 0) * keep)}</div>
+          <div className="text-[10px] text-grass">{t('assetCard.row.rebate', { usd: fmtUsd((h.rebateUsd ?? 0) * keep) })}</div>
         )}
       </td>
-      <td className="num text-right" title="Realised rate PnL from closing early, before its trade fee.">
+      <td className="num text-right" title={t('assetCard.row.tradeEarlyTitle')}>
         {Math.abs((h.tradePnlUsd + h.tradeFeeUsd) * keep) >= 0.005 ? (
           <SignedNumber value={(h.tradePnlUsd + h.tradeFeeUsd) * keep} format={fmtUsd} />
         ) : (
@@ -4841,22 +4837,22 @@ function ClosedPerpRow({ row, base }: { row: AssetPerpClosedRow & { symbol: stri
           dim
           sub={`CrossEx · ${row.closedAt !== null ? fmtDateLocal(row.closedAt) : '—'}`}
           chips={
-            <Chip sm tone="neutral" title={row.complete ? 'The whole position was closed' : 'Part of the position was closed.'}>
-              {row.complete ? 'closed' : 'partial close'}
+            <Chip sm tone="neutral" title={row.complete ? t('assetCard.row.wholeClosed') : t('assetCard.row.partClosed')}>
+              {row.complete ? t('assetCard.row.closed') : t('assetCard.row.partialClose')}
             </Chip>
           }
         />
       </td>
       <td className="num text-right">{fmtTokenQty(row.qty, base)}</td>
       <td className="num text-right">{fmtUsd(row.openPx)} → {fmtUsd(row.closePx)}</td>
-      <td className="num text-right" title={`Funding\t${fmtUsd(row.fundingUsd)}\nFees\t${fmtUsd(row.feesUsd)}`}>
+      <td className="num text-right" title={t('assetCard.row.fundingFeesTitle', { funding: fmtUsd(row.fundingUsd), fees: fmtUsd(row.feesUsd) })}>
         {row.dedupedIntoOpen ? (
-          <span className="text-ink-600" title="Booked on the open row above.">in open ↑</span>
+          <span className="text-ink-600" title={t('assetCard.row.bookedOnOpen')}>{t('assetCard.row.inOpen')}</span>
         ) : (
           <SignedNumber value={row.fundingUsd} format={fmtUsd} />
         )}
       </td>
-      <td className="num text-right" title="Realised price PnL on the close.">
+      <td className="num text-right" title={t('assetCard.row.closePriceTitle')}>
         <SignedNumber value={row.priceUsd} format={fmtUsd} />
       </td>
       <td />
@@ -5004,7 +5000,7 @@ function BundleCard({
                           side === 'LONG' ? 'text-grass' : 'text-guava'
                         }`}
                       >
-                        {side}
+                        {sideUpper(side)}
                       </b>
                     )}
                     {/* Badges only for a PROBLEM: the card's own "hedged ✓" already
@@ -5012,22 +5008,22 @@ function BundleCard({
                         Tags, not a sub-line of amber words — a second line of
                         text per row cost height for nothing (his call). */}
                     {missing.map((g) => (
-                      <Chip key={g.leg} sm tone="amber" title={`Open ${gapAsk(g, base)} to complete this bundle.`}>
-                        {g.leg === 'boros' ? 'Boros leg missing' : 'perp leg missing'}
+                      <Chip key={g.leg} sm tone="amber" title={t('assetCard.bundle.completeTitle', { ask: gapAsk(g, base) })}>
+                        {g.leg === 'boros' ? t('assetCard.bundle.borosMissing') : t('assetCard.bundle.perpMissing')}
                       </Chip>
                     ))}
                     {b.gapsHere.filter((g) => g.kind === 'deficit').map((g) => (
                       <DeficitChip key={`d-${g.leg}`} gap={g} base={base} />
                     ))}
-                    {!b.active && <Chip sm tone="neutral">closed</Chip>}
+                    {!b.active && <Chip sm tone="neutral">{t('assetCard.row.closed')}</Chip>}
                   </span>
                   {/* "N active · M inactive" — YU legs by count; a zero side is
                       simply not said. */}
                   {(maturities.length > 0 || inactiveCount > 0) && (
                     <span className="num text-[11.5px] leading-none text-ink-400">
                       {[
-                        maturities.length > 0 ? `${maturities.length} active` : null,
-                        inactiveCount > 0 ? `${inactiveCount} inactive` : null,
+                        maturities.length > 0 ? t('assetCard.bundle.active', { n: maturities.length }) : null,
+                        inactiveCount > 0 ? t('assetCard.bundle.inactive', { n: inactiveCount }) : null,
                       ]
                         .filter(Boolean)
                         .join(' · ')}
@@ -5038,7 +5034,7 @@ function BundleCard({
             </td>
             <td
               className="px-3 text-right"
-              title={`Notional of the live perp, or of the Boros legs when there is no perp.${b.notionalUsd > 0 ? `\n${exactUsd(b.notionalUsd)}${b.sizeToken > 0 ? ` on ${exactQty(b.sizeToken, b.sizeUnit)}` : ''}` : ''}`}
+              title={`${t('assetCard.bundleHead.notionalTitle')}${b.notionalUsd > 0 ? `\n${exactUsd(b.notionalUsd)}${b.sizeToken > 0 ? t('assetCard.bundle.onQty', { qty: exactQty(b.sizeToken, b.sizeUnit) }) : ''}` : ''}`}
             >
               <div className="num text-[14px] font-medium leading-none text-ink-50">
                 {b.notionalUsd > 0 ? fmtUsdCompact(b.notionalUsd) : <span className="text-ink-600">—</span>}
@@ -5046,16 +5042,16 @@ function BundleCard({
             </td>
             <td
               className="px-3 text-right"
-              title="The fixed rate this venue is hedged at, blended across its live Boros legs, net of settlement fees."
+              title={t('assetCard.bundleHead.fixedAprTitle')}
             >
               <div className="num text-[14px] font-medium leading-none">
                 {b.fixedApr !== null ? (
                   <span className={b.fixedApr >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
-                    {b.fixedApr >= 0 ? 'receive ' : 'pay '}
+                    {`${b.fixedApr >= 0 ? t('assetCard.bundle.receive') : t('assetCard.bundle.pay')} `}
                     {fmtPct(Math.abs(b.fixedApr))}
                   </span>
                 ) : b.ratePending ? (
-                  <span className="text-ink-500">pending</span>
+                  <span className="text-ink-500">{t('assetCard.pending')}</span>
                 ) : (
                   <span className="text-ink-600">—</span>
                 )}
@@ -5063,7 +5059,7 @@ function BundleCard({
             </td>
             <td
               className="px-3 text-right"
-              title={`Funding settlement\t${fmtUsd(b.settleUsd)}\nTrading fees\t${b.feesUsd > 0 ? `−${fmtUsd(b.feesUsd)}` : fmtUsd(0)}`}
+              title={`${t('assetCard.bundleHead.funding')}\t${fmtUsd(b.settleUsd)}\n${t('assetCard.bundle.tradingFees')}\t${b.feesUsd > 0 ? `−${fmtUsd(b.feesUsd)}` : fmtUsd(0)}`}
             >
               <div className="num text-[14px] font-medium leading-none">
                 <SignedNumber value={b.settleUsd} format={fmtUsd} />
@@ -5071,8 +5067,8 @@ function BundleCard({
             </td>
             <td
               className="px-3 text-right"
-              title={`Boros realised rate PnL + perp realised price PnL + perp uPnL.${
-                multiVenue && Math.abs(b.tradePnlUsd) >= 0.005 ? '\n* Offsets across venues.' : ''
+              title={`${t('assetCard.bundleHead.tradeTitle')}${
+                multiVenue && Math.abs(b.tradePnlUsd) >= 0.005 ? `\n${t('assetCard.bundle.offsets')}` : ''
               }`}
             >
               <div className="num text-[14px] font-medium leading-none">
@@ -5103,11 +5099,11 @@ function BundleCard({
             <BundleColGroup />
             <thead>
               <tr className="[&>th]:px-3 [&>th]:py-2.5 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-[46px] [&>th:last-child]:pr-4">
-                <th className="text-left">Leg</th>
-                <th className="text-right">Size</th>
-                <th className="text-right">Entry → Mark</th>
-                <th className="text-right">Funding / Settled</th>
-                <th className="text-right">uPnL / Trade PnL</th>
+                <th className="text-left">{t('common.leg')}</th>
+                <th className="text-right">{t('common.size')}</th>
+                <th className="text-right">{t('assetCard.bundle.entryMark')}</th>
+                <th className="text-right">{t('assetCard.bundle.fundingSettled')}</th>
+                <th className="text-right">{t('assetCard.bundle.upnlTrade')}</th>
                 <th />
               </tr>
             </thead>
@@ -5185,7 +5181,7 @@ function BundleCard({
                       aria-expanded={inactiveOpen}
                       onClick={() => setInactiveOpen((v) => !v)}
                     >
-                      {inactiveOpen ? 'hide' : 'show'} {inactiveCount} inactive leg{inactiveCount === 1 ? '' : 's'} — matured or closed, still in this bundle's settlement
+                      {t(inactiveOpen ? 'assetCard.bundle.hideInactive' : 'assetCard.bundle.showInactive', { count: inactiveCount })}
                     </button>
                   </td>
                 </tr>
@@ -5232,6 +5228,7 @@ export function AssetCard({
   onLegSince,
   liquidation = null,
 }: Props) {
+  useTranslation();
   const { totals, gaps, venues } = derived;
   const flow = useTradeFlowOptional();
   /**
@@ -5422,19 +5419,19 @@ export function AssetCard({
       : // The tooltip's own conventions: two-cell rows (the value cell never
         // wraps, so it stays short) and "* " footnotes, which wrap.
         [
-          'Estimate: part of this book floats.',
-          `Fixed\t${fmtPct(estimate.fixedApr)}`,
-          `Floating\t${fmtPct(estimate.floatingApr)}`,
+          t('assetCard.estimate.head'),
+          `${t('assetCard.estimate.fixed')}\t${fmtPct(estimate.fixedApr)}`,
+          `${t('assetCard.estimate.floating')}\t${fmtPct(estimate.floatingApr)}`,
           ...(estimate.venues.length > 0 ? ['---'] : []),
           ...estimate.venues.map(
             (v) =>
-              `${prettyVenue(v.venue)}\t${v.gapUsd > 0 ? 'LONG' : 'SHORT'} ${fmtUsdCompact(Math.abs(v.gapUsd))} · ${fmtPct(v.fundingApr)}${v.source === 'current' ? ' now' : ''}`,
+              `${prettyVenue(v.venue)}\t${sideUpper(v.gapUsd > 0 ? 'LONG' : 'SHORT')} ${fmtUsdCompact(Math.abs(v.gapUsd))} · ${fmtPct(v.fundingApr)}${v.source === 'current' ? ` ${t('assetCard.estimate.now')}` : ''}`,
           ),
-          "* Floating = unhedged size × funding (7-day average, or today's where marked now).",
+          t('assetCard.estimate.floatingNote'),
           ...(estimate.leftOutCapitalUsd > 0
-            ? [`* Leaves out legs with no hedge and their ${fmtUsd(estimate.leftOutCapitalUsd)} margin.`]
+            ? [t('assetCard.estimate.leftOut', { usd: fmtUsd(estimate.leftOutCapitalUsd) })]
             : []),
-          '* Excludes price moves.',
+          t('assetCard.estimate.noPrice'),
         ].join('\n');
   // Pairs inside the roll window — the banner's count, and the cards it
   // points at carry the same flag.
@@ -5647,7 +5644,7 @@ export function AssetCard({
   const named = (n: ExcludedNet | undefined): NamedNet | null => {
     if (!n) return null;
     const leg = group.borosOpen.find((b) => b.marketId === n.marketId);
-    return { ...n, name: leg?.spreadVenues ? `${legVenueName(leg)} ${leg.side}` : `${prettyVenue(n.venue)} ${n.side}` };
+    return { ...n, name: leg?.spreadVenues ? `${legVenueName(leg)} ${sideUpper(leg.side)}` : `${prettyVenue(n.venue)} ${sideUpper(n.side)}` };
   };
   const netsAt = (list: ExcludedNet[], market: BorosPairMarketRow | undefined, maturity: number | undefined): NamedNet | null => {
     if (list.length === 0) return null;
@@ -5718,7 +5715,7 @@ export function AssetCard({
       {
         venue,
         side,
-        held: `${prettyVenue(venue)} ${side} holds ${exactSize(total, p.unit, group.base)} at ${dates.join(' and ')}.`,
+        held: t('assetCard.overlapHeld', { venue: prettyVenue(venue), side: sideUpper(side), size: exactSize(total, p.unit, group.base), dates: dates.join(t('assetCard.andSep')) }),
         room: usd(h.room),
         roomBase: coin(h.room),
         legs: h.legs.map((y) => ({ size: usd(sizeIn(y, p.unit)), sizeBase: coin(sizeIn(y, p.unit)), maturity: y.maturity })),
@@ -5808,36 +5805,36 @@ export function AssetCard({
               className={HEAD_CHIP}
               title={
                 derived.grossPerp > 0 && derived.netPerp !== 0
-                  ? `Every leg is covered and the perps cancel within ${venues[0]?.unit === 'base' ? '0.1%' : '2%'}.\nResidual exposure\t${derived.netPerp > 0 ? 'LONG' : 'SHORT'} ${compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''}`
-                  : 'Every leg is covered and the perps cancel exactly.'
+                  ? `${t('assetCard.head.hedgedWithin', { tol: venues[0]?.unit === 'base' ? '0.1%' : '2%' })}\n${t('assetCard.head.residual')}\t${sideUpper(derived.netPerp > 0 ? 'LONG' : 'SHORT')} ${compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}${venues[0]?.unit === 'base' && group.priceUsd > 0 ? ` ≈ ${fmtUsdCompact(Math.abs(derived.netPerp) * group.priceUsd)}` : ''}`
+                  : t('assetCard.head.hedgedExact')
               }
             >
-              Hedged <Check size={12} aria-hidden className="inline" />
+              {t('assetCard.head.hedged')} <Check size={12} aria-hidden className="inline" />
             </Chip>
           ) : gaps.length > 0 ? (
             <Chip
               tone="amber"
               className={HEAD_CHIP}
-              title={['To complete the hedge', ...gaps.map((g) => `${prettyVenue(g.venue)}\topen ${gapAsk(g, group.base)}`)].join('\n')}
+              title={[t('assetCard.head.toComplete'), ...gaps.map((g) => `${prettyVenue(g.venue)}\t${t('assetCard.head.openAsk', { ask: gapAsk(g, group.base) })}`)].join('\n')}
             >
-              Missing hedge
+              {t('assetCard.head.missingHedge')}
             </Chip>
           ) : (
-            <Chip tone="amber" className={HEAD_CHIP} title="The perps do not cancel across venues. Price risk is live.">
-              Perps don’t cancel
+            <Chip tone="amber" className={HEAD_CHIP} title={t('assetCard.head.noCancelTitle')}>
+              {t('assetCard.head.noCancel')}
             </Chip>
           ))}
         {hasLegs && liquidation && <LiquidationChip line={liquidation} base={group.base} />}
         <span className="ml-auto" />
-        {windowPending && <span className="text-xs text-ink-600">updating window…</span>}
+        {windowPending && <span className="text-xs text-ink-600">{t('assetCard.head.updatingWindow')}</span>}
         <SinceChip base={group.base} storedSec={storedSinceSec} defaultSec={defaultSinceSec} onChange={onChangeSince} />
       </div>
 
       {!group.supported && (
         <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
           <span className="font-semibold">
-            {group.base} is{' '}
-            <HoverCard label="not supported">{`The terminal supports ${listCoins(supportedCoins)}.`}</HoverCard>
+            {t('assetCard.head.isBefore', { base: group.base })}{' '}
+            <HoverCard label={t('assetCard.head.notSupported')}>{t('assetCard.head.supports', { coins: listCoins(supportedCoins) })}</HoverCard>
           </span>
         </div>
       )}
@@ -5855,7 +5852,7 @@ export function AssetCard({
           <div className="absolute inset-0 z-10 flex items-center justify-center gap-2.5 rounded bg-ink-950/90 text-sm text-ink-100">
             <Spinner />
             <span>
-              {sinceSec > 0 ? `Reading Boros payments since ${fmtDateShort(sinceSec)}…` : 'Reading all Boros payments…'}
+              {sinceSec > 0 ? t('assetCard.head.readingSince', { date: fmtDateShort(sinceSec) }) : t('assetCard.head.readingAll')}
             </span>
           </div>
         )}
@@ -5870,13 +5867,13 @@ export function AssetCard({
         <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-5">
         <div className="flex min-w-0 flex-wrap items-end gap-x-10 gap-y-5">
           <div>
-            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="PnL since the start date.">
-              <span className="tip-label">Total PnL</span>
+            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title={t('assetCard.head.pnlTitle')}>
+              <span className="tip-label">{t('assetCard.head.totalPnl')}</span>
             </div>
             <button
               type="button"
               className="group/pnl num mt-1.5 flex items-center text-left text-[28px] font-bold leading-[1.1]"
-              title={`Carry − fees\t${fmtUsd(totals.pnlUsd - totals.priceResidualUsd)}\nOpen marks\t${fmtUsd(totals.breakdown.perpUpnlUsd)}\nClosed realized price\t${fmtUsd(totals.priceResidualUsd - totals.breakdown.perpUpnlUsd)}\n---\nTotal PnL\t${fmtUsd(totals.pnlUsd)}\n* Click for the full breakdown.`}
+              title={t('assetCard.head.pnlBreakdownTitle', { carry: fmtUsd(totals.pnlUsd - totals.priceResidualUsd), open: fmtUsd(totals.breakdown.perpUpnlUsd), closed: fmtUsd(totals.priceResidualUsd - totals.breakdown.perpUpnlUsd), total: fmtUsd(totals.pnlUsd) })}
               onClick={() => setFeesOpen(true)}
             >
               <SignedNumber value={totals.pnlUsd} format={fmtUsd} />
@@ -5897,7 +5894,7 @@ export function AssetCard({
                 breakdown, which already itemises these fees per leg. */}
             <div
               className="num mt-2 text-[11px] leading-none text-ink-400"
-              title={`Perp fees\t${fmtUsd(totals.perpFeesAllUsd)}\nBoros fees\t${fmtUsd(totals.borosFeesAllUsd)}\nPrice basis\t${fmtUsd(-totals.priceResidualUsd)}\n---\nAll time cost\t${fmtUsd(Math.abs(totals.costUsd))}`}
+              title={t('assetCard.head.costTitle', { perp: fmtUsd(totals.perpFeesAllUsd), boros: fmtUsd(totals.borosFeesAllUsd), basis: fmtUsd(-totals.priceResidualUsd), cost: fmtUsd(Math.abs(totals.costUsd)) })}
             >
               {derived.roi !== null && (
                 <>
@@ -5905,7 +5902,7 @@ export function AssetCard({
                   <span aria-hidden="true">·</span>{' '}
                 </>
               )}
-              <span className="tip-label">All time Cost {fmtUsd(Math.abs(totals.costUsd))}</span>
+              <span className="tip-label">{t('assetCard.head.allTimeCost', { usd: fmtUsd(Math.abs(totals.costUsd)) })}</span>
             </div>
           </div>
         </div>
@@ -5916,11 +5913,11 @@ export function AssetCard({
                 shows its fixed rate is untouched (his call 2026-10-01). */}
             {estimate !== null ? (
               <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title={estimateTitle}>
-                <span className="tip-label">Current APR</span>
+                <span className="tip-label">{t('assetCard.head.currentApr')}</span>
               </div>
             ) : (
-              <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="The rate the hedge locks now, net of Boros settlement fees. A dash means the hedge is incomplete.">
-                <span className="tip-label">Current APR (Fixed)</span>
+              <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title={t('assetCard.head.currentFixedTitle')}>
+                <span className="tip-label">{t('assetCard.head.currentAprFixed')}</span>
               </div>
             )}
             <div className="num mt-1.5 text-[20px] font-bold leading-[24.2px]">
@@ -5934,7 +5931,7 @@ export function AssetCard({
             </div>
             {estimate !== null && (
               <div className="num mt-2 text-[11px] leading-none text-ink-400" title={estimateTitle}>
-                Fixed <SignedNumber value={estimate.fixedApr} format={fmtPct} className="!text-ink-400" /> · Floating{' '}
+                {t('assetCard.estimate.fixed')} <SignedNumber value={estimate.fixedApr} format={fmtPct} className="!text-ink-400" /> · {t('assetCard.estimate.floating')}{' '}
                 <SignedNumber value={estimate.floatingApr} format={fmtPct} className="!text-ink-400" />
               </div>
             )}
@@ -5944,16 +5941,16 @@ export function AssetCard({
             {derived.lockedAprFwd !== null && derived.lockedCarryPerYearUsd !== null && (
               <div
                 className="num mt-2 text-[11px] leading-none text-ink-400"
-                title={`The locked rate in dollars per day.${derived.lockedNotionalUsd !== null ? `\nOn notional\t${fmtPct(derived.lockedCarryPerYearUsd / derived.lockedNotionalUsd)}\nNotional\t${fmtUsdCompact(derived.lockedNotionalUsd)}` : ''}`}
+                title={`${t('assetCard.head.perDayTitle')}${derived.lockedNotionalUsd !== null ? `\n${t('assetCard.head.onNotional')}\t${fmtPct(derived.lockedCarryPerYearUsd / derived.lockedNotionalUsd)}\n${t('common.notional')}\t${fmtUsdCompact(derived.lockedNotionalUsd)}` : ''}`}
               >
                 ≈ <SignedNumber value={derived.lockedCarryPerYearUsd / 365} format={fmtUsd} className="!text-ink-400" />
-                /day
+                {t('assetCard.head.perDay')}
               </div>
             )}
           </div>
           <div className="border-l border-ink-700 pl-7">
-            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title="Initial margin required across every counted leg.">
-              <span className="tip-label">Current Capital</span>
+            <div className="text-[12px] font-normal leading-[14.52px] text-ink-300" title={t('assetCard.head.capitalTitle')}>
+              <span className="tip-label">{t('assetCard.head.currentCapital')}</span>
             </div>
             <div className="num mt-1.5 text-[20px] font-semibold leading-[24.2px] text-ink-50">
               {fmtUsd(totals.capitalUsd)}
@@ -5971,7 +5968,7 @@ export function AssetCard({
           onClick={() => setWfOpen((v) => !v)}
         >
           <ChartColumnDecreasing size={13} aria-hidden className="text-ink-400" />
-          {wfOpen ? 'Hide waterfall' : 'PnL waterfall'}
+          {wfOpen ? t('assetCard.head.hideWaterfall') : t('assetCard.head.pnlWaterfall')}
         </button>
         </div>
 
@@ -5994,14 +5991,13 @@ export function AssetCard({
         <div className="mb-3 flex flex-col gap-1.5">
           {!derived.deltaNeutral && (
             <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
-              <span className="font-semibold">Perps don’t cancel</span>
+              <span className="font-semibold">{t('assetCard.head.noCancel')}</span>
               <span>
-                net{' '}
-                <span className="num font-semibold">
-                  {derived.netPerp > 0 ? 'LONG' : 'SHORT'}{' '}
-                  {compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base)}
-                </span>{' '}
-                across venues — price risk is live
+                <Trans
+                  i18nKey="assetCard.head.netAcross"
+                  values={{ side: sideUpper(derived.netPerp > 0 ? 'LONG' : 'SHORT'), size: compactSize(Math.abs(derived.netPerp), venues[0]?.unit ?? 'usd', group.base) }}
+                  components={{ b: <span className="num font-semibold" /> }}
+                />
               </span>
             </div>
           )}
@@ -6017,8 +6013,8 @@ export function AssetCard({
         value={view}
         onChange={setView}
         options={[
-          { value: 'bundles', label: 'Funding Bundles', count: activeBundles.length },
-          { value: 'pairs', label: 'Fixed Rate Pairs', count: derived.pairs.length + derived.perpOnly.length + derived.borosOnly.length },
+          { value: 'bundles', label: t('assetCard.tabs.bundles'), count: activeBundles.length },
+          { value: 'pairs', label: t('assetCard.tabs.pairs'), count: derived.pairs.length + derived.perpOnly.length + derived.borosOnly.length },
         ]}
         right={
           excludedRows.length > 0 || view === 'bundles' ? (
@@ -6027,17 +6023,17 @@ export function AssetCard({
                 <button
                   type="button"
                   className="btn-ghost-xs"
-                  title="Jump to the excluded legs."
+                  title={t('assetCard.head.jumpExcluded')}
                   onClick={() => excludedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
                 >
-                  <span className="num">{excludedRows.length}</span> excluded
+                  <span className="num">{excludedRows.length}</span> {t('assetCard.head.excluded')}
                   <ArrowDown size={12} aria-hidden />
                 </button>
               )}
               {view === 'bundles' && (
                 <>
-                  <span className={microLabelClass}>Funding bundles</span>
-                  <span className="num text-sm font-semibold" title="Perp funding + Boros settlements, live and finished legs.">
+                  <span className={microLabelClass}>{t('assetCard.head.fundingBundles')}</span>
+                  <span className="num text-sm font-semibold" title={t('assetCard.head.fundingBundlesTitle')}>
                     <SignedNumber value={fixedFundingUsd} format={fmtUsd} />
                   </span>
                 </>
@@ -6090,7 +6086,7 @@ export function AssetCard({
           </div>
         ) : (
           <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
-            No open legs — the totals above are history since the start date.
+            {t('assetCard.head.noOpenLegs')}
           </p>
         )}
 
@@ -6104,14 +6100,14 @@ export function AssetCard({
             type="button"
             onClick={() => setClosedOpen(true)}
             className="mt-3 flex w-full flex-wrap items-center gap-2 rounded border border-ink-700 bg-ink-950/60 px-3.5 py-2.5 text-left text-xs transition-colors hover:border-ink-500"
-            title="Exchanges where every leg is closed or matured."
+            title={t('assetCard.head.closedTitle')}
           >
-            <span className={microLabelClass}>Closed Funding Bundles</span>
+            <span className={microLabelClass}>{t('assetCard.head.closedBundles')}</span>
             <span className="text-ink-400">
-              {closedBundles.length} exchange{closedBundles.length === 1 ? '' : 's'} with every leg closed or matured
+              {t('assetCard.head.closedCount', { count: closedBundles.length })}
             </span>
             <span className="num ml-auto text-ink-400">
-              funding settlement{' '}
+              {t('assetCard.head.fundingSettlementLower')}{' '}
               <span className="text-sm font-semibold">
                 <SignedNumber value={closedBundles.reduce((t, b) => t + b.settleUsd, 0)} format={fmtUsd} />
               </span>
@@ -6119,12 +6115,12 @@ export function AssetCard({
           </button>
           {closedOpen && (
             <Modal
-              title={`Closed funding bundles — ${group.base}`}
+              title={t('assetCard.head.closedModalTitle', { base: group.base })}
               onClose={() => setClosedOpen(false)}
               widthClass="w-[960px]"
             >
               <p className="mb-3 text-[11.5px] text-ink-300">
-                Exchanges where every leg is closed or matured. Their funding settlement and realised PnL stay in this asset's totals.
+                {t('assetCard.head.closedIntro')}
               </p>
               <div className="flex flex-col gap-2">
                 <BundleListHeader />
@@ -6250,7 +6246,7 @@ export function AssetCard({
           </div>
         ) : (
           <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
-            No open legs to pair.
+            {t('assetCard.head.noLegsToPair')}
           </p>
         )}
       </div>
@@ -6258,16 +6254,16 @@ export function AssetCard({
         {excludedRows.length > 0 && (
           <div ref={excludedRef} className="mb-3 overflow-hidden rounded border border-ink-700">
             <div className="flex flex-wrap items-center gap-2 border-b border-ink-850 bg-wash/[0.04] px-3.5 py-2">
-              <span className={microLabelClass}>Excluded</span>
-              <span className="text-[11px] text-ink-400">Not part of the arb: out of the hedge, PnL and capital.</span>
+              <span className={microLabelClass}>{t('assetCard.excluded.title')}</span>
+              <span className="text-[11px] text-ink-400">{t('assetCard.excluded.sub')}</span>
             </div>
             <table className="w-full border-collapse text-[12.5px] [&_td]:border-b [&_td]:border-ink-850 [&_td]:px-2.5 [&_td]:py-2 [&_tr:last-child_td]:border-b-0">
               <thead>
                 <tr>
-                  <th className="th text-left">Leg</th>
-                  <th className="th text-right">Size</th>
-                  <th className="th text-right">Locked</th>
-                  <th className="th text-right">Initial margin</th>
+                  <th className="th text-left">{t('common.leg')}</th>
+                  <th className="th text-right">{t('common.size')}</th>
+                  <th className="th text-right">{t('common.locked')}</th>
+                  <th className="th text-right">{t('common.initialMargin')}</th>
                   <th className="th" />
                 </tr>
               </thead>
@@ -6282,16 +6278,16 @@ export function AssetCard({
                       </td>
                       <td className="num whitespace-nowrap text-right text-ink-100">
                         {fmtTokenQty(r.frac * r.legQty, r.unit)}
-                        <span className="ml-1 text-ink-400">{r.frac >= 1 ? 'whole leg' : 'slice'}</span>
+                        <span className="ml-1 text-ink-400">{r.frac >= 1 ? t('assetCard.excluded.wholeLeg') : t('assetCard.excluded.slice')}</span>
                       </td>
                       <td className="num whitespace-nowrap text-right text-ink-300">
                         {at !== null ? (
-                          <span title="The level this slice was excluded at.">
-                            at {show(at)}
+                          <span title={t('assetCard.excluded.atTitle')}>
+                            {t('assetCard.excluded.at', { v: show(at) })}
                           </span>
                         ) : (
-                          <span className="text-ink-500" title="Split at the leg's average.">
-                            at avg {r.entry !== null ? show(r.entry) : 'pending'}
+                          <span className="text-ink-500" title={t('assetCard.excluded.avgTitle')}>
+                            {t('assetCard.excluded.atAvg', { v: r.entry !== null ? show(r.entry) : t('assetCard.pending') })}
                           </span>
                         )}
                       </td>
@@ -6301,10 +6297,10 @@ export function AssetCard({
                           <button
                             type="button"
                             className="btn-ghost-xs"
-                            title="Count the whole leg in the arb again."
+                            title={t('assetCard.excluded.restoreTitle')}
                             onClick={() => onExclude(r.key, undefined)}
                           >
-                            Restore
+                            {t('assetCard.excluded.restore')}
                           </button>
                           <EditCell
                             exKey={r.key}
@@ -6330,7 +6326,7 @@ export function AssetCard({
         <Modal
           title={
             <>
-              Close pair
+              {t('assetCard.closePair')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {group.base} · {prettyVenue(closePerps.longVenue)} ⇄ {prettyVenue(closePerps.shortVenue)}
                 {closePerps.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closePerps.soonestMaturitySec)}` : ''}
@@ -6355,9 +6351,9 @@ export function AssetCard({
         <Modal
           title={
             <>
-              Close pair
+              {t('assetCard.closePair')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
-                {group.base} · {prettyVenue(closePerpOnly.longVenue)} ⇄ {prettyVenue(closePerpOnly.shortVenue)} · no rate legs
+                {group.base} · {prettyVenue(closePerpOnly.longVenue)} ⇄ {prettyVenue(closePerpOnly.shortVenue)} · {t('assetCard.closeModal.noRateLegs')}
               </span>
             </>
           }
@@ -6388,12 +6384,12 @@ export function AssetCard({
         <Modal
           title={
             <>
-              {closeLeg.leg.spreadVenues ? `Close ${spreadName(group.base, closeLeg.leg.spreadVenues)}` : 'Close Boros leg'}
+              {closeLeg.leg.spreadVenues ? t('assetCard.closeModal.closeName', { name: spreadName(group.base, closeLeg.leg.spreadVenues) }) : t('assetCard.borosOnly.closeLeg')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {/* A spread's title already names the coin. */}
                 {closeLeg.leg.spreadVenues ? '' : `${prettyVenue(closeLeg.leg.venue)} · ${group.base} · `}
                 {closeLeg.leg.maturity ? `${fmtDateLocal(closeLeg.leg.maturity)} · ` : ''}
-                {closeLeg.leg.side.toLowerCase()}
+                {t(closeLeg.leg.side === 'LONG' ? 'common.long' : 'common.short').toLowerCase()}
               </span>
             </>
           }
@@ -6434,7 +6430,7 @@ export function AssetCard({
           title={
             <>
               {/* Named for what it closes: the perps stay open. */}
-              {pairBorosCloseLegs(closeBoros, group).length === 1 ? 'Close Boros leg' : 'Close Boros legs'}
+              {pairBorosCloseLegs(closeBoros, group).length === 1 ? t('assetCard.borosOnly.closeLeg') : t('assetCard.borosOnly.closeLegs')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {group.base} · {prettyVenue(closeBoros.longVenue)} ⇄ {prettyVenue(closeBoros.shortVenue)}
                 {closeBoros.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closeBoros.soonestMaturitySec)}` : ''}
@@ -6459,10 +6455,10 @@ export function AssetCard({
         <Modal
           title={
             <>
-              Close pair
+              {t('assetCard.closePair')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {group.base} · {prettyVenue(closeBorosOnly.longVenue)} ⇄ {prettyVenue(closeBorosOnly.shortVenue)} ·{' '}
-                {fmtDateLocal(closeBorosOnly.maturity)} · no perps
+                {fmtDateLocal(closeBorosOnly.maturity)} · {t('assetCard.closeModal.noPerps')}
               </span>
             </>
           }
@@ -6510,7 +6506,7 @@ export function AssetCard({
       )}
 
       {feesOpen && (
-        <Modal title={`${group.base} — PnL breakdown`} onClose={() => setFeesOpen(false)} widthClass="w-[760px]">
+        <Modal title={t('assetCard.breakdown.title', { base: group.base })} onClose={() => setFeesOpen(false)} widthClass="w-[760px]">
           {(() => {
             const cell = 'px-2 py-1.5';
             const th = 'px-2 pb-1 text-[11px] font-normal text-ink-500';
@@ -6518,7 +6514,7 @@ export function AssetCard({
               ...group.perpOpen.map((l) => ({
                 key: `o:${l.symbol}`,
                 venue: prettyVenue(l.venue),
-                status: 'open',
+                status: t('assetCard.breakdown.open'),
                 note: '',
                 fundingUsd: l.fundingUsd as number | null,
                 priceUsd: l.upnlUsd as number | null,
@@ -6530,8 +6526,8 @@ export function AssetCard({
               ...group.perpClosed.map((r) => ({
                 key: `c:${r.symbol}`,
                 venue: prettyVenue(r.venue),
-                status: `${r.count} closed`,
-                note: r.lastClosedAt !== null ? `last ${fmtDateLocal(r.lastClosedAt)}` : '',
+                status: t('assetCard.breakdown.closedCount', { n: r.count }),
+                note: r.lastClosedAt !== null ? t('assetCard.breakdown.last', { date: fmtDateLocal(r.lastClosedAt) }) : '',
                 fundingUsd: (r.fundingUsd !== 0 ? r.fundingUsd : null) as number | null,
                 priceUsd: r.closedPnlUsd as number | null,
                 priceIsUpnl: false,
@@ -6584,23 +6580,23 @@ export function AssetCard({
               <>
                 <div
                   className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1 rounded-md border border-ink-800 px-3 py-2 text-xs text-ink-400"
-                  title="Carry − fees is settled. Price basis is open marks + closed realized price."
+                  title={t('assetCard.breakdown.summaryTitle')}
                 >
                   <span>
-                    carry − fees{' '}
+                    {t('assetCard.breakdown.carryFees')}{' '}
                     <span className="num">
                       <SignedNumber value={totals.pnlUsd - totals.priceResidualUsd} format={fmtUsd} />
                     </span>
                   </span>
                   <span>
-                    price basis{' '}
+                    {t('assetCard.breakdown.priceBasis')}{' '}
                     <span className="num">
                       <SignedNumber value={totals.priceResidualUsd} format={fmtUsd} />
                     </span>
                   </span>
                   {totals.breakdown.borosRebateUsd > 0 && (
-                    <span title="CrossEx settlement-fee rebate credited back, included in PnL.">
-                      settlement rebate{' '}
+                    <span title={t('assetCard.breakdown.rebateTitle')}>
+                      {t('assetCard.breakdown.settlementRebate')}{' '}
                       <span className="num">
                         <SignedNumber value={totals.breakdown.borosRebateUsd} format={fmtUsd} className="!text-grass" />
                       </span>
@@ -6608,15 +6604,15 @@ export function AssetCard({
                   )}
                   <span
                     className="text-ink-600"
-                    title="Mark value of the open Boros legs. Not counted in PnL."
+                    title={t('assetCard.breakdown.mtmTitle')}
                   >
-                    Boros MtM{' '}
+                    {t('assetCard.breakdown.borosMtm')}{' '}
                     <span className="num">
                       <SignedNumber value={totals.mtmUsd} format={fmtUsd} className="!text-ink-500" />
                     </span>
                   </span>
                   <span className="ml-auto font-semibold text-ink-300">
-                    PnL{' '}
+                    {t('common.pnl')}{' '}
                     <span className="num">
                       <SignedNumber value={totals.pnlUsd} format={fmtUsd} />
                     </span>
@@ -6625,10 +6621,10 @@ export function AssetCard({
                 {venueCarry.length > 1 && (
                   <div
                     className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-500"
-                    title="Per venue: perp funding + Boros settlement and trade PnL in the window. Before fees and price basis."
+                    title={t('assetCard.breakdown.netCarryTitle')}
                   >
                     <span className="text-[11px] font-normal text-ink-500">
-                      Net carry by venue
+                      {t('assetCard.breakdown.netCarry')}
                     </span>
                     {venueCarry.map(([v, usd]) => (
                       <span key={v} className="num">
@@ -6638,17 +6634,17 @@ export function AssetCard({
                   </div>
                 )}
                 <p className="mb-1 text-[14px] font-semibold text-ink-50">
-                  Perps — by venue
+                  {t('assetCard.breakdown.perpsByVenue')}
                 </p>
                 {perpRows.length ? (
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left">
-                        <th className={th}>Venue</th>
-                        <th className={th}>Position</th>
-                        <th className={`${th} text-right`}>Funding</th>
-                        <th className={`${th} text-right`}>Price PnL</th>
-                        <th className={`${th} text-right`}>Fees</th>
+                        <th className={th}>{t('common.venue')}</th>
+                        <th className={th}>{t('common.position')}</th>
+                        <th className={`${th} text-right`}>{t('assetCard.breakdown.funding')}</th>
+                        <th className={`${th} text-right`}>{t('assetCard.breakdown.pricePnl')}</th>
+                        <th className={`${th} text-right`}>{t('common.fees')}</th>
                       </tr>
                     </thead>
                     <tbody className="num">
@@ -6658,15 +6654,15 @@ export function AssetCard({
                           <td className={`${cell} text-xs text-ink-500`}>
                             {r.status}
                             {r.note && ` · ${r.note}`}
-                            {r.excluded && ' · excluded'}
+                            {r.excluded && ` · ${t('assetCard.head.excluded')}`}
                           </td>
                           <td className={`${cell} text-right`}>
                             {r.fundingUsd === null ? (
                               <span
                                 className="text-ink-600"
-                                title={r.deduped ? 'Carried in the open position’s funding above.' : undefined}
+                                title={r.deduped ? t('assetCard.breakdown.carriedTitle') : undefined}
                               >
-                                {r.deduped ? 'in open ↑' : '—'}
+                                {r.deduped ? t('assetCard.row.inOpen') : '—'}
                               </span>
                             ) : (
                               <SignedNumber value={r.fundingUsd} format={fmtUsd} />
@@ -6674,7 +6670,7 @@ export function AssetCard({
                           </td>
                           <td
                             className={`${cell} text-right`}
-                            title={r.priceIsUpnl ? 'Unrealized.' : undefined}
+                            title={r.priceIsUpnl ? t('assetCard.breakdown.unrealized') : undefined}
                           >
                             {r.priceUsd === null ? (
                               <span className="text-ink-600">—</span>
@@ -6686,9 +6682,9 @@ export function AssetCard({
                             {r.deduped ? (
                               <span
                                 className="text-ink-600"
-                                title="Counted in the open position's row above."
+                                title={t('assetCard.breakdown.countedTitle')}
                               >
-                                in open ↑
+                                {t('assetCard.row.inOpen')}
                               </span>
                             ) : (
                               fmtUsd(r.feesUsd)
@@ -6698,7 +6694,7 @@ export function AssetCard({
                       ))}
                       <tr className="border-t border-ink-700 font-semibold">
                         <td className={`${cell} text-[12px] font-normal leading-[14.52px] text-ink-300`} colSpan={2}>
-                          Total
+                          {t('assetCard.breakdown.total')}
                         </td>
                         <td className={`${cell} text-right`}>
                           <SignedNumber value={perpTotals.funding} format={fmtUsd} />
@@ -6711,22 +6707,22 @@ export function AssetCard({
                     </tbody>
                   </table>
                 ) : (
-                  <p className="text-sm text-ink-600">No perp activity in this window.</p>
+                  <p className="text-sm text-ink-600">{t('assetCard.breakdown.noPerp')}</p>
                 )}
 
                 <p className="mb-1 mt-5 text-[14px] font-semibold text-ink-50">
-                  Boros — by market
+                  {t('assetCard.breakdown.borosByMarket')}
                 </p>
                 {borosRows.length ? (
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-left">
-                        <th className={th}>Venue</th>
-                        <th className={th}>Maturity</th>
-                        <th className={`${th} text-right`}>Settlement</th>
-                        <th className={`${th} text-right`}>Trade PnL</th>
-                        <th className={`${th} text-right`}>Fees</th>
-                        {showRebate && <th className={`${th} text-right`}>Rebates</th>}
+                        <th className={th}>{t('common.venue')}</th>
+                        <th className={th}>{t('common.maturity')}</th>
+                        <th className={`${th} text-right`}>{t('common.settlement')}</th>
+                        <th className={`${th} text-right`}>{t('assetCard.bundleHead.tradePnl')}</th>
+                        <th className={`${th} text-right`}>{t('common.fees')}</th>
+                        {showRebate && <th className={`${th} text-right`}>{t('assetCard.breakdown.rebates')}</th>}
                       </tr>
                     </thead>
                     <tbody className="num">
@@ -6735,7 +6731,7 @@ export function AssetCard({
                           <td className={`${cell} text-ink-300`}>{r.venue}</td>
                           <td className={`${cell} text-xs text-ink-500`}>
                             {r.maturity}
-                            {r.excluded && ' · excluded'}
+                            {r.excluded && ` · ${t('assetCard.head.excluded')}`}
                           </td>
                           <td className={`${cell} text-right`}>
                             <SignedNumber value={r.settleUsd} format={fmtUsd} />
@@ -6753,7 +6749,7 @@ export function AssetCard({
                       ))}
                       <tr className="border-t border-ink-700 font-semibold">
                         <td className={`${cell} text-[12px] font-normal leading-[14.52px] text-ink-300`} colSpan={2}>
-                          Total
+                          {t('assetCard.breakdown.total')}
                         </td>
                         <td className={`${cell} text-right`}>
                           <SignedNumber value={borosTotals.settle} format={fmtUsd} />
@@ -6769,22 +6765,26 @@ export function AssetCard({
                     </tbody>
                   </table>
                 ) : (
-                  <p className="text-sm text-ink-600">No Boros activity in this window.</p>
+                  <p className="text-sm text-ink-600">{t('assetCard.breakdown.noBoros')}</p>
                 )}
                 <p className="mt-3 text-[11px] text-ink-600">
-                  Settlement is net of its fee, already in the locked rate. Fees are trade fees.
+                  {t('assetCard.breakdown.note')}
                   {showRebate && (
                     <>
-                      {' '}Rebates are settlement-fee rebates added into PnL, claimable on your Boros account page{' '}
-                      <a
-                        href="https://boros.pendle.finance/portfolio?info=myAccount"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-ink-300 underline hover:text-ink-100"
-                      >
-                        here
-                      </a>
-                      .
+                      {' '}
+                      <Trans
+                        i18nKey="assetCard.breakdown.rebateNote"
+                        components={{
+                          a: (
+                            <a
+                              href="https://boros.pendle.finance/portfolio?info=myAccount"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-ink-300 underline hover:text-ink-100"
+                            />
+                          ),
+                        }}
+                      />
                     </>
                   )}
                 </p>

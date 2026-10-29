@@ -11,6 +11,7 @@
  */
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
 import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
@@ -50,6 +51,7 @@ function restOffsetPrice(rest: RestEstimate, isBuy: boolean): number {
 /** `onExecuted` fires once the pair is ACCEPTED (the 202 that opens the deal
  * view) — execution itself is asynchronous and tracked by the DealModal. */
 export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
+  const { t } = useTranslation();
   const [base, setBase] = useState<string | null>(null);
   const [longSym, setLongSym] = useState<string | null>(null);
   const [shortSym, setShortSym] = useState<string | null>(null);
@@ -346,9 +348,9 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
 
   const leverageText =
     levLong !== undefined && levShort !== undefined
-      ? `${levLong}x long / ${levShort}x short`
+      ? t('pairTicket.pair.leverage', { long: levLong, short: levShort })
       : longSym && shortSym
-        ? 'loading…'
+        ? t('pairTicket.pair.loading')
         : null;
 
   return (
@@ -401,7 +403,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
       )}
 
       <div className="flex flex-col gap-1.5">
-        <FieldLabel htmlFor="pair-notional">Size per leg</FieldLabel>
+        <FieldLabel htmlFor="pair-notional">{t('pairTicket.pair.sizePerLeg')}</FieldLabel>
         {/* The unit follows the coin (see sizeUnitForBase): ETH/BTC are
             coin-margined on Boros, so the perp is sized in the coin and the
             hedge is exact; every other coin is USDT-collateral there, so the
@@ -414,7 +416,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
           affix={
             base ? (
               <SegmentedToggle<'base' | 'usd'>
-                ariaLabel="Size unit"
+                ariaLabel={t('pairTicket.pair.sizeUnit')}
                 className="seg-xs"
                 value={sizeUnit}
                 onChange={(u) => {
@@ -438,10 +440,10 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
             id="pair-notional"
             // The accessible name carries the unit — the visible caption does
             // not, because the unit switch inside the box already shows it.
-            aria-label={`Size per leg (${sizeUnit === 'base' && base ? base : 'USDT'})`}
+            aria-label={t('pairTicket.pair.sizePerLegAria', { unit: sizeUnit === 'base' && base ? base : 'USDT' })}
             className={`input num ${base ? 'pr-[124px]' : 'pr-14'} ${notionalErr ? '!border-rose-500/60' : ''}`}
             inputMode="decimal"
-            placeholder={sizeUnit === 'base' && base ? `size in ${base}` : 'size per leg'}
+            placeholder={sizeUnit === 'base' && base ? t('pairTicket.pair.sizeIn', { unit: base }) : t('pairTicket.pair.sizePerLegPlaceholder')}
             aria-invalid={notionalErr ? true : undefined}
             aria-describedby={notionalErr ? 'pair-notional-error' : undefined}
             value={notionalStr}
@@ -456,9 +458,9 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <FieldLabel>Execution</FieldLabel>
+        <FieldLabel>{t('pairTicket.pair.execution')}</FieldLabel>
         <SegmentedToggle<ExecMode>
-          ariaLabel="Pair execution mode"
+          ariaLabel={t('pairTicket.pair.executionAria')}
           fill
           value={mode}
           onChange={(m) => {
@@ -466,8 +468,8 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
             setPricePinned(false);
           }}
           options={[
-            { value: 'market', label: '2 market orders' },
-            { value: 'maker', label: 'Limit + hedge', sub: 'saves fees' },
+            { value: 'market', label: t('pairTicket.pair.twoMarket') },
+            { value: 'maker', label: t('pairTicket.pair.limitHedge'), sub: t('pairTicket.pair.savesFees') },
           ]}
         />
       </div>
@@ -530,7 +532,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         tone="cyan"
         label={
             <>
-              Execute pair
+              {t('pairTicket.pair.execute')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -577,10 +579,10 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
           <div className="flex flex-col gap-0.5">
             {levLong !== undefined && levShort !== undefined && (
               <span>
-                Leverage {levLong}x long / {levShort}x short (venue max)
+                {t('pairTicket.pair.leverageDetail', { long: levLong, short: levShort })}
               </span>
             )}
-            {trackingMaker && <span>maker price pegs to the touch at submit</span>}
+            {trackingMaker && <span>{t('pairTicket.pair.pegNote')}</span>}
           </div>
         }
       />

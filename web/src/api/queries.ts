@@ -10,6 +10,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
+import { t } from '../i18n';
 import { del, fetchJson, patchJson, postJson, putJson } from './client';
 import { useTabActive } from '../components/TabBar';
 import { useToast } from '../components/Toast';
@@ -257,7 +258,7 @@ export function usePatchAssetPrefs(book: string) {
       );
     },
     onError: () => {
-      toast.push('error', 'Could not save. Try again.', { key: 'asset-prefs-save' });
+      toast.push('error', t('app.api.saveFailed'), { key: 'asset-prefs-save' });
       void qc.invalidateQueries({ queryKey: key });
     },
   });
@@ -269,7 +270,7 @@ let importSettled: Promise<void> = Promise.resolve();
 
 export function importAssetPrefs(raw: unknown): Promise<void> {
   const run = new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('The import did not answer in 10 s.')), IMPORT_TIMEOUT_MS);
+    const timer = setTimeout(() => reject(new Error(t('app.api.importTimeout'))), IMPORT_TIMEOUT_MS);
     postJson<unknown>('/asset-prefs/import', raw)
       .then(() => resolve(), reject)
       .finally(() => clearTimeout(timer));

@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { useCredentials, useDisclaimer, useOpenOrders, usePositions } from './api/queries';
 import { AccountStatusStrip } from './panels/accounts/AccountsUi';
@@ -41,6 +42,7 @@ const UserGuideModal = lazy(() =>
 
 
 export default function App() {
+  const { t } = useTranslation();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsFocus, setSettingsFocus] = useState<SetupStep | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
@@ -92,7 +94,7 @@ export default function App() {
         sm
         tone="info"
         className="num"
-        title={`${orderCount} open order${orderCount === 1 ? '' : 's'}`}
+        title={t('app.openOrders', { count: orderCount })}
       >
         {orderCount}
       </Chip>
@@ -128,15 +130,15 @@ export default function App() {
   const guideButton = (
     <button
       type="button"
-      aria-label="User guide"
-      title="How to read the Opportunities scan and open a pair well"
+      aria-label={t('app.userGuide')}
+      title={t('app.userGuideTitle')}
       onClick={() => {
         markGuideHintDone();
         openGuide();
       }}
       className="hdr-ctl border-info/50 bg-transparent font-medium text-pastel-blue hover:bg-info/[0.16]"
     >
-      User guide
+      {t('app.userGuide')}
     </button>
   );
 
@@ -220,12 +222,12 @@ export default function App() {
                   right={stripActions}
                   tabs={[
                     // Forward-looking: what to put on next, then what is on.
-                    { id: 'opportunities', label: 'Opportunities', primary: true },
-                    { id: 'positions', label: 'Positions', primary: true },
-                    { id: 'balances', label: 'Accounts' },
-                    { id: 'orders', label: 'Open Orders', badge: ordersBadge },
-                    { id: 'trades', label: 'Trades' },
-                    { id: 'fees', label: 'Fees' },
+                    { id: 'opportunities', label: t('app.tabs.opportunities'), primary: true },
+                    { id: 'positions', label: t('app.tabs.positions'), primary: true },
+                    { id: 'balances', label: t('app.tabs.accounts') },
+                    { id: 'orders', label: t('app.tabs.openOrders'), badge: ordersBadge },
+                    { id: 'trades', label: t('app.tabs.trades') },
+                    { id: 'fees', label: t('app.tabs.fees') },
                   ]}
                 />
               </div>
@@ -324,15 +326,16 @@ function SetupPrompt({ onOpen }: { onOpen: (step: SetupStep) => void }) {
 /** Opens the manual order-ticket drawer. Must render inside TradeFlowProvider. */
 function OrderTicketButton() {
   const flow = useTradeFlow();
+  const { t } = useTranslation();
   return (
     <button
       type="button"
-      aria-label="Order ticket"
-      title="Free-form Boros and CrossEx orders."
+      aria-label={t('app.orderTicket')}
+      title={t('app.orderTicketTitle')}
       onClick={flow.openRail}
       className="hdr-ctl border-ink-700 bg-ink-900 text-ink-300 hover:border-ink-500 hover:text-ink-100"
     >
-      Order ticket
+      {t('app.orderTicket')}
     </button>
   );
 }
@@ -346,10 +349,11 @@ function OrderTicketButton() {
 function OrderTicketDrawer() {
   const flow = useTradeFlow();
   const [busy, setBusy] = useState(false);
+  const { t } = useTranslation();
   return (
     <Drawer
       open={flow.railOpen}
-      title="Order ticket"
+      title={t('app.orderTicket')}
       locked={busy}
       onClose={flow.closeRail}
       widthClass="w-[560px]"

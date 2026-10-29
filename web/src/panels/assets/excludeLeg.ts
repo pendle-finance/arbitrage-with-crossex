@@ -1,3 +1,4 @@
+import { t } from '../../i18n';
 import { prettyVenue } from '../../lib/fmt';
 import { spreadPlatform, type SpreadVenues } from '../../lib/spread';
 import type { AssetBorosOpen } from '../../api/types';
@@ -43,4 +44,6 @@ export function sizesForWholeExclusions(
 }
 
 export const legVenueName = (leg: { venue: string; spreadVenues?: readonly string[] | null }): string =>
-  leg.spreadVenues ? `Spread ${spreadPlatform(leg.spreadVenues as SpreadVenues)}` : prettyVenue(leg.venue);
+  leg.spreadVenues
+    ? t('assets.spreadVenue', { platform: spreadPlatform(leg.spreadVenues as SpreadVenues) })
+    : prettyVenue(leg.venue);

@@ -5,7 +5,8 @@ import { ChartTooltip } from '../components/ChartTooltip';
 import { SignedNumber } from '../components/SignedNumber';
 import { microLabelClass } from '../components/Th';
 import { fmtAbout, fmtAge, num } from '../lib/fmt';
-import { HOVER_CASH, HOVER_TARGET, HOVER_UPNL, LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
+import { t } from '../i18n';
+import { hoverCash, hoverTarget, hoverUpnl, LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
 
 const HOVER_WIDTH_PX = 268;
 
@@ -137,18 +138,18 @@ function WalletHover({ row }: { row: BarRow }) {
       <div aria-hidden className="h-px bg-ink-700" />
       <div className="flex items-center gap-2.5">
         <span aria-hidden data-swatch="cash" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${cashFill(row)}`} />
-        <span className="text-ink-400">{HOVER_CASH}</span>
+        <span className="text-ink-400">{hoverCash()}</span>
         <span className={`num ml-auto ${row.cash < 0 ? 'text-guava' : 'text-ink-100'}`}>{num(row.cash)}</span>
       </div>
       <div className="flex items-center gap-2.5">
         <span aria-hidden data-swatch="pnl" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${pnlFill(row.upnl)}`} />
-        <span className="text-ink-400">{HOVER_UPNL}</span>
+        <span className="text-ink-400">{hoverUpnl()}</span>
         <SignedNumber value={row.upnl} className="ml-auto" />
       </div>
       {row.target !== null && (
         <div className="flex items-center gap-2.5">
           <span aria-hidden data-swatch="target" className="mx-1 h-2.5 w-0.5 shrink-0 bg-gold" />
-          <span className="text-ink-400">{HOVER_TARGET}</span>
+          <span className="text-ink-400">{hoverTarget()}</span>
           <span className="num ml-auto text-gold">{num(row.target)}</span>
         </div>
       )}
@@ -305,15 +306,17 @@ function stepText(step: StepTextInput): { text: string; sub: string } {
   const borrowLeft = step.borrowLeft === null ? null : num(step.borrowLeft);
   const sub =
     borrowLeft === null
-      ? `${arrives} arrives`
-      : `${arrives} arrives · ${borrowLeft === num(0) ? 'borrow paid' : `borrow left ${borrowLeft}`}`;
+      ? t('accounts.rebalanceBits.arrives', { arrives })
+      : borrowLeft === num(0)
+        ? t('accounts.rebalanceBits.arrivesBorrowPaid', { arrives })
+        : t('accounts.rebalanceBits.arrivesBorrowLeft', { arrives, left: borrowLeft });
   if (step.kind === 'convert') return { text: MOVE_TEXT.convert(step.from, step.to, move), sub };
   if (step.from !== 'CROSSEX') return { text: MOVE_TEXT.step(step.from, step.to, move, arrives), sub };
   const wallet = MOVE_TEXT.into(step.to);
   const buy = num(step.buy);
-  if (buy === num(0)) return { text: `Move ${move} USDC to ${wallet}`, sub };
-  if (buy === move) return { text: `Buy ${buy} USDC, move it to ${wallet}`, sub };
-  return { text: `Buy ${buy} USDC, move ${move} USDC to ${wallet}`, sub };
+  if (buy === num(0)) return { text: t('accounts.rebalanceBits.moveTo', { move, wallet }), sub };
+  if (buy === move) return { text: t('accounts.rebalanceBits.buyMoveIt', { buy, wallet }), sub };
+  return { text: t('accounts.rebalanceBits.buyMove', { buy, move, wallet }), sub };
 }
 
 const HOP_SECONDS: Record<Pool, { in: number; out: number }> = {
@@ -375,28 +378,29 @@ export function jobRows(job: RebalanceJob, now: number, borrow: number | null): 
     const { from, to } = steps[0];
     const expected = round === null ? 0 : roundSeconds(from, to);
     const started = steps.find((step) => step.startedAt !== null)?.startedAt ?? null;
-    const label = round === null ? 'Convert' : `Round ${num(round, 0)}`;
-    const base = { key: `${label}:${index}`, label, ...jobStepText(steps, round) };
+    const label = round === null ? t('accounts.rebalance.hover.title.convert') : t('accounts.rebalanceBits.round', { n: num(round, 0) });
+    const base = { key: `${round ?? 'convert'}:${index}`, label, ...jobStepText(steps, round) };
     const doneAt = steps.at(-1)?.doneAt ?? null;
     if (steps.every((step) => step.status === 'done')) {
       const took = started === null || doneAt === null ? '' : fmtAge(doneAt - started);
       return { ...base, state: 'done', progress: 1, right: took };
     }
     if (!current || !steps.includes(current)) {
-      return { ...base, state: 'pending', progress: 0, right: expected > 0 ? fmtAbout(expected) : 'instant' };
+      return { ...base, state: 'pending', progress: 0, right: expected > 0 ? fmtAbout(expected) : t('accounts.rebalance.hover.title.time.instant') };
     }
     const elapsed = started === null ? 0 : Math.max(0, (job.status === 'running' ? now : job.updatedAt) - started);
     const progress = expected > 0 ? elapsed / 1000 / expected : 0;
-    if (job.status !== 'running') return { ...base, state: 'stopped', progress, right: 'stopped' };
-    const right = expected > 0 ? `${fmtAge(elapsed)} of ${fmtAbout(expected)}` : fmtAge(elapsed);
+    if (job.status !== 'running') return { ...base, state: 'stopped', progress, right: t('accounts.rebalanceBits.stopped') };
+    const right =
+      expected > 0 ? t('accounts.rebalanceBits.elapsedOf', { elapsed: fmtAge(elapsed), expected: fmtAbout(expected) }) : fmtAge(elapsed);
     return { ...base, sub: LEG_TEXT[current.name] ?? base.sub, state: 'running', progress, right };
   });
 }
 
 export function planRows(route: RoutePlan, borrow: number | null): StepRow[] {
   return route.steps.map((step, index): StepRow => {
-    const label = step.kind === 'convert' ? 'Convert' : `Round ${num(step.round ?? index + 1, 0)}`;
-    const right = step.kind === 'convert' ? 'instant' : fmtAbout(step.seconds);
+    const label = step.kind === 'convert' ? t('accounts.rebalance.hover.title.convert') : t('accounts.rebalanceBits.round', { n: num(step.round ?? index + 1, 0) });
+    const right = step.kind === 'convert' ? t('accounts.rebalance.hover.title.time.instant') : fmtAbout(step.seconds);
     const text = stepText({ ...step, borrowLeft: borrow === null ? null : step.borrowLeft });
     return { key: String(index), label, ...text, right, state: 'pending', progress: 0 };
   });

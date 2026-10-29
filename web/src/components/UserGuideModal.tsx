@@ -10,6 +10,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, type ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Modal } from './Modal';
@@ -21,6 +22,9 @@ const DOC = 'docs/USER_GUIDE.md';
 
 export const USER_GUIDE_RAW_URL = `https://raw.githubusercontent.com/${REPO}/${BRANCH}/${DOC}`;
 export const USER_GUIDE_HTML_URL = `https://github.com/${REPO}/blob/${BRANCH}/${DOC}`;
+const DOC_ZH = 'docs/USER_GUIDE.zh-CN.md';
+const USER_GUIDE_ZH_RAW_URL = `https://raw.githubusercontent.com/${REPO}/${BRANCH}/${DOC_ZH}`;
+const USER_GUIDE_ZH_HTML_URL = `https://github.com/${REPO}/blob/${BRANCH}/${DOC_ZH}`;
 
 /** Sibling docs are written relative ("./DISCLAIMER.md"). Off GitHub those would
  * resolve against the app's own origin, so send them back to the repo. */
@@ -148,12 +152,18 @@ const components = {
 };
 
 export function UserGuideModal({ onClose, section }: { onClose: () => void; section?: string }) {
+  const { t, i18n } = useTranslation();
+  const isChinese = i18n.language === 'zh-CN';
   const guide = useQuery({
-    queryKey: ['user-guide', USER_GUIDE_RAW_URL] as const,
+    queryKey: ['user-guide', isChinese ? USER_GUIDE_ZH_RAW_URL : USER_GUIDE_RAW_URL] as const,
     queryFn: async () => {
+      if (isChinese) {
+        const zh = await fetch(USER_GUIDE_ZH_RAW_URL).catch(() => null);
+        if (zh?.ok) return { text: await zh.text(), doc: DOC_ZH, htmlUrl: USER_GUIDE_ZH_HTML_URL };
+      }
       const r = await fetch(USER_GUIDE_RAW_URL);
-      if (!r.ok) throw new Error(`GitHub returned HTTP ${r.status}`);
-      return r.text();
+      if (!r.ok) throw new Error(t('app.guide.httpError', { status: r.status }));
+      return { text: await r.text(), doc: DOC, htmlUrl: USER_GUIDE_HTML_URL };
     },
     staleTime: Infinity,
     gcTime: Infinity,
@@ -169,9 +179,9 @@ export function UserGuideModal({ onClose, section }: { onClose: () => void; sect
   }, [section, guide.data]);
 
   return (
-    <Modal title="User guide" onClose={onClose} widthClass="w-[760px]">
+    <Modal title={t('app.userGuide')} onClose={onClose} widthClass="w-[760px]">
       {guide.isPending ? (
-        <div className="flex flex-col gap-3" aria-label="Loading the user guide">
+        <div className="flex flex-col gap-3" aria-label={t('app.guide.loading')}>
           <Skeleton className="h-5 w-40" />
           <Skeleton className="h-3 w-full" />
           <Skeleton className="h-3 w-11/12" />
@@ -180,23 +190,23 @@ export function UserGuideModal({ onClose, section }: { onClose: () => void; sect
       ) : guide.isError ? (
         <div role="alert" className="flex flex-col gap-2 text-xs leading-relaxed text-ink-300">
           <span className="text-rose-400">
-            Couldn’t load the guide — {(guide.error as Error).message}
+            {t('app.guide.loadFailed', { error: (guide.error as Error).message })}
           </span>
           <span>
-            It lives on GitHub; open it there instead:{' '}
+            {t('app.guide.openOnGithub')}{' '}
             <Ext href={USER_GUIDE_HTML_URL}>{DOC}</Ext>
           </span>
           <button type="button" className="btn-ghost-xs self-start" onClick={() => void guide.refetch()}>
-            Try again
+            {t('app.tryAgain')}
           </button>
         </div>
       ) : (
         <div ref={bodyRef}>
           <Markdown remarkPlugins={[remarkGfm]} components={components}>
-            {guide.data}
+            {guide.data.text}
           </Markdown>
           <div className="mt-5 border-t border-ink-800 pt-3 text-[11px] text-ink-500">
-            Rendered from <Ext href={USER_GUIDE_HTML_URL}>{DOC}</Ext> on GitHub.
+            <Trans i18nKey="app.guide.renderedFrom" values={{ doc: guide.data.doc }} components={{ a: <Ext href={guide.data.htmlUrl} /> }} />
           </div>
         </div>
       )}

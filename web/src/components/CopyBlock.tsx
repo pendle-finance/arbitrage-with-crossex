@@ -1,12 +1,13 @@
 import { Check } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 /** Copyable command block (the landing install step, and the LLM audit prompt).
  * Clipboard API only — on the rare denial the visitor selects the text, which
  * `select-all` makes a single click. */
 export function CopyBlock({
   text,
-  label = 'Copy command',
+  label,
   maxHeightClass,
   tabbed,
 }: {
@@ -19,11 +20,12 @@ export function CopyBlock({
    * the first tab's left border meets the block's, with no notch between them. */
   tabbed?: boolean;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
     if (!copied) return;
-    const t = setTimeout(() => setCopied(false), 1500);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
   }, [copied]);
   return (
     <div className="flex flex-col gap-2">
@@ -46,11 +48,11 @@ export function CopyBlock({
       >
         {copied ? (
           <>
-            Copied
+            {t('common.copied')}
             <Check size={14} aria-hidden />
           </>
         ) : (
-          label
+          (label ?? t('app.copyCommand'))
         )}
       </button>
     </div>

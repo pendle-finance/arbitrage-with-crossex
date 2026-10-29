@@ -23,6 +23,7 @@ import { Check, X } from 'lucide-react';
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { ApiError, postJson } from '../api/client';
 import { useAccount, usePositions } from '../api/queries';
 import type { ActionInput, DealResponse, PreviewResult } from '../api/types';
@@ -103,6 +104,7 @@ export function ExecuteControl({
   holdMs,
   hoverCard = true,
 }: Props) {
+  const { t } = useTranslation();
   const flow = useTradeFlow();
   // View-only shows every position but trades none of them.
   const viewOnly = useActiveWallet().viewOnly;
@@ -182,7 +184,7 @@ export function ExecuteControl({
         } catch (err) {
           const message = err instanceof ApiError ? err.message : (err as Error).message;
           setSplitLegs((prev) =>
-            prev.map((l, k) => (k === i ? { ...l, state: 'failed', message } : k > i ? { ...l, state: 'failed', message: 'not sent' } : l)),
+            prev.map((l, k) => (k === i ? { ...l, state: 'failed', message } : k > i ? { ...l, state: 'failed', message: t('trade.execute.notSent') } : l)),
           );
           throw err;
         }
@@ -318,7 +320,12 @@ export function ExecuteControl({
     // `b` is OMITTED for a single leg, not set to null — hence ?? null.
     restingOnlyRef.current = (deal.b ?? null) === null && deal.execution === 'maker';
     placedSummaryRef.current = restingOnlyRef.current
-      ? `${deal.a.side} ${deal.qty} ${parseSymbol(deal.a.symbol).base} @ ${deal.price}`
+      ? t('trade.execute.placedSummary', {
+          side: deal.a.side === 'BUY' ? t('trade.execute.buyUpper') : t('trade.execute.sellUpper'),
+          qty: deal.qty,
+          base: parseSymbol(deal.a.symbol).base,
+          price: deal.price,
+        })
       : null;
     setPlacedResting(null);
     setReplayedDeal(null);
@@ -342,26 +349,28 @@ export function ExecuteControl({
       <HoldToConfirmButton tone={tone} disabled={disabled} holdMs={holdMs} onConfirm={onConfirm} className={buttonClassName}>
         {execute.isPending || executeSplit.isPending ? (
           <span className="inline-flex items-center gap-1.5">
-            <Spinner className="h-3.5 w-3.5" /> executing…
+            <Spinner className="h-3.5 w-3.5" /> {t('trade.execute.executing')}
           </span>
         ) : (
           label
         )}
       </HoldToConfirmButton>
-      {viewOnly && <p className="mt-1 text-[11px] text-ink-400">View-only: switch to your logged-in wallet to trade.</p>}
+      {viewOnly && <p className="mt-1 text-[11px] text-ink-400">{t('trade.execute.viewOnly')}</p>}
       {placedResting && (
         <div
           role="status"
           className="mt-1 flex items-start justify-between gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/5 px-2 py-1.5 text-[11px] text-emerald-300"
         >
           <span>
-            <span className="font-medium">Limit order placed.</span>{' '}
-            <span className="num">{placedResting}</span> is resting on the venue until it fills —
-            see Open Orders.
+            <Trans
+              i18nKey="trade.execute.placed"
+              values={{ summary: placedResting }}
+              components={{ b: <span className="font-medium" />, n: <span className="num" /> }}
+            />
           </span>
           <button
             type="button"
-            aria-label="Dismiss"
+            aria-label={t('common.dismiss')}
             className="px-1 leading-none text-emerald-400/70 transition-colors hover:text-emerald-200"
             onClick={() => setPlacedResting(null)}
           >
@@ -372,12 +381,15 @@ export function ExecuteControl({
       {replayedDeal && (
         <div role="status" className="mt-1 flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-amber-200">
           <span>
-            This confirm matched an earlier submission — deal <span className="num">{replayedDeal}</span> already exists and no new
-            order was sent. Showing that deal.
+            <Trans
+              i18nKey="trade.execute.replayed"
+              values={{ id: replayedDeal }}
+              components={{ n: <span className="num" /> }}
+            />
           </span>
           <button
             type="button"
-            aria-label="Dismiss"
+            aria-label={t('common.dismiss')}
             className="px-1 leading-none text-amber-400/70 transition-colors hover:text-amber-200"
             onClick={() => setReplayedDeal(null)}
           >
@@ -387,31 +399,39 @@ export function ExecuteControl({
       )}
       {marginBlocked && (
         <div role="alert" className="mt-1 text-[11px] text-rose-400">
-          margin ≈ {fmtUsd(margin.gateRequired)} (incl. 5% buffer + fee reserve) exceeds available{' '}
-          {Number.isFinite(available) ? fmtUsd(available) : '—'}
+          {t('trade.execute.marginBlocked', {
+            required: fmtUsd(margin.gateRequired),
+            available: Number.isFinite(available) ? fmtUsd(available) : '—',
+          })}
         </div>
       )}
       {!mappable && (
         <div role="alert" className="mt-1 text-[11px] text-amber-400">
-          can't run as one deal (e.g. unequal leg sizes) — execute the legs individually
+          {t('trade.execute.notMappable')}
         </div>
       )}
       {splitClose && splitLegs.length === 0 && (
         <div className="mt-1 text-[11px] text-ink-400">
-          two deals, one per leg (sizes differ) — sent in order; each leg reports its own outcome
+          {t('trade.execute.splitNote')}
         </div>
       )}
       {splitLegs.some((l) => l.state === 'failed') && (
         <div role="alert" className="mt-1 flex flex-col gap-0.5 text-[11px]">
           {splitLegs.map((l) => (
             <div key={l.symbol} className={l.state === 'done' ? 'text-emerald-300' : l.state === 'failed' ? 'text-rose-300' : 'text-ink-400'}>
-              {l.state === 'done' ? <Check size={12} aria-hidden className="inline" /> : l.state === 'failed' ? <X size={12} aria-hidden className="inline" /> : '…'} {parseSymbol(l.symbol).exchange} leg{' '}
-              {l.state === 'done' ? 'closed' : l.state === 'failed' ? `not closed — ${l.message ?? 'failed'}` : 'sending'}
+              {l.state === 'done' ? <Check size={12} aria-hidden className="inline" /> : l.state === 'failed' ? <X size={12} aria-hidden className="inline" /> : '…'} {l.state === 'done'
+                ? t('trade.execute.legClosed', { venue: parseSymbol(l.symbol).exchange })
+                : l.state === 'failed'
+                  ? t('trade.execute.legNotClosed', {
+                      venue: parseSymbol(l.symbol).exchange,
+                      reason: l.message ?? t('trade.execute.failed'),
+                    })
+                  : t('trade.execute.legSending', { venue: parseSymbol(l.symbol).exchange })}
             </div>
           ))}
           {splitLegs.some((l) => l.state === 'done') && (
             <div className="text-amber-400">
-              One leg is closed and the other is still open — the pair is no longer hedged. Retry closes only the leg that failed.
+              {t('trade.execute.halfHedged')}
             </div>
           )}
         </div>
@@ -460,6 +480,7 @@ function HoverCard({
   detail: ReactNode;
   execError: string | null;
 }) {
+  const { t } = useTranslation();
   const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
   useLayoutEffect(() => {
     const reposition = () => {
@@ -494,9 +515,15 @@ function HoverCard({
         </div>
       )}
       <div className="mb-1.5 flex items-center justify-between text-[12px] font-normal text-ink-300">
-        <span>Review</span>
+        <span>{t('trade.execute.review')}</span>
         <span className="num">
-          {isError ? 'preview failed' : estimating ? 'previewing…' : Number.isFinite(ageMs) ? `${Math.floor(ageMs / 1000)}s ago` : '—'}
+          {isError
+            ? t('trade.execute.previewFailed')
+            : estimating
+              ? t('trade.execute.previewing')
+              : Number.isFinite(ageMs)
+                ? t('trade.execute.secondsAgo', { s: Math.floor(ageMs / 1000) })
+                : '—'}
         </span>
       </div>
       {previews ? (
@@ -513,10 +540,13 @@ function HoverCard({
               <div className="flex items-center justify-between gap-2 text-[11px] text-ink-400">
                 <span className="num">
                   {p.type === 'MARKET'
-                    ? 'MKT'
+                    ? t('trade.execute.mkt')
                     : p.input.kind === 'close-position'
-                      ? `IOC@${p.price ?? '—'}`
-                      : `LMT@${p.price ?? '—'}${p.tif && p.tif !== 'GTC' ? ` ${p.tif}` : ''}`}
+                      ? t('trade.execute.iocAt', { price: p.price ?? '—' })
+                      : t('trade.execute.lmtAt', {
+                          price: p.price ?? '—',
+                          tif: p.tif && p.tif !== 'GTC' ? ` ${p.tif}` : '',
+                        })}
                   {p.fillEstimate && (
                     <>
                       {' · '}
@@ -533,22 +563,31 @@ function HoverCard({
           ))}
           <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 border-t border-ink-800 pt-1.5 text-[11px] text-ink-400">
             <span>
-              Σ fees <span className="num text-ink-100">≈ {fmtUsd(fees, 4)}</span>
+              <Trans
+                i18nKey="trade.execute.sumFees"
+                values={{ fees: fmtUsd(fees, 4) }}
+                components={{ n: <span className="num text-ink-100" /> }}
+              />
             </span>
             <span>
-              margin{' '}
-              <span className={`num ${marginExceeds ? 'font-semibold text-rose-400' : 'text-ink-100'}`}>{fmtUsd(marginRequired)}</span>
-              <span className="text-ink-500"> / {Number.isFinite(available) ? fmtUsd(available) : '—'}</span>
+              <Trans
+                i18nKey="trade.execute.marginOf"
+                values={{ required: fmtUsd(marginRequired), available: Number.isFinite(available) ? fmtUsd(available) : '—' }}
+                components={{
+                  m: <span className={`num ${marginExceeds ? 'font-semibold text-rose-400' : 'text-ink-100'}`} />,
+                  d: <span className="text-ink-500" />,
+                }}
+              />
             </span>
           </div>
         </div>
       ) : (
         <div className="py-2 text-center text-ink-500">
-          <Spinner className="inline h-3 w-3" /> <span className="ml-1 align-middle">pricing…</span>
+          <Spinner className="inline h-3 w-3" /> <span className="ml-1 align-middle">{t('trade.execute.pricing')}</span>
         </div>
       )}
       {detail && <div className="mt-1.5 border-t border-ink-800 pt-1.5 text-[11px] text-ink-400">{detail}</div>}
-      <div className="mt-1.5 text-center text-[10px] text-ink-500">press &amp; hold to confirm</div>
+      <div className="mt-1.5 text-center text-[10px] text-ink-500">{t('trade.execute.pressHold')}</div>
     </div>,
     document.body,
   );

@@ -1,6 +1,8 @@
 /** Envelope-aware fetch helper. Unwraps { ok, data, meta } and throws a typed
  * ApiError (carrying category/message/hint/retryable) on { ok: false } or
  * transport-level failures. */
+import { t } from '../i18n';
+import { localizeServerText } from '../i18n/serverMessages';
 import type { ClassifiedError, Envelope } from './types';
 
 export class ApiError extends Error {
@@ -10,13 +12,14 @@ export class ApiError extends Error {
   readonly hint?: string;
   readonly httpStatus?: number;
 
+  /** The server writes English; message and hint are shown in the trader's language. */
   constructor(err: ClassifiedError) {
-    super(err.message);
+    super(localizeServerText(err.message));
     this.name = 'ApiError';
     this.category = err.category;
     this.label = err.label;
     this.retryable = err.retryable;
-    this.hint = err.hint;
+    this.hint = err.hint === undefined ? undefined : localizeServerText(err.hint);
     this.httpStatus = err.httpStatus;
   }
 }
@@ -34,11 +37,11 @@ function apiUrl(path: string): string {
  * the untouched placeholder means the same thing —
  * this page did not come from the terminal backend, so send nothing. */
 function authHeader(): Record<string, string> {
-  const t =
+  const token =
     typeof document === 'undefined'
       ? null
       : document.querySelector('meta[name="arb-token"]')?.getAttribute('content');
-  return t && t !== '__ARB_TOKEN__' ? { 'x-arb-token': t } : {};
+  return token && token !== '__ARB_TOKEN__' ? { 'x-arb-token': token } : {};
 }
 
 export async function fetchJson<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -56,9 +59,9 @@ export async function fetchJson<T>(path: string, init: RequestInit = {}): Promis
   } catch (err) {
     throw new ApiError({
       category: 'network',
-      message: `network error calling ${path}: ${(err as Error).message ?? String(err)}`,
+      message: t('app.api.network', { path, error: (err as Error).message ?? String(err) }),
       retryable: true,
-      hint: 'Is the backend running on localhost:6688?',
+      hint: t('app.api.backendHint'),
     });
   }
 
@@ -78,7 +81,9 @@ export async function fetchJson<T>(path: string, init: RequestInit = {}): Promis
   // No recognizable envelope — synthesize a transport error.
   throw new ApiError({
     category: resp.status === 401 || resp.status === 403 ? 'auth' : 'unknown',
-    message: `${path} returned HTTP ${resp.status}${body ? ' with an unexpected body' : ''}`,
+    message: body
+      ? t('app.api.httpUnexpected', { path, status: resp.status })
+      : t('app.api.http', { path, status: resp.status }),
     httpStatus: resp.status,
     retryable: resp.status >= 500,
   });

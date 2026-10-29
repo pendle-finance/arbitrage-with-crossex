@@ -7,8 +7,14 @@ in-app update check compares against).
 
 TLDR: Fixed Rate Pairs pairs your legs by venue at any Boros date. You can exclude part of a
 Boros leg from the arbitrage. A Boros send that times out no longer reads as "nothing traded".
-Opportunities sizes every card by the capital you put in.
+Opportunities sizes every card by the capital you put in. Every screen can show Simplified Chinese.
 
+- **Simplified Chinese.** The 中文 menu in the header switches every screen, hover and error
+  to Simplified Chinese. The choice is saved per browser. Boros and Gate names, tickers and
+  market names stay in English. The terms follow the Boros app's Chinese. The user guide has a
+  Chinese copy. Messages from the terminal's server are translated too; raw text from Gate or
+  Boros stays in English. Translations live in `web/src/locales/<language>/`, one file per
+  screen area, so a wrong line is a one-line fix and a new language is a new folder.
 - **Fixed Rate Pairs pairs legs by venue at any date.** Each card pairs your perps and Boros
   legs by venue and side, at any Boros date. After a half roll, the new date gets its card and
   the old leg goes to Ungrouped. A leg on the wrong side shows a `Wrong side` tag at any date,

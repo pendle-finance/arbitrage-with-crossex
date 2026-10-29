@@ -1,1 +1,50 @@
-{}
+{
+  "spreadVenue": "Spread {{platform}}",
+  "bars": {
+    "fixedFundingTitle": "固定资金费：Boros 结算 {{settle}}（已扣结算手续费）+ 永续资金费 {{funding}}，含持仓中和已完成的腿，合计 {{amount}}",
+    "fixedFunding": "固定资金费",
+    "tradeTitle": "Boros 交易盈亏（未扣交易手续费）{{amount}}",
+    "trade": "Boros 交易",
+    "tradeFeeTitle": "Boros 交易手续费 {{amount}}",
+    "tradeFee": "交易手续费",
+    "perpFeesTitle": "永续交易手续费（含持仓和已平仓）{{amount}}",
+    "perpFees": "永续手续费",
+    "basisTitle": "永续价格基差：持仓未实现盈亏 + 已平仓已实现价格盈亏（Delta 中性组合应接近 0）{{amount}}",
+    "basis": "永续基差",
+    "rebateTitle": "已返还的 Boros 结算手续费返佣 {{amount}}",
+    "rebate": "结算返佣",
+    "netTitle": "净盈亏 {{amount}}",
+    "caption": "固定资金费（Boros 结算 + 永续资金费）= 锁定的利差；其后是 Boros 交易盈亏、交易手续费、永续手续费和永续价格残差"
+  },
+  "home": {
+    "headingTitle": "所有腿按标的资产分组。",
+    "heading": "按资产查看资金费收益",
+    "hideInactiveTitle": "只显示有持仓腿的资产。账户合计仍包含所有资产。",
+    "hideInactive": "隐藏不活跃组合",
+    "connectTitle": "连接钱包，按资产查看收益",
+    "connectHint": "资产视图按标的币种汇总所有永续和 Boros 腿，并显示各交易所自己记录的累计数据。",
+    "loadError": "无法加载资产视图",
+    "prefsUnreadable": "无法读取已保存的排除设置，已另存为备份文件。",
+    "legacyFailed": "无法将此浏览器保存的排除设置迁移到终端，下次加载时会重试。",
+    "viewOnly": "正在查看 <addr>{{address}}</addr>，未登录：仅查看。永续仓位来自您连接的 Gate 账户；交易和手续费返佣需要登录 <owner>{{root}}</owner>。",
+    "totalPnlTitleWithInterest": "扣除借款利息后的实际收益。",
+    "totalPnlTitleNoInterest": "各卡片之和。无法读取借款利息，因此未扣除。",
+    "totalPnl": "账户总盈亏",
+    "interestPaid": "已付借款利息",
+    "interestTotal": "合计",
+    "afterInterest": "已扣 {{amount}} 借款利息",
+    "aprTitle": "至今盈亏 ÷（资金 × 时间），年化。为估算值：资金按当前所需计算。",
+    "apr": "已实现 APR ≈",
+    "capital": "占用资金",
+    "emptyTitle": "此地址没有仓位或历史记录",
+    "emptyHint": "开仓（或把开始日期往前调）后，资产会显示在这里。",
+    "allInactive": "没有活跃组合，已隐藏 {{n}} 个不活跃组合。"
+  },
+  "since": {
+    "allTime": "全部时间",
+    "since": "自 {{date}} 起",
+    "inputLabel": "统计 {{base}} 盈亏的起始日期",
+    "options": "日期选项",
+    "useDefault": "使用默认（首个仓位，{{date}}）"
+  }
+}

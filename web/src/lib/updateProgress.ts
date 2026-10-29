@@ -11,18 +11,46 @@
  * all still right — where a strict parser would show a stalled update instead.
  */
 
+import { t } from '../i18n';
+
 /** install.sh colours its `say` output; a redirected log keeps the escapes. */
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 export const UPDATE_PHASES = [
-  { key: 'runtime', label: 'Runtime', match: /Node\.js|yarn package manager/i },
-  { key: 'fetch', label: 'Download', match: /Downloading the app/i },
-  { key: 'deps', label: 'Dependencies', match: /Installing dependencies/i },
-  { key: 'build', label: 'Build', match: /Building the web interface/i },
+  {
+    key: 'runtime',
+    get label() {
+      return t('app.update.phase.runtime');
+    },
+    match: /Node\.js|yarn package manager/i,
+  },
+  {
+    key: 'fetch',
+    get label() {
+      return t('app.update.phase.fetch');
+    },
+    match: /Downloading the app/i,
+  },
+  {
+    key: 'deps',
+    get label() {
+      return t('app.update.phase.deps');
+    },
+    match: /Installing dependencies/i,
+  },
+  {
+    key: 'build',
+    get label() {
+      return t('app.update.phase.build');
+    },
+    match: /Building the web interface/i,
+  },
   {
     key: 'restart',
-    label: 'Restart',
+    get label() {
+      return t('app.update.phase.restart');
+    },
     match: /Stopping (the previous version|any running instance)|Registering the background service|Waiting for the app to start/i,
   },
 ] as const;

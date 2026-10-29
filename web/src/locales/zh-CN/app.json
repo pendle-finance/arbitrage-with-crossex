@@ -1,3 +1,296 @@
 {
-  "language": "语言"
+  "language": "语言",
+  "openOrders_other": "{{count}} 笔当前委托",
+  "userGuide": "用户指南",
+  "userGuideTitle": "如何读懂机会扫描结果，并开好一个组合",
+  "tabs": {
+    "opportunities": "机会",
+    "positions": "持仓",
+    "accounts": "账户",
+    "openOrders": "当前委托",
+    "trades": "成交记录",
+    "fees": "手续费"
+  },
+  "orderTicket": "手动下单",
+  "orderTicketTitle": "自由下 Boros 和 CrossEx 订单。",
+  "settings": "设置",
+  "wallet": {
+    "notLoggedIn": "未登录",
+    "loginExpired": "登录已过期",
+    "loggingIn": "登录中…",
+    "notApproved": "未授权",
+    "uncheckedTitle": "Boros 未响应。交易所仍会校验登录状态。",
+    "loginNotChecked": "登录未验证",
+    "renewBy": "请于 {{date}} 前续期",
+    "loggedIn": "已登录",
+    "settingsTitle": "设置与 Boros 钱包",
+    "settingsAria": "设置。Boros 钱包 {{address}}",
+    "settingsAriaLoggedIn": "设置。Boros 钱包 {{address}}，已登录"
+  },
+  "rebalanceOnAccounts": "去账户页再平衡",
+  "connect": {
+    "install": "请安装 Rabby 或 MetaMask，然后刷新页面。",
+    "hint": "连接持有您 Boros 账户的钱包。",
+    "waiting": "等待钱包确认…",
+    "button": "连接钱包"
+  },
+  "copyCommand": "复制命令",
+  "credentials": {
+    "refused": "Gate 拒绝了此密钥：{{reason}}。请确认密钥已完整粘贴。",
+    "apiKey": "API 密钥",
+    "keyPlaceholder": "Gate API 密钥",
+    "apiSecret": "API 私钥",
+    "secretPlaceholder": "Gate API 私钥",
+    "serviceMissing": "凭证服务暂不可用",
+    "saved": "凭证已保存",
+    "checking": "正在向 Gate 验证…",
+    "save": "保存凭证"
+  },
+  "toggleDetails": "展开或收起详情",
+  "closeAria": "关闭",
+  "finishSetup": "完成设置",
+  "loadingLower": "加载中",
+  "freshness": {
+    "stale": "数据已过期 {{age}} · 重试中",
+    "ago": "{{age}}前",
+    "refetchAll": "刷新所有面板",
+    "refetchStrategy": "刷新策略数据"
+  },
+  "spreadName": "{{base}} Spread",
+  "sections": "分区",
+  "venue": {
+    "quotes": "以 {{quote}} 计价",
+    "viaCrossex": "经由 CrossEx（已连接的 Gate 账户）"
+  },
+  "side": {
+    "buy": "买入",
+    "sell": "卖出"
+  },
+  "hold": {
+    "titleWith": "{{title}}\n\n长按以确认。",
+    "title": "长按以确认"
+  },
+  "waterfall": {
+    "nowTitle": "当前盈亏 {{pnl}} — 资金费 + Boros 结算与利率按市值计价 − 手续费 − 开仓滑点",
+    "now": "当前 {{value}}"
+  },
+  "guideHint": {
+    "title": "第一次使用？",
+    "body": "上方的 <b>📖 用户指南</b> 解释了机会页各项假设的含义，以及如何开好一个组合。第一次真实下单前，值得花五分钟读一读。",
+    "open": "打开指南"
+  },
+  "tryAgain": "重试",
+  "guide": {
+    "httpError": "GitHub 返回 HTTP {{status}}",
+    "loading": "正在加载用户指南",
+    "loadFailed": "无法加载指南 — {{error}}",
+    "openOnGithub": "指南托管在 GitHub 上，可直接在那里打开：",
+    "renderedFrom": "内容来自 GitHub 上的 <a>{{doc}}</a>。"
+  },
+  "unknownLower": "未知",
+  "update": {
+    "phase": {
+      "runtime": "运行环境",
+      "fetch": "下载",
+      "deps": "依赖",
+      "build": "构建",
+      "restart": "重启"
+    },
+    "failed": "更新失败，已恢复运行之前的版本。",
+    "reloading": "已更新，正在重新加载页面…",
+    "restarting": "正在重启应用…",
+    "starting": "正在启动安装程序…",
+    "failedNote": "您的密钥和交易记录未受影响。请重试，或自行运行命令。",
+    "slowNote": "耗时比平常更长。下方是安装程序的输出。",
+    "runningNote": "正在后台安装。完成后本页会自动重新加载。",
+    "showLog": "查看日志",
+    "nothingYet": "暂无内容",
+    "installingTitle": "更新正在安装 — 点击查看进度",
+    "availableTitle": "版本 {{version}} 可用 — 点击查看并更新",
+    "updating": "更新中…",
+    "pill": "更新 v{{version}}",
+    "updatingTo": "正在更新到 v{{version}}",
+    "available": "有可用更新 — v{{version}}",
+    "youreOn": "当前版本：<v>v{{version}}</v>。",
+    "howTo": "更新方式",
+    "auto": "自动更新",
+    "manual": "在终端中手动运行",
+    "autoNote": "在本机安装 v{{version}} 并重启应用，约需一分钟。您的密钥和交易记录不受影响。",
+    "startingShort": "启动中…",
+    "updateTo": "更新到 v{{version}}",
+    "paste": "将以下命令粘贴到终端中运行。",
+    "os": "操作系统",
+    "codeChanges": "查看代码改动",
+    "changelog": "GitHub 上的完整更新日志"
+  },
+  "about": {
+    "seconds": "约 {{n}} 秒",
+    "minutes": "约 {{n}} 分钟",
+    "hours": "约 {{n}} 小时",
+    "hoursMinutes": "约 {{h}} 小时 {{m}} 分钟"
+  },
+  "syncAge": {
+    "s": "{{n}} 秒前",
+    "m": "{{n}} 分钟前",
+    "h": "{{n}} 小时前",
+    "d": "{{n}} 天前"
+  },
+  "liquidation": {
+    "label": "清算 {{price}}（{{move}}）",
+    "detail": "假设其他币种价格不变。",
+    "detailWithLeg": "亏损腿：{{venue}} {{side}}。假设其他币种价格不变。",
+    "falls": "{{base}} 跌至 {{price}}（{{move}}）。{{detail}}",
+    "rises": "{{base}} 涨至 {{price}}（{{move}}）。{{detail}}",
+    "noPrice": "Gate 已有 {{age}} 未提供 {{venue}} 价格。"
+  },
+  "rebate": {
+    "capped": "手续费上限 {{range}}",
+    "relative": "{{range}} 手续费返佣",
+    "legLine": "• {{venue}} {{side}}：{{pct}}",
+    "onMarkets_other": "市场 {{ids}}：{{pct}}"
+  },
+  "amount": {
+    "removeCommasType": "请去掉逗号，输入 {{value}}",
+    "removeCommas": "请去掉逗号",
+    "notNumber": "不是有效数字",
+    "notPositive": "必须大于 0",
+    "min": "最小值为 {{value}}",
+    "max": "最大值为 {{value}}"
+  },
+  "walletError": {
+    "noWallet": "未检测到浏览器钱包。请安装 MetaMask（或其他注入式钱包）后刷新页面。",
+    "rejected": "钱包连接被拒绝。",
+    "connectFailed": "无法连接钱包。",
+    "noAccount": "钱包未返回任何账户。",
+    "switchRejected": "Boros 运行在 {{chain}} 上，网络切换被拒绝。",
+    "switchManually": "请将钱包切换到 {{chain}} 后重试。",
+    "addRejected": "添加 {{chain}} 网络被拒绝。",
+    "switchFailed": "无法切换到 {{chain}}。",
+    "userRejected": "您在钱包中拒绝了该请求。",
+    "requestFailed": "钱包请求失败。"
+  },
+  "setup": {
+    "pageTitle": "设置终端",
+    "notSetUp": "未设置",
+    "collapse": "收起",
+    "expand": "展开",
+    "setUp": "设置",
+    "skipQuestion": "跳过 {{title}}？",
+    "notRecommended": "不推荐。",
+    "skipAnyway": "仍然跳过",
+    "skipLink": "跳过（不推荐）",
+    "keyWorks": "可用",
+    "gateKeyTitle": "Gate API 密钥",
+    "replaceCredentials": "替换凭证",
+    "checkKey": "验证密钥"
+  },
+  "settingsDrawer": {
+    "terminalSetup": "终端设置",
+    "about": "关于",
+    "version": "版本 {{version}}",
+    "available": " — v{{version}} 可更新",
+    "commitUnknown": "提交未知",
+    "installed": " · 安装于 {{date}}",
+    "sourceCheckout": "源码运行"
+  },
+  "permissions": {
+    "crossExchange": "Cross-Exchange",
+    "readWrite": "读写",
+    "tradeTransfer": "交易和划转",
+    "spot": "现货交易",
+    "readOnly": "只读",
+    "spotBalances": "查看现货余额",
+    "others": "其他全部",
+    "off": "关闭",
+    "withdrawal": "包括提款"
+  },
+  "gateSteps": {
+    "fundGate": "Gate 入金",
+    "fundGateDetail": "在 <a>gate.com/signup</a> 注册，并充值您要投入的资金。",
+    "enable": "开通 CrossEx",
+    "enableDetail": "在 <a>gate.com/crossex</a> 开通 CrossEx。Cross-Exchange 密钥权限和划转都需要先开通它。",
+    "fundCrossex": "CrossEx 入金",
+    "fundCrossexDetail": "将资金划入 <a>CrossEx</a>，即 Gate 的跨交易所保证金账户。所有 CrossEx 交易都使用这笔保证金。",
+    "createKey": "创建 API 密钥",
+    "apiManagement": "API 管理",
+    "createKeyDetail": "在 <a>API 管理</a>中，为交易账户创建 APIv4 密钥。除非您的 IP 固定，否则 IP 权限选择“稍后”。",
+    "aria": "获取密钥的步骤",
+    "summary": "APIv4 密钥 · 交易账户 · IP 权限：稍后"
+  },
+  "borosWallet": {
+    "nowShowing": "当前显示 <a>{{wallet}}</a>，即用于交易的钱包。",
+    "install": "请安装 Rabby 或 MetaMask 以登录。",
+    "loginEnds": "登录将于 {{date}} 到期。该密钥无法提款。",
+    "noWithdraw": "该密钥无法提款。",
+    "loginEndedOn": "登录已于 {{date}} 结束。Boros 会拒绝订单。",
+    "loginEnded": "登录已结束。Boros 会拒绝订单。",
+    "loggedInHere": "本终端已登录：<a>{{wallet}}</a>",
+    "oneSignature": "只需一次免费签名。该密钥无法提款。",
+    "title": "Boros 钱包",
+    "skip": "无法进行 Boros 交易，持仓页也不会显示 Boros 腿。",
+    "continueWithout": "不登录，继续",
+    "logOut": "退出登录",
+    "logOutLabel": "退出 {{wallet}} 的登录？",
+    "logOutQuestion": "退出 <a>{{wallet}}</a> 的登录？仓位保持不变。",
+    "loggingOut": "正在退出…",
+    "loggedOut": "已退出登录。链上授权会一直保留，直到您在 Boros 中撤销。"
+  },
+  "telegram": {
+    "walletName": "{{coin}} {{wallet}} 钱包",
+    "floorBorrow": "{{name}} · 借款超过 {{amount}}（前 {{amount}} 免息）",
+    "floorEquity": "{{name}} · 权益低于 {{amount}}",
+    "interestLead": "钱包开始",
+    "borrowing": "借款",
+    "floorsLoading": "阈值随终端一同加载。",
+    "allOn": "全部开启",
+    "noneOn": "全部关闭",
+    "someOn": "已开启 {{on}}/4",
+    "syncFailed": "{{time}} 同步失败。正在重试。",
+    "syncFailedSince": "{{time}} 同步失败。提醒使用 {{since}} 的同步数据。正在重试。",
+    "checking": "检查中…",
+    "lastSyncFailed": "上次同步失败",
+    "stateSynced": "{{alerts}} · {{age}}同步",
+    "setUpFor": "为 {{wallet}} 设置提醒",
+    "disconnect": "断开此终端",
+    "disconnectLabel": "断开此终端？",
+    "disconnectQuestion": "断开此终端？其上所有钱包的 Telegram 提醒都将停止。",
+    "disconnectConfirm": "断开",
+    "disconnecting": "断开中…",
+    "botNotReached": "无法连接机器人。请重试，或在 <a>Boros 通知页面</a>逐个停止各钱包的提醒。",
+    "liquidation": "接近清算",
+    "interest": "开始支付利息",
+    "maturity": "临近到期",
+    "rollover": "展期机会",
+    "liquidationCaption": "价格波动 20% 会导致某条腿被清算",
+    "maturityCaption": "到期前 7 天每日提醒，并列出可展期的到期日",
+    "rolloverCaption": "更晚的到期日 APR 更高",
+    "caveat": "提醒所用数据最多延迟 5 分钟。在终端外的交易会在下次同步后计入。",
+    "alertsFor": "{{wallet}} 的提醒 ·",
+    "synced": "{{age}}同步",
+    "borosNotifications": "Boros 通知",
+    "finish": "完成",
+    "perWallet": "提醒按钱包分别设置，可使用同一个 Telegram 聊天。",
+    "linkExpired": "链接已过期，请重新设置。",
+    "waiting": "等待您在 Boros 通知页面确认",
+    "openAgain": "重新打开页面",
+    "title": "Telegram 提醒",
+    "notForThisWallet": "此钱包未设置",
+    "skip": "接近清算、开始计息或临近到期时将不会收到预警。",
+    "checkingBot": "正在向 Telegram 机器人查询…",
+    "linkedElsewhere": "提醒绑定的是 <a>{{other}}</a>，而不是 <b>{{viewed}}</b>。请以此钱包登录来设置它的提醒。"
+  },
+  "api": {
+    "network": "调用 {{path}} 时网络出错：{{error}}",
+    "backendHint": "后端是否在 localhost:6688 上运行？",
+    "http": "{{path}} 返回 HTTP {{status}}",
+    "httpUnexpected": "{{path}} 返回 HTTP {{status}}，响应内容异常",
+    "saveFailed": "保存失败，请重试。",
+    "importTimeout": "导入在 10 秒内未响应。"
+  },
+  "age": {
+    "s": "{{n}}秒",
+    "m": "{{n}}分{{rest}}秒",
+    "h": "{{n}}小时{{rest}}分",
+    "d": "{{n}}天"
+  }
 }

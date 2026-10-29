@@ -1,4 +1,5 @@
 import type { CrossexAccount, CrossexPosition, PositionsResponse } from '../api/types';
+import { t } from '../i18n';
 import { fmtAge, fmtUsd, num, prettyVenue } from './fmt';
 
 /**
@@ -296,21 +297,23 @@ export function fmtLinePrice(price: number): string {
 /** `Liquidation ~$3,150 (+37%)` — the signed move carries the direction. The chip sits in the coin's
  *  own card, so it does not repeat the coin. */
 export function lineLabel(line: LiquidationLine): string {
-  return `Liquidation ${fmtLinePrice(line.price)} (${fmtMove(line.move)})`;
+  return t('app.liquidation.label', { price: fmtLinePrice(line.price), move: fmtMove(line.move) });
 }
 
 /** The losing leg and the model, for the hover on a chip that already shows the price. */
 export function lineDetail(line: LiquidationLine): string {
-  const leg = line.side === null ? '' : `Losing leg: ${line.venue} ${line.side}. `;
-  return `${leg}Assumes other coins do not move.`;
+  if (line.side === null) return t('app.liquidation.detail');
+  const side = t(line.side === 'long' ? 'common.long' : 'common.short').toLowerCase();
+  return t('app.liquidation.detailWithLeg', { venue: line.venue, side });
 }
 
 /** The full line, for a hover that does not show the price. */
 export function describeLine(line: LiquidationLine): string {
   const price = fmtUsd(line.price, line.price >= 1000 ? 0 : 2);
-  return `${line.base} ${line.move < 0 ? 'falls' : 'rises'} to ${price} (${fmtMove(line.move)}). ${lineDetail(line)}`;
+  const values = { base: line.base, price, move: fmtMove(line.move), detail: lineDetail(line) };
+  return line.move < 0 ? t('app.liquidation.falls', values) : t('app.liquidation.rises', values);
 }
 
 export function unknownLabel(unknown: { venue: string; sinceMs: number }, nowMs: number): string {
-  return `No ${unknown.venue} price from Gate for ${fmtAge(nowMs - unknown.sinceMs)}.`;
+  return t('app.liquidation.noPrice', { venue: unknown.venue, age: fmtAge(nowMs - unknown.sinceMs) });
 }

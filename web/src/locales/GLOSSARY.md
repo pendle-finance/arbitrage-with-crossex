@@ -34,6 +34,7 @@ Edit the line in `zh-CN/<area>.json`. Nothing else changes.
 
 Boros, CrossEx, Pendle, venue names (Gate, Hyperliquid, Binance, Lighter, OKX,
 Bybit), coin tickers (ETH, BTC, USDT, USDC), YU, APR, Gas, IOC, API, Telegram.
+Market names stay as Boros names them: `Binance ETHUSDT`, `ETH Spread HL-GATE`.
 
 ## Simplified Chinese terms
 
@@ -87,6 +88,11 @@ reads the same word in both apps.
 | transfer (between wallets) | 划转 |
 | rebalance | 再平衡 |
 | top up | 充值 |
+| maker / taker | 挂单 / 吃单 |
+| post-only | 只做挂单 |
+| reduce-only | 只减仓 |
+| Open Orders (tab) | 当前委托 |
+| convert (USDT ↔ USDC) | 兑换 |
 | withdraw | 提款 |
 | wallet | 钱包 |
 | agent (Boros signing key) | 代理 |

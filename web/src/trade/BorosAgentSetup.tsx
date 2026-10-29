@@ -21,6 +21,7 @@
  * not rendered.
  */
 import { useEffect, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import type { Hex } from 'viem';
 import { ApiError, fetchJson } from '../api/client';
 import { qk, refreshTelegramFresh, useBorosAgent, useProvisionBorosAgent, useTelegramLinked } from '../api/queries';
@@ -58,14 +59,6 @@ const CONFIRM_EVERY_MS = 1500;
 
 type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'sending' | 'confirming';
 
-const STEP_LABEL: Record<Exclude<Step, 'idle'>, string> = {
-  connecting: 'Open your wallet…',
-  replace: 'Waiting for your answer…',
-  sending: 'Sending the approval to Boros…',
-  approving: 'Sign in your wallet…',
-  confirming: 'Waiting for Boros…',
-};
-
 export const NOT_APPROVED_TEXT = 'Boros shows no approval for this login. Log in again.';
 
 const day = (unix: number): string => fmtDateShort(unix, { year: 'numeric' });
@@ -97,6 +90,7 @@ export interface ReplaceNotice {
 }
 
 function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null) {
+  const { t } = useTranslation();
   const provision = useProvisionBorosAgent();
   const status = useBorosAgent();
   const qc = useQueryClient();
@@ -121,7 +115,7 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       setStep('connecting');
       const wallet = await connectWallet();
       if (expected && !isSameAddress(wallet.address, expected)) {
-        setError(`Your browser wallet is ${short(wallet.address)}. Switch it to ${short(expected)} to log in.`);
+        setError(t('trade.agent.wrongWallet', { wallet: short(wallet.address), expected: short(expected) }));
         return;
       }
 
@@ -191,17 +185,17 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
       const confirmed = await waitForApproval(wallet.address, expiry);
       void qc.invalidateQueries({ queryKey: qk.borosAgent });
       if (confirmed === 'timeout') {
-        setError('Boros has not confirmed yet. If Log in still shows in a minute, log in again.');
+        setError(t('trade.agent.notConfirmed'));
         return;
       }
       if (confirmed === 'unchecked') {
-        setError('Boros did not answer. If Log in shows again, log in again.');
+        setError(t('trade.agent.noAnswer'));
         return;
       }
       // The server moves Telegram alerts to this wallet on its next sync, which
       // the approval starts. Ask the bot once that has had time to start.
       setTimeout(() => void refreshTelegramFresh(qc).catch(() => undefined), TELEGRAM_REFRESH_MS);
-      const done = `Logged in ${short(wallet.address)} until ${day(expiry)}.`;
+      const done = t('trade.agent.loggedIn', { address: short(wallet.address), date: day(expiry) });
       setNote(done);
       toast?.push('success', done);
       tracked?.followBrowserWallet(wallet.address);
@@ -230,32 +224,37 @@ function useBorosLogIn(onDone?: (root: string) => void, expected?: string | null
 
 type LogIn = ReturnType<typeof useBorosLogIn>;
 
-const buttonText = (login: LogIn, idle: string): string =>
-  login.step !== 'idle' ? STEP_LABEL[login.step] : login.busy ? 'Logging in…' : idle;
-
 /** Asked before a login that logs out the wallet that can trade now. */
 function ReplaceConfirm({ login }: { login: LogIn }) {
+  const { t } = useTranslation();
   const alertsLinked = useTelegramLinked();
   if (!login.replacing) return null;
   const { from, to } = login.replacing;
   return (
     <InlineConfirm
       tone="warn"
-      label={`Log out ${short(from)} and log in ${short(to)}?`}
+      label={t('trade.agent.replaceLabel', { from: short(from), to: short(to) })}
       question={
         <span className="font-medium">
-          Log out <span className="num">{short(from)}</span> and log in <span className="num">{short(to)}</span>?
+          <Trans
+            i18nKey="trade.agent.replaceQuestion"
+            values={{ from: short(from), to: short(to) }}
+            components={{ n: <span className="num" /> }}
+          />
         </span>
       }
-      confirmLabel={`Log in ${short(to)}`}
+      confirmLabel={t('trade.agent.loginAs', { address: short(to) })}
       onConfirm={() => login.answerReplace(true)}
       onCancel={() => login.answerReplace(false)}
     >
       <p>
-        <span className="num">{short(from)}</span> Boros legs stay open. Its Gate perps show unhedged until you log
-        it back in.
+        <Trans
+          i18nKey="trade.agent.replaceBody"
+          values={{ from: short(from) }}
+          components={{ n: <span className="num" /> }}
+        />
       </p>
-      {alertsLinked && <p>Telegram alerts are per wallet.</p>}
+      {alertsLinked && <p>{t('trade.agent.alertsPerWallet')}</p>}
     </InlineConfirm>
   );
 }
@@ -269,10 +268,18 @@ export function BorosLogInButton({
   renew?: boolean;
   onDone?: (root: string) => void;
 }) {
+  const { t } = useTranslation();
   const { address, loginLabel, openLogin } = useActiveWallet();
   const login = useBorosLogIn(onDone, address);
   // `renew`: the login still works but ends soon, so there is no loginLabel.
-  const label = loginLabel ?? (renew && address ? `Renew login for ${short(address)}` : null);
+  const label = loginLabel ?? (renew && address ? t('trade.agent.renew', { address: short(address) }) : null);
+  const stepText: Record<Exclude<Step, 'idle'>, string> = {
+    connecting: t('trade.agent.stepConnecting'),
+    replace: t('trade.agent.stepReplace'),
+    sending: t('trade.agent.stepSending'),
+    approving: t('trade.agent.stepApproving'),
+    confirming: t('trade.agent.stepConfirming'),
+  };
   if (!label && !login.note && !login.error) return null;
   return (
     <div className={`flex flex-col gap-1.5 ${className ?? ''}`}>
@@ -284,7 +291,7 @@ export function BorosLogInButton({
           disabled={login.busy}
           onClick={hasInjectedWallet() ? login.run : openLogin}
         >
-          {buttonText(login, label)}
+          {login.step !== 'idle' ? stepText[login.step] : login.busy ? t('trade.agent.loggingIn') : label}
         </button>
       )}
       <ReplaceConfirm login={login} />
@@ -305,13 +312,14 @@ export function BorosLogInButton({
  * and the header chip carries view only and a login that ends soon.
  */
 export function BorosAgentSetup({ className = '' }: { className?: string }) {
+  const { t } = useTranslation();
   const status = useBorosAgent();
   const active = useActiveWallet();
 
   if (status.data && !status.data.configured && !status.data.canProvision) {
     return (
       <p className={`rounded-lg border border-ink-700 bg-ink-950 px-3 py-2 text-[11px] text-ink-400 ${className}`}>
-        This build cannot place Boros orders. Trade the pair in the Boros app.
+        {t('trade.agent.noBuild')}
       </p>
     );
   }

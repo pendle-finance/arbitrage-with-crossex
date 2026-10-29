@@ -1,7 +1,9 @@
 import { ArrowUpRight } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
+import { Trans } from 'react-i18next';
 import { ApiError } from '../../api/client';
+import { t } from '../../i18n';
 import {
   qk,
   refreshTelegramFresh,
@@ -36,24 +38,21 @@ type AlertSettings = { liquidation: boolean; interest: boolean; maturity: boolea
 const WALLET_NAME: Record<string, string> = { USDT: 'CrossEx', HYPERLIQUID: 'Hyperliquid', LIGHTER: 'Lighter' };
 
 const floorLine = (floor: InterestFloor): string => {
-  const name = `${floor.coin} ${WALLET_NAME[floor.wallet] ?? floor.wallet} wallet`;
+  const name = t('app.telegram.walletName', { coin: floor.coin, wallet: WALLET_NAME[floor.wallet] ?? floor.wallet });
   return floor.floorUsd < 0
-    ? `${name} · borrows more than ${fmtUsd(-floor.floorUsd, 0)}, the first ${fmtUsd(-floor.floorUsd, 0)} is free`
-    : `${name} · equity under ${fmtUsd(floor.floorUsd, 0)}`;
+    ? t('app.telegram.floorBorrow', { name, amount: fmtUsd(-floor.floorUsd, 0) })
+    : t('app.telegram.floorEquity', { name, amount: fmtUsd(floor.floorUsd, 0) });
 };
 
-const LIQUIDATION_CAPTION = 'a 20% price move would liquidate a leg';
 
-const MATURITY_CAPTION = 'daily in the last 7 days, with maturities to roll to';
 
-const ROLLOVER_CAPTION = 'a later maturity pays a better APR';
 
 const interestCaption = (floors: readonly InterestFloor[]) => (
   <>
-    a wallet starts{' '}
-    <HoverCard label="borrowing" widthPx={300}>
+    {t('app.telegram.interestLead')}{' '}
+    <HoverCard label={t('app.telegram.borrowing')} widthPx={300}>
       <div className="flex flex-col gap-1 text-xs">
-        {floors.length === 0 && <div className="text-ink-200">Floors load with the terminal.</div>}
+        {floors.length === 0 && <div className="text-ink-200">{t('app.telegram.floorsLoading')}</div>}
         {floors.map((floor) => (
           <div key={floor.wallet} className="num text-ink-200">
             {floorLine(floor)}
@@ -64,8 +63,6 @@ const interestCaption = (floors: readonly InterestFloor[]) => (
   </>
 );
 
-const CAVEAT =
-  'Alerts use data up to 5 min old. Trades outside the terminal count after the next sync.';
 
 function alertSettings(info: TelegramInfo): AlertSettings {
   return {
@@ -78,17 +75,18 @@ function alertSettings(info: TelegramInfo): AlertSettings {
 
 function alertsLabel(settings: AlertSettings): string {
   const on = Object.values(settings).filter(Boolean).length;
-  if (on === 4) return 'All on';
-  if (on === 0) return 'None on';
-  return `${on} of 4 on`;
+  if (on === 4) return t('app.telegram.allOn');
+  if (on === 0) return t('app.telegram.noneOn');
+  return t('app.telegram.someOn', { on });
 }
 
 function syncFailure(info: TelegramInfo): string | null {
   const error = info.lastSyncError;
   if (!info.connected || error === null) return null;
   if (info.lastSyncAt !== null && info.lastSyncAt >= error.at) return null;
-  const since = info.lastSyncAt === null ? null : `Alerts use the ${fmtClock(info.lastSyncAt)} sync.`;
-  return [`Sync failed at ${fmtClock(error.at)}.`, since, 'Retrying.'].filter(Boolean).join(' ');
+  return info.lastSyncAt === null
+    ? t('app.telegram.syncFailed', { time: fmtClock(error.at) })
+    : t('app.telegram.syncFailedSince', { time: fmtClock(error.at), since: fmtClock(info.lastSyncAt) });
 }
 
 /** A stored key the bot has not answered for yet (the server just started):
@@ -106,10 +104,16 @@ function stateLine(info: TelegramInfo | undefined, now: number): { text: string 
   // opened row says which wallet.
   if (unlinkedOf(info) || info.state === 'replaced' || info.state === 'removed') return { text: null, isWarn: false };
   if (!info.connected) return { text: null, isWarn: false };
-  if (isChecking(info)) return { text: 'Checking…', isWarn: false };
-  if (syncFailure(info)) return { text: 'Last sync failed', isWarn: true };
-  const synced = info.lastSyncAt === null ? '' : ` · synced ${fmtSyncAge(now - info.lastSyncAt)}`;
-  return { text: `${alertsLabel(alertSettings(info))}${synced}`, isWarn: false };
+  if (isChecking(info)) return { text: t('app.telegram.checking'), isWarn: false };
+  if (syncFailure(info)) return { text: t('app.telegram.lastSyncFailed'), isWarn: true };
+  const alerts = alertsLabel(alertSettings(info));
+  return {
+    text:
+      info.lastSyncAt === null
+        ? alerts
+        : t('app.telegram.stateSynced', { alerts, age: fmtSyncAge(now - info.lastSyncAt) }),
+    isWarn: false,
+  };
 }
 
 export function TelegramRow(p: SetupRowProps) {
@@ -176,7 +180,7 @@ export function TelegramRow(p: SetupRowProps) {
   const setupButton = (
     <button type="button" className="btn-primary w-fit" disabled={start.isPending} onClick={() => openBorosPage(false)}>
       {start.isPending && <Spinner />}
-      Set up
+      {t('app.setup.setUp')}
       <ArrowUpRight size={12} aria-hidden className="inline" />
     </button>
   );
@@ -191,7 +195,7 @@ export function TelegramRow(p: SetupRowProps) {
       onClick={() => openBorosPage(true)}
     >
       {start.isPending && <Spinner />}
-      {compact ? 'Set up' : `Set up alerts for ${short(wallet)}`}
+      {compact ? t('app.setup.setUp') : t('app.telegram.setUpFor', { wallet: short(wallet) })}
       <ArrowUpRight size={12} aria-hidden className="inline" />
     </button>
   );
@@ -213,7 +217,7 @@ export function TelegramRow(p: SetupRowProps) {
       disabled={disconnect.isPending || askDisconnect}
       onClick={() => setAskDisconnect(true)}
     >
-      Disconnect this terminal
+      {t('app.telegram.disconnect')}
     </button>
   );
 
@@ -223,10 +227,10 @@ export function TelegramRow(p: SetupRowProps) {
       {askDisconnect && (
         <InlineConfirm
           tone="danger"
-          label="Disconnect this terminal?"
-          question="Disconnect this terminal? Telegram alerts stop for every wallet on it."
-          confirmLabel="Disconnect"
-          busyLabel="Disconnecting…"
+          label={t('app.telegram.disconnectLabel')}
+          question={t('app.telegram.disconnectQuestion')}
+          confirmLabel={t('app.telegram.disconnectConfirm')}
+          busyLabel={t('app.telegram.disconnecting')}
           busy={disconnect.isPending}
           onConfirm={() => disconnect.mutate(undefined, { onSettled: () => setAskDisconnect(false) })}
           onCancel={() => setAskDisconnect(false)}
@@ -234,11 +238,10 @@ export function TelegramRow(p: SetupRowProps) {
       )}
       {disconnect.isError && (
         <p role="alert" className="text-xs text-amber-300">
-          Bot not reached. Retry, or stop each wallet&apos;s alerts on the{' '}
-          <Ext href={info?.alertsPageUrl ?? ALERTS_PAGE_FALLBACK}>
-            Boros notifications page
-          </Ext>
-          .
+          <Trans
+            i18nKey="app.telegram.botNotReached"
+            components={{ a: <Ext href={info?.alertsPageUrl ?? ALERTS_PAGE_FALLBACK} /> }}
+          />
         </p>
       )}
     </>
@@ -249,16 +252,16 @@ export function TelegramRow(p: SetupRowProps) {
       <div className="flex flex-col gap-0.5">
         <Switch
           on={settings.liquidation}
-          label="Close to liquidation"
+          label={t('app.telegram.liquidation')}
           disabled={saveSettings.isPending}
           onChange={(next) => save({ liquidation: next })}
         />
-        <p className="pl-9 text-xs text-ink-500">{LIQUIDATION_CAPTION}</p>
+        <p className="pl-9 text-xs text-ink-500">{t('app.telegram.liquidationCaption')}</p>
       </div>
       <div className="flex flex-col gap-0.5">
         <Switch
           on={settings.interest}
-          label="Started paying interest"
+          label={t('app.telegram.interest')}
           disabled={saveSettings.isPending}
           onChange={(next) => save({ interest: next })}
         />
@@ -267,31 +270,31 @@ export function TelegramRow(p: SetupRowProps) {
       <div className="flex flex-col gap-0.5">
         <Switch
           on={settings.maturity}
-          label="Close to maturity"
+          label={t('app.telegram.maturity')}
           disabled={saveSettings.isPending}
           onChange={(next) => save({ maturity: next })}
         />
-        <p className="pl-9 text-xs text-ink-500">{MATURITY_CAPTION}</p>
+        <p className="pl-9 text-xs text-ink-500">{t('app.telegram.maturityCaption')}</p>
       </div>
       <div className="flex flex-col gap-0.5">
         <Switch
           on={settings.rollover}
-          label="Roll-over opportunity"
+          label={t('app.telegram.rollover')}
           disabled={saveSettings.isPending}
           onChange={(next) => save({ rollover: next })}
         />
-        <p className="pl-9 text-xs text-ink-500">{ROLLOVER_CAPTION}</p>
+        <p className="pl-9 text-xs text-ink-500">{t('app.telegram.rolloverCaption')}</p>
       </div>
       <div className="flex flex-wrap items-center gap-x-1 gap-y-1 text-xs text-ink-400">
-        {info?.alertWallet && <span className="num">{`Alerts for ${short(info.alertWallet)} ·`}</span>}
+        {info?.alertWallet && <span className="num">{t('app.telegram.alertsFor', { wallet: short(info.alertWallet) })}</span>}
         {lastSyncAt !== null ? (
           <span className="num">
-            <HoverCard label={`synced ${fmtSyncAge(now - lastSyncAt)}`} widthPx={300}>
-              <div className="text-xs text-ink-200">{CAVEAT}</div>
+            <HoverCard label={t('app.telegram.synced', { age: fmtSyncAge(now - lastSyncAt) })} widthPx={300}>
+              <div className="text-xs text-ink-200">{t('app.telegram.caveat')}</div>
             </HoverCard>
           </span>
         ) : (
-          <span className="text-ink-500">{CAVEAT}</span>
+          <span className="text-ink-500">{t('app.telegram.caveat')}</span>
         )}
       </div>
       {p.variant !== 'setup' && !askDisconnect && (
@@ -302,7 +305,7 @@ export function TelegramRow(p: SetupRowProps) {
             rel="noreferrer"
             className="btn-link inline-flex items-center gap-1"
           >
-            Boros notifications
+            {t('app.telegram.borosNotifications')}
             <ArrowUpRight size={12} aria-hidden />
           </a>
           {disconnectLink}
@@ -310,7 +313,7 @@ export function TelegramRow(p: SetupRowProps) {
       )}
       {p.variant === 'setup' ? (
         <button type="button" className="btn-primary w-fit" onClick={p.onDone}>
-          Finish
+          {t('app.telegram.finish')}
         </button>
       ) : (
         disconnectBlock
@@ -321,9 +324,9 @@ export function TelegramRow(p: SetupRowProps) {
   const unlinkedBody = (wallet: string) => (
     <>
       <p className="num text-xs text-ink-300">
-        {'Alerts are per wallet. The same Telegram chat works.'}
+        {t('app.telegram.perWallet')}
       </p>
-      {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}
+      {phase === 'expired' && <p className="text-xs text-amber-300">{t('app.telegram.linkExpired')}</p>}
       {startError && (
         <p role="alert" className="text-xs text-amber-300">
           {startError}
@@ -341,10 +344,10 @@ export function TelegramRow(p: SetupRowProps) {
     <>
       <div className="flex items-center gap-2 text-xs text-ink-300">
         <Spinner />
-        <span>Waiting for you to confirm on the Boros notifications page</span>
+        <span>{t('app.telegram.waiting')}</span>
       </div>
       {pageUrl && <Ext href={pageUrl}>
-          Open the page again <ArrowUpRight size={12} aria-hidden className="inline" />
+          {t('app.telegram.openAgain')} <ArrowUpRight size={12} aria-hidden className="inline" />
         </Ext>}
       <button
         type="button"
@@ -352,7 +355,7 @@ export function TelegramRow(p: SetupRowProps) {
         disabled={cancelLink.isPending}
         onClick={() => cancelLink.mutate(undefined, { onSuccess: () => setPhase('idle'), onError: showError })}
       >
-        Cancel
+        {t('common.cancel')}
       </button>
     </>
   );
@@ -361,23 +364,23 @@ export function TelegramRow(p: SetupRowProps) {
     <>
       <div className="flex flex-col gap-2 text-xs">
         <div className="flex flex-col gap-0.5">
-          <span className="text-ink-100">Close to liquidation</span>
-          <span className="text-ink-500">{LIQUIDATION_CAPTION}</span>
+          <span className="text-ink-100">{t('app.telegram.liquidation')}</span>
+          <span className="text-ink-500">{t('app.telegram.liquidationCaption')}</span>
         </div>
         <div className="flex flex-col gap-0.5">
-          <span className="text-ink-100">Started paying interest</span>
+          <span className="text-ink-100">{t('app.telegram.interest')}</span>
           <span className="text-ink-500">{interestCaption(info?.floors ?? [])}</span>
         </div>
         <div className="flex flex-col gap-0.5">
-          <span className="text-ink-100">Close to maturity</span>
-          <span className="text-ink-500">{MATURITY_CAPTION}</span>
+          <span className="text-ink-100">{t('app.telegram.maturity')}</span>
+          <span className="text-ink-500">{t('app.telegram.maturityCaption')}</span>
         </div>
         <div className="flex flex-col gap-0.5">
-          <span className="text-ink-100">Roll-over opportunity</span>
-          <span className="text-ink-500">{ROLLOVER_CAPTION}</span>
+          <span className="text-ink-100">{t('app.telegram.rollover')}</span>
+          <span className="text-ink-500">{t('app.telegram.rolloverCaption')}</span>
         </div>
       </div>
-      {phase === 'expired' && <p className="text-xs text-amber-300">Link expired. Set up again.</p>}
+      {phase === 'expired' && <p className="text-xs text-amber-300">{t('app.telegram.linkExpired')}</p>}
       {startError && (
         <p role="alert" className="text-xs text-amber-300">
           {startError}
@@ -390,10 +393,10 @@ export function TelegramRow(p: SetupRowProps) {
   return (
     <SetupRowFrame
       n={3}
-      title="Telegram alerts"
+      title={t('app.telegram.title')}
       row={p}
       isDone={isConnected}
-      state={otherWallet ? 'Not set up for this wallet' : p.open && isConnected ? null : line.text}
+      state={otherWallet ? t('app.telegram.notForThisWallet') : p.open && isConnected ? null : line.text}
       isWarn={line.isWarn}
       alert={
         ((failure && p.open) || readError) && (
@@ -403,17 +406,20 @@ export function TelegramRow(p: SetupRowProps) {
         )
       }
       setupAction={checking || otherWallet ? <span /> : unlinked ? addWalletButton(unlinked, true) : setupButton}
-      skipConsequence="No warning near liquidation, interest or maturity."
+      skipConsequence={t('app.telegram.skip')}
     >
       {checking ? (
         <div className="flex items-center gap-2 text-xs text-ink-300">
           <Spinner />
-          <span>Checking with the Telegram bot…</span>
+          <span>{t('app.telegram.checkingBot')}</span>
         </div>
       ) : otherWallet && viewed ? (
         <p className="text-xs text-ink-300">
-          Alerts are linked to <span className="num text-ink-100">{short(otherWallet)}</span>, not{' '}
-          <span className="num text-ink-100">{short(viewed)}</span>. Log in as this wallet to set up its alerts.
+          <Trans
+            i18nKey="app.telegram.linkedElsewhere"
+            values={{ other: short(otherWallet), viewed: short(viewed) }}
+            components={{ a: <span className="num text-ink-100" />, b: <span className="num text-ink-100" /> }}
+          />
         </p>
       ) : unlinked && phase !== 'waiting'
         ? unlinkedBody(unlinked)

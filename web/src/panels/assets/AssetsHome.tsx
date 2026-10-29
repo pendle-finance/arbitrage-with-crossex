@@ -9,6 +9,7 @@
  *      venues' own records (open positions live, closed ones from history).
  */
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { AccountsAlert } from '../accounts/AccountsUi';
 import {
   importAssetPrefs,
@@ -42,6 +43,7 @@ import { sizesForWholeExclusions } from './excludeLeg';
 const NO_PREFS: AssetViewPrefs = { sinceByAsset: {}, exclusions: {}, legSince: {} };
 
 export function AssetsHome() {
+  const { t } = useTranslation();
   const { address } = useTrackedAddress();
   const viewOnly = useActiveWallet().viewOnly;
   const loggedInRoot = useBorosAgent().data?.root ?? null;
@@ -206,18 +208,18 @@ export function AssetsHome() {
     <div className="mb-4 flex flex-wrap items-baseline gap-2">
       <h2
         className="text-[16px] font-semibold leading-[19.36px] text-ink-50"
-        title="Every leg grouped by its underlying asset."
+        title={t('assets.home.headingTitle')}
       >
-        Funding farm by asset
+        {t('assets.home.heading')}
       </h2>
       {address && <span className="num text-xs text-ink-500">{short(address)}</span>}
       {address && (
         <label
           className="ml-auto flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs text-ink-300"
-          title="Show only assets with an open leg. Account totals still include every asset."
+          title={t('assets.home.hideInactiveTitle')}
         >
           <input type="checkbox" className="chk" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />
-          <span>Hide inactive pairs</span>
+          <span>{t('assets.home.hideInactive')}</span>
           {hideInactive && inactive.length > 0 && <span className="num text-ink-500">({inactive.length})</span>}
         </label>
       )}
@@ -230,8 +232,8 @@ export function AssetsHome() {
         {header}
         <EmptyState
           icon="✦"
-          title="Connect your wallet to see your farm by asset"
-          hint="The asset view groups every perp and Boros leg by its underlying coin and reports the venues' own lifetime numbers."
+          title={t('assets.home.connectTitle')}
+          hint={t('assets.home.connectHint')}
           action={
             <div className="w-72 max-w-full">
               <ConnectWalletButton />
@@ -247,7 +249,7 @@ export function AssetsHome() {
       <section>
         {header}
         <QueryError
-          title="Couldn't load the asset view"
+          title={t('assets.home.loadError')}
           error={prefsQuery.error ?? query.error}
           onRetry={() => {
             if (prefsQuery.isError) void prefsQuery.refetch();
@@ -277,18 +279,18 @@ export function AssetsHome() {
       {/* Account health lives on Accounts; here only a warning when needed. */}
       <AccountsAlert />
       {prefsQuery.data.unreadable && (
-        <p className="mb-4 text-xs text-ink-300">Saved exclusions could not be read. They were kept as a backup file.</p>
+        <p className="mb-4 text-xs text-ink-300">{t('assets.home.prefsUnreadable')}</p>
       )}
       {legacy === 'failed' && (
-        <p className="mb-4 text-xs text-ink-300">
-          Could not move this browser's saved exclusions to the terminal. It tries again on the next load.
-        </p>
+        <p className="mb-4 text-xs text-ink-300">{t('assets.home.legacyFailed')}</p>
       )}
       {viewOnly && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
-          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: view-only. Perps are
-          your connected Gate account's; trading and fee rebates need the logged-in{' '}
-          <span className="num text-ink-200">{short(loggedInRoot)}</span>.
+          <Trans
+            i18nKey="assets.home.viewOnly"
+            values={{ address: short(address), root: short(loggedInRoot) }}
+            components={{ addr: <span className="num text-ink-200" />, owner: <span className="num text-ink-200" /> }}
+          />
         </p>
       )}
 
@@ -312,11 +314,11 @@ export function AssetsHome() {
             className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
             title={
               interestAvailable
-                ? 'What the farm kept, after borrow interest.'
-                : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
+                ? t('assets.home.totalPnlTitleWithInterest')
+                : t('assets.home.totalPnlTitleNoInterest')
             }
           >
-            Total Account PnL
+            {t('assets.home.totalPnl')}
           </div>
           <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
             <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">
@@ -334,15 +336,15 @@ export function AssetsHome() {
                   const byCoin = Object.entries(data?.interest?.byCoin ?? {});
                   return byCoin.length > 0
                     ? [
-                        'Borrow interest paid',
+                        t('assets.home.interestPaid'),
                         ...byCoin.map(([c, n]) => `${c}\t${num(n, 2)}`),
                         '---',
-                        `Total\t${fmtUsd(interestUsd)}`,
+                        `${t('assets.home.interestTotal')}\t${fmtUsd(interestUsd)}`,
                       ].join('\n')
-                    : `Borrow interest paid\t${fmtUsd(interestUsd)}`;
+                    : `${t('assets.home.interestPaid')}\t${fmtUsd(interestUsd)}`;
                 })()}
               >
-                after {fmtUsd(interestUsd)} borrow interest
+                {t('assets.home.afterInterest', { amount: fmtUsd(interestUsd) })}
               </span>
             )}
           </div>
@@ -351,16 +353,16 @@ export function AssetsHome() {
           <div className="flex flex-col gap-2">
             <div
               className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
-              title="PnL so far over capital × time, annualized. Approximate: capital is today's requirement."
+              title={t('assets.home.aprTitle')}
             >
-              Realized APR ≈
+              {t('assets.home.apr')}
             </div>
             <div className="num text-[24px] font-bold leading-[29.05px]">
               {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} /> : '—'}
             </div>
           </div>
           <div className="flex flex-col gap-2 border-l border-ink-700 pl-9">
-            <div className="text-[14px] font-normal leading-[16.94px] text-ink-300">Capital at work</div>
+            <div className="text-[14px] font-normal leading-[16.94px] text-ink-300">{t('assets.home.capital')}</div>
             <div className="num text-[24px] font-semibold leading-[29.05px] text-ink-50">{fmtUsd(totalCapital)}</div>
           </div>
         </div>
@@ -375,14 +377,14 @@ export function AssetsHome() {
       {derived.length === 0 ? (
         <EmptyState
           icon="◦"
-          title="No positions or history found for this address"
-          hint="Open a position (or move the start date back) and the assets will appear here."
+          title={t('assets.home.emptyTitle')}
+          hint={t('assets.home.emptyHint')}
         />
       ) : (
         <div className="flex flex-col gap-8">
           {shown.length === 0 && (
             <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
-              No active pairs — {inactive.length} inactive hidden.
+              {t('assets.home.allInactive', { n: inactive.length })}
             </p>
           )}
           {shown.map(({ group, derived: d, sinceSec, storedSinceSec, backfilling, windowPending }) => (
