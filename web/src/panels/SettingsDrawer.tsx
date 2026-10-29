@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useVersion } from '../api/queries';
 import { Drawer } from '../components/Drawer';
 import { GithubMark } from '../components/GithubMark';
@@ -15,6 +16,7 @@ export function SettingsDrawer({
   onClose: () => void;
   focusStep?: SetupStep | null;
 }) {
+  const { t } = useTranslation();
   const version = useVersion(); // same query key as the header pill — deduped
   const install = version.data?.install ?? null;
   const [openStep, setOpenStep] = useState<SetupStep | null>(open ? focusStep : null);
@@ -25,13 +27,13 @@ export function SettingsDrawer({
   }
 
   return (
-    <Drawer open={open} title="Settings" onClose={onClose}>
+    <Drawer open={open} title={t('app.settings')} onClose={onClose}>
       <div className="flex flex-col gap-6">
         {/* Named like the first-run checklist ("Set up the terminal"), so the
             three rows read as the same setup, reopened (his call 2026-09-23). */}
         <section>
           <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
-            Terminal setup
+            {t('app.settingsDrawer.terminalSetup')}
           </h3>
           <SetupRows
             openStep={openStep}
@@ -42,17 +44,17 @@ export function SettingsDrawer({
         </section>
         <section>
           <h3 className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
-            About
+            {t('app.settingsDrawer.about')}
           </h3>
           <div className="flex flex-col gap-[5px] rounded border border-ink-700 px-3 py-[11px] text-[11.5px] text-ink-100">
             <div className="flex items-baseline justify-between gap-3">
               <div className="num">
-                Version {version.data?.current ?? 'unknown'}
+                {t('app.settingsDrawer.version', { version: version.data?.current ?? t('app.unknownLower') })}
                 {/* Gold, not a button: an available update is a FACT about this
                     install, and the upgrade runs through the installer, not from
                     in here. Colouring it is what makes it noticed. */}
                 {version.data?.updateAvailable && version.data.latest ? (
-                  <span className="text-gold"> — v{version.data.latest} available</span>
+                  <span className="text-gold">{t('app.settingsDrawer.available', { version: version.data.latest })}</span>
                 ) : null}
               </div>
               <a
@@ -85,13 +87,13 @@ export function SettingsDrawer({
                       install.commit.slice(0, 9)
                     )
                   ) : (
-                    'commit unknown'
+                    t('app.settingsDrawer.commitUnknown')
                   )}
                   {install.requestedRef ? ` · ${install.requestedRef}` : ''}
-                  {install.installedAt ? ` · installed ${install.installedAt.slice(0, 10)}` : ''}
+                  {install.installedAt ? t('app.settingsDrawer.installed', { date: install.installedAt.slice(0, 10) }) : ''}
                 </>
               ) : (
-                'source checkout'
+                t('app.settingsDrawer.sourceCheckout')
               )}
             </div>
           </div>

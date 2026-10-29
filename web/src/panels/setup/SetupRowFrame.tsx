@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { SetupRowProps } from './setupState';
 import { InlineConfirm } from '../../components/InlineConfirm';
 import { ChevronDown } from 'lucide-react';
@@ -46,11 +47,12 @@ export function SetupRowFrame({
   skipConsequence?: string;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   const [isSkipped, setIsSkipped] = useState(false);
   const [isAsking, setIsAsking] = useState(false);
   const isSettings = row.variant === 'settings';
   const showsNotSetUp = !isDone && state === null && (isSettings || isSkipped);
-  const line = showsNotSetUp ? 'not set up' : state;
+  const line = showsNotSetUp ? t('app.setup.notSetUp') : state;
   const isLineWarn = isWarn || showsNotSetUp;
   const dot: DotTone = isDone && !isLineWarn ? (doneTone === 'done' ? 'done' : 'later') : isLineWarn ? 'warn' : row.open ? 'current' : 'later';
   const canSkip = !isSettings && !isDone && row.onSkip !== undefined && skipConsequence !== undefined;
@@ -66,7 +68,7 @@ export function SetupRowFrame({
   const action = isDisclosure ? (
     <button
       type="button"
-      aria-label={row.open ? 'Collapse' : 'Expand'}
+      aria-label={row.open ? t('app.setup.collapse') : t('app.setup.expand')}
       aria-expanded={row.open}
       onClick={row.open ? row.onClose : row.onOpen}
       className="rounded-full hover:text-ink-50"
@@ -76,7 +78,7 @@ export function SetupRowFrame({
   ) : (
     (setupAction ?? (
       <button type="button" className="btn-primary" onClick={row.onOpen}>
-        Set up
+        {t('app.setup.setUp')}
       </button>
     ))
   );
@@ -128,15 +130,15 @@ export function SetupRowFrame({
       {row.open && isAsking && (
         <InlineConfirm
           tone="warn"
-          label={`Skip ${title}?`}
+          label={t('app.setup.skipQuestion', { title })}
           question={
             <>
-              <span className="font-semibold">Not recommended.</span> <span>{skipConsequence}</span>
+              <span className="font-semibold">{t('app.setup.notRecommended')}</span> <span>{skipConsequence}</span>
             </>
           }
-          confirmLabel="Skip anyway"
+          confirmLabel={t('app.setup.skipAnyway')}
           confirmKind="neutral"
-          cancelLabel="Back"
+          cancelLabel={t('common.back')}
           onConfirm={skipAnyway}
           onCancel={() => setIsAsking(false)}
         />
@@ -144,7 +146,7 @@ export function SetupRowFrame({
       {row.open && !isAsking && children}
       {row.open && !isAsking && canSkip && (
         <button type="button" className="btn-link self-end text-ink-400" onClick={() => setIsAsking(true)}>
-          Skip, not recommended
+          {t('app.setup.skipLink')}
         </button>
       )}
     </section>

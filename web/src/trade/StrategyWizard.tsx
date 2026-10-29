@@ -24,6 +24,7 @@
  */
 import { ArrowRight, Check, ChevronRight } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { BorosLegFill, BorosLegSizing, BorosPairResult, BorosPairSimulation } from '../api/types';
 import { useBorosPairContext } from '../api/queries';
 import { Modal } from '../components/Modal';
@@ -151,6 +152,7 @@ function WizardBody({
   flow: TradeFlowApi;
   onViewPositions?: () => void;
 }) {
+  const { t } = useTranslation();
   const resuming = (w.initialStep ?? 1) === 2;
   const [step, setStep] = useState<Step>(w.initialStep ?? 1);
   /** Everything step 1 has executed, as one signed book — see StepOneBook. */
@@ -325,8 +327,8 @@ function WizardBody({
    * empty gap between separators.
    */
   const venuePair = [
-    w.borosShortVenue ? `short ${w.borosShortVenue.toLowerCase()}` : null,
-    w.borosLongVenue ? `long ${w.borosLongVenue.toLowerCase()}` : null,
+    w.borosShortVenue ? t('trade.wizard.venueShort', { venue: w.borosShortVenue.toLowerCase() }) : null,
+    w.borosLongVenue ? t('trade.wizard.venueLong', { venue: w.borosLongVenue.toLowerCase() }) : null,
   ]
     .filter((p): p is string => p !== null)
     .join(' / ');
@@ -335,7 +337,7 @@ function WizardBody({
       {/* A resume is FINISHING a position that already exists — calling that
           "Open this strategy" tells the user they are starting something they
           are half-way through. */}
-      <span>{resuming ? 'Finish this strategy' : 'Open this strategy'}</span>
+      <span>{resuming ? t('trade.wizard.finishTitle') : t('trade.wizard.openTitle')}</span>
       <span className="num text-[12px] font-normal text-ink-400">
         {w.base}
         {venuePair && ` · ${venuePair}`}
@@ -359,19 +361,18 @@ function WizardBody({
         {leaveArmed && step !== 'done' && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/[0.08] px-3 py-2 text-[12px] leading-relaxed text-amber-100">
             <span>
-              The rate is locked but not hedged — until the perp legs open you hold directional
-              exposure. The Positions page will show this and offer to finish the hedge.
+              {t('trade.wizard.leaveWarning')}
             </span>
             <span className="flex shrink-0 gap-2">
               <button type="button" className="btn !py-1 text-[11px]" onClick={closeWizard}>
-                Leave
+                {t('trade.wizard.leave')}
               </button>
               <button
                 type="button"
                 className="btn btn-primary !py-1 text-[11px]"
                 onClick={() => setLeaveArmed(false)}
               >
-                Stay
+                {t('trade.wizard.stay')}
               </button>
             </span>
           </div>
@@ -399,9 +400,9 @@ function WizardBody({
             <div className="flex flex-col gap-3">
               <StepOneReceipt book={book} hedged={hedged} />
               <button type="button" className="btn btn-primary w-full" onClick={continueToHedge}>
-                Rate locked
+                {t('trade.wizard.rateLocked')}
                 <Check size={14} aria-hidden />
-                — hedge the perps
+                {t('trade.wizard.hedgeSuffix')}
                 <ChevronRight size={14} aria-hidden />
               </button>
             </div>
@@ -421,13 +422,12 @@ function WizardBody({
                         report can be dismissed, and copy pointing at something
                         no longer on screen reads as a bug. The fact that
                         survives either way is what continuing would cost. */}
-                    The rate legs are lopsided — {sig(residualSize)}
-                    {book.collateral ? ` ${book.collateral}` : ''} is unmatched. Continuing hedges
-                    only the size both legs share; the rest stays directional until you complete or
-                    close it.
+                    {t('trade.wizard.lopsided', {
+                      size: `${sig(residualSize)}${book.collateral ? ` ${book.collateral}` : ''}`,
+                    })}
                   </p>
                   <button type="button" className="btn btn-primary w-full" onClick={continueToHedge}>
-                    Continue anyway — hedge the perps
+                    {t('trade.wizard.continueAnyway')}
                     <ChevronRight size={14} aria-hidden />
                   </button>
                 </div>
@@ -439,9 +439,7 @@ function WizardBody({
                    and arming the intent size here was exactly the bug where
                    a one-leg book got a full-size "hedge". */
                 <p className="mt-3 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
-                  Only one side of the rate pair is on — that is directional exposure, not a locked
-                  spread. There is no shared size to hedge yet; complete the other leg, or close
-                  this one.
+                  {t('trade.wizard.oneSided')}
                 </p>
               )}
             </>
@@ -461,8 +459,7 @@ function WizardBody({
                 // wipe the user's edits — the exact bug the lastArmedHedge
                 // gate fixes — so say it instead and let them re-continue.
                 <p className="mb-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
-                  The rate legs changed since this hedge was sized — go back to the rate legs and
-                  continue again to re-size it.
+                  {t('trade.wizard.rateChanged')}
                 </p>
               )}
             <PairTicket onExecuted={() => setStep('done')} />
@@ -472,7 +469,7 @@ function WizardBody({
                 className="mt-3 text-[11px] text-ink-400 underline decoration-dotted hover:text-ink-200"
                 onClick={() => setStep(1)}
               >
-                ‹ Back to the rate legs
+                {t('trade.wizard.back')}
               </button>
             )}
           </div>
@@ -482,9 +479,8 @@ function WizardBody({
         {step === 'done' && (
           <div className="flex flex-col gap-3">
             <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.05] px-3 py-2.5 text-[12.5px] leading-relaxed text-ink-100">
-              <span className="mr-2 inline-flex items-center gap-1 font-semibold text-emerald-400"><Check size={14} aria-hidden />Strategy submitted.</span>
-              The perp legs are executing — the deal view tracks their fills. Your position appears
-              on the Positions page, which watches all {book.spread.marketId !== 0 ? 'three' : 'four'} legs from here on.
+              <span className="mr-2 inline-flex items-center gap-1 font-semibold text-emerald-400"><Check size={14} aria-hidden />{t('trade.wizard.submitted')}</span>
+              {book.spread.marketId !== 0 ? t('trade.wizard.doneThree') : t('trade.wizard.doneFour')}
             </div>
             <button
               type="button"
@@ -494,7 +490,7 @@ function WizardBody({
                 onViewPositions?.();
               }}
             >
-              View my position
+              {t('trade.wizard.viewPosition')}
               <ArrowRight size={14} aria-hidden />
             </button>
             <button
@@ -502,7 +498,7 @@ function WizardBody({
               className="self-center text-[11px] text-ink-400 underline decoration-dotted hover:text-ink-200"
               onClick={closeWizard}
             >
-              close
+              {t('trade.wizard.close')}
             </button>
           </div>
         )}
@@ -568,17 +564,18 @@ function StepOneReceipt({ book, hedged }: { book: StepOneBook; hedged: number })
 
 /** 1 ── 2 ── ✓, with the active step lit and finished steps checked. */
 function StepStrip({ step, locked }: { step: Step; locked: boolean }) {
+  const { t } = useTranslation();
   const items: { n: 1 | 2; label: string; venue: string; done: boolean; active: boolean }[] = [
     {
       n: 1,
-      label: 'Lock the rate',
+      label: t('trade.wizard.lockRate'),
       venue: 'Boros',
       done: locked || step === 2 || step === 'done',
       active: step === 1,
     },
     {
       n: 2,
-      label: 'Hedge the perps',
+      label: t('trade.wizard.hedgePerps'),
       venue: 'Gate CrossEx',
       done: step === 'done',
       active: step === 2,

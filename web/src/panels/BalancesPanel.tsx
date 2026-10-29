@@ -1,6 +1,7 @@
 import { ChevronRight } from 'lucide-react';
 import { AccountsOverview } from './accounts/AccountsUi';
 import { useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAccount, useTransfer } from '../api/queries';
 import type { CrossexAsset, GateAccount, SpotBalance, TransferCoin } from '../api/types';
 import { TokenIcon } from '../components/AssetIcon';
@@ -10,16 +11,14 @@ import { HoverCard } from '../components/HoverCard';
 import { QueryError } from '../components/QueryError';
 import { SignedNumber } from '../components/SignedNumber';
 import { TableSkeleton, TilesSkeleton } from '../components/Skeleton';
+import { t } from '../i18n';
 import { num } from '../lib/fmt';
-import { HOVER } from './rebalanceCopy';
+import { gateSpot, HOVER } from './rebalanceCopy';
 import { Term } from './RebalanceHovers';
 import { RebalanceSection } from './RebalanceSection';
 import { NoSpotReadHow } from './TransferBits';
 import { TransferSection } from './TransferSection';
 import type { TransferPick } from './TransferModal';
-
-const NO_SPOT_READ_TEXT = 'Add Spot read permission to see spot balances.';
-const SPOT_HELD = (free: string, held: string) => `${free} free. ${held} is held by open Gate spot orders.`;
 
 type AssetRow =
   | { kind: 'crossex'; asset: CrossexAsset }
@@ -38,10 +37,11 @@ function CoinCell({ coin, account }: { coin: string; account: string }) {
 }
 
 function NoSpotReadRow() {
+  const { t } = useTranslation();
   return (
     <span className="flex flex-wrap items-center gap-2">
-      <span className="text-ink-200">{NO_SPOT_READ_TEXT}</span>
-      <HoverCard label={<span className="text-link">How <ChevronRight size={12} aria-hidden className="inline" /></span>} icon={false} underline={false}>
+      <span className="text-ink-200">{t('accounts.transfer.addSpotRead')}</span>
+      <HoverCard label={<span className="text-link">{t('accounts.transfer.how')} <ChevronRight size={12} aria-hidden className="inline" /></span>} icon={false} underline={false}>
         <NoSpotReadHow />
       </HoverCard>
     </span>
@@ -52,7 +52,7 @@ function coinCell(row: AssetRow): ReactNode {
   if (row.kind === 'crossex') return <CoinCell coin={row.asset.coin} account={row.asset.exchangeType} />;
   if (row.kind === 'spot') return <CoinCell coin={row.spot.coin} account="SPOT" />;
   if (row.kind === 'noSpotRead') return <NoSpotReadRow />;
-  const label = <span className="text-[11px] font-semibold text-gold">Gate spot</span>;
+  const label = <span className="text-[11px] font-semibold text-gold">{gateSpot()}</span>;
   return <Term label={label} text={HOVER.gateSpotAssets} />;
 }
 
@@ -65,24 +65,24 @@ function spotBalanceCell(spot: SpotBalance): ReactNode {
   if (spot.locked <= 0) return total;
   return (
     <HoverCard icon={false} widthPx={320} label={<span className="text-ink-100">{total}</span>}>
-      <p className="text-xs leading-snug">{SPOT_HELD(num(spot.available, 2), num(spot.locked, 2))}</p>
+      <p className="text-xs leading-snug">{t('accounts.balances.spotHeld', { free: num(spot.available, 2), held: num(spot.locked, 2) })}</p>
     </HoverCard>
   );
 }
 
-const ASSET_COLUMNS: Column<AssetRow>[] = [
-  { key: 'coin', header: 'Coin', render: coinCell },
+const assetColumns = (): Column<AssetRow>[] => [
+  { key: 'coin', header: t('common.coin'), render: coinCell },
   // Fixed 2dp on every money column: tabular figures only line up when the
   // decimal point sits in the same place on every row.
   {
     key: 'equity',
-    header: 'Equity',
+    header: t('accounts.balances.equity'),
     align: 'right',
     render: (row) => amountCell(row.kind === 'crossex' ? row.asset.equity : null),
   },
   {
     key: 'balance',
-    header: 'Balance',
+    header: t('accounts.balances.balance'),
     align: 'right',
     render: (row) => {
       if (row.kind === 'crossex') return amountCell(row.asset.balance);
@@ -91,7 +91,7 @@ const ASSET_COLUMNS: Column<AssetRow>[] = [
   },
   {
     key: 'upnl',
-    header: 'uPnL',
+    header: t('accounts.balances.upnl'),
     align: 'right',
     render: (row) =>
       row.kind === 'crossex' ? <SignedNumber value={row.asset.upnl} format={(n) => num(n, 2)} /> : null,
@@ -114,6 +114,7 @@ function spotRows(spot: SpotBalance[] | null | undefined): AssetRow[] {
 /** Balances tab: the margin card, then one Assets card. The card shows what
  * each wallet holds first, then the borrow facts and the two actions. */
 export function BalancesPanel() {
+  const { t } = useTranslation();
   const { data: acc, isPending, isError, error } = useAccount();
   const spot = useTransfer().data?.spot;
   const [pick, setPick] = useState<TransferPick | null>(null);
@@ -128,7 +129,7 @@ export function BalancesPanel() {
     );
   }
   if (isError && !acc) {
-    return <QueryError title="Couldn't load account" error={error} />;
+    return <QueryError title={t('accounts.balances.loadFailed')} error={error} />;
   }
   if (!acc) return null;
 
@@ -147,17 +148,17 @@ export function BalancesPanel() {
       {/* Every account, both venues, on one scale, verdict first. */}
       <AccountsOverview />
 
-      <section ref={assetsSection} aria-label="CrossEx assets" className="card flex flex-col gap-4 p-4">
+      <section ref={assetsSection} aria-label={t('accounts.balances.title')} className="card flex flex-col gap-4 p-4">
         <h2 className="text-[14px] font-semibold text-ink-50">
-          CrossEx assets <span className="normal-case text-ink-500">· non-zero only</span>
+          {t('accounts.balances.title')} <span className="normal-case text-ink-500">{t('accounts.balances.nonZeroOnly')}</span>
         </h2>
         <div>
           <DataTable
-            columns={ASSET_COLUMNS}
+            columns={assetColumns()}
             rows={rows}
             rowKey={rowKeyOf}
             maxHeightClass="max-h-none"
-            emptyState={<EmptyState icon="○" title="No non-zero balances" hint="Deposit collateral to CrossEx to get started." />}
+            emptyState={<EmptyState icon="○" title={t('accounts.balances.emptyTitle')} hint={t('accounts.balances.emptyHint')} />}
           />
           {assets.length === 0 && spot === null && <NoSpotReadRow />}
         </div>

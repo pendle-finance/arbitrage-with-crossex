@@ -36,10 +36,12 @@ import {
   useBorosPairSimulation,
   useExecuteBorosPair,
 } from '../api/queries';
+import { Trans, useTranslation } from 'react-i18next';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosLogInButton } from './BorosAgentSetup';
+import { localizeServerText } from '../i18n/serverMessages';
 
 const newOrderIds = (count: number): string[] => Array.from({ length: count }, (_, i) => `${i}-${uuid()}`);
 
@@ -99,6 +101,7 @@ export function CloseBorosForm({
   onClosed?: (leg: StrategyLeg, filled: number) => void;
   onDone?: () => void;
 }) {
+  const { t } = useTranslation();
   const close = useBorosCancelAndClose();
   const execute = useExecuteBorosPair();
   const busy = close.isPending || execute.isPending;
@@ -133,7 +136,7 @@ export function CloseBorosForm({
   const pending = useMemo(() => closable.filter((l) => !done.some((d) => d.marketId === l.marketId)), [closable, done]);
   const collaterals = [...new Set(closable.map((l) => (l.collateral ?? '').toUpperCase()))];
   const legsBlocked = collaterals.length > 1;
-  const legsReason = `These legs are sized in different collateral (${collaterals.join(', ')}), so one size cannot apply to ${closable.length > 2 ? 'all of them' : 'both'}. Close them one at a time from the legs table.`;
+  const legsReason = t(closable.length > 2 ? 'pairTicket.closeBoros.legsReasonAll' : 'pairTicket.closeBoros.legsReasonBoth', { list: collaterals.join(', ') });
 
   const ctx = useBorosPairContext(address);
   const rowOf = (marketId: number | undefined) =>
@@ -279,7 +282,7 @@ export function CloseBorosForm({
 
 
   const agentBlocked = agent.isSuccess && !canTrade;
-  const agentReason = 'This build cannot close Boros legs. Close them in the Boros app.';
+  const agentReason = t('pairTicket.closeBoros.agentReason');
 
   const allDone = closable.length > 0 && done.length === closable.length;
   /**
@@ -396,7 +399,7 @@ export function CloseBorosForm({
               const f = fills.find((x) => x.marketId === l.marketId) ?? null;
               const sent = f === null || (f.filledSize === 0 && f.shortfallSize === 0 && f.failure === null) ? null : f;
               const open = rowOf(l.marketId)?.currentSize;
-              return settle(l, closeReq.legs[i].size, sent, open === undefined ? undefined : Math.abs(open), 'There was no open position to close.');
+              return settle(l, closeReq.legs[i].size, sent, open === undefined ? undefined : Math.abs(open), t('pairTicket.closeBoros.noPositionToClose'));
             }),
           );
         }
@@ -426,8 +429,8 @@ export function CloseBorosForm({
             r.fill,
             r.openSize,
             r.cancelled
-              ? 'Resting orders were cancelled, but there was no open position to close.'
-              : 'Nothing was closed.',
+              ? t('pairTicket.closeBoros.cancelledNoPosition')
+              : t('pairTicket.closeBoros.nothingClosed'),
           ),
         ]);
       } catch (err) {
@@ -440,7 +443,7 @@ export function CloseBorosForm({
   };
 
   if (closable.length === 0) {
-    return <p className="text-[12px] text-ink-400">No Boros legs on this position.</p>;
+    return <p className="text-[12px] text-ink-400">{t('pairTicket.closeBoros.noLegs')}</p>;
   }
 
   // A close that landed says so, and stays said until dismissed — the dialog
@@ -450,8 +453,7 @@ export function CloseBorosForm({
     return (
       <div className="flex flex-col gap-3">
         <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2.5 text-[12px] leading-relaxed text-emerald-300">
-          {closable.length === 1 ? 'Leg closed.' : `${closable.length} legs closed.`} The position is
-          re-reading from the venue now — the card updates on its own.
+          {t('pairTicket.closeBoros.closedDone', { count: closable.length })}
         </p>
         {/* The venue leg outliving the close is normal. Said plainly and NOT
             as an amber warning: nothing went wrong. But the two halves are
@@ -459,18 +461,16 @@ export function CloseBorosForm({
             like, the other is not theirs at all. */}
         {residualYours > 0 && (
           <p className="text-[11px] leading-relaxed text-ink-400">
-            {`${sigGrouped(residualYours)} ${unit}`} of this position is still open — you closed part of
-            it. Close the rest whenever you like.
+            {t('pairTicket.closeBoros.residualYours', { amount: `${sigGrouped(residualYours)} ${unit}` })}
           </p>
         )}
         {residualOthers > 0 && (
           <p className="text-[11px] leading-relaxed text-ink-400">
-            {`${sigGrouped(residualOthers)} ${unit}`} more is open on the venue — that is another
-            position's share of the same leg, not yours.
+            {t('pairTicket.closeBoros.residualOthers', { amount: `${sigGrouped(residualOthers)} ${unit}` })}
           </p>
         )}
         <button type="button" className="btn-primary w-full" onClick={onDone}>
-          Done
+          {t('common.done')}
         </button>
       </div>
     );
@@ -533,14 +533,14 @@ export function CloseBorosForm({
               venue={venueLabel(l)}
               spreadVenues={spreadOf(l)}
               side={l.side}
-              sub={`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${days}d` : ''}`}
+              sub={`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`}
               value={`${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}`}
               valueSub={
                 l.entryApr !== undefined || knownRate(l.markApr) ? (
                   <>
-                    {l.entryApr !== undefined ? `locked ${fmtPct(l.entryApr)}` : ''}
+                    {l.entryApr !== undefined ? t('pairTicket.closeBoros.locked', { rate: fmtPct(l.entryApr) }) : ''}
                     {l.entryApr !== undefined && knownRate(l.markApr) ? ' · ' : ''}
-                    {knownRate(l.markApr) ? `mark ${fmtPct(l.markApr)}` : ''}
+                    {knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : ''}
                   </>
                 ) : undefined
               }
@@ -549,25 +549,27 @@ export function CloseBorosForm({
         })}
         {soleSpread && (
           <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-400">
-            Leaves both bundles: <VenueIcon venue={soleSpread[0]} size={14} />
-            {prettyVenue(soleSpread[0])} and <VenueIcon venue={soleSpread[1]} size={14} />
-            {prettyVenue(soleSpread[1])}.
+            <Trans
+              i18nKey="pairTicket.closeBoros.leavesBundles"
+              values={{ a: prettyVenue(soleSpread[0]), b: prettyVenue(soleSpread[1]) }}
+              components={{ i0: <VenueIcon venue={soleSpread[0]} size={14} />, i1: <VenueIcon venue={soleSpread[1]} size={14} /> }}
+            />
           </span>
         )}
       </div>
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-3">
-          <FieldLabel htmlFor="boros-close-size">{closable.length > 2 ? 'Close size · all legs' : closable.length > 1 ? 'Close size · both legs' : 'Close size'}</FieldLabel>
+          <FieldLabel htmlFor="boros-close-size">{closable.length > 2 ? t('pairTicket.closeBoros.closeSizeAll') : closable.length > 1 ? t('pairTicket.closeBoros.closeSizeBoth') : t('pairTicket.closeBoros.closeSize')}</FieldLabel>
           {/* The ceiling, stated where the number is typed — and clickable.
               It was only discoverable by overshooting and reading an error. */}
           <button
             type="button"
             className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-            title={closable.length > 1 ? 'Close the whole position on every leg' : 'Close the whole position'}
+            title={closable.length > 1 ? t('pairTicket.closeBoros.closeWholeEvery') : t('pairTicket.closeBoros.closeWhole')}
             onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
           >
-            max{' '}
+            {t('pairTicket.closeBoros.maxLower')}{' '}
             <span className="text-link underline decoration-link/40 underline-offset-2">
               {`${sigGrouped(maxCloseSize)} ${unit0}`}
             </span>
@@ -580,38 +582,37 @@ export function CloseBorosForm({
             inputMode="decimal"
             value={shownSize()}
             onChange={(e) => setSizeEdited(e.target.value)}
-            aria-label="Close size, applied to all legs"
+            aria-label={t('pairTicket.closeBoros.sizeAria')}
           />
         </AffixedInput>
         {anySizeInvalid ? (
           <span className="text-[11px] text-rose-300">
-            size must be above 0 and at most {sigGrouped(maxCloseSize)} {unit0}
+            {t('pairTicket.closeBoros.sizeInvalid', { max: sigGrouped(maxCloseSize), unit: unit0 })}
           </span>
         ) : (
           <span className="text-[11px] text-ink-400">
             {flatAfter ? (
               closable.length > 1 ? (
-                <>
-                  whole pair · <span className="text-ink-200">flat after</span> on{' '}
-                  {closable.length > 2 ? `all ${closable.length} markets` : 'both markets'}
-                </>
+                <Trans
+                  i18nKey={closable.length > 2 ? 'pairTicket.closeBoros.wholePairAll' : 'pairTicket.closeBoros.wholePairBoth'}
+                  values={{ n: closable.length }}
+                  components={{ b: <span className="text-ink-200" /> }}
+                />
               ) : (
-                <>
-                  whole position · <span className="text-ink-200">flat after</span>
-                </>
+                <Trans i18nKey="pairTicket.closeBoros.wholePosition" components={{ b: <span className="text-ink-200" /> }} />
               )
             ) : atMax ? (
-              <span title="Part of a venue leg another position also holds. That part stays open.">
-                this position's share · the rest of the shared leg stays open
+              <span title={t('pairTicket.closeBoros.sharedHint')}>
+                {t('pairTicket.closeBoros.sharedLabel')}
               </span>
             ) : (
-              'partial close'
+              t('pairTicket.closeBoros.partialClose')
             )}
             {closable.length === 1 && (
               <>
                 {' · '}
-                <span title="The size is capped at what is open, so it can never cross past flat.">
-                  capped at open size
+                <span title={t('pairTicket.closeBoros.cappedHint')}>
+                  {t('pairTicket.closeBoros.capped')}
                 </span>
               </>
             )}
@@ -619,7 +620,7 @@ export function CloseBorosForm({
         )}
       </div>
 
-      {sim.isError && <QueryError title="Couldn’t quote this close" error={sim.error} onRetry={() => sim.refetch()} />}
+      {sim.isError && <QueryError title={t('pairTicket.closeBoros.quoteFailed')} error={sim.error} onRetry={() => sim.refetch()} />}
       <EstimateCard
         dataUpdatedAt={sim.dataUpdatedAt}
         estimating={sim.isPlaceholderData || (sim.isFetching && !sim.data)}
@@ -629,8 +630,8 @@ export function CloseBorosForm({
             time to maturity, before the fee — summed over the legs. */}
         <div className="flex items-end justify-between gap-3">
           <div className="flex flex-col">
-            <span className="text-[12.5px] text-ink-50">Est. PnL</span>
-            <span className="text-[11px] text-ink-400">before fee</span>
+            <span className="text-[12.5px] text-ink-50">{t('pairTicket.closeBoros.estPnl')}</span>
+            <span className="text-[11px] text-ink-400">{t('pairTicket.closeBoros.beforeFee')}</span>
           </div>
           <span className="num text-lg font-semibold">
             {totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
@@ -658,32 +659,30 @@ export function CloseBorosForm({
               <>
                 {finished && (
                   <span className="text-[11px] text-ink-400">
-                    {prefix}This leg is closed; it will not be sent again.
-                    {finished.yours > 0 && ` ${sigGrouped(finished.yours)} ${unit} of it is still open — you closed part.`}
+                    {finished.yours > 0
+                      ? t('pairTicket.closeBoros.legClosedYours', { prefix, amount: `${sigGrouped(finished.yours)} ${unit}` })
+                      : t('pairTicket.closeBoros.legClosed', { prefix })}
                   </span>
                 )}
                 {/* The server's own words — a copy here could disagree at the boundary. */}
-                {!finished && belowMin && <span className="text-[11px] text-rose-400">{prefix}{belowMin.message}</span>}
+                {!finished && belowMin && <span className="text-[11px] text-rose-400">{prefix}{localizeServerText(belowMin.message)}</span>}
                 {/* A dust residual is not a shortfall: the walk returns sizes
                     like 419.49999999 for a book that fully covers 419.5, and
                     warning on that reads as "no depth" on a market that has
                     plenty. */}
                 {!finished && q && q.shortfallSize > Math.max(1e-6, f.value * 1e-6) && (
                   <span className="text-[11px] text-amber-400/90">
-                    {prefix}the book only supports {sigGrouped(q.estFillSize)} {unit} of this size — it
-                    will fill short
+                    {t('pairTicket.closeBoros.bookShort', { prefix, amount: sigGrouped(q.estFillSize), unit })}
                   </span>
                 )}
                 {!finished && q && q.bookStatus === 'unavailable' && (
                   <span className="text-[11px] text-amber-400/90">
-                    {prefix}order book unavailable — no rate can be quoted for this leg
+                    {t('pairTicket.closeBoros.bookUnavailable', { prefix })}
                   </span>
                 )}
                 {part && (
                   <span className="text-[11px] text-amber-400/90">
-                    {prefix}filled {sigGrouped(part.filled)} {unit} — {sigGrouped(part.left)} {unit} of what
-                    you asked for is still open. The size above is set to what is left; close again
-                    to finish it.
+                    {t('pairTicket.closeBoros.partFilled', { prefix, filled: sigGrouped(part.filled), left: sigGrouped(part.left), unit })}
                   </span>
                 )}
                 {err && <span className="text-[11px] text-rose-400">{prefix}{err.message}</span>}
@@ -691,7 +690,7 @@ export function CloseBorosForm({
             );
           };
           const rateOf = (q: BorosSimulatedLeg | null) =>
-            q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? 'quoting…' : '—';
+            q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? t('pairTicket.closeBoros.quoting') : '—';
           const feeOf = (q: BorosSimulatedLeg | null, unit: string) =>
             q?.takerFeeCost !== undefined ? (
               <span className="text-guava">
@@ -705,16 +704,16 @@ export function CloseBorosForm({
             return (
               <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
                 <EstimateRow
-                  label="Est. rate"
-                  title="Market order after cancelling any resting orders on this market"
+                  label={t('pairTicket.closeBoros.estRate')}
+                  title={t('pairTicket.closeBoros.estRateHint')}
                   value={rateOf(f.q)}
                 />
                 {/* The taker fee THIS order pays, from the simulation: rate ×
                     size × years to maturity. Settlement fees are not here —
                     a close ends the settlements that would have paid them. */}
                 <EstimateRow
-                  label="Est. fee"
-                  title="Boros taker fee on this order: rate × size × time to maturity"
+                  label={t('pairTicket.closeBoros.estFee')}
+                  title={t('pairTicket.closeBoros.estFeeHint')}
                   value={feeOf(f.q, f.l.collateral ?? '')}
                 />
                 {noticeFor(f)}
@@ -726,10 +725,10 @@ export function CloseBorosForm({
               <table className="w-full">
                 <thead>
                   <tr className="text-[12px] font-normal text-ink-300">
-                    <th className="pb-1 text-left font-medium">leg</th>
-                    <th className="pb-1 text-right font-medium">est rate</th>
-                    <th className="pb-1 text-right font-medium">pnl</th>
-                    <th className="pb-1 text-right font-medium">est fee</th>
+                    <th className="pb-1 text-left font-medium">{t('pairTicket.bits.colLeg')}</th>
+                    <th className="pb-1 text-right font-medium">{t('pairTicket.closeBoros.colRate')}</th>
+                    <th className="pb-1 text-right font-medium">{t('pairTicket.closeBoros.colPnl')}</th>
+                    <th className="pb-1 text-right font-medium">{t('pairTicket.preview.estFee')}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -748,7 +747,7 @@ export function CloseBorosForm({
                             )}
                             {venueLabel(f.l)}
                           </span>
-                          {finished && <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-emerald-300">closed<Check size={12} aria-hidden /></span>}
+                          {finished && <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-emerald-300">{t('pairTicket.closeBoros.closedTag')}<Check size={12} aria-hidden /></span>}
                         </td>
                         <td className="num py-1.5 text-right text-[12.5px] text-ink-50">{rateOf(f.q)}</td>
                         <td className="num py-1.5 text-right text-[12px]">
@@ -769,7 +768,7 @@ export function CloseBorosForm({
                   the same list it will refuse on. */}
               {batchBlockers.map((b) => (
                 <span key={`${b.code}-${b.marketId ?? ''}`} className="text-[11px] text-rose-400">
-                  {b.message}
+                  {localizeServerText(b.message)}
                 </span>
               ))}
               {batchError && <span className="text-[11px] text-rose-400">{batchError}</span>}
@@ -791,10 +790,10 @@ export function CloseBorosForm({
             value={slipStr}
             onChange={setSlipEdited}
             invalid={slipInvalid}
-            invalidText={`slippage must be in (0, ${MAX_SLIP_PCT}]`}
-            inputAriaLabel="Close slippage tolerance, APR percent"
-            title="The worst APR this close accepts, per leg. A close that misses it leaves the position open."
-            hint="Max rate this close will accept. A wider tolerance may be needed for a large size or a thin book."
+            invalidText={t('pairTicket.closeBoros.slipInvalid', { max: MAX_SLIP_PCT })}
+            inputAriaLabel={t('pairTicket.closeBoros.slipAria')}
+            title={t('pairTicket.closeBoros.slipTitle')}
+            hint={t('pairTicket.closeBoros.slipHint')}
           />
         </div>
       </EstimateCard>
@@ -824,10 +823,10 @@ export function CloseBorosForm({
           className="w-full"
         >
           {busy ? (
-            'Closing…'
+            t('pairTicket.closeBoros.closing')
           ) : (
             <>
-              {`Close ${closable.length === 1 ? 'leg' : `${closable.length} legs`}`}
+              {t('pairTicket.closeBoros.closeLegs', { count: closable.length })}
               <ChevronRight size={14} aria-hidden />
             </>
           )}
@@ -835,16 +834,18 @@ export function CloseBorosForm({
         )}
         {!loginLabel && unquoted && (
           <p className="text-[11px] leading-relaxed text-amber-400/90">
-            No quote is available for this market. The close still goes out, within {slipStr}% of mid.
+            {t('pairTicket.closeBoros.unquoted', { slip: slipStr })}
           </p>
         )}
         {!loginLabel && (
           <p className="text-[11px] leading-relaxed text-ink-400">
             {closable.length === 1
-              ? `Cancels resting orders, then sends 1 market order. ${soleSpread ? 'The perps stay open.' : 'The perp stays open.'}`
+              ? t(soleSpread ? 'pairTicket.closeBoros.footOnePerps' : 'pairTicket.closeBoros.footOnePerp')
               : pending.length < closable.length
-                ? `Cancels resting orders, then closes the ${pending.length === 1 ? 'leg' : `${pending.length} legs`} left in one batch, all or none.`
-                : `Cancels resting orders, then closes ${closable.length > 2 ? `all ${closable.length}` : 'both'} legs in one batch, all or none.`}
+                ? t('pairTicket.closeBoros.footLeft', { count: pending.length })
+                : closable.length > 2
+                  ? t('pairTicket.closeBoros.footAll', { n: closable.length })
+                  : t('pairTicket.closeBoros.footBoth')}
           </p>
         )}
       </div>

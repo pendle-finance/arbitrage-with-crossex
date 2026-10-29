@@ -1,5 +1,7 @@
 import { Check } from 'lucide-react';
+import type { TFunction } from 'i18next';
 import { useId, useState, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
 import { usePutCredentials } from '../api/queries';
 import { Spinner } from './Spinner';
@@ -7,18 +9,19 @@ import { Spinner } from './Spinner';
 /** Shared key/secret form (first-run setup guide + Settings drawer).
  * A 404/405/network failure on PUT (a backend without the credentials service)
  * renders as a friendly inline message rather than a raw error. */
-function refusedText(err: unknown): string | null {
+function refusedText(err: unknown, t: TFunction): string | null {
   if (!(err instanceof ApiError) || err.category !== 'auth') return null;
-  return `Gate refused this key: ${err.label ?? err.message.replace(/\.$/, '')}. Check you pasted the whole key.`;
+  return t('app.credentials.refused', { reason: err.label ?? err.message.replace(/\.$/, '') });
 }
 
 export function CredentialsForm({
-  submitLabel = 'Save credentials',
+  submitLabel,
   onSaved,
 }: {
   submitLabel?: string;
   onSaved?: () => void;
 }) {
+  const { t } = useTranslation();
   const keyId = useId();
   const secretId = useId();
   const [key, setKey] = useState('');
@@ -47,34 +50,34 @@ export function CredentialsForm({
   const serviceMissing =
     err instanceof ApiError &&
     (err.httpStatus === 404 || err.httpStatus === 405 || err.category === 'network');
-  const refused = refusedText(err);
+  const refused = refusedText(err, t);
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-3">
       <div>
         <label htmlFor={keyId} className="mb-1 block text-xs font-medium text-ink-300">
-          API key
+          {t('app.credentials.apiKey')}
         </label>
         <input
           id={keyId}
           type="password"
           autoComplete="off"
           className="input num"
-          placeholder="Gate API key"
+          placeholder={t('app.credentials.keyPlaceholder')}
           value={key}
           onChange={(e) => setKey(e.target.value)}
         />
       </div>
       <div>
         <label htmlFor={secretId} className="mb-1 block text-xs font-medium text-ink-300">
-          API secret
+          {t('app.credentials.apiSecret')}
         </label>
         <input
           id={secretId}
           type="password"
           autoComplete="off"
           className="input num"
-          placeholder="Gate API secret"
+          placeholder={t('app.credentials.secretPlaceholder')}
           value={secret}
           onChange={(e) => setSecret(e.target.value)}
         />
@@ -83,7 +86,7 @@ export function CredentialsForm({
       {err != null &&
         (serviceMissing ? (
           <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-            credentials service not available yet
+            {t('app.credentials.serviceMissing')}
           </p>
         ) : refused ? (
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
@@ -98,13 +101,13 @@ export function CredentialsForm({
 
       {saved && !put.isPending && err == null && (
         <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-          Credentials saved <Check size={12} aria-hidden className="inline" />
+          {t('app.credentials.saved')} <Check size={12} aria-hidden className="inline" />
         </p>
       )}
 
       <button type="submit" className="btn btn-primary self-start" disabled={put.isPending || !key.trim() || !secret.trim()}>
         {put.isPending && <Spinner />}
-        {put.isPending ? 'Checking with Gate…' : submitLabel}
+        {put.isPending ? t('app.credentials.checking') : (submitLabel ?? t('app.credentials.save'))}
       </button>
     </form>
   );

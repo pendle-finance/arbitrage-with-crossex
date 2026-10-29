@@ -10,6 +10,7 @@
  */
 import { X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { readJson, writeJson } from '../lib/storage';
 
 const FIRST_SEEN_KEY = 'crossex.firstSeenAt';
@@ -40,6 +41,7 @@ export function markGuideHintDone(): void {
 }
 
 export function UserGuideHint({ enabled, onOpen }: { enabled: boolean; onOpen: () => void }) {
+  const { t } = useTranslation();
   const [show, setShow] = useState(false);
 
   useEffect(() => {
@@ -59,14 +61,14 @@ export function UserGuideHint({ enabled, onOpen }: { enabled: boolean; onOpen: (
   return (
     <div
       role="dialog"
-      aria-label="New here?"
+      aria-label={t('app.guideHint.title')}
       className="fixed right-5 top-24 z-50 w-[300px] rounded border border-info/60 bg-ink-900 p-4"
     >
       <div className="flex items-start justify-between gap-2">
-        <h2 className="text-sm font-semibold text-cyan-300">New here?</h2>
+        <h2 className="text-sm font-semibold text-cyan-300">{t('app.guideHint.title')}</h2>
         <button
           type="button"
-          aria-label="Dismiss"
+          aria-label={t('common.dismiss')}
           onClick={close}
           className="-mt-1 px-1 text-lg leading-none text-ink-500 transition-colors hover:text-ink-200"
         >
@@ -74,9 +76,7 @@ export function UserGuideHint({ enabled, onOpen }: { enabled: boolean; onOpen: (
         </button>
       </div>
       <p className="mt-1.5 text-xs leading-relaxed text-ink-300">
-        The <span className="font-medium text-ink-100">📖 User guide</span> up there explains what
-        the Opportunities assumptions mean and how to open a pair well. Worth five minutes before
-        your first real order.
+        <Trans i18nKey="app.guideHint.body" components={{ b: <span className="font-medium text-ink-100" /> }} />
       </p>
       <div className="mt-3 flex items-center gap-2">
         <button
@@ -88,14 +88,14 @@ export function UserGuideHint({ enabled, onOpen }: { enabled: boolean; onOpen: (
           }}
           className="rounded-md border border-cyan-400/70 bg-cyan-500/10 px-2.5 py-1 text-xs font-semibold text-cyan-300 transition-colors hover:bg-cyan-500/20"
         >
-          Open the guide
+          {t('app.guideHint.open')}
         </button>
         <button
           type="button"
           onClick={close}
           className="px-1 text-xs text-ink-400 transition-colors hover:text-ink-200"
         >
-          Not now
+          {t('common.notNow')}
         </button>
       </div>
     </div>

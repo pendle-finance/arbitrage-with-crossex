@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { useTrades } from '../api/queries';
 import type { Trade } from '../api/types';
 import { Chip, type ChipTone } from '../components/Chip';
@@ -10,6 +11,7 @@ import { SignedNumber } from '../components/SignedNumber';
 import { TableSkeleton } from '../components/Skeleton';
 import { Spinner } from '../components/Spinner';
 import { SideChip, SymbolCell } from '../components/VenueChip';
+import { t as tr } from '../i18n';
 import { bps, fmtTime, num, sig, toDate } from '../lib/fmt';
 
 type Mode = 'grouped' | 'flat';
@@ -26,16 +28,23 @@ export function asRole(v: string): Role {
   return k === 'maker' || k === 'taker' ? k : 'mixed';
 }
 
+const ROLE_LABEL = {
+  maker: 'opportunities.trades.roleMaker',
+  taker: 'opportunities.trades.roleTaker',
+  mixed: 'opportunities.trades.roleMixed',
+} as const satisfies Record<Role, string>;
+
 function RoleChip({ role }: { role: Role }) {
-  return <Chip sm tone={ROLE_TONE[role]}>{role}</Chip>;
+  const { t } = useTranslation();
+  return <Chip sm tone={ROLE_TONE[role]}>{t(ROLE_LABEL[role])}</Chip>;
 }
 
 /** "LMT IOC" / "LMT POC" / "MKT" from the joined order (join=1), when present. */
 function orderTypeLabel(t: Trade): string | null {
   if (!t.orderType) return null;
   const type = t.orderType.toUpperCase();
-  if (type === 'MARKET') return 'MKT';
-  const base = type === 'LIMIT' ? 'LMT' : type;
+  if (type === 'MARKET') return tr('opportunities.trades.typeMarket');
+  const base = type === 'LIMIT' ? tr('opportunities.trades.typeLimit') : type;
   return t.orderTif ? `${base} ${t.orderTif.toUpperCase()}` : base;
 }
 
@@ -102,60 +111,60 @@ function groupByOrder(trades: Trade[]): OrderGroup[] {
 const FILL_COLUMNS: Column<Trade>[] = [
   {
     key: 'txn',
-    header: 'Transaction',
+    header: <Trans i18nKey="opportunities.trades.transaction" />,
     render: (t) => <span className="num text-xs text-ink-400">{t.transactionId}</span>,
   },
   // Fixed dp per column (qty 4, fee 4, PnL 2) so the decimal points align.
-  { key: 'qty', header: 'Qty', align: 'right', render: (t) => <span className="num">{num(t.qty, 4)}</span> },
-  { key: 'price', header: 'Price', align: 'right', render: (t) => <span className="num">{sig(t.price)}</span> },
+  { key: 'qty', header: <Trans i18nKey="opportunities.trades.qty" />, align: 'right', render: (t) => <span className="num">{num(t.qty, 4)}</span> },
+  { key: 'price', header: <Trans i18nKey="opportunities.trades.price" />, align: 'right', render: (t) => <span className="num">{sig(t.price)}</span> },
   {
     key: 'fee',
-    header: 'Fee',
+    header: <Trans i18nKey="common.fee" />,
     align: 'right',
     render: (t) => <span className="num">{`${num(t.fee, 4)} ${t.feeCoin}`}</span>,
   },
   {
     key: 'rate',
-    header: 'Rate',
+    header: <Trans i18nKey="opportunities.trades.rate" />,
     align: 'right',
     render: (t) => <span className="num text-ink-300">{bps(t.feeRate)}</span>,
   },
-  { key: 'role', header: 'Role', render: (t) => <RoleChip role={asRole(t.matchRole)} /> },
+  { key: 'role', header: <Trans i18nKey="opportunities.trades.role" />, render: (t) => <RoleChip role={asRole(t.matchRole)} /> },
   {
     key: 'rpnl',
-    header: 'rPnL',
+    header: <Trans i18nKey="opportunities.trades.rpnl" />,
     align: 'right',
     render: (t) => <SignedNumber value={t.rpnl} format={(n) => num(n, 2)} />,
   },
 ];
 
 const GROUP_COLUMNS: Column<OrderGroup>[] = [
-  { key: 'time', header: 'Time', render: (g) => <span className="num text-xs text-ink-300">{fmtTime(g.time)}</span> },
-  { key: 'symbol', header: 'Symbol', render: (g) => <SymbolCell symbol={g.symbol} /> },
-  { key: 'side', header: 'Side', render: (g) => <SideChip side={g.side} /> },
-  { key: 'qty', header: 'Qty', align: 'right', render: (g) => <span className="num">{num(g.totalQty, 4)}</span> },
-  { key: 'avg', header: 'Avg price', align: 'right', render: (g) => <span className="num">{sig(g.avgPrice)}</span> },
+  { key: 'time', header: <Trans i18nKey="opportunities.trades.time" />, render: (g) => <span className="num text-xs text-ink-300">{fmtTime(g.time)}</span> },
+  { key: 'symbol', header: <Trans i18nKey="opportunities.trades.symbol" />, render: (g) => <SymbolCell symbol={g.symbol} /> },
+  { key: 'side', header: <Trans i18nKey="common.side" />, render: (g) => <SideChip side={g.side} /> },
+  { key: 'qty', header: <Trans i18nKey="opportunities.trades.qty" />, align: 'right', render: (g) => <span className="num">{num(g.totalQty, 4)}</span> },
+  { key: 'avg', header: <Trans i18nKey="opportunities.trades.avgPrice" />, align: 'right', render: (g) => <span className="num">{sig(g.avgPrice)}</span> },
   {
     key: 'fee',
-    header: 'Fee',
+    header: <Trans i18nKey="common.fee" />,
     align: 'right',
     render: (g) => <span className="num">{`${num(g.totalFee, 4)} ${g.feeCoin}`}</span>,
   },
   {
     key: 'rate',
-    header: 'Rate',
+    header: <Trans i18nKey="opportunities.trades.rate" />,
     align: 'right',
     render: (g) => <span className="num text-ink-300">{bps(g.feeRate)}</span>,
   },
-  { key: 'role', header: 'Role', render: (g) => <RoleChip role={g.role} /> },
+  { key: 'role', header: <Trans i18nKey="opportunities.trades.role" />, render: (g) => <RoleChip role={g.role} /> },
   {
     key: 'type',
-    header: 'Type',
+    header: <Trans i18nKey="opportunities.trades.type" />,
     render: (g) => (g.typeLabel ? <Chip sm className="num">{g.typeLabel}</Chip> : <span className="text-ink-500">—</span>),
   },
   {
     key: 'fills',
-    header: 'Fills',
+    header: <Trans i18nKey="opportunities.trades.fills" />,
     align: 'right',
     render: (g) => <span className="num text-ink-300">{g.fills.length}</span>,
   },
@@ -164,16 +173,17 @@ const GROUP_COLUMNS: Column<OrderGroup>[] = [
 const FLAT_COLUMNS: Column<Trade>[] = [
   {
     key: 'time',
-    header: 'Time',
+    header: <Trans i18nKey="opportunities.trades.time" />,
     render: (t) => <span className="num text-xs text-ink-300">{fmtTime(toDate(t.createTime))}</span>,
   },
-  { key: 'symbol', header: 'Symbol', render: (t) => <SymbolCell symbol={t.symbol} /> },
-  { key: 'side', header: 'Side', render: (t) => <SideChip side={t.side} /> },
+  { key: 'symbol', header: <Trans i18nKey="opportunities.trades.symbol" />, render: (t) => <SymbolCell symbol={t.symbol} /> },
+  { key: 'side', header: <Trans i18nKey="common.side" />, render: (t) => <SideChip side={t.side} /> },
   ...FILL_COLUMNS.filter((c) => c.key !== 'txn'),
 ];
 
 /** Trades tab: fills joined to their orders, grouped by order by default. */
 export function TradesPanel() {
+  const { t, i18n } = useTranslation();
   const [mode, setMode] = useState<Mode>('grouped');
   const [filter, setFilter] = useState('');
   const query = useTrades();
@@ -183,38 +193,41 @@ export function TradesPanel() {
     const q = filter.trim().toLowerCase();
     return q ? trades.filter((t) => t.symbol.toLowerCase().includes(q)) : trades;
   }, [trades, filter]);
-  const groups = useMemo(() => (mode === 'grouped' ? groupByOrder(filtered) : []), [mode, filtered]);
+  const groups = useMemo(
+    () => (mode === 'grouped' ? groupByOrder(filtered) : []),
+    [mode, filtered, i18n.language],
+  );
 
   if (query.isPending) return <TableSkeleton rows={8} cols={8} />;
   if (query.isError && !query.data) {
-    return <QueryError title="Couldn't load trades" error={query.error} />;
+    return <QueryError title={t('opportunities.trades.loadError')} error={query.error} />;
   }
 
   const empty = (
-    <EmptyState icon="≋" title="No fills yet" hint="Executed trades land here, joined to the order they filled." />
+    <EmptyState icon="≋" title={t('opportunities.trades.emptyTitle')} hint={t('opportunities.trades.emptyHint')} />
   );
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-3">
         <SegmentedToggle<Mode>
-          ariaLabel="Trade grouping"
+          ariaLabel={t('opportunities.trades.groupingAria')}
           value={mode}
           onChange={setMode}
           options={[
-            { value: 'grouped', label: 'Group by order' },
-            { value: 'flat', label: 'Flat fills' },
+            { value: 'grouped', label: t('opportunities.trades.groupByOrder') },
+            { value: 'flat', label: t('opportunities.trades.flatFills') },
           ]}
         />
         <input
           className="input w-52"
-          placeholder="Filter symbol…"
-          aria-label="Filter symbol"
+          placeholder={t('opportunities.trades.filterPlaceholder')}
+          aria-label={t('opportunities.trades.filterAria')}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
         <span className="num ml-auto text-xs text-ink-500">
-          {filtered.length} fill{filtered.length === 1 ? '' : 's'} loaded
+          {t('opportunities.trades.loaded', { count: filtered.length })}
         </span>
       </div>
 
@@ -240,7 +253,7 @@ export function TradesPanel() {
           disabled={query.isFetchingNextPage}
         >
           {query.isFetchingNextPage && <Spinner />}
-          Load more
+          {t('opportunities.trades.loadMore')}
         </button>
       )}
     </div>

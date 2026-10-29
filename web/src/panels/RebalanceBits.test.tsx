@@ -2,9 +2,11 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { RebalanceJob, RebalanceStep } from '../api/types';
 import { rebalanceViews } from '../test/fixtures';
-import { BAR_CAPTION, HOVER_TARGET } from './rebalanceCopy';
 import * as bits from './RebalanceBits';
 import { BalanceBars, StepList, type BarRow, type StepRow } from './RebalanceBits';
+
+const BAR_CAPTION = 'Equity (cash + unrealized PnL)';
+const HOVER_TARGET = 'Balanced target';
 
 const ROWS: BarRow[] = [
   { key: 'USDT/CROSSEX', label: 'USDT · CrossEx', cash: 60, upnl: -10, target: 45, tone: 'usdt' },

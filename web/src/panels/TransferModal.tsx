@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
 import { useRebalance, type useStartTransfer } from '../api/queries';
 import type { GateAccount, TransferCoin, TransferJob, TransferLock, TransferPath, TransferView } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { HoverCard } from '../components/HoverCard';
+import { t } from '../i18n';
 import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
@@ -13,7 +15,7 @@ import { floorCents, roundToStep } from '../lib/ticks';
 import { useNow } from '../lib/useNow';
 import { ProgressBar } from './RebalanceBits';
 import { Facts, type Fact } from './RebalanceHovers';
-import { HOVER } from './rebalanceCopy';
+import { HOVER, transferCta } from './rebalanceCopy';
 import {
   findPath,
   fmtTransferAmount,
@@ -22,22 +24,19 @@ import {
   TransferFacts,
   WalletList,
   coinOf,
-  destinationOf,
   walletName,
   type CrossexWallet,
 } from './TransferBits';
+import { localizeServerText } from '../i18n/serverMessages';
 
 type Tab = 'into' | 'out';
 
-const TABS: { value: Tab; label: string }[] = [
-  { value: 'into', label: 'Into CrossEx' },
-  { value: 'out', label: 'Out of CrossEx' },
-];
+const TABS: readonly Tab[] = ['into', 'out'];
 
-const LOCK_LINE: Record<TransferLock, string> = {
-  rebalance: 'Transfers wait until the rebalance ends.',
-  halted: 'Transfers wait until you resume or abandon the rebalance.',
-  deal: 'Transfers wait until the deal ends.',
+const LOCK_LINE: Readonly<Record<TransferLock, string>> = {
+  get rebalance() { return t('accounts.transfer.lock.rebalance'); },
+  get halted() { return t('accounts.transfer.lock.halted'); },
+  get deal() { return t('accounts.transfer.lock.deal'); },
 };
 
 export interface TransferPick {
@@ -46,7 +45,7 @@ export interface TransferPick {
   nonce: number;
 }
 
-const isZero = (trimmed: string): boolean => Number(trimmed) === 0 && amountError(trimmed) === 'Must be more than 0';
+const isZero = (trimmed: string): boolean => trimmed !== '' && Number(trimmed) === 0;
 
 function parsedAmount(text: string): number | null {
   const trimmed = text.trim();
@@ -57,7 +56,7 @@ function parsedAmount(text: string): number | null {
 }
 
 function formatLine(text: string): string | null {
-  if (text.includes(',')) return 'Remove the commas.';
+  if (text.includes(',')) return t('accounts.transfer.removeCommas');
   if (isZero(text.trim())) return null;
   return amountError(text);
 }
@@ -65,52 +64,60 @@ function formatLine(text: string): string | null {
 function limitLine(tab: Tab, path: TransferPath, amount: number | null): string | null {
   if (amount === null) return null;
   if (path.max !== null && amount > path.max) {
-    const rest = tab === 'out' ? 'The rest is margin for open positions.' : 'That is your Gate spot balance.';
-    return `Max ${num(path.max)} ${path.coin}. ${rest}`;
+    const values = { max: num(path.max), coin: path.coin };
+    return t(tab === 'out' ? 'accounts.transfer.maxOut' : 'accounts.transfer.maxInto', values);
   }
-  if (amount < path.min) return `Minimum ${sig(path.min)} ${path.coin}.`;
+  if (amount < path.min) return t('accounts.transfer.minimumLine', { min: sig(path.min), coin: path.coin });
   return null;
 }
 
 const fieldAmount = (value: number): string => roundToStep(floorCents(value), '0.01', 'down');
 
 function SendingSteps({ to }: { to: GateAccount }) {
+  const { t } = useTranslation();
   return (
     <ol className="flex flex-col gap-1.5 text-xs">
-      <li className="text-grass">{'✓ Asked Gate to move it'}</li>
-      <li aria-current="step" className="text-pastel-blue">{`• Waiting for ${walletName(to)} to show it`}</li>
-      <li className="text-ink-600">{'○ Reading your balances again'}</li>
+      <li className="text-grass">{`✓ ${t('accounts.transfer.stepAsked')}`}</li>
+      <li aria-current="step" className="text-pastel-blue">{`• ${t('accounts.transfer.stepWaiting', { wallet: walletName(to) })}`}</li>
+      <li className="text-ink-600">{`○ ${t('accounts.transfer.stepReading')}`}</li>
     </ol>
   );
 }
 
 function SendingBody({ job, path, now }: { job: TransferJob; path: TransferPath | undefined; now: number }) {
+  const { t } = useTranslation();
   const elapsedMs = Math.max(0, now - job.createdAt);
-  const usually = path ? `, usually ${fmtAbout(path.seconds)}` : '';
   const items: Fact[] = [
-    { key: 'moving', label: 'Moving', value: `${num(job.amount)} ${job.coin}` },
-    { key: 'from', label: 'From', value: walletName(job.from) },
-    { key: 'to', label: 'To', value: walletName(job.to) },
+    { key: 'moving', label: t('accounts.transfer.moving'), value: `${num(job.amount)} ${job.coin}` },
+    { key: 'from', label: t('accounts.rebalanceModal.from'), value: walletName(job.from) },
+    { key: 'to', label: t('accounts.rebalanceModal.to'), value: walletName(job.to) },
   ];
   return (
     <div className="flex flex-col gap-3.5">
       <p className="text-xs text-ink-400">
-        {`Started ${fmtAge(elapsedMs)} ago${usually}. You can close this.`}
+        {path
+          ? t('accounts.transfer.startedUsually', { age: fmtAge(elapsedMs), usual: fmtAbout(path.seconds) })
+          : t('accounts.transfer.started', { age: fmtAge(elapsedMs) })}
       </p>
       <Facts items={items} className="flex flex-wrap gap-x-8 gap-y-3" />
       <ProgressBar ratio={path ? elapsedMs / (path.seconds * 1000) : 0} tone="running" />
       <SendingSteps to={job.to} />
-      <p className="border-t border-ink-800 pt-3.5 text-xs text-ink-400">Rebalance waits until this ends.</p>
+      <p className="border-t border-ink-800 pt-3.5 text-xs text-ink-400">{t('accounts.transfer.rebalanceWaits')}</p>
     </div>
   );
 }
 
 function allowsFact(job: TransferJob, max: number | null): Fact {
   if (max === null) {
-    return { key: 'allows', label: 'Gate allows', value: 'not known', sub: ['this key cannot read Gate spot'] };
+    return {
+      key: 'allows',
+      label: t('accounts.transfer.gateAllows'),
+      value: t('accounts.transfer.notKnown'),
+      sub: [t('accounts.transfer.cannotReadSpot')],
+    };
   }
-  const source = job.from === 'SPOT' ? 'Gate spot balance' : 'free margin, right now';
-  return { key: 'allows', label: 'Gate allows', value: `${num(max)} ${job.coin}`, sub: [source], warn: true };
+  const source = t(job.from === 'SPOT' ? 'accounts.transfer.spotBalance' : 'accounts.transfer.freeMarginNow');
+  return { key: 'allows', label: t('accounts.transfer.gateAllows'), value: `${num(max)} ${job.coin}`, sub: [source], warn: true };
 }
 
 function FailedBody({
@@ -124,29 +131,30 @@ function FailedBody({
   onRetry: (amount: number | null) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   const retry = max === null ? null : Math.min(job.amount, max);
   const items: Fact[] = [
-    { key: 'asked', label: 'You asked to move', value: `${num(job.amount)} ${job.coin}` },
+    { key: 'asked', label: t('accounts.transfer.youAsked'), value: `${num(job.amount)} ${job.coin}` },
     allowsFact(job, max),
     {
       key: 'moved',
-      label: 'Moved',
-      value: job.received === null ? 'nothing' : `${num(job.received)} ${job.coin}`,
+      label: t('accounts.rebalanceModal.moved'),
+      value: job.received === null ? t('accounts.transfer.nothing') : `${num(job.received)} ${job.coin}`,
     },
   ];
   return (
     <div className="flex flex-col gap-3.5">
       <div role="alert" className="alert-red">
-        <span className="text-xs font-medium text-guava">Transfer failed.</span>
-        <span className="text-xs text-ink-400">{job.failText}</span>
+        <span className="text-xs font-medium text-guava">{t('accounts.transfer.failed')}</span>
+        <span className="text-xs text-ink-400">{job.failText && localizeServerText(job.failText)}</span>
       </div>
       <Facts items={items} className="flex flex-wrap gap-x-8 gap-y-3" />
       <div className="flex items-center gap-3 border-t border-ink-800 pt-3.5">
         <button type="button" className="btn-primary num" onClick={() => onRetry(retry)}>
-          {retry === null ? 'Try again' : `Try again with ${fmtTransferAmount(retry)}`}
+          {retry === null ? t('accounts.transfer.tryAgain') : t('accounts.transfer.tryAgainWith', { amount: fmtTransferAmount(retry) })}
         </button>
         <button type="button" className="btn" onClick={onClose}>
-          Close
+          {t('common.close')}
         </button>
       </div>
     </div>
@@ -166,6 +174,7 @@ export function TransferModal({
   pick?: TransferPick | null;
   start: ReturnType<typeof useStartTransfer>;
 }) {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('out');
   const [wallet, setWallet] = useState<CrossexWallet>('CROSSEX');
   const [typed, setTyped] = useState('');
@@ -189,11 +198,11 @@ export function TransferModal({
 
   const title = (
     <span className="flex items-center gap-2.5">
-      <span>Manual Transfer</span>
-      {moving && <Chip tone="info">Sending</Chip>}
-      {failed && <Chip tone="red">Failed</Chip>}
+      <span>{transferCta()}</span>
+      {moving && <Chip tone="info">{t('accounts.transfer.sending')}</Chip>}
+      {failed && <Chip tone="red">{t('accounts.transfer.failedChip')}</Chip>}
       {!moving && !failed && (
-        <span className="text-xs font-normal text-ink-400">{"Gate's website cannot do this."}</span>
+        <span className="text-xs font-normal text-ink-400">{t('accounts.transfer.gateCannot')}</span>
       )}
     </span>
   );
@@ -263,10 +272,10 @@ export function TransferModal({
         <fieldset disabled={locked} className="grid min-w-0 gap-6 md:grid-cols-2">
           <div className="flex flex-col gap-3">
             <SegmentedToggle<Tab>
-              ariaLabel="Direction"
+              ariaLabel={t('accounts.transfer.direction')}
               value={tab}
               onChange={setTab}
-              options={TABS}
+              options={TABS.map((value) => ({ value, label: t(value === 'into' ? 'accounts.transfer.into' : 'accounts.transfer.out') }))}
               className={locked ? 'opacity-50' : undefined}
               fill
             />
@@ -276,10 +285,10 @@ export function TransferModal({
           <div className="flex flex-col gap-3 md:border-l md:border-ink-700 md:pl-6">
             <div className="flex items-baseline gap-2">
               <label htmlFor={inputId} className={`text-xs text-ink-400 ${locked ? 'opacity-50' : ''}`}>
-                {'Amount'}
+                {t('accounts.rebalanceModal.amount')}
                 {max !== null && ' · '}
                 {max !== null && (
-                  <HoverCard label={<span className="num">{`up to ${num(max)}`}</span>} icon={false} widthPx={280}>
+                  <HoverCard label={<span className="num">{t('accounts.transfer.upTo', { max: num(max) })}</span>} icon={false} widthPx={280}>
                     {tab === 'out' ? HOVER.upToOut : HOVER.upToInto}
                   </HoverCard>
                 )}
@@ -290,7 +299,7 @@ export function TransferModal({
                   className="btn-ghost-xs ml-auto leading-4"
                   onClick={() => setTyped(fieldAmount(max))}
                 >
-                  Max
+                  {t('common.max')}
                 </button>
               )}
             </div>
@@ -308,7 +317,7 @@ export function TransferModal({
             {path && <TransferFacts path={path} amount={amount ?? 0} showYouGet={!problem} disabled={locked} />}
             {problem && <p className="num text-xs text-guava">{problem}</p>}
             <HoldToConfirmButton tone="cyan" holdMs={holdMs} disabled={!canSend} onConfirm={send} className="num self-start">
-              {`Hold to send ${fmtTransferAmount(amount ?? 0)} ${coin} ${destinationOf(to)}`}
+              {t('accounts.transfer.holdSend', { amount: fmtTransferAmount(amount ?? 0), coin, to: walletName(to) })}
             </HoldToConfirmButton>
             {start.error && (
               <p role="alert" className="num text-xs text-guava">
