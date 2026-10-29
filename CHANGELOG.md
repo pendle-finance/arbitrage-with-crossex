@@ -12,7 +12,10 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
 - **Simplified Chinese.** The Language toggle in Settings switches every screen, hover and error
   to Simplified Chinese. The choice is saved per browser. Boros and Gate names, tickers and
   market names stay in English. The terms follow the Boros app's Chinese. The user guide has a
-  Chinese copy. Messages from the terminal's server are translated too; raw text from Gate or
+  Chinese copy with Chinese screenshots, and both guides now describe today's screens: Capital,
+  Roll over, Open this strategy, the deal window, Fixed Rate Pairs, the fees window, Exclude and
+  the Rebalance presets. Messages from the terminal's server are translated too, including a
+  finished deal's result; raw text from Gate or
   Boros stays in English. Translations live in `web/src/locales/<language>/`, one file per
   screen area, so a wrong line is a one-line fix and a new language is a new folder.
 - **Fixed Rate Pairs pairs legs by venue at any date.** Each card pairs your perps and Boros

@@ -59,8 +59,6 @@ const CONFIRM_EVERY_MS = 1500;
 
 type Step = 'idle' | 'connecting' | 'replace' | 'approving' | 'sending' | 'confirming';
 
-export const NOT_APPROVED_TEXT = 'Boros shows no approval for this login. Log in again.';
-
 const day = (unix: number): string => fmtDateShort(unix, { year: 'numeric' });
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

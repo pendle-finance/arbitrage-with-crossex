@@ -185,7 +185,7 @@
       "perMonth": "每月 {{now}} → {{after}}",
       "steps": "显示步骤",
       "refreshRoute": "刷新路线",
-      "resume": "继续",
+      "resume": "恢复",
       "abandon": "放弃"
     },
     "waits": {
@@ -226,7 +226,7 @@
     "time": "时间",
     "stoppedAtConvert": "在兑换步骤停止。",
     "stoppedInRound": "在第 {{round}} / {{rounds}} 轮停止。",
-    "resuming": "正在继续",
+    "resuming": "正在恢复",
     "balanced": "已平衡",
     "moved": "已划转",
     "took": "耗时",
@@ -278,7 +278,7 @@
     "how": "如何添加",
     "lock": {
       "rebalance": "划转将等待再平衡结束。",
-      "halted": "划转将等待您继续或放弃再平衡。",
+      "halted": "划转将等待您恢复或放弃再平衡。",
       "deal": "划转将等待交易结束。"
     },
     "removeCommas": "请删除逗号。",
