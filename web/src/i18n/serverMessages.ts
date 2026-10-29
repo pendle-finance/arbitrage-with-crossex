@@ -408,6 +408,22 @@ const RULES: readonly Rule[] = [
   [/^deal finished with (\S+) UNHEDGED on (\S+) — below that venue's minimum order size\/notional, so the engine could not neutralize it\. You are holding a one-sided position\.$/, 'alertUnhedgedLeft', ['size', 'contract']],
   [/^tick failed: (.+)$/, 'alertTickFailed', ['inner']],
   [/^legacy basket\(s\) were mid-flight at upgrade: (.+) — check Gate open orders\/positions manually \(the retired engine cannot reconcile them\)$/, 'alertLegacyBaskets', ['ids']],
+  // Deal report reasons (src/engine/decide.ts). The unhedged note is appended after the residual note, so it is peeled first.
+  [/^(.+) \(unhedged (\S+) — below (\S+)'s lot, not submittable\)$/, 'dealUnhedgedSuffix', ['inner', 'size', 'contract']],
+  [/^(.+) \(unacquired residual (\S+) — below the venue minimum or blocked\)$/, 'dealResidualSuffix', ['inner', 'size']],
+  [/^stopped$/, 'dealStopped'],
+  [/^converted$/, 'dealConverted'],
+  [/^target reached$/, 'dealTargetReached'],
+  [/^target reached \(unacquired sub-minimum residual (\S+) on the maker leg\)$/, 'dealTargetResidual', ['size']],
+  [/^hedge failed (\d+)x — stopped acquiring unhedgeable exposure$/, 'dealHedgeFailed', ['count']],
+  [/^A-leg failing repeatedly \(position gone, venue wall, or persistent whiffs\) — stopped honestly$/, 'dealALegFailing'],
+  [/^the limit price kept crossing the market — the venue rejected the post-only maker (\d+) times in a row$/, 'dealCrossing', ['count']],
+  // Order close reasons (closeReasonOf in src/engine/loop.ts).
+  [/^cancelled$/, 'orderCancelled'],
+  [/^filled$/, 'orderFilled'],
+  [/^poc-reject$/, 'orderPocReject'],
+  [/^never-reached-venue$/, 'orderNeverSent'],
+  [/^rejected:(.*)$/s, 'orderRejected', ['detail']],
 ];
 
 function valueOf(name: string, raw: string): string {
