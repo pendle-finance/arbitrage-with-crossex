@@ -26,8 +26,8 @@ const NOW = Date.UTC(2026, 8, 18, 12) / 1000;
 const JUNE = Date.UTC(2026, 5, 23, 12) / 1000;
 const DEC = Date.UTC(2026, 11, 25, 8) / 1000;
 
-const EXCLUDED_TITLE = 'Part of this leg is excluded.';
-const INCLUDED_TITLE = 'Exclude some or all of this leg from the farm';
+const EXCLUDED_TITLE = 'Part of this position is excluded.';
+const INCLUDED_TITLE = 'Exclude some or all of this position from the farm';
 
 const PART = { qty: 4 };
 
@@ -465,7 +465,7 @@ async function rowMenuExclude(): Promise<HTMLElement> {
   await screen.findAllByText('ETH');
   const tab = screen.queryByRole('tab', { name: /^Fixed Rate Pairs/, selected: false });
   if (tab) await userEvent.click(tab);
-  const toggle = await screen.findByRole('button', { name: /Ungrouped legs/ });
+  const toggle = await screen.findByRole('button', { name: /Ungrouped positions/ });
   if (toggle.getAttribute('aria-expanded') === 'false') await userEvent.click(toggle);
   await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
   return screen.findByRole('menuitem', { name: /^Exclude/ });

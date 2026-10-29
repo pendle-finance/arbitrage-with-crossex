@@ -1277,7 +1277,7 @@ describe('pairs over legs: spread opens and mixed closes', () => {
     });
     const b = g.blockers.find((x) => x.code === 'cross-short-margin')!;
     expect(b.shortfall).toBeCloseTo(1.46 / 2490.3, 12);
-    expect(b.message).toMatch(/to open this leg, including about \$1\.46 of gas top-up\.$/);
+    expect(b.message).toMatch(/to open this position, including about \$1\.46 of gas top-up\.$/);
   });
 
   it('quotes a pay-fixed spread as a negative rate and does not ask for a second leg', () => {

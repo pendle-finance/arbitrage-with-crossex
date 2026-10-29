@@ -89,10 +89,10 @@ function listSingles(markets: ReturnType<typeof singleRow>[]) {
   );
   return markets;
 }
-const closeSize = async () => Number((await screen.findByLabelText(/Close size, applied to all legs/) as HTMLInputElement).value);
+const closeSize = async () => Number((await screen.findByLabelText(/Close size, applied to all positions/) as HTMLInputElement).value);
 
 async function openUngrouped(user: User) {
-  const toggle = await screen.findByRole('button', { name: /Ungrouped legs/ });
+  const toggle = await screen.findByRole('button', { name: /Ungrouped positions/ });
   if (toggle.getAttribute('aria-expanded') === 'false') await user.click(toggle);
 }
 
@@ -166,7 +166,7 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(PART_FILL), {}, spy);
     await showPairs(user);
-    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
+    await clickExclude(user, await pickBorosCard(/Boros position missing/));
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0]).toEqual([KEY_101, { qty: 4 }]);
   });
@@ -176,8 +176,8 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(PART_FILL), {}, spy);
     await showPairs(user);
-    const popup = await openExclude(user, await pickBorosCard(/Boros leg missing/));
-    expect(within(popup).getByText(/^Edit leg — Gate Long YU · /)).toBeInTheDocument();
+    const popup = await openExclude(user, await pickBorosCard(/Boros position missing/));
+    expect(within(popup).getByText(/^Edit position — Gate Long YU · /)).toBeInTheDocument();
     expect(within(popup).getByRole('radio', { name: 'Exclude a portion' })).toBeChecked();
     expect(within(popup).getByLabelText('Size to exclude (ETH)')).toHaveValue('4');
     expect(within(popup).getByText(/Farm keeps/)).toHaveTextContent('Farm keeps 6 ETH');
@@ -191,14 +191,14 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(PART_FILL));
     await showPairs(user);
-    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
-    await waitFor(() => expect(cardsTitled(/Boros leg missing/)).toHaveLength(0));
+    await clickExclude(user, await pickBorosCard(/Boros position missing/));
+    await waitFor(() => expect(cardsTitled(/Boros position missing/)).toHaveLength(0));
     const [hedged] = hedgedCards();
     expect(hedgedCards()).toHaveLength(1);
     await expand(user, hedged);
     expect(textOf(hedged)).toMatch(/GateBorosLONG6 ETH/);
-    const missing = await pickBorosCard(/Boros legs missing/);
-    expect(textOf(missing)).toContain('No Boros leg');
+    const missing = await pickBorosCard(/Boros positions missing/);
+    expect(textOf(missing)).toContain('No Boros position');
     expect(textOf(missing)).toContain('4 ETH');
   });
 
@@ -210,17 +210,17 @@ describe('Exclude from the card, by the DoD', () => {
     expect(within(card).getAllByRole('button', { name: 'More actions' })).toHaveLength(2);
   });
 
-  it('menu on Boros legs missing', async () => {
+  it('menu on Boros positions missing', async () => {
     const user = userEvent.setup();
     const single = renderCard(groupOf(B13));
     await showPairs(user);
-    const held = await pickBorosCard(/Boros leg missing/);
+    const held = await pickBorosCard(/Boros position missing/);
     expect(within(held).getAllByRole('button', { name: 'More actions' })).toHaveLength(1);
     single.unmount();
 
     renderCard(groupOf(B21));
     await showPairs(user);
-    const flipped = await pickBorosCard(/Boros legs? missing/);
+    const flipped = await pickBorosCard(/Boros positions? missing/);
     expect(textOf(flipped)).toContain('Wrong side');
     expect(within(flipped).getAllByRole('button', { name: 'More actions' })).toHaveLength(1);
   });
@@ -230,7 +230,7 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf(['G L 10', 'H S 1', 'G LONG 1 N', 'H SHORT 1 N']));
     await showPairs(user);
     await openUngrouped(user);
-    const card = await pickBorosCard(/Ungrouped legs/);
+    const card = await pickBorosCard(/Ungrouped positions/);
     expect(textOf(card)).toMatch(/1 perp/);
     expect(within(card).queryAllByRole('button', { name: 'More actions' })).toHaveLength(0);
   });
@@ -272,7 +272,7 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     await waitFor(() => expect(hedgedCards()).toHaveLength(1));
     await expand(user, hedgedCards()[0]);
-    await pickBorosCard(/Boros leg missing/);
+    await pickBorosCard(/Boros position missing/);
     const tables = legTables();
     expect(tables).toHaveLength(2);
     for (const table of tables) expectLegTable(table, true);
@@ -295,10 +295,10 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(B13), { [KEY_101]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros legs missing/);
+    const card = await pickBorosCard(/Boros positions missing/);
     expect(textOf(card)).toContain('4.03 ETH');
     expect(cardsTitled(/missing/)).toHaveLength(1);
-    expect(cardsTitled(/Ungrouped legs/)).toHaveLength(0);
+    expect(cardsTitled(/Ungrouped positions/)).toHaveLength(0);
   });
 
   it('offer after exclude, spread listed', async () => {
@@ -306,16 +306,16 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(B13), { [KEY_101]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros leg missing/);
-    expect(await within(card).findByRole('button', { name: 'Open Boros leg' })).toBeInTheDocument();
+    const card = await pickBorosCard(/Boros position missing/);
+    expect(await within(card).findByRole('button', { name: 'Open Boros position' })).toBeInTheDocument();
   });
 
   it('offer after exclude, no spread', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(B13), { [KEY_101]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros legs missing/);
-    expect(await within(card).findByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
+    const card = await pickBorosCard(/Boros positions missing/);
+    expect(await within(card).findByRole('button', { name: 'Open both Boros positions' })).toBeInTheDocument();
   });
 
   it('tab bar shows the excluded count', async () => {
@@ -342,7 +342,7 @@ describe('Exclude from the card, by the DoD', () => {
     expect(onPairs).toContain(EXCLUDED_NOTE);
     expect(onPairs).toMatch(/Gate.*LONG/);
     expect(onPairs).toContain('0.36 ETH');
-    expect(onPairs).toContain('whole leg');
+    expect(onPairs).toContain('whole position');
     await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
     expect(textOf(excludedBlock())).toBe(onPairs);
   });
@@ -352,7 +352,7 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf(B13), { [KEY_101]: 'all' });
     await showPairs(user);
     const block = excludedBlock();
-    expect(within(block).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Leg', 'Size', 'Locked', 'Initial margin', '']);
+    expect(within(block).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Position', 'Size', 'Locked', 'Initial margin', '']);
     const row = within(block).getByRole('button', { name: 'Restore' }).closest('tr') as HTMLElement;
     expect(row.querySelector('img[aria-hidden="true"]')).not.toBeNull();
     expect(within(row).getByText('Boros')).toHaveClass('bg-info/[0.16]');
@@ -383,7 +383,7 @@ describe('Exclude from the card, by the DoD', () => {
     await showPairs(user);
     await user.click(within(excludedBlock()).getByRole('button', { name: 'Restore' }));
     expect(spy).toHaveBeenCalledWith(KEY_101, undefined);
-    const card = await pickBorosCard(/Boros leg missing/);
+    const card = await pickBorosCard(/Boros position missing/);
     expect(textOf(card)).toContain('0.36 ETH');
     expect(screen.queryByText('Excluded')).toBeNull();
   });
@@ -419,14 +419,14 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     const first = renderCard(groupOf(book, patch), { [KEY_101]: { qty: 2, at: 100 } }, spy);
     await showPairs(user);
-    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
+    await clickExclude(user, await pickBorosCard(/Boros position missing/));
     expect(spy).toHaveBeenLastCalledWith(KEY_101, { qty: 6, at: 300 });
     first.unmount();
 
     const legacy = vi.fn();
     renderCard(groupOf(book, patch), { [KEY_101]: 2 }, legacy);
     await showPairs(user);
-    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
+    await clickExclude(user, await pickBorosCard(/Boros position missing/));
     expect(legacy).toHaveBeenLastCalledWith(KEY_101, { qty: 6 });
   });
 
@@ -435,7 +435,7 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(['G L 4', 'H S 4', 'G LONG 10 N']), { [KEY_101]: { qty: 6 } }, spy);
     await showPairs(user);
-    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
+    await clickExclude(user, await pickBorosCard(/Boros position missing/));
     expect(spy).toHaveBeenLastCalledWith(KEY_101, { qty: 10 });
   });
 
@@ -444,7 +444,7 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(PART_FILL, { 101: { collateral: 'USDT', sizeToken: 25_000, notionalUsd: 25_000 } }), {}, spy);
     await showPairs(user);
-    await clickExclude(user, await pickBorosCard(/Boros leg missing/));
+    await clickExclude(user, await pickBorosCard(/Boros position missing/));
     expect(spy).toHaveBeenLastCalledWith(KEY_101, { qty: 10_000 });
   });
 
@@ -468,7 +468,7 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(['G L 2', 'H S 2', 'G LONG 2 N']), { [KEY_101]: { qty: 4 } });
     await showPairs(user);
-    expect(textOf(excludedBlock())).toMatch(/2 ETH\s*whole leg/);
+    expect(textOf(excludedBlock())).toMatch(/2 ETH\s*whole position/);
     expect(screen.getByRole('button', { name: /1 excluded/ })).toBeInTheDocument();
   });
 
@@ -478,20 +478,20 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     const first = renderCard(groupOf(B21), { [KEY_101]: 'all' });
     await showPairs(user);
-    const blocked = await pickBorosCard(/Boros legs missing/);
+    const blocked = await pickBorosCard(/Boros positions missing/);
     expect(textOf(blocked)).not.toContain('Wrong side');
-    await waitFor(() => expect(opensIn(blocked, 'Open leg').filter(isDead)).toHaveLength(1));
-    expect(await blockedReasons(user, opensIn(blocked, 'Open leg').filter(isDead))).toEqual([net]);
+    await waitFor(() => expect(opensIn(blocked, 'Open position').filter(isDead)).toHaveLength(1));
+    expect(await blockedReasons(user, opensIn(blocked, 'Open position').filter(isDead))).toEqual([net]);
     expect(textOf(blocked)).not.toContain(net);
-    expect(within(blocked).queryByRole('button', { name: 'Open both Boros legs' })).toBeNull();
-    expect(opensIn(blocked, 'Open leg').filter((b) => !isDead(b))).toHaveLength(1);
+    expect(within(blocked).queryByRole('button', { name: 'Open both Boros positions' })).toBeNull();
+    expect(opensIn(blocked, 'Open position').filter((b) => !isDead(b))).toHaveLength(1);
     first.unmount();
 
     const markets = listSingles([singleRow('Gate', DATES.N), singleRow('Hyperliquid', DATES.O), singleRow('Hyperliquid', DATES.N)]);
     renderCard(groupOf(B21), { [KEY_101]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros legs missing/);
-    await user.click(await within(card).findByRole('button', { name: 'Open both Boros legs' }));
+    const card = await pickBorosCard(/Boros positions missing/);
+    await user.click(await within(card).findByRole('button', { name: 'Open both Boros positions' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     const sent = prefill.current as BorosOpenPrefill;
     expect(sent).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', sizeBase: 1 });
@@ -502,9 +502,9 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(['G L 1', 'H S 1', 'G LONG 1 O', 'H LONG 1 O']), { 'boros:102': 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros leg missing/);
+    const card = await pickBorosCard(/Boros position missing/);
     expect(textOf(card)).not.toContain('would offset it');
-    const open = within(card).getByRole('button', { name: 'Open leg' });
+    const open = within(card).getByRole('button', { name: 'Open position' });
     expect(open).toHaveAttribute('aria-disabled', 'true');
     expect(await blockedReason(user, open)).toBe(NET_HL_30);
     await user.click(open);
@@ -517,9 +517,9 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf(['G L 1', 'H S 1', 'G LONG 1 N', 'H LONG 1 O']), { 'boros:102': 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros leg missing/);
+    const card = await pickBorosCard(/Boros position missing/);
     expect(textOf(card)).not.toContain('would offset it');
-    await user.click(within(card).getByRole('button', { name: 'Open leg' }));
+    await user.click(within(card).getByRole('button', { name: 'Open position' }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     expect(prefill.current).toMatchObject({ longVenue: null, shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: 1 });
   });
@@ -530,8 +530,8 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `G LONG ${q} N`, `H LONG ${q} O`]), { 'boros:102': 'all' });
     await openBundle(user, /Hyperliquid/);
     const row = await waitFor(() => screen.getByText(/Not open yet/).closest('tr') as HTMLElement);
-    await waitFor(() => expect(within(row).getByRole('button', { name: /Open Boros leg/ })).toBeEnabled());
-    await user.click(within(row).getByRole('button', { name: /Open Boros leg/ }));
+    await waitFor(() => expect(within(row).getByRole('button', { name: /Open Boros position/ })).toBeEnabled());
+    await user.click(within(row).getByRole('button', { name: /Open Boros position/ }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     const sent = prefill.current as BorosOpenPrefill;
     expect(sent).toMatchObject({ longVenue: null, shortVenue: 'HYPERLIQUID', maturity: DATES.N, sizeBase: q });
@@ -544,8 +544,8 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `G LONG ${q} N`, `H LONG ${q} O`]), { 'boros:102': 'all' });
     await openBundle(user, /Hyperliquid/);
     const row = await waitFor(() => screen.getByText(/Not open yet/).closest('tr') as HTMLElement);
-    await waitFor(() => expect(within(row).getByRole('button', { name: /Open Boros leg/ })).toHaveAttribute('aria-disabled', 'true'));
-    const open = within(row).getByRole('button', { name: /Open Boros leg/ });
+    await waitFor(() => expect(within(row).getByRole('button', { name: /Open Boros position/ })).toHaveAttribute('aria-disabled', 'true'));
+    const open = within(row).getByRole('button', { name: /Open Boros position/ });
     expect(await blockedReason(user, open)).toBe(NET_HL_30);
     expect(textOf(row)).not.toContain('would offset it');
     await user.click(open);
@@ -557,8 +557,8 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H LONG ${q} O`]), { 'boros:101': 'all' });
     await openBundle(user, /Hyperliquid/);
-    await waitFor(() => expect(screen.getAllByRole('button', { name: /Open (both )?Boros legs?/ }).every(isDead)).toBe(true));
-    expect(await blockedReasons(user, screen.getAllByRole('button', { name: /Open (both )?Boros legs?/ }))).toContain(NET_HL_30);
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /Open (both )?Boros (positions?|on both venues)/ }).every(isDead)).toBe(true));
+    expect(await blockedReasons(user, screen.getAllByRole('button', { name: /Open (both )?Boros (positions?|on both venues)/ }))).toContain(NET_HL_30);
     expect(screen.queryByText(NET_HL_30)).toBeNull();
   });
 
@@ -581,15 +581,15 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     const pairs = renderCard(groupOf(book), { [KEY_101]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros legs missing/);
-    await waitFor(() => expect(opensIn(card, 'Open leg').filter(isDead)).toHaveLength(1));
-    expect(await blockedReasons(user, opensIn(card, 'Open leg').filter(isDead))).toEqual([net]);
+    const card = await pickBorosCard(/Boros positions missing/);
+    await waitFor(() => expect(opensIn(card, 'Open position').filter(isDead)).toHaveLength(1));
+    expect(await blockedReasons(user, opensIn(card, 'Open position').filter(isDead))).toEqual([net]);
     expect(textOf(card)).not.toContain(net);
-    const [hlOpen] = opensIn(card, 'Open leg').filter(isDead);
+    const [hlOpen] = opensIn(card, 'Open position').filter(isDead);
     expect(hlOpen.closest('tr')?.textContent).toMatch(/^HyperliquidBorosSHORT/);
     await user.click(hlOpen);
     expect(prefill.current).toBeNull();
-    const live = opensIn(card, 'Open leg').filter((b) => !isDead(b));
+    const live = opensIn(card, 'Open position').filter((b) => !isDead(b));
     expect(live.map((b) => b.closest('tr')?.textContent)).toEqual([expect.stringMatching(/^GateBorosLONG/)]);
     await user.click(live[0]);
     await waitFor(() => expect(prefill.current).not.toBeNull());
@@ -607,9 +607,9 @@ describe('Exclude from the card, by the DoD', () => {
     await user.click(hlBundleOpen);
     expect(prefill.current).toBeNull();
     expect(textOf(gate)).not.toContain('would offset it');
-    expect(within(gate).getByRole('button', { name: /Open Boros leg/ })).not.toHaveAttribute('aria-disabled', 'true');
-    await waitFor(() => expect(within(gate).getByRole('button', { name: /Open Boros leg/ })).toBeEnabled());
-    await user.click(within(gate).getByRole('button', { name: /Open Boros leg/ }));
+    expect(within(gate).getByRole('button', { name: /Open Boros position/ })).not.toHaveAttribute('aria-disabled', 'true');
+    await waitFor(() => expect(within(gate).getByRole('button', { name: /Open Boros position/ })).toBeEnabled());
+    await user.click(within(gate).getByRole('button', { name: /Open Boros position/ }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     const sent = prefill.current as BorosOpenPrefill;
     expect(sent).toMatchObject({ longVenue: 'GATE', shortVenue: null, sizeBase: q });
@@ -635,9 +635,9 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H LONG ${q} O`]), { [KEY_101]: 'all' });
     const { gate, hl } = await bundleGapRows(user);
-    await waitFor(() => expect(within(hl).getByRole('button', { name: /Open both Boros legs/ })).toBeEnabled());
-    expect(within(gate).getByRole('button', { name: /Open both Boros legs/ })).toBeEnabled();
-    await user.click(within(hl).getByRole('button', { name: /Open both Boros legs/ }));
+    await waitFor(() => expect(within(hl).getByRole('button', { name: /Open Boros on both venues/ })).toBeEnabled());
+    expect(within(gate).getByRole('button', { name: /Open Boros on both venues/ })).toBeEnabled();
+    await user.click(within(hl).getByRole('button', { name: /Open Boros on both venues/ }));
     await waitFor(() => expect(prefill.current).not.toBeNull());
     const sent = prefill.current as BorosOpenPrefill;
     expect(sent).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', sizeBase: q });
@@ -651,8 +651,8 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `G LONG ${q} N`, `H LONG ${q} O`]), { 'boros:102': 'all' });
     await openBundle(user, /Hyperliquid/);
     const row = await waitFor(() => screen.getByText(/Not open yet/).closest('tr') as HTMLElement);
-    await waitFor(() => expect(within(row).getByRole('button', { name: /Open Boros leg/ })).toHaveAttribute('aria-disabled', 'true'));
-    const open = within(row).getByRole('button', { name: /Open Boros leg/ });
+    await waitFor(() => expect(within(row).getByRole('button', { name: /Open Boros position/ })).toHaveAttribute('aria-disabled', 'true'));
+    const open = within(row).getByRole('button', { name: /Open Boros position/ });
     expect(open).not.toBeDisabled();
     expect(open.className).not.toMatch(/grass|gold/);
     open.focus();
@@ -668,7 +668,7 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H LONG ${q} O`]), { [KEY_101]: 'all' });
     await openBundle(user, /Hyperliquid/);
     const opens = await waitFor(() => {
-      const found = screen.getAllByRole('button', { name: /Open (both )?Boros legs?/ });
+      const found = screen.getAllByRole('button', { name: /Open (both )?Boros (positions?|on both venues)/ });
       expect(found.length).toBeGreaterThan(0);
       expect(found.every(isDead)).toBe(true);
       return found;
@@ -685,16 +685,16 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H-G LONG ${q} O`], { 101: { marketId: spreadId } }), { [`boros:${spreadId}`]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/No Boros leg/);
+    const card = await pickBorosCard(/No Boros position/);
     const open = await waitFor(() => {
-      const dead = opensIn(card, 'Open leg').filter(isDead);
+      const dead = opensIn(card, 'Open position').filter(isDead);
       expect(dead).toHaveLength(1);
       return dead[0];
     });
     expect(await blockedReason(user, open)).toBe('Spread HL-GATE Long at 30 Oct is excluded. Opening here would offset it: Boros keeps one position per market. Pick another date or restore it.');
     expect(open.className).not.toMatch(/grass|gold/);
     expect(textOf(card)).not.toContain('would offset it');
-    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros legs?$/ })).toBeNull();
+    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros (positions?|on both venues)$/ })).toBeNull();
     await user.click(open);
     expect(prefill.current).toBeNull();
   });
@@ -710,30 +710,30 @@ describe('Exclude from the card, by the DoD', () => {
     const user = userEvent.setup();
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `H-G LONG ${q} O`], { 101: { marketId: spreadId } }), { [`boros:${spreadId}`]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/No Boros leg/);
+    const card = await pickBorosCard(/No Boros position/);
     const open = await waitFor(() => {
-      const dead = opensIn(card, 'Open leg').filter(isDead);
+      const dead = opensIn(card, 'Open position').filter(isDead);
       expect(dead).toHaveLength(1);
       return dead[0];
     });
     expect(await blockedReason(user, open)).toBe('Spread HL-GATE Long at 30 Oct is excluded. Opening here would offset it: Boros keeps one position per market. Pick another date or restore it.');
-    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros legs?$/ })).toBeNull();
+    expect(within(card).queryByRole('button', { name: /^Open (both )?Boros (positions?|on both venues)$/ })).toBeNull();
     await user.click(open);
     expect(prefill.current).toBeNull();
   });
 
-  it.each([50 / PX, 6_000_000 / PX])('#75 a live Open leg does not carry the pair net sentence (%s ETH)', async (q) => {
+  it.each([50 / PX, 6_000_000 / PX])('#75 a live Open position does not carry the pair net sentence (%s ETH)', async (q) => {
     listSingles([singleRow('Gate', DATES.N), singleRow('Hyperliquid', DATES.O)]);
     const user = userEvent.setup();
     renderCard(groupOf([`G L ${q}`, `H S ${q}`, `G SHORT ${q} O`]), { [KEY_101]: 'all' });
     await showPairs(user);
-    const card = await pickBorosCard(/Boros legs missing/);
+    const card = await pickBorosCard(/Boros positions missing/);
     const live = await waitFor(() => {
-      const found = opensIn(card, 'Open leg').filter((b) => !isDead(b));
+      const found = opensIn(card, 'Open position').filter((b) => !isDead(b));
       expect(found).toHaveLength(2);
       return found;
     });
-    const pairOpen = within(card).getByRole('button', { name: 'Open both Boros legs' });
+    const pairOpen = within(card).getByRole('button', { name: 'Open both Boros positions' });
     expect(isDead(pairOpen)).toBe(true);
     expect(pairOpen.className).not.toMatch(/grass|gold/);
     expect(pairOpen).not.toBeDisabled();
@@ -741,8 +741,8 @@ describe('Exclude from the card, by the DoD', () => {
     await user.click(pairOpen);
     expect(prefill.current).toBeNull();
     expect(live.map((b) => b.title)).toEqual([
-      expect.stringMatching(/^Open only the Gate Long Boros leg, at \S+ ETH$/),
-      expect.stringMatching(/^Open only the Hyperliquid Short Boros leg, at \S+ ETH$/),
+      expect.stringMatching(/^Open only the Gate Long Boros position, at \S+ ETH$/),
+      expect.stringMatching(/^Open only the Hyperliquid Short Boros position, at \S+ ETH$/),
     ]);
   });
 

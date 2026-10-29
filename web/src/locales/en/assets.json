@@ -1,7 +1,7 @@
 {
   "spreadVenue": "Spread {{platform}}",
   "bars": {
-    "fixedFundingTitle": "Fixed funding — Boros settlements {{settle}} (net of settlement fees) + perp funding {{funding}}, open and completed legs {{amount}}",
+    "fixedFundingTitle": "Fixed funding — Boros settlements {{settle}} (net of settlement fees) + perp funding {{funding}}, open and completed positions {{amount}}",
     "fixedFunding": "Fixed funding",
     "tradeTitle": "Boros trade PnL (gross of trade fees) {{amount}}",
     "trade": "Boros trade",
@@ -17,12 +17,12 @@
     "caption": "Fixed funding is the locked spread. Then Boros trade PnL, trade fees, perp fees and perp basis."
   },
   "home": {
-    "headingTitle": "Every leg grouped by its underlying asset.",
+    "headingTitle": "Every position grouped by its underlying asset.",
     "heading": "Funding farm by asset",
-    "hideInactiveTitle": "Show only assets with an open leg. Account totals still include every asset.",
-    "hideInactive": "Hide inactive assets",
+    "hideInactiveTitle": "Show only assets with an open position. Account totals still include every asset.",
+    "hideInactive": "Hide assets with no position",
     "connectTitle": "Connect your wallet to see your farm by asset",
-    "connectHint": "The asset view groups every perp and Boros leg by its underlying coin and reports the venues' own lifetime numbers.",
+    "connectHint": "The asset view groups every perp and Boros position by its underlying coin and reports the venues' own lifetime numbers.",
     "loadError": "Couldn't load the asset view",
     "prefsUnreadable": "Saved exclusions could not be read. They were kept as a backup file.",
     "legacyFailed": "Could not move this browser's saved exclusions to the terminal. It tries again on the next load.",
@@ -35,10 +35,10 @@
     "afterInterest": "after {{amount}} borrow interest",
     "aprTitle": "PnL so far over capital × time, annualized. Approximate: capital is today's requirement.",
     "apr": "Realized APR ≈",
-    "capital": "Capital at work",
+    "capital": "Total current capital",
     "emptyTitle": "No positions or history found for this address",
     "emptyHint": "Open a position (or move the start date back) and the assets will appear here.",
-    "allInactive": "No active assets — {{n}} hidden."
+    "allInactive": "No asset has a position — {{n}} hidden."
   },
   "since": {
     "allTime": "All time",

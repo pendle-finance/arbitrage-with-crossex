@@ -562,7 +562,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     fireEvent.pointerDown(confirm);
 
     expect(
-      await screen.findByText(/Only one rate leg is open/, undefined, { timeout: 4000 }),
+      await screen.findByText(/Only one Boros position is open/, undefined, { timeout: 4000 }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Continue anyway/ })).not.toBeInTheDocument();
@@ -585,7 +585,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
-    await screen.findByText(/Only one rate leg is open/, undefined, { timeout: 4000 });
+    await screen.findByText(/Only one Boros position is open/, undefined, { timeout: 4000 });
 
     // Leaving with one side on must NOT be silent: the rate is locked and
     // unhedged, which is directional exposure the user has to be told about.
@@ -605,7 +605,7 @@ describe('StrategyWizard — continue arms once per book state', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Rate locked/ }, { timeout: 4000 }));
     await waitFor(() => expect(prefillsSeen.filter((x) => x.kind === 'pair')).toHaveLength(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /Back to the rate legs/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to Boros/ }));
     fireEvent.click(await screen.findByRole('button', { name: /Rate locked/ }));
     await screen.findByLabelText(/Size per leg/);
     // Same book ⇒ same arm: still exactly one pair prefill.

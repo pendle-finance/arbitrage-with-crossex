@@ -22,7 +22,7 @@ const NOW = Date.UTC(2026, 8, 18, 12) / 1000;
 const JUNE = Date.UTC(2026, 5, 23, 12) / 1000;
 const DEC = Date.UTC(2026, 11, 25, 8) / 1000;
 const PRICE = 3_650.17;
-const PART_TITLE = 'Part of this leg is excluded.';
+const PART_TITLE = 'Part of this position is excluded.';
 
 const empty = (): AssetViewPrefs => ({ sinceByAsset: {}, exclusions: {}, legSince: {} });
 

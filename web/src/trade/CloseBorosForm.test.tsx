@@ -71,7 +71,7 @@ const fill = (filledSize: number, shortfallSize = 0) => ({
 
 /** Hold the confirm through its 800ms gate. */
 const confirmClose = async () => {
-  const btn = await screen.findByRole('button', { name: /Close leg/ });
+  const btn = await screen.findByRole('button', { name: /Close position/ });
   await waitFor(() => expect(btn).toBeEnabled());
   fireEvent.pointerDown(btn);
 };
@@ -100,7 +100,7 @@ describe('CloseBorosForm — reporting what it closed', () => {
     expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
     // …and the size is re-armed at the REMAINDER, so a second press cannot
     // re-send the amount that just half-filled.
-    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue('0.004');
+    expect(screen.getByLabelText(/Close size, applied to all positions/)).toHaveValue('0.004');
   });
 
   it('reports a PARTIAL as a partial even though the venue client stamps it with a failure', async () => {
@@ -120,7 +120,7 @@ describe('CloseBorosForm — reporting what it closed', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     await confirmClose();
     expect(await screen.findByText(/of what you asked for is still open/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue('0.004');
+    expect(screen.getByLabelText(/Close size, applied to all positions/)).toHaveValue('0.004');
     expect(screen.queryByText(/Only 0.006 of 0.01 matched/)).not.toBeInTheDocument();
   });
 
@@ -174,7 +174,7 @@ describe('CloseBorosForm — one size, one unit', () => {
       />,
     );
     expect(await screen.findByText(/different collateral \(ETH, USDT\)/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Close 2 legs/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Close 2 positions/ })).toBeDisabled();
     expect(seen).toHaveLength(0);
   });
 });
@@ -190,7 +190,7 @@ describe('CloseBorosForm — whose legs these are', () => {
     server.use(versionHandler(), agentFor(ROOT), closeReturns({}));
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Close leg/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Close position/ })).toBeNull();
     expect(screen.getAllByRole('button', { name: /Log in to trade|Connect wallet/ })).toHaveLength(1);
     localStorage.clear();
   });
@@ -208,8 +208,8 @@ describe('CloseBorosForm — whose legs these are', () => {
 });
 
 describe('CloseBorosForm — saying that it landed', () => {
-  const panel = () => screen.queryByText(/Leg closed\./);
-  const armed = () => screen.queryByRole('button', { name: /Close leg/ });
+  const panel = () => screen.queryByText(/Position closed\./);
+  const armed = () => screen.queryByRole('button', { name: /Close position/ });
 
   it('reports DONE when the request filled, even though the venue is not flat', async () => {
     // The reported case: 39 asked, 39 filled, 0 short — and `closed: false`,
@@ -221,7 +221,7 @@ describe('CloseBorosForm — saying that it landed', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     await confirmClose();
 
-    expect(await screen.findByText(/Leg closed\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Position closed\./)).toBeInTheDocument();
     // The confirm is GONE, replaced by Done — the whole point.
     expect(armed()).toBeNull();
     expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
@@ -236,7 +236,7 @@ describe('CloseBorosForm — saying that it landed', () => {
     server.use(...ready(), closeReturns({ closed: false, fill: fill(0.004), openSize: MINE }));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: MINE }]} />);
     // Ask for less than the whole share.
-    fireEvent.change(screen.getByLabelText(/Close size, applied to all legs/), {
+    fireEvent.change(screen.getByLabelText(/Close size, applied to all positions/), {
       target: { value: '0.004' },
     });
     await confirmClose();
@@ -253,8 +253,8 @@ describe('CloseBorosForm — saying that it landed', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     await confirmClose();
 
-    expect(await screen.findByText(/Leg closed\./)).toBeInTheDocument();
-    expect(screen.getByText(/another position's share of the same leg, not yours/)).toBeInTheDocument();
+    expect(await screen.findByText(/Position closed\./)).toBeInTheDocument();
+    expect(screen.getByText(/another pair's share of the same position, not yours/)).toBeInTheDocument();
     expect(armed()).toBeNull();
   });
 
@@ -362,7 +362,7 @@ describe('CloseBorosForm — the venue minimum', () => {
     server.use(...quoting([belowMin]));
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     expect(await screen.findByText(/worth \$2\.46/)).toBeInTheDocument();
-    const btn = await screen.findByRole('button', { name: /Close leg/ });
+    const btn = await screen.findByRole('button', { name: /Close position/ });
     await waitFor(() => expect(btn).toBeDisabled());
   });
 
@@ -377,7 +377,7 @@ describe('CloseBorosForm — the venue minimum', () => {
       ]),
     );
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
-    const btn = await screen.findByRole('button', { name: /Close leg/ });
+    const btn = await screen.findByRole('button', { name: /Close position/ });
     await waitFor(() => expect(btn).toBeEnabled());
     expect(screen.queryByText(/flip one to trade a spread/)).not.toBeInTheDocument();
   });
@@ -470,7 +470,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
       );
     });
   const holdBoth = async () => {
-    const btn = await screen.findByRole('button', { name: /Close 2 legs/ });
+    const btn = await screen.findByRole('button', { name: /Close 2 positions/ });
     await waitFor(() => expect(btn).toBeEnabled());
     fireEvent.pointerDown(btn);
   };
@@ -486,7 +486,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     );
     renderWithClient(<CloseBorosForm legs={pairLegs()} onClosed={(l, q) => closed.push([l.marketId!, q])} />);
     await holdBoth();
-    expect(await screen.findByText(/2 legs closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(await screen.findByText(/2 positions closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
 
     expect(sent).toHaveLength(1);
     const body = sent[0] as BorosPairRequest;
@@ -532,7 +532,7 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     );
     renderWithClient(<CloseBorosForm legs={pairLegs()} />);
     expect(await screen.findByText(/past the 0\.80% max/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Close 2 legs/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Close 2 positions/ })).toBeDisabled();
   });
 });
 
@@ -543,7 +543,7 @@ describe('CloseBorosForm — a leg nothing can quote', () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     expect(await screen.findByText(/No quote is available for this market/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Close leg/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Close position/ })).toBeEnabled();
   });
 
   it('holds the confirm while the markets are still loading', async () => {
@@ -562,7 +562,7 @@ describe('CloseBorosForm — a leg nothing can quote', () => {
       }),
     );
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
-    const btn = await screen.findByRole('button', { name: /Close leg/ });
+    const btn = await screen.findByRole('button', { name: /Close position/ });
     expect(btn).toBeDisabled();
     expect(screen.queryByText(/No quote is available/)).not.toBeInTheDocument();
     release();
@@ -579,7 +579,7 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: size }]} />);
 
     expect(await screen.findByRole('button', { name: `Max ${text}` })).toBeInTheDocument();
-    const input = screen.getByLabelText(/Close size, applied to all legs/) as HTMLInputElement;
+    const input = screen.getByLabelText(/Close size, applied to all positions/) as HTMLInputElement;
     expect(input.value).not.toContain(',');
     fireEvent.change(input, { target: { value: '100' } });
     expect(await screen.findByText(/Partial close/)).toBeInTheDocument();
@@ -593,7 +593,7 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
   it('never says flat after at the max: the rest of the venue leg stays open', async () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 37.3, share: 0.0734 }]} />);
-    expect(await screen.findByText(/the rest of the shared leg stays open/)).toBeInTheDocument();
+    expect(await screen.findByText(/the rest of the shared position stays open/)).toBeInTheDocument();
     expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
   });
 
@@ -634,7 +634,7 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
   it.each([0.02, 2, 40, 400, 2_400])('S-CLOSE-08 the kept part of a part-excluded leg is never flat (%s ETH)', async (kept) => {
     server.use(versionHandler(), agentReady(), heldOnChain(kept * 2.5));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: kept, share: 1 }]} />);
-    expect(await screen.findByText(/the rest of the shared leg stays open/)).toBeInTheDocument();
+    expect(await screen.findByText(/the rest of the shared position stays open/)).toBeInTheDocument();
     expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
   });
 
@@ -734,7 +734,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     }),
   ];
   const holdAll = async () => {
-    const btn = await screen.findByRole('button', { name: /Close 3 legs/ });
+    const btn = await screen.findByRole('button', { name: /Close 3 positions/ });
     await waitFor(() => expect(btn).toBeEnabled());
     fireEvent.pointerDown(btn);
   };
@@ -748,11 +748,11 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
 
     expect(await screen.findAllByText('ETH Spread HL-GATE')).not.toHaveLength(0);
     expect(screen.getAllByText('Boros')).toHaveLength(3);
-    expect(screen.getByText('Close size · all legs')).toBeInTheDocument();
-    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue('0.555');
+    expect(screen.getByText('Close size · all positions')).toBeInTheDocument();
+    expect(screen.getByLabelText(/Close size, applied to all positions/)).toHaveValue('0.555');
     expect(screen.queryByText(/This close spans/)).not.toBeInTheDocument();
     await holdAll();
-    expect(await screen.findByText(/3 legs closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(await screen.findByText(/3 positions closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
 
     expect(sent).toHaveLength(1);
     expect(sent[0].intent).toBe('close');
@@ -774,7 +774,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     const sent: BorosPairRequest[] = [];
     server.use(...mixed(0.3, 0.255, sent));
     renderWithClient(<CloseBorosForm legs={book(0.3, 0.255)} />);
-    fireEvent.change(await screen.findByLabelText(/Close size, applied to all legs/), { target: { value: '0.2775' } });
+    fireEvent.change(await screen.findByLabelText(/Close size, applied to all positions/), { target: { value: '0.2775' } });
     await holdAll();
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 3_000 });
     expect(sent[0].legs.map((l) => l.size)).toEqual([0.15, 0.15, 0.1275]);
@@ -788,7 +788,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     const sent: BorosPairRequest[] = [];
     server.use(...mixed(single, spread, sent));
     renderWithClient(<CloseBorosForm legs={book(single, spread)} />);
-    fireEvent.change(await screen.findByLabelText(/Close size, applied to all legs/), { target: { value: typed } });
+    fireEvent.change(await screen.findByLabelText(/Close size, applied to all positions/), { target: { value: typed } });
     await holdAll();
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 3_000 });
     const sizes = sent[0].legs.map((l) => l.size);
@@ -811,7 +811,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     const sent: BorosPairRequest[] = [];
     server.use(...mixed(single, spread, sent));
     renderWithClient(<CloseBorosForm legs={book(single, spread)} />);
-    fireEvent.change(await screen.findByLabelText(/Close size, applied to all legs/), { target: { value: typed } });
+    fireEvent.change(await screen.findByLabelText(/Close size, applied to all positions/), { target: { value: typed } });
     await holdAll();
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 3_000 });
     const max = wei(single) + wei(spread);
@@ -891,7 +891,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     const chip = await screen.findByText(new RegExp(`Filled ${filledText} ETH — ${leftText} ETH of what you asked for is still open`));
     expect(chip).toBeInTheDocument();
     expect(screen.getAllByText('Closed')).toHaveLength(2);
-    expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue(leftText);
+    expect(screen.getByLabelText(/Close size, applied to all positions/)).toHaveValue(leftText);
 
     await holdAll();
     await waitFor(() => expect(raw).toHaveLength(2), { timeout: 3_000 });
@@ -901,7 +901,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     expect(raw[1]).toContain(`"size":${leftText}`);
     expect(retry.legs[0].clientOrderId).not.toBe(first.legs[0].clientOrderId);
     expect(perLeg).toEqual([]);
-    expect(await screen.findByText(/3 legs closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(await screen.findByText(/3 positions closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
     expect(closed).toEqual([
       [51, filled],
       [60, single],

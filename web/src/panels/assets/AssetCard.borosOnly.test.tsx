@@ -81,7 +81,7 @@ const renderCard = (group: AssetGroup) =>
   );
 
 /** The expanded card's leg table (the one with a "Leg" header). */
-const legTable = () => screen.getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+const legTable = () => screen.getByRole('columnheader', { name: 'Position' }).closest('table') as HTMLElement;
 
 beforeEach(() => {
   server.use(
@@ -113,7 +113,7 @@ describe('BorosOnlyPairCard', () => {
     expect(missing[1]).toHaveTextContent(/Missing 100 ETH0 \/ 100 ETH/);
     // The gaps differ (60 vs 100): one prefill would under-hedge the short side.
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
-    expect(within(table).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
+    expect(within(table).getAllByRole('button', { name: 'Open position' })).toHaveLength(2);
   });
 
   it('gaps that differ by under $25 a side are even: "Open both perps" stays, at the smaller gap', () => {
@@ -187,7 +187,7 @@ describe('BorosOnlyPairCard', () => {
     expect(screen.queryByText(/^Rolled · covered from/)).toBeNull();
     const card = missingCard();
     expect(card).toHaveTextContent(`Matures ${fmtDateLocal(NOW + 8 * DAY)}`);
-    const table = within(card).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+    const table = within(card).getByRole('columnheader', { name: 'Position' }).closest('table') as HTMLElement;
     // The badge names the gap; Size keeps held / needed.
     const gaps = within(table).getAllByText('Missing 100 ETH');
     expect(gaps).toHaveLength(2);
@@ -197,7 +197,7 @@ describe('BorosOnlyPairCard', () => {
 
   it('a part perp left on the old card shows held / needed, and the badge the rest', () => {
     renderCard(rolledBook(100, 110));
-    const table = within(missingCard()).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+    const table = within(missingCard()).getByRole('columnheader', { name: 'Position' }).closest('table') as HTMLElement;
     const hl = within(table)
       .getAllByRole('row')
       .filter((r) => /HyperliquidCrossEx/.test(r.textContent ?? ''));
@@ -214,7 +214,7 @@ describe('BorosOnlyPairCard', () => {
       ['This pair uses 66.67% of the position', 'Whole position\t150 ETH', 'This pair\t100 ETH', 'Other pairs\t50 ETH'].join('\n'),
     );
     // The ungrouped card holds the other 50 ETH.
-    fireEvent.click(screen.getByText('Ungrouped legs'));
+    fireEvent.click(screen.getByText('Ungrouped positions'));
     expect(screen.getByText('(33.33%)')).toHaveAttribute(
       'title',
       ['33.33% of the position is unpaired', 'Whole position\t150 ETH', 'Unpaired\t50 ETH', 'In pairs\t100 ETH'].join('\n'),

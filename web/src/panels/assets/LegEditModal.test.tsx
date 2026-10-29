@@ -48,7 +48,7 @@ describe('LegEditModal', () => {
     render(<LegEditModal {...base} current={undefined} onExclude={onExclude} onClose={() => {}} />);
     await userEvent.click(screen.getByRole('radio', { name: 'Exclude a portion' }));
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
-    expect(screen.getByText(/whole leg is excluded/)).toBeInTheDocument();
+    expect(screen.getByText(/whole position is excluded/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onExclude).toHaveBeenCalledWith('perp:HL', { qty: 1000 });
   });
@@ -78,7 +78,7 @@ describe('LegEditModal', () => {
         onClose={() => {}}
       />,
     );
-    expect(screen.getByText(/The farm keeps the whole leg/)).toHaveTextContent('· entry pending');
+    expect(screen.getByText(/The farm keeps the whole position/)).toHaveTextContent('· entry pending');
     expect(document.body).not.toHaveTextContent('at pending');
   });
 

@@ -402,16 +402,16 @@ describe('AssetCard — roll over', () => {
     const g = { ...book(8), borosOpen: [] };
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
-    const row = within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros legs missing/ });
+    const row = within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros positions missing/ });
     expect(row).toHaveAttribute('aria-expanded', 'true');
     // Both gaps are named, each with its own action, plus the one for both.
     expect(within(panel).getAllByText('Missing 100 ETH')).toHaveLength(2);
-    expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
-    expect(within(panel).getByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
+    expect(within(panel).getAllByRole('button', { name: 'Open position' })).toHaveLength(2);
+    expect(within(panel).getByRole('button', { name: 'Open both Boros positions' })).toBeInTheDocument();
     // … and the other way out: stop farming it.
     expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();
-    // Nothing is left over, so there is no "Ungrouped legs" card at all.
-    expect(within(panel).queryByText('Ungrouped legs')).not.toBeInTheDocument();
+    // Nothing is left over, so there is no "Ungrouped positions" card at all.
+    expect(within(panel).queryByText('Ungrouped positions')).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /^Fixed Rate Pairs/ })).toHaveTextContent('1');
   });
 
@@ -420,10 +420,10 @@ describe('AssetCard — roll over', () => {
     const g = { ...base, borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') };
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
-    expect(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros leg missing/ })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros position missing/ })).toBeInTheDocument();
     expect(within(panel).getAllByText('Missing 100 ETH')).toHaveLength(1);
-    expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(1);
-    expect(within(panel).queryByRole('button', { name: 'Open both Boros legs' })).not.toBeInTheDocument();
+    expect(within(panel).getAllByRole('button', { name: 'Open position' })).toHaveLength(1);
+    expect(within(panel).queryByRole('button', { name: 'Open both Boros positions' })).not.toBeInTheDocument();
     expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();
   });
 
@@ -432,17 +432,17 @@ describe('AssetCard — roll over', () => {
     // One perp with nothing opposite it: no pair to form, so it stays loose.
     renderCard({ ...base, perpOpen: base.perpOpen.filter((p) => p.venue === 'GATE'), borosOpen: [] });
     let panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
-    expect(within(panel).getByText('Ungrouped legs')).toBeInTheDocument();
+    expect(within(panel).getByText('Ungrouped positions')).toBeInTheDocument();
     expect(within(panel).getByText('1 perp')).toBeInTheDocument();
-    expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/Boros positions? missing/)).not.toBeInTheDocument();
     cleanup();
 
     // One rate leg with no perps at all behind it.
     renderCard({ ...base, perpOpen: [], borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') });
     panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
-    expect(within(panel).getByText('Ungrouped legs')).toBeInTheDocument();
-    expect(within(panel).getByText('1 Boros leg')).toBeInTheDocument();
-    expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
+    expect(within(panel).getByText('Ungrouped positions')).toBeInTheDocument();
+    expect(within(panel).getByText('1 Boros position')).toBeInTheDocument();
+    expect(within(panel).queryByText(/Boros positions? missing/)).not.toBeInTheDocument();
   });
 
   it('a pair maturing in 40 days: no banner, no flag, a folded card — and a plain Roll over button inside it', async () => {

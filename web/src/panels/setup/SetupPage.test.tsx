@@ -277,7 +277,7 @@ describe('SetupPage · Boros wallet', () => {
 
     expect(screen.getByText('Not recommended.')).toBeInTheDocument();
     expect(
-      screen.getByText('No Boros trades, and Positions shows no Boros legs.'),
+      screen.getByText('No Boros trades, and Positions shows no Boros positions.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Skip anyway' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Back' }));

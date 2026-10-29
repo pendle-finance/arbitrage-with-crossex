@@ -7,7 +7,7 @@
     "opportunities": "机会",
     "positions": "持仓",
     "accounts": "账户",
-    "openOrders": "当前委托",
+    "openOrders": "限价单",
     "trades": "成交记录",
     "fees": "手续费"
   },
@@ -228,7 +228,7 @@
     "loggedInHere": "本终端已登录：<a>{{wallet}}</a>",
     "oneSignature": "只需一次免费签名。该密钥无法提款。",
     "title": "Boros 钱包",
-    "skip": "无法进行 Boros 交易，持仓页也不会显示 Boros 腿。",
+    "skip": "无法进行 Boros 交易，持仓页也不会显示 Boros 仓位。",
     "continueWithout": "不登录，继续",
     "logOut": "退出登录",
     "logOutLabel": "退出 {{wallet}} 的登录？",

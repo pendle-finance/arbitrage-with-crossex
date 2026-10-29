@@ -1,7 +1,7 @@
 {
   "spreadVenue": "Spread {{platform}}",
   "bars": {
-    "fixedFundingTitle": "固定资金费：Boros 结算 {{settle}}（已扣结算手续费）+ 永续资金费 {{funding}}，含持仓中和已完成的腿，合计 {{amount}}",
+    "fixedFundingTitle": "固定资金费：Boros 结算 {{settle}}（已扣结算手续费）+ 永续资金费 {{funding}}，含持有中和已完成的仓位，合计 {{amount}}",
     "fixedFunding": "固定资金费",
     "tradeTitle": "Boros 交易盈亏（未扣交易手续费）{{amount}}",
     "trade": "Boros 交易",
@@ -17,12 +17,12 @@
     "caption": "固定资金费即锁定的利差。其后是 Boros 交易盈亏、交易手续费、永续手续费和永续价格盈亏。"
   },
   "home": {
-    "headingTitle": "所有腿按标的资产分组。",
+    "headingTitle": "所有仓位按标的资产分组。",
     "heading": "按资产查看资金费收益",
-    "hideInactiveTitle": "只显示有持仓腿的资产。账户合计仍包含所有资产。",
-    "hideInactive": "隐藏不活跃资产",
+    "hideInactiveTitle": "只显示有持仓的资产。账户合计仍包含所有资产。",
+    "hideInactive": "隐藏无持仓资产",
     "connectTitle": "连接钱包，按资产查看收益",
-    "connectHint": "资产视图按标的币种汇总所有永续和 Boros 腿，并显示各交易所自己记录的累计数据。",
+    "connectHint": "资产视图按标的币种汇总所有永续和 Boros 仓位，并显示各交易所自己记录的累计数据。",
     "loadError": "无法加载资产视图",
     "prefsUnreadable": "无法读取已保存的排除设置，已另存为备份文件。",
     "legacyFailed": "无法将此浏览器保存的排除设置迁移到终端，下次加载时会重试。",
@@ -35,10 +35,10 @@
     "afterInterest": "已扣 {{amount}} 借款利息",
     "aprTitle": "至今盈亏 ÷（本金 × 时间），年化。为估算值：本金按当前所需计算。",
     "apr": "已实现 APR ≈",
-    "capital": "投入本金",
+    "capital": "总占用本金",
     "emptyTitle": "此地址没有仓位或历史记录",
     "emptyHint": "开仓（或把开始日期往前调）后，资产会显示在这里。",
-    "allInactive": "没有活跃资产，已隐藏 {{n}} 个。"
+    "allInactive": "所有资产均无持仓，已隐藏 {{n}} 个。"
   },
   "since": {
     "allTime": "全部时间",

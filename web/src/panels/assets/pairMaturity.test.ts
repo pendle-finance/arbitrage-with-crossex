@@ -253,7 +253,7 @@ describe('pairs are 4-leg units at one maturity', () => {
     expect(d.pendingLegs.map((l) => [l.venue, l.maturity, l.sizeBase])).toEqual([['GATE', SEP, 100]]);
   });
 
-  it('an incomplete side pairs what it can; the rest is a Boros leg missing card (#25)', () => {
+  it('an incomplete side pairs what it can; the rest is a Boros position missing card (#25)', () => {
     mid = 1;
     const g = group({
       perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
@@ -320,7 +320,7 @@ describe('a pair can roll over at any time before it matures', () => {
 });
 
 describe('ungrouped legs: what no 4-leg unit claimed', () => {
-  it('a perp at a venue with no YU makes a Boros legs missing card with the rest of the other side (#25)', () => {
+  it('a perp at a venue with no YU makes a Boros positions missing card with the rest of the other side (#25)', () => {
     mid = 1;
     const g = group({
       perpOpen: [
@@ -357,7 +357,7 @@ describe('ungrouped legs: what no 4-leg unit claimed', () => {
     expect(d.pendingLegs).toMatchObject([{ venue: 'GATE', maturity: SEP, sizeBase: 100, share: 1 }]);
   });
 
-  it('a YU slice on a Boros leg missing card carries its share of the leg, so a partial one cannot be closed whole (#25)', () => {
+  it('a YU slice on a Boros position missing card carries its share of the leg, so a partial one cannot be closed whole (#25)', () => {
     mid = 1;
     const g = group({
       perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
@@ -413,7 +413,7 @@ describe('a Boros leg with no entry rate yet', () => {
  * Two units on one book. Each perp used to be spread over every counterparty
  * in proportion, so part of OKX's long faced Hyperliquid's short — whose rate
  * legs share no maturity with OKX's — and every leg left a remainder that
- * surfaced as "Boros leg missing" beside ungrouped rate legs (a user's
+ * surfaced as "Boros position missing" beside ungrouped rate legs (a user's
  * report, 2026-10-04). Units now form where their rate legs pair.
  */
 describe('several units on one book pair where their rate legs pair', () => {

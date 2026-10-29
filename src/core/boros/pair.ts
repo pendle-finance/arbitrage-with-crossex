@@ -586,7 +586,7 @@ function simulateLeg(
   if (!leg.book) {
     bookStatus = 'unavailable';
     reasons.push(
-      `${leg.market.name}: order book unavailable — no rate, spread or margin can be quoted for this leg.`,
+      `${leg.market.name}: order book unavailable — no rate, spread or margin can be quoted for this position.`,
     );
   } else if (!walk) {
     bookStatus = size > 0 ? 'insufficient-depth' : 'not-fetched';
@@ -598,7 +598,7 @@ function simulateLeg(
   } else if (walk.insufficient) {
     bookStatus = 'insufficient-depth';
     reasons.push(
-      `${leg.market.name}: the book only supports ${fmtSize(walk.filledUsd)} of the ${fmtSize(size)} requested — this leg will fill short.`,
+      `${leg.market.name}: the book only supports ${fmtSize(walk.filledUsd)} of the ${fmtSize(size)} requested — this order will fill short.`,
     );
   }
 
@@ -991,7 +991,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     // puts it — the guided wizard's "nothing left to do", not a missing size.
     const atTarget = sim.intent === 'target' && legs.some((l) => l.sim.sizing.currentSize !== 0);
     if (atTarget) {
-      message = `${legs.length === 1 ? 'This leg is' : 'Both legs are'} already at this target — there is nothing to send.`;
+      message = `${legs.length === 1 ? 'This position is' : 'Both positions are'} already at this target — there is nothing to send.`;
     } else if (adding.length) {
       message =
         `Close can only reduce. ${adding.map((l) => l.sim.marketName).join(' and ')} ` +
@@ -1029,7 +1029,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         leg: index,
         marketId: leg.marketId,
         message:
-          `${leg.marketName}: this leg is worth $${value.toFixed(2)}, and Boros takes nothing ` +
+          `${leg.marketName}: this order is worth $${value.toFixed(2)}, and Boros takes nothing ` +
           `at or under $${MIN_ORDER_VALUE_USD} — increase the size.`,
       });
     }
@@ -1038,14 +1038,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         code: 'book-unavailable',
         leg: index,
         marketId: leg.marketId,
-        message: `${leg.marketName}: order book unavailable — cannot price this leg.`,
+        message: `${leg.marketName}: order book unavailable — cannot price this position.`,
       });
     } else if (leg.execApr === null) {
       blockers.push({
         code: 'no-depth',
         leg: index,
         marketId: leg.marketId,
-        message: `${leg.marketName}: nothing resting on the side this leg would cross.`,
+        message: `${leg.marketName}: nothing resting on the side this order would cross.`,
       });
     } else if (leg.slippageExceeded) {
       // The fill already sits past the bound the order would carry, so the
@@ -1143,7 +1143,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
           leg: index,
           marketId: leg.marketId,
           shortfall: required - available,
-          message: `${leg.marketName} is isolated-only. You need ${fmtSize(required - available)} ${sim.collateral} in its account to open this leg.`,
+          message: `${leg.marketName} is isolated-only. You need ${fmtSize(required - available)} ${sim.collateral} in its account to open this position.`,
         });
       }
       continue;
@@ -1190,7 +1190,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         // user never asked for, in the one message that is telling them why
         // their order cannot go out.
         message: `Cross margin is short ${fmtSize(crossRequired - available)} ${sim.collateral} to open ${
-          tradingLegs > 2 ? 'all legs' : tradingLegs === 2 ? 'both legs' : 'this leg'
+          tradingLegs > 2 ? 'all positions' : tradingLegs === 2 ? 'both positions' : 'this position'
         }${autoTopUpToken > 0 && sim.intent !== 'close' && !openTopUpElsewhere ? `, including about $${autoTopUpUsd.toFixed(2)} of gas top-up` : ''}.`,
       });
     }
@@ -1222,7 +1222,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
       `Prepaid gas on this Boros account is ${gas <= 0 ? 'empty' : `low, about $${gas.toFixed(2)}`}, so this order tops it up as it sends. ` +
         ((sim.intent === 'close' && (account.cross?.available ?? 0) < autoTopUpToken) || openTopUpElsewhere
           ? `Your ${sim.collateral} cross margin cannot spare about $${topUp.toFixed(2)}, so it comes from the coin with the most free cross margin.`
-          : `That takes about $${topUp.toFixed(2)} worth of ${sim.collateral} from this market's cross margin, on top of the margin for these legs.`),
+          : `That takes about $${topUp.toFixed(2)} worth of ${sim.collateral} from this market's cross margin, on top of the margin for this trade.`),
     );
   }
 

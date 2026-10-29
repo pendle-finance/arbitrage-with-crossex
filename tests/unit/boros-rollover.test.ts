@@ -166,7 +166,7 @@ describe('evaluateRollGate', () => {
     const g = evaluateRollGate({ ...rollInput({ entry }), venue: null });
     // Still blocked, by the step that cannot price, and only by it.
     expect(g.blockers.map((b) => b.code)).toEqual(['no-depth']);
-    expect(g.blockers[0].message).toBe('Re-entry: Binance ETH new: nothing resting on the side this leg would cross.');
+    expect(g.blockers[0].message).toBe('Re-entry: Binance ETH new: nothing resting on the side this order would cross.');
     // A book that could not be fetched at all is the same: its step says so.
     const unread = step([leg(hlNew, 'short'), leg(bnNew, 'long', { book: null })], 'open');
     expect(evaluateRollGate({ ...rollInput({ entry: unread }), venue: null }).blockers.map((b) => b.code)).toEqual(['book-unavailable']);

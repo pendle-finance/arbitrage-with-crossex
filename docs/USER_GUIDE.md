@@ -24,14 +24,14 @@ In this guide, we will cover:
 
 Perp traders pay (or earn) a floating funding rate. On [Boros](https://boros.pendle.finance), that funding rate is itself tradable - and the same coin's funding often carries **different implied fixed rates on different venues**: say ETH funding priced at 8% APR on Hyperliquid but 5% on Binance. The strategy locks in that gap.
 
-One position is 4 legs, all at the same notional:
+One arbitrage holds 2 perps and 2 Boros positions, all at the same notional:
 
-- **2 rate legs on Boros** - short the funding of the expensive market (you *receive* its fixed rate) and long the funding of the cheap one (you *pay* its fixed rate). Receive 8%, pay 5% → ~3% locked until the market's maturity.
-- **2 perp legs via CrossEx** - a short perp on the first venue, a long perp on the second, both opened through [Gate CrossEx](https://www.gate.com/crossex) under one **unified margin** account. Each perp leg's funding cancels the floating funding its Boros leg owes, and the two perps cancel each other's price exposure - with the shared margin, one leg's gain collateralises the other's loss.
+- **2 Boros positions** - short the funding of the expensive market (you *receive* its fixed rate) and long the funding of the cheap one (you *pay* its fixed rate). Receive 8%, pay 5% → ~3% locked until the market's maturity.
+- **2 perp legs via CrossEx** - a short perp on the first venue, a long perp on the second, both opened through [Gate CrossEx](https://www.gate.com/crossex) under one **unified margin** account. Each perp leg's funding cancels the floating funding its Boros position owes, and the two perps cancel each other's price exposure - with the shared margin, one leg's gain collateralises the other's loss.
 
-Some venue pairs have a Boros **spread market**, such as "ETH Spread HL-GATE": one Boros market that pays the funding gap between the two venues. Where Boros lists one, a single Boros order replaces the 2 rate legs, so the position has 3 legs, with one Boros fee and one margin.
+Some venue pairs have a Boros **spread market**, such as "ETH Spread HL-GATE": one Boros market that pays the funding gap between the two venues. Where Boros lists one, a single spread position replaces the 2 Boros positions, with one Boros order, one Boros fee and one margin. The arbitrage is then 2 perps + 1 spread position.
 
-Once everything nets out there is no price exposure and no floating-rate exposure left - just the fixed spread, earned on the notional until maturity. The Opportunities scan prices that spread at your size, subtracts every cost it can model (Boros fees and price impact, perp fees and slippage, entry and exit), and shows what remains as a **net fixed APR on the capital** the four legs actually consume as margin.
+Once everything nets out there is no price exposure and no floating-rate exposure left - just the fixed spread, earned on the notional until maturity. The Opportunities scan prices that spread at your size, subtracts every cost it can model (Boros fees and price impact, perp fees and slippage, entry and exit), and shows what remains as a **net fixed APR on the capital** the perps and the Boros side actually consume as margin.
 
 Boros Academy walks through this strategy in more depth: [Fixed-Return Funding Arbitrage](https://docs.pendle.finance/boros-academy/advanced-strategies/fixed-return-funding-arbitrage).
 
@@ -43,23 +43,23 @@ You will use the tool for 3 things, in order:
 ### A. Discover and understand opportunities
 The bar above the **Opportunities** scan sets the assumptions every card is priced with:
 ![The assumptions bar above the Opportunities scan: Capital, Perp entry and Perps at maturity](./Assumptions.png)
-- **Capital** is the margin you post across all the legs. Each card sizes its own notional to use this amount. The default is $200,000, and the presets are $10k, $100k, $500k and $1M.
+- **Capital** is the margin you post across every position. Each card sizes its own notional to use this amount. The default is $200,000, and the presets are $10k, $100k, $500k and $1M.
 - For **Perp entry**, **"2 market orders"** opens both perp legs at market. **"Limit + hedge"** means the terminal will place a limit order on exchange A, wait for it to be filled, and immediately market order on the other exchange to hedge. This will save on perp fees (because *maker* fees are cheaper than *taker* fees).
 - For **Perps at maturity**, **"Roll over"** (the default) assumes you keep the perp legs open at maturity and lock another Boros spread on them at a later maturity, so no closing fee is charged. **"Close positions"** charges the fees and slippage to close both perp legs at maturity.
-- The Boros legs are always priced as market orders at your size. Each Boros leg shows its rate "after impact"; hover it to see the mid rate. Filling one Boros leg with a limit order can do better (see section 4).
+- The Boros positions are always priced as market orders at your size. Each Boros position shows its rate "after impact"; hover it to see the mid rate. Filling one of two single Boros positions with a limit order can do better (see section 4).
 - Perp fees follow your Gate VIP tier once your Gate API key is connected. Without a key, a note above the cards says the fees assume the VIP 0 schedule.
 - **Include rebate in APR** shows only when your logged-in Boros account has a settlement-fee rebate. It is on by default and adds the rebate to every card's APR and Return.
-- Above $1M of notional per leg, a note says the perp slippage is estimated at $1M. Above that size, split (TWAP) the perp side.
+- Above $1M of notional per position, a note says the perp slippage is estimated at $1M. Above that size, split (TWAP) the perp side.
 
-Each card shows its **APR** on capital, the **Capital** it posts, the **Return** by maturity and the **Notional** per leg. Tick **"I already hold the perps"** on a card when you already hold those perps, for example to roll over: the card then charges no perp entry fees or entry slippage. It is ticked for you when you already hold the same pair at a sooner maturity.
+Each card shows its **APR** on capital, the **Capital** it posts, the **Return** by maturity and the **Notional** per position. Tick **"I already hold the perps"** on a card when you already hold those perps, for example to roll over: the card then charges no perp entry fees or entry slippage. It is ticked for you when you already hold the same pair at a sooner maturity.
 
-**More details** breaks a card down: the legs on each venue, the **Est. profit at maturity** and **Capital (modeled min)** waterfalls, and the **Net effect** line. Try changing the assumptions to see how each cost moves.
+**More details** breaks a card down: the positions on each venue, the **Est. profit at maturity** and **Capital (modeled min)** waterfalls, and the **Net effect** line. Try changing the assumptions to see how each cost moves.
 ![More details on an opportunity: the Est. profit at maturity and Capital (modeled min) waterfalls, and the Net effect line](./OpportunitiesDetails.png)
 
 Click **"Open this strategy"** on an opportunity to open it step by step: first **Lock the rate** (the Boros order), then **Hedge the perps** (the perp pair, sized from the card and your Perp entry choice). Each form is filled in for you, and you confirm each order yourself.
 
-### B. Execute a 4-legged Funding Rate Arbitrage position
-It's recommended to **open the Boros legs first**, before opening the Perp legs. This is because the price impact from opening Boros position is higher and more uncertain, so you should "lock in" the Boros spread first before executing the whole 4-legged position.
+### B. Execute a Funding Rate Arbitrage position
+It's recommended to **open the Boros side first**, before opening the perp legs. This is because the price impact from opening Boros position is higher and more uncertain, so you should "lock in" the Boros spread first before executing the whole position.
 
 Do **connect your Boros wallet** and log in with it (in the setup steps, or in **Settings**), so that your Boros position can be tracked and traded.
 
@@ -87,7 +87,7 @@ As for executing with **"Limit + hedge"**, there are a few things to note:
 - When executing a large position, it's recommended to manually **break it into a few executions** (for example, do 5x 100k instead of 500k in one go)
 
 ### C. Monitor your position
-Once opened, there's not much maintenance you need to do on a 4-legged position, except for when to close the two perp legs at maturity (if you don't roll over
+Once opened, there's not much maintenance you need to do on a position, except for when to close the two perp legs at maturity (if you don't roll over
 into the next maturity).
 
 What's most useful is to understand and break down the PnL for your positions. The **Positions** tab shows one card per coin.
@@ -96,20 +96,20 @@ What's most useful is to understand and break down the PnL for your positions. T
 The top of each card shows:
 - **Total PnL**, with its ROI and the all-time cost. Click the pie icon next to it for the PnL breakdown.
 - **Current APR**: the fixed APR your pairs lock, and about how much that earns per day. When part of the book is not locked, it shows the fixed and the floating part.
-- **Current capital**: the initial margin your counted legs need, on Gate and on Boros.
+- **Current capital**: the initial margin your counted positions need, on Gate and on Boros.
 - **PnL waterfall** shows the PnL as bars: fixed funding, Boros trade, trade fees, perp fees, perp basis and settlement rebate, then the net.
 
 Below them are two tabs:
 - **Fixed Rate Pairs** (the default) lists each pair: a Boros position matched with its perps, with its **Notional**, **Capital**, **Est. fixed APR** and **Profit at maturity**.
-- **Funding Bundles** lists the perp funding and the Boros settlements per venue, for live and finished legs.
+- **Funding Bundles** lists the perp funding and the Boros settlements per venue, for live and finished positions.
 
-Click a pair to open it. It shows its legs and these buttons:
+Click a pair to open it. It shows its positions and these buttons:
 - **Share** makes a public link and image of the pair. Your wallet address is not included.
 - **Close perps** closes both perp legs, reduce-only.
-- **Close Boros legs** closes the pair's Boros legs. The perps stay open.
-- **Roll over** moves the Boros legs to a later maturity. It is highlighted when the pair is due.
+- **Close Boros** closes the pair's Boros positions. The perps stay open.
+- **Roll over** moves the Boros positions to a later maturity. It is highlighted when the pair is due.
 
-When a leg is shared with another pair, Close perps and Close Boros legs close only this pair's share.
+When a position is shared with another pair, Close perps and Close Boros close only this pair's share.
 
 #### Fees on a pair
 
@@ -117,30 +117,30 @@ When a leg is shared with another pair, Close perps and Close Boros legs close o
 ![The fees window of a pair: the Charge switches, the fee figures and the profit at maturity](./PairFees.png)
 
 It shows the pair's **Fixed earning**, the **Boros trade fees** it paid, the **Perp entry fees**, the **Est. perp exit fees** and the **Est. profit at maturity**. The two **Charge** switches pick which perp fees count against this pair:
-- **Perp entry fees**: what opening the perps cost. It is ticked, unless the perps were opened more than 3 days before the Boros leg. Then the perps most likely came from an earlier pair you rolled over, and they paid their fees there.
+- **Perp entry fees**: what opening the perps cost. It is ticked, unless the perps were opened more than 3 days before the Boros position. Then the perps most likely came from an earlier pair you rolled over, and they paid their fees there.
 - **Est. perp exit fees**: closing both perps at maturity at your venues' taker fees. It starts unticked, because perps are usually rolled over. Tick it if you mean to close them.
 
 The switches change only that pair's Est. fixed APR and Profit at maturity. They are not saved: a reload sets them back.
 
-#### When one venue leg belongs to two pairs
+#### When one position belongs to two pairs
 
 Run HL/Gate and HL/Binance at the same time, and the HL side is **one** position at Gate, at one blended entry price. The terminal splits it by size between the pairs that use it. Each pair shows its slice, for example **(52.00%)**. Hover it to see the whole position, this pair's part and the other cards.
 
-A leg that no pair uses shows under **Ungrouped legs**, tagged **not in a pair**. A Boros leg on the wrong side for its perp is tagged **Wrong side**: it adds to that perp's funding risk instead of hedging it. Close it before you open the hedge.
+A position that no pair uses shows under **Ungrouped positions**, tagged **not in a pair**. A Boros position on the wrong side for its perp is tagged **Wrong side**: it adds to that perp's funding risk instead of hedging it. Close it before you open the hedge.
 
-#### Leaving a leg out
+#### Leaving a position out
 
-If a leg, or part of one, is not part of the arb (for example a position you trade by hand), on a Boros leg open the **⋯** menu on its row in Fixed Rate Pairs and pick **Exclude**. For any leg, you can also use the row's **Edit** button on the Funding Bundles tab. Set how much of the leg to exclude. That part moves to the **Excluded** section, out of the hedge, the PnL and the capital. **Restore** counts the whole leg again. Exclusions are saved on the terminal.
+If a position, or part of one, is not part of the arb (for example one you trade by hand), on a Boros position open the **⋯** menu on its row in Fixed Rate Pairs and pick **Exclude**. For any position, you can also use the row's **Edit** button on the Funding Bundles tab. Set how much of it to exclude. That part moves to the **Excluded** section, out of the hedge, the PnL and the capital. **Restore** counts the whole position again. Exclusions are saved on the terminal.
 
 #### What counts as your capital
 
-Every APR on a position is a return *on capital*. Capital is the initial margin the legs post today: the perps' initial margin on Gate, plus the Boros positions' initial margin. A pair's capital is the sum over its legs. Idle cash in your accounts does not count.
+Every APR on a position is a return *on capital*. Capital is the initial margin the positions post today: the perps' initial margin on Gate, plus the Boros positions' initial margin. A pair's capital is the sum over its positions. Idle cash in your accounts does not count.
 
 #### Rebalancing USDC and USDT
 
 Your CrossEx account has three wallets. Every venue except Hyperliquid and Lighter margins and settles in USDT. Hyperliquid and Lighter settle in USDC, so each has its own USDC wallet, which starts at 0.
 
-Opening a leg does not borrow. Its margin comes from your whole account. A wallet moves only when its legs pay or receive: hourly funding, fees, and profit or loss. When a wallet's legs lose more than it holds, the wallet goes negative and Gate lends you the coin: USDC for the Hyperliquid and Lighter legs, USDT for the legs on every other venue. Gate counts the unrealised loss too, so a borrow can show while the cash is still positive.
+Opening a perp leg does not borrow. Its margin comes from your whole account. A wallet moves only when its legs pay or receive: hourly funding, fees, and profit or loss. When a wallet's legs lose more than it holds, the wallet goes negative and Gate lends you the coin: USDC for the Hyperliquid and Lighter legs, USDT for the legs on every other venue. Gate counts the unrealised loss too, so a borrow can show while the cash is still positive.
 
 The borrow costs two things. Gate holds 20% of it as initial margin and 10% as maintenance margin. It also pays interest:
 
@@ -229,21 +229,21 @@ Transfers wait while a rebalance runs or is stopped, or while a deal is still wo
 A deal waits a few seconds after a transfer starts, until Gate has taken the money.
 
 ## 4. How to maximise return
-These few factors move the needle the most in maximising your return on the 4-legged Funding Rate Arbitrage
+These few factors move the needle the most in maximising your return on the Funding Rate Arbitrage
 1. Reduce perp fees with a **higher VIP tier** in Gate.
    * Play around with the VIP tier assumption in https://boros.pendle.finance/arbitrage-crossex, and you will see the immediate impact of your VIP tier on the potential returns.
    * As an example, my current VIP8 tier boosts a particular opportunity from **11.3% APR** to **16.2% APR**. For reference, I need a 400k capital in Gate to get VIP8 tier.
 2. **Rolling over**
-   * Being able to roll over an existing 4-legged position into the next maturity is a powerful boost to your return
+   * Being able to roll over an existing position into the next maturity is a powerful boost to your return
    * The boost is two-fold: the existing position will escape the perp closing fees, and the new position will escape the perp opening fees. On **Opportunities**, compare **Perps at maturity** set to **Close positions** with **Roll over** to see the impact on the return. Tick **"I already hold the perps"** on the next maturity's card to drop the perp entry fees. On a pair you hold, the **Fees ›** window shows the same with its **Perp entry fees** and **Est. perp exit fees** switches.
-   * If you manage to keep rolling over, the subsequent 4-legged position wont have to pay **a single cent of perp fees** (for both entry and exit), which boosts the return even more.
+   * If you manage to keep rolling over, the subsequent position won't have to pay **a single cent of perp fees** (for both entry and exit), which boosts the return even more.
 3. Reduce perp fees + slipapge through an optimised execution of **Limit + hedge**
    * The goal is to minimise slipapge when executing the **Limit + hedge**. Its even possible to get possible slippage (for example, short Hyperliquid ETH at 1601, long OKX ETH at 1600)
    * Its best to execute when the market is generally more calm, reducing risks for big slippage
    * Its best to break a big trade (lets say 1M notional) into multiple rounds, to reduce the average slippage
    * To be the most careful, always **manually set the maker price** at a price relatively further away, and do the execution in the **Deal modal**. At the deal modal, its a *mini-game* of re-pegging the limit order price decently close to market, patiently wait for it to get hit (say by other impatient users on the perp), trying to get an optimised slippage.
 4. Optimise **Boros spread**
-   * To optimise for the spread you are locking, try to use **limit orders** to fill at least one Boros leg, and do a **market order** on the other leg. Sometimes, it can give you a much higher spread.
+   * To optimise for the spread you are locking, with two single Boros markets, try to use a **limit order** on one and a **market order** on the other. Sometimes, it can give you a much higher spread.
    * That said, sometimes when a decent opportunity are there that you can just market order, you could just take it (otherwise, some other users might take it before you)
 
 ## 5. Risk Disclosure
@@ -251,6 +251,6 @@ These few factors move the needle the most in maximising your return on the 4-le
 - **Cross-margin risk** - CrossEx manages margin across exchanges for you.
 - **Spread risk** - rare, but the perp legs could diverge enough to trigger liquidation.
 - **Boros liquidation risk** - a big enough move against your locked-in spread can break the hedge; keep a margin buffer.
-- **Execution risk** - if a leg doesn't open hedged, check after execution.
+- **Execution risk** - if a position doesn't open hedged, check after execution.
 
 Ultimately, you should **do your own research**, make sense of all the different risks and rewards, and make the decisions for yourself.

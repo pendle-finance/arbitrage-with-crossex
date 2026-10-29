@@ -8,7 +8,7 @@
     "opportunities": "Opportunities",
     "positions": "Positions",
     "accounts": "Accounts",
-    "openOrders": "Open Orders",
+    "openOrders": "Limit orders",
     "trades": "Trades",
     "fees": "Fees"
   },
@@ -230,7 +230,7 @@
     "loggedInHere": "Logged in here: <a>{{wallet}}</a>",
     "oneSignature": "One free signature. The key cannot withdraw.",
     "title": "Boros wallet",
-    "skip": "No Boros trades, and Positions shows no Boros legs.",
+    "skip": "No Boros trades, and Positions shows no Boros positions.",
     "continueWithout": "Continue without logging in",
     "logOut": "Log out",
     "logOutLabel": "Log out {{wallet}}?",

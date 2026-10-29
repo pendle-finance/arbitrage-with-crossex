@@ -62,7 +62,7 @@ describe('shareCardLines', () => {
     });
     const { legs, legOverflow } = shareCardLines(eight);
     expect(legs).toHaveLength(6);
-    expect(legOverflow).toBe('+2 more legs');
+    expect(legOverflow).toBe('+2 more positions');
   });
 
   it('credits Boros, Gate CrossEx, and the tool', () => {

@@ -174,11 +174,11 @@ describe('App tab shell', () => {
     expect(scrollSpy).toHaveBeenCalledWith({ top: 0 });
   });
 
-  it('shows the live order count on the tab while Open Orders is inactive', async () => {
+  it('shows the live order count on the tab while Limit orders is inactive', async () => {
     mockApp({ orders: [order('1'), order('2')] });
     await renderApp();
 
-    const ordersTab = tab(/^Open Orders/);
+    const ordersTab = tab(/^Limit orders/);
     expect(ordersTab).toHaveAttribute('aria-selected', 'false');
 
     // The badge lands once the (still-mounted) query resolves.

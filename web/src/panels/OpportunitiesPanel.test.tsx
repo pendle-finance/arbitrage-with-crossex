@@ -277,10 +277,10 @@ describe('OpportunitiesPanel — capital basis', () => {
     expect(screen.getByTitle(/Locked fixed spread annualized/)).toHaveTextContent('7.0%');
     expect(screen.getByText('(30d)')).toBeInTheDocument();
     expect(screen.getByText('~$1,512')).toBeInTheDocument();
-    expect(screen.getByTitle('Estimated profit at maturity on $10,000 per leg')).toHaveTextContent(
+    expect(screen.getByTitle('Estimated profit at maturity on $10,000 per position')).toHaveTextContent(
       '$9',
     );
-    expect(screen.getByTitle('$10,000 per leg')).toHaveTextContent('$10k');
+    expect(screen.getByTitle('$10,000 per position')).toHaveTextContent('$10k');
     // The asset line names the underlying (via its badge) and both venue legs
     // by side. The leg capsule writes the venue and its direction as separate
     // elements, so each is asserted on its own row rather than as one string.
@@ -378,14 +378,14 @@ describe('OpportunitiesPanel — collateral bracket', () => {
     renderWithClient(<OpportunitiesPanel />);
 
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByTitle('$10,000 per leg ≈ 5.2632 ETH')).toHaveTextContent('$10k (5.26 ETH)');
+    expect(screen.getByTitle('$10,000 per position ≈ 5.2632 ETH')).toHaveTextContent('$10k (5.26 ETH)');
 
     // Expanded, the notional is stated ONCE for all four legs rather than
     // repeated on each row: every leg carries the same size, so four copies of
     // it were four chances to misread it as four different numbers.
     await userEvent.click(toggles()[0]);
-    expect(screen.getByText(/Four legs ·/)).toHaveTextContent(
-      'Four legs · $10k (5.26 ETH) notional each',
+    expect(screen.getByText(/2 perps \+ 2 Boros positions ·/)).toHaveTextContent(
+      '2 perps + 2 Boros positions · $10k (5.26 ETH) notional each',
     );
   });
 
@@ -409,8 +409,8 @@ describe('OpportunitiesPanel — collateral bracket', () => {
 
     await waitFor(() => expect(toggles()).toHaveLength(2));
     // Both cards: the plain dollar figure, the unchanged tooltip, no token text.
-    expect(screen.getAllByTitle('$10,000 per leg')).toHaveLength(2);
-    for (const el of screen.getAllByTitle('$10,000 per leg')) {
+    expect(screen.getAllByTitle('$10,000 per position')).toHaveLength(2);
+    for (const el of screen.getAllByTitle('$10,000 per position')) {
       expect(el).toHaveTextContent(/^\$10k$/);
     }
   });
@@ -430,14 +430,14 @@ describe('OpportunitiesPanel — collapse', () => {
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'false');
     expect(container.querySelector('[data-waterfall]')).toBeNull();
     expect(screen.queryByText('Boros taker fee')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Four legs ·/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/2 perps \+ 2 Boros positions ·/)).not.toBeInTheDocument();
 
     await userEvent.click(toggles()[0]);
     expect(toggles()[0]).toHaveTextContent('Hide details');
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'true');
 
     // The body is the 4-leg explainer, the net-effect sentence and the charts.
-    expect(screen.getByText(/Four legs ·/)).toBeInTheDocument();
+    expect(screen.getByText(/2 perps \+ 2 Boros positions ·/)).toBeInTheDocument();
     // Two legs read "Short ETH" — the CrossEx perp and the Boros rate leg. The
     // suffix tag on each is what tells them apart, exactly as designed.
     expect(screen.getAllByText('Short ETH')).toHaveLength(2);
@@ -796,7 +796,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     );
     renderWithClient(<OpportunitiesPanel />);
     await waitFor(() => expect(toggles()).toHaveLength(1));
-    expect(screen.getByTitle(/^\$712,000 per leg/)).toBeInTheDocument();
+    expect(screen.getByTitle(/^\$712,000 per position/)).toBeInTheDocument();
   });
 
   it('keeps the last valid size while the input is unusable', async () => {

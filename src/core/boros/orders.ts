@@ -365,7 +365,7 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
         gasTopUpMarket: input.gasTopUpMarket,
       });
       submitted.forEach(({ index, req }, i) => {
-        byIndex.set(index, fills[i] ?? failed(req, new Error(`no result returned for leg ${index + 1}`)));
+        byIndex.set(index, fills[i] ?? failed(req, new Error(`no result returned for order ${index + 1}`)));
       });
     } catch (err) {
       for (const { index, req } of submitted) byIndex.set(index, failed(req, err));
