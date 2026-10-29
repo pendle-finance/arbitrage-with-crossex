@@ -2,6 +2,8 @@
  * src/core/numbers.ts (and `direction` of src/core/orders.ts) — keep behavior
  * identical; the fmt tests pin them to the core test expectations. */
 
+import { dateLocale } from '../i18n';
+
 /** Format a number to a fixed number of decimals with thousands separators. */
 export function num(value: number | string, dp = 2): string {
   const n = typeof value === 'number' ? value : Number(value);
@@ -243,7 +245,7 @@ export function fmtDateShort(
   unixSec: number,
   options: { year?: 'numeric'; timeZone?: 'UTC' } = {},
 ): string {
-  return new Date(unixSec * 1000).toLocaleDateString('en-GB', {
+  return new Date(unixSec * 1000).toLocaleDateString(dateLocale(), {
     day: 'numeric',
     month: 'short',
     year: options.year,
