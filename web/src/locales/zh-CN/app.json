@@ -39,8 +39,8 @@
     "refused": "Gate 拒绝了此密钥：{{reason}}。请确认密钥已完整粘贴。",
     "apiKey": "API 密钥",
     "keyPlaceholder": "Gate API 密钥",
-    "apiSecret": "API 私钥",
-    "secretPlaceholder": "Gate API 私钥",
+    "apiSecret": "Secret Key",
+    "secretPlaceholder": "Gate API Secret Key",
     "serviceMissing": "凭证服务暂不可用",
     "saved": "凭证已保存",
     "checking": "正在向 Gate 验证…",
@@ -51,7 +51,7 @@
   "finishSetup": "完成设置",
   "loadingLower": "加载中",
   "freshness": {
-    "stale": "数据已过期 {{age}} · 重试中",
+    "stale": "数据滞后 {{age}} · 重试中",
     "ago": "{{age}}前",
     "refetchAll": "刷新所有面板",
     "refetchStrategy": "刷新策略数据"
@@ -136,7 +136,7 @@
     "d": "{{n}} 天前"
   },
   "liquidation": {
-    "label": "清算 {{price}}（{{move}}）",
+    "label": "清算价 {{price}}（{{move}}）",
     "detail": "假设其他币种价格不变。",
     "detailWithLeg": "亏损腿：{{venue}} {{side}}。假设其他币种价格不变。",
     "falls": "{{base}} 跌至 {{price}}（{{move}}）。{{detail}}",
