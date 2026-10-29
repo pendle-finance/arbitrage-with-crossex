@@ -411,6 +411,7 @@ const RULES: readonly Rule[] = [
   // Deal report reasons (src/engine/decide.ts). The unhedged note is appended after the residual note, so it is peeled first.
   [/^(.+) \(unhedged (\S+) — below (\S+)'s lot, not submittable\)$/, 'dealUnhedgedSuffix', ['inner', 'size', 'contract']],
   [/^(.+) \(unacquired residual (\S+) — below the venue minimum or blocked\)$/, 'dealResidualSuffix', ['inner', 'size']],
+  [/^(.+) \(unacquired residual (\S+) — not filled before the stop\)$/, 'dealResidualStopped', ['inner', 'size']],
   [/^stopped$/, 'dealStopped'],
   [/^converted$/, 'dealConverted'],
   [/^target reached$/, 'dealTargetReached'],

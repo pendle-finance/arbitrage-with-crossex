@@ -381,6 +381,7 @@
   "alertLegacyBaskets": "legacy basket(s) were mid-flight at upgrade: {{ids}} — check Gate open orders/positions manually (the retired engine cannot reconcile them)",
   "dealUnhedgedSuffix": "{{inner}} (unhedged {{size}} — below {{contract}}'s lot, not submittable)",
   "dealResidualSuffix": "{{inner}} (unacquired residual {{size}} — below the venue minimum or blocked)",
+  "dealResidualStopped": "{{inner}} (unacquired residual {{size}} — not filled before the stop)",
   "dealStopped": "stopped",
   "dealConverted": "converted",
   "dealTargetReached": "target reached",
