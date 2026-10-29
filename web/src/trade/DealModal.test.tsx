@@ -52,7 +52,7 @@ describe('DealModal', () => {
         projection: { aFilled: '0.02', bFilled: '0.02' },
       }),
     );
-    expect(await screen.findByText(/maker resting/)).toBeInTheDocument();
+    expect(await screen.findByText(/Maker resting/)).toBeInTheDocument();
     expect(screen.getByText(/until convert/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Convert now' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Re-peg to touch' })).toBeEnabled();
@@ -119,7 +119,7 @@ describe('DealModal', () => {
         },
       }),
     );
-    await screen.findByText(/maker resting/);
+    await screen.findByText(/Maker resting/);
     // The maker (GATE, BUY → long column) carries the resting limit at the
     // LIVE order's price; the hedge column shows only its book.
     await waitFor(() => expect(document.querySelector('[data-price-graph]')).not.toBeNull());
@@ -132,7 +132,7 @@ describe('DealModal', () => {
     // to spell them out).
     expect(
       document.querySelector('[data-leg="long"] [data-mark="limit"]')?.textContent,
-    ).toContain('limit 2497 × 0.05');
+    ).toContain('Limit 2497 × 0.05');
     expect(document.querySelector('[data-leg="short"] [data-mark="limit"]')).toBeNull();
     expect(document.querySelector('[data-leg="short"] [data-mark="bid"]')?.getAttribute('data-price')).toBe('2499');
     // The hedge column carries its market-order simulation — the market hedge
@@ -322,8 +322,8 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0.02', unhedged: '0.03' },
       }),
     );
-    expect(await screen.findByText(/HALTED — operator needed — hedge failed 3x/)).toBeInTheDocument();
-    expect(screen.getByText(/unhedged/)).toBeInTheDocument();
+    expect(await screen.findByText(/Halted — operator needed — hedge failed 3x/)).toBeInTheDocument();
+    expect(screen.getByText(/Unhedged/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Resume/ })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Convert now' })).not.toBeInTheDocument();
   });
@@ -339,8 +339,8 @@ describe('DealModal', () => {
       }),
     );
     expect(await screen.findByText('Report')).toBeInTheDocument();
-    expect(screen.getByText(/unhedged dust/)).toBeInTheDocument();
-    expect(screen.getByText('stopped')).toBeInTheDocument();
+    expect(screen.getByText(/Unhedged dust/)).toBeInTheDocument();
+    expect(screen.getByText('Stopped')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
     // An ordinary stop must NOT wear the crossing-limit explanation.
     expect(screen.queryByText(/through the market/)).not.toBeInTheDocument();
@@ -389,18 +389,18 @@ describe('DealModal', () => {
     // Scoped to the report: the orders table below it prints kinds too.
     const rep = within(await screen.findByTestId('deal-report'));
     // Each leg reads: role · direction · venue · @ price.
-    expect(rep.getByText('maker')).toBeInTheDocument();
-    expect(rep.getByText('taker')).toBeInTheDocument();
-    expect(rep.getByText('limit — the filled resting leg')).toBeInTheDocument();
-    expect(rep.getByText('long')).toBeInTheDocument(); // the BUY (maker) leg
-    expect(rep.getByText('short')).toBeInTheDocument(); // the SELL (taker) leg
+    expect(rep.getByText('Maker')).toBeInTheDocument();
+    expect(rep.getByText('Taker')).toBeInTheDocument();
+    expect(rep.getByText('Limit — the filled resting leg')).toBeInTheDocument();
+    expect(rep.getByText('Long')).toBeInTheDocument(); // the BUY (maker) leg
+    expect(rep.getByText('Short')).toBeInTheDocument(); // the SELL (taker) leg
     expect(rep.getByText('Gate')).toBeInTheDocument(); // maker venue
     expect(rep.getByText('Binance')).toBeInTheDocument(); // taker venue
     expect(rep.getByText('2500')).toBeInTheDocument(); // long/maker avg fill
     expect(rep.getByText('2503.75')).toBeInTheDocument(); // short/taker avg fill
     expect(rep.getByText(/^\+3\.75$/)).toBeInTheDocument(); // signed price basis
     expect(rep.getByText(/^\(\+0\.150%\)$/)).toBeInTheDocument(); // +0.150%
-    expect(rep.getByText('favorable')).toBeInTheDocument();
+    expect(rep.getByText('Favorable')).toBeInTheDocument();
   });
 
   /** "2 market orders" sends both legs as takers and nothing rests. The report
@@ -421,10 +421,10 @@ describe('DealModal', () => {
       }),
     );
     const rep = within(await screen.findByTestId('deal-report'));
-    expect(rep.queryByText('maker')).not.toBeInTheDocument();
+    expect(rep.queryByText('Maker')).not.toBeInTheDocument();
     expect(rep.queryByText(/the filled resting leg/)).not.toBeInTheDocument();
-    expect(rep.getAllByText('taker')).toHaveLength(2);
-    expect(rep.getByText('market order')).toBeInTheDocument();
+    expect(rep.getAllByText('Taker')).toHaveLength(2);
+    expect(rep.getByText('Market order')).toBeInTheDocument();
     // The basis is a difference of averages — right in either mode.
     expect(rep.getByText(/^\+3\.75$/)).toBeInTheDocument();
   });
@@ -440,7 +440,7 @@ describe('DealModal', () => {
       }),
     );
     expect(await screen.findByText('Report')).toBeInTheDocument();
-    expect(screen.queryByText('maker')).not.toBeInTheDocument();
-    expect(screen.queryByText('slippage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Maker')).not.toBeInTheDocument();
+    expect(screen.queryByText('Slippage')).not.toBeInTheDocument();
   });
 });

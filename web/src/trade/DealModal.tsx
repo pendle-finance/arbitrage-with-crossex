@@ -39,6 +39,11 @@ function venueReasonText(raw: string | null): string | null {
   }
 }
 
+/** Server reasons are lowercase so they can follow a "—"; the report shows one alone. */
+function upperFirst(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 const ORDER_STATE_TONE: Record<DealOrder['state'], string> = {
   PENDING: 'text-amber-300',
   OPEN: 'text-cyan-300',
@@ -441,7 +446,7 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
                       />
                     </span>
                   )}
-                  <span className="text-ink-500">{localizeServerText(report.reason)}</span>
+                  <span className="text-ink-500">{upperFirst(localizeServerText(report.reason))}</span>
                 </div>
                 {slip && pair.b && (
                   <div className="mt-1.5 flex flex-col gap-0.5 border-t border-ink-800 pt-1.5">
