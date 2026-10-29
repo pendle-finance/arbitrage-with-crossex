@@ -66,7 +66,7 @@ describe('POST /api/preview', () => {
     const [buy, sell] = previews.map((p) => p.violations.map((v) => v.code));
     expect(buy).toContain('exceeds-max-position');
     expect(previews[0].violations.find((v) => v.code === 'exceeds-max-position')?.message).toMatch(
-      /^this open takes the GATE_FUTURE_ETH_USDT position to \$52,\d{3},\d{3}, above its \$49,000,000 limit \(2% under the CrossEx risk-limit cap\)$/,
+      /^This open takes GATE_FUTURE_ETH_USDT to \$52,\d{3},\d{3}, above its limit of \$49,000,000 \(2% under the CrossEx risk-limit cap\)$/,
     );
     // Selling shrinks the long: no cap to pass.
     expect(sell).not.toContain('exceeds-max-position');

@@ -184,9 +184,8 @@ export async function preflightMargin(
 
   if (required > available) {
     throw new CoreError(
-      `insufficient margin: this basket needs ≈ $${required.toFixed(2)} ` +
-        `(incl. taker-fee reserve + ${Math.round((PREFLIGHT_MARGIN_BUFFER - 1) * 100)}% buffer) ` +
-        `but only $${available.toFixed(2)} is available — nothing was sent`,
+      `Not enough free margin: this deal needs about $${required.toFixed(2)}, and $${available.toFixed(2)} is free. ` +
+        'Nothing was sent. Add margin or lower the size.',
       'insufficient-margin',
       { required, available, legs },
     );

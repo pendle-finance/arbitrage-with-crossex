@@ -86,10 +86,10 @@ function previewHandler(opts: {
 /** The venues are dropdowns keyed by full symbol; the option for a symbol only
  * exists once that base's rules have loaded, so wait for it. */
 async function pickVenues(longSymbol: string, shortSymbol: string) {
-  const longSel = (await screen.findByLabelText('LONG venue')) as HTMLSelectElement;
+  const longSel = (await screen.findByLabelText('Long venue')) as HTMLSelectElement;
   await waitFor(() => expect(longSel.querySelector(`option[value="${longSymbol}"]`)).not.toBeNull());
   await userEvent.selectOptions(longSel, longSymbol);
-  await userEvent.selectOptions(screen.getByLabelText('SHORT venue'), shortSymbol);
+  await userEvent.selectOptions(screen.getByLabelText('Short venue'), shortSymbol);
 }
 
 /** Fill an already-mounted ticket: ETH via quick-pick, GATE as the LONG venue,
@@ -111,7 +111,7 @@ async function setupTwoVenuePair() {
 
 /** Wait for the initial preview to land (fees become known). */
 async function waitForFirstPreview() {
-  await screen.findByText(/Shared qty/, undefined, { timeout: 4000 });
+  await screen.findByText(/Shared size/, undefined, { timeout: 4000 });
 }
 
 const makerPanel = () => screen.getByText('Maker leg').parentElement as HTMLElement;
@@ -348,9 +348,9 @@ describe('PairTicket execution modes', () => {
 
     const panel = makerPanel();
     expect(within(panel).getByText('OKX')).toBeInTheDocument();
-    expect(within(panel).getByText('auto')).toBeInTheDocument();
+    expect(within(panel).getByText('Auto')).toBeInTheDocument();
     // (4.8+5 − 4.8) bps × $1000 = $0.5
-    expect(screen.getByText(/saves ≈ 0\.5 USDT/)).toBeInTheDocument();
+    expect(screen.getByText(/Saves ≈ 0\.5 USDT/)).toBeInTheDocument();
     // The auto-choice is authoritative — there is no swap/override control.
     expect(within(panel).queryByRole('button', { name: 'swap' })).toBeNull();
     expect(within(panel).queryByText('manual')).toBeNull();
@@ -383,7 +383,7 @@ describe('PairTicket execution modes', () => {
     await waitForFirstPreview();
 
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
-    const timeoutGroup = screen.getByRole('radiogroup', { name: 'Maker timeout' });
+    const timeoutGroup = screen.getByRole('radiogroup', { name: 'Convert to taker after' });
     await userEvent.click(within(timeoutGroup).getByRole('radio', { name: '15m' }));
     expect(within(timeoutGroup).getByRole('radio', { name: '15m' })).toHaveAttribute('aria-checked', 'true');
 
@@ -408,11 +408,11 @@ describe('PairTicket execution modes', () => {
     const priceInput = await screen.findByLabelText(/Maker price/);
     // One gap behind the touch: bid 2499 − (2501 − 2499) = 2497.
     await waitFor(() => expect(priceInput).toHaveValue('2497'), { timeout: 4000 });
-    expect(screen.getByText(/tracking the book/)).toBeInTheDocument();
+    expect(screen.getByText(/Tracking the book/)).toBeInTheDocument();
 
     await userEvent.clear(priceInput);
     await userEvent.type(priceInput, '2450');
-    expect(screen.getByText(/pinned —/)).toBeInTheDocument();
+    expect(screen.getByText(/Pinned —/)).toBeInTheDocument();
 
     // Another preview cycle completes for the typed price (its response still
     // reports the touch at 2499/2501) — the pinned input must NOT be overwritten.
@@ -432,7 +432,7 @@ describe('PairTicket execution modes', () => {
     // Un-pinning resumes tracking: the input snaps back to the book offset.
     await userEvent.click(screen.getByRole('button', { name: 'track book' }));
     await waitFor(() => expect(priceInput).toHaveValue('2497'), { timeout: 4000 });
-    expect(screen.getByText(/tracking the book/)).toBeInTheDocument();
+    expect(screen.getByText(/Tracking the book/)).toBeInTheDocument();
   });
 });
 
@@ -633,7 +633,7 @@ describe('PairTicket prefill', () => {
     );
     expect(screen.getByRole('radio', { name: '2 market orders' })).toHaveAttribute('aria-checked', 'false');
     // Same invariant as the manual toggle: the maker price is not pinned.
-    expect(screen.getByText(/tracking the book/)).toBeInTheDocument();
+    expect(screen.getByText(/Tracking the book/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('1000'));
   });
 

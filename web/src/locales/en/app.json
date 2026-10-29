@@ -37,12 +37,13 @@
   },
   "copyCommand": "Copy command",
   "credentials": {
-    "refused": "Gate refused this key: {{reason}}. Check you pasted the whole key.",
+    "refused": "Gate refused this key. Check you pasted the whole key and secret, and the key's permissions.",
+    "refusedDetail": "Gate says: {{reason}}",
     "apiKey": "API key",
     "keyPlaceholder": "Gate API key",
     "apiSecret": "API secret",
     "secretPlaceholder": "Gate API secret",
-    "serviceMissing": "credentials service not available yet",
+    "serviceMissing": "Key check is not ready yet. Reload in a moment.",
     "saved": "Credentials saved",
     "checking": "Checking with Gate…",
     "save": "Save credentials"
@@ -50,18 +51,18 @@
   "toggleDetails": "toggle details",
   "closeAria": "close",
   "finishSetup": "Finish setup",
-  "loadingLower": "loading",
+  "loadingLower": "Loading",
   "freshness": {
-    "stale": "stale {{age}} · retrying",
+    "stale": "Stale {{age}} · retrying",
     "ago": "{{age}} ago",
-    "refetchAll": "Refetch all panels",
-    "refetchStrategy": "Refetch strategy data"
+    "refetchAll": "Refresh all",
+    "refetchStrategy": "Refresh"
   },
   "spreadName": "{{base}} Spread",
   "sections": "Sections",
   "venue": {
-    "quotes": "quotes {{quote}}",
-    "viaCrossex": "via CrossEx (connected Gate account)"
+    "quotes": "Quotes in {{quote}}",
+    "viaCrossex": "Via CrossEx (your Gate account)"
   },
   "side": {
     "buy": "BUY",
@@ -69,23 +70,23 @@
   },
   "hold": {
     "titleWith": "{{title}}\n\nPress and hold to confirm.",
-    "title": "press and hold to confirm"
+    "title": "Press and hold to confirm."
   },
   "waterfall": {
-    "nowTitle": "Current PnL {{pnl}} — funding + Boros settlements & rate MtM − fees − entry slippage",
-    "now": "now {{value}}"
+    "nowTitle": "Current PnL {{pnl}}: funding + Boros settlements + rate PnL − fees − entry slippage",
+    "now": "Now {{value}}"
   },
   "guideHint": {
     "title": "New here?",
-    "body": "The <b>📖 User guide</b> up there explains what the Opportunities assumptions mean and how to open a pair well. Worth five minutes before your first real order.",
+    "body": "The <b>📖 User guide</b> explains the Opportunities assumptions and how to open a pair. Read it before your first order.",
     "open": "Open the guide"
   },
   "tryAgain": "Try again",
   "guide": {
     "httpError": "GitHub returned HTTP {{status}}",
     "loading": "Loading the user guide",
-    "loadFailed": "Couldn’t load the guide — {{error}}",
-    "openOnGithub": "It lives on GitHub; open it there instead:",
+    "loadFailed": "Could not load the guide: {{error}}",
+    "openOnGithub": "Open it on GitHub:",
     "renderedFrom": "Rendered from <a>{{doc}}</a> on GitHub."
   },
   "unknownLower": "unknown",
@@ -103,7 +104,7 @@
     "starting": "Starting the installer…",
     "failedNote": "Your keys and trade history are untouched. Try again, or run the command yourself.",
     "slowNote": "This is taking longer than usual. The installer’s own output is below.",
-    "runningNote": "Installation running in the background. This page reloads itself when it is done.",
+    "runningNote": "Installing. This page reloads when done.",
     "showLog": "Show log",
     "nothingYet": "nothing yet",
     "installingTitle": "The update is installing — click to watch it",
@@ -115,11 +116,11 @@
     "youreOn": "You’re on <v>v{{version}}</v>.",
     "howTo": "How to update",
     "auto": "Update for me",
-    "manual": "Run it in my terminal",
+    "manual": "Run the command myself",
     "autoNote": "Installs v{{version}} on this machine and restarts the app. It takes about a minute. Your keys and trade history are not touched.",
     "startingShort": "Starting…",
     "updateTo": "Update to v{{version}}",
-    "paste": "Paste this into a terminal.",
+    "paste": "Paste this into Terminal (macOS) or PowerShell (Windows).",
     "os": "Operating system",
     "codeChanges": "Read the code changes",
     "changelog": "Full changelog on GitHub"
@@ -160,7 +161,7 @@
     "max": "Maximum is {{value}}"
   },
   "walletError": {
-    "noWallet": "No browser wallet found. Install MetaMask (or another injected wallet) and reload.",
+    "noWallet": "No browser wallet found. Install Rabby or MetaMask, then reload.",
     "rejected": "Wallet connection was rejected.",
     "connectFailed": "Could not connect the wallet.",
     "noAccount": "The wallet returned no account.",
@@ -173,7 +174,7 @@
   },
   "setup": {
     "pageTitle": "Set up the terminal",
-    "notSetUp": "not set up",
+    "notSetUp": "Not set up",
     "collapse": "Collapse",
     "expand": "Expand",
     "setUp": "Set up",
@@ -191,20 +192,20 @@
     "about": "About",
     "version": "Version {{version}}",
     "available": " — v{{version}} available",
-    "commitUnknown": "commit unknown",
+    "commitUnknown": "Commit unknown",
     "installed": " · installed {{date}}",
-    "sourceCheckout": "source checkout"
+    "sourceCheckout": "Source checkout"
   },
   "permissions": {
     "crossExchange": "Cross-Exchange",
     "readWrite": "Read and Write",
-    "tradeTransfer": "trade and transfer",
+    "tradeTransfer": "Trade and transfer",
     "spot": "Spot Trading",
     "readOnly": "Read Only",
-    "spotBalances": "see spot balances",
+    "spotBalances": "See spot balances",
     "others": "All others",
     "off": "Off",
-    "withdrawal": "including Withdrawal"
+    "withdrawal": "Including withdrawal"
   },
   "gateSteps": {
     "fundGate": "Fund Gate",
@@ -238,10 +239,10 @@
     "loggedOut": "Logged out. The on-chain approval stays until you revoke it in Boros."
   },
   "telegram": {
-    "walletName": "{{coin}} {{wallet}} wallet",
+    "walletName": "CrossEx {{wallet}} wallet",
     "floorBorrow": "{{name}} · borrows more than {{amount}}, the first {{amount}} is free",
     "floorEquity": "{{name}} · equity under {{amount}}",
-    "interestLead": "a wallet starts",
+    "interestLead": "A wallet starts",
     "borrowing": "borrowing",
     "floorsLoading": "Floors load with the terminal.",
     "allOn": "All on",
@@ -259,13 +260,13 @@
     "disconnectConfirm": "Disconnect",
     "disconnecting": "Disconnecting…",
     "botNotReached": "Bot not reached. Retry, or stop each wallet's alerts on the <a>Boros notifications page</a>.",
-    "liquidation": "Close to liquidation",
+    "liquidation": "Near liquidation",
     "interest": "Started paying interest",
     "maturity": "Close to maturity",
-    "rollover": "Roll-over opportunity",
-    "liquidationCaption": "a 20% price move would liquidate a leg",
-    "maturityCaption": "daily in the last 7 days, with maturities to roll to",
-    "rolloverCaption": "a later maturity pays a better APR",
+    "rollover": "Rollover opportunity",
+    "liquidationCaption": "A 20% price move would liquidate a leg",
+    "maturityCaption": "Daily in the last 7 days, with maturities to roll to",
+    "rolloverCaption": "A later maturity pays a better APR",
     "caveat": "Alerts use data up to 5 min old. Trades outside the terminal count after the next sync.",
     "alertsFor": "Alerts for {{wallet}} ·",
     "synced": "synced {{age}}",
@@ -282,12 +283,12 @@
     "linkedElsewhere": "Alerts are linked to <a>{{other}}</a>, not <b>{{viewed}}</b>. Log in as this wallet to set up its alerts."
   },
   "api": {
-    "network": "network error calling {{path}}: {{error}}",
-    "backendHint": "Is the backend running on localhost:6688?",
+    "network": "Network error on {{path}}: {{error}}",
+    "backendHint": "Can't reach the terminal. Check it is running, then reload.",
     "http": "{{path}} returned HTTP {{status}}",
     "httpUnexpected": "{{path}} returned HTTP {{status}} with an unexpected body",
     "saveFailed": "Could not save. Try again.",
-    "importTimeout": "The import did not answer in 10 s."
+    "importTimeout": "Asset settings import did not answer in 10 s."
   },
   "age": {
     "s": "{{n}}s",

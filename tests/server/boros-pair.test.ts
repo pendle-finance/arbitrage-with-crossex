@@ -408,7 +408,7 @@ describe('POST /api/boros/pair/simulate', () => {
     makeApp();
     const res = await post('/api/boros/pair/simulate', pairBody({ legs: [pairLeg(HL, 'short', 0.0025, 100_000), pairLeg(999, 'long', 0.0025, 100_000)] }));
     expect(res.statusCode).toBe(400);
-    expect(res.json().error.message).toMatch(/unknown Boros market 999/);
+    expect(res.json().error.message).toMatch(/Unknown Boros market 999/);
   });
 
   const failedReads: Array<[string, () => Promise<number | null>]> = [
@@ -1193,7 +1193,7 @@ describe('POST /api/boros/pair/market/:marketId/cancel-and-close', () => {
         size: 5,
       });
       expect(res.statusCode).toBeGreaterThanOrEqual(400);
-      expect(res.json().error.message).toMatch(/worth \$5\.00.*at or under \$10/);
+      expect(res.json().error.message).toMatch(/worth \$5\.00.*\$10 or less/);
       // The whole point: the irreversible step never ran.
       expect(calls).toEqual([]);
     });

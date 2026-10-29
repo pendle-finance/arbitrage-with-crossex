@@ -130,7 +130,7 @@ export function EstimateCard({
         </span>
         <span className="flex items-center gap-2 text-[11px] text-ink-400">
           <span className="num">
-            {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('pairTicket.preview.estimating') : (
+            {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('trade.execute.pricing') : (
               <>
                 <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
               </>
@@ -328,12 +328,12 @@ function VenueSelect({
       </div>
       <div className="relative">
         <select
-          aria-label={t(long ? 'pairTicket.bits.longVenueAria' : 'pairTicket.bits.shortVenueAria')}
+          aria-label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
           className="select"
           value={value ?? ''}
           onChange={(e) => onPick(e.target.value)}
         >
-          <option value="">{loading ? t('pairTicket.bits.loadingVenues') : t('pairTicket.bits.selectVenue')}</option>
+          <option value="">{loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}</option>
           {(venues ?? []).map((r) => (
             <option key={r.symbol} value={r.symbol} disabled={r.exchange === otherVenue}>
               {prettyVenue(r.exchange)}
@@ -493,7 +493,7 @@ export function MakerHedgeControls({
           </span>
         </FieldLabel>
         <SegmentedToggle
-          ariaLabel={t('pairTicket.bits.makerTimeout')}
+          ariaLabel={t('pairTicket.bits.convertAfter')}
           fill
           value={timeoutSec}
           onChange={onTimeout}
@@ -661,8 +661,8 @@ export function PairEstimate({
               </tr>
             </thead>
             <tbody>
-              <LegRow label={t('pairTicket.bits.long')} tone="green" p={legLong} />
-              <LegRow label={t('pairTicket.bits.short')} tone="red" p={legShort} />
+              <LegRow label={t('common.long')} tone="green" p={legLong} />
+              <LegRow label={t('common.short')} tone="red" p={legShort} />
             </tbody>
           </table>
 

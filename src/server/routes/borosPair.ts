@@ -83,9 +83,9 @@ const CLOSE_RUNNING = 'A close on this market is already running.';
 const ORDER_RUNNING = 'An order on this market is already running.';
 const MAY_HAVE_FILLED = ' — Boros gave no answer, so the orders may have filled. Check your positions on Boros before sending again.';
 const CLOSE_ISOLATED = 'This position is on isolated margin. Close it on Boros.';
-const READS_LIMITED_NOTHING_SENT = 'Boros is limiting reads. Nothing was sent. Try again in a minute.';
+const READS_LIMITED_NOTHING_SENT = 'Boros is limiting requests. Nothing was sent. Try again in a minute.';
 const READS_LIMITED_AFTER_CANCEL =
-  'Boros is limiting reads. Your open orders on this market were cancelled. The close was not sent. Try again in a minute.';
+  'Boros is limiting requests. Your open orders on this market were cancelled. The close was not sent. Try again in a minute.';
 
 /**
  * Rate tolerance a §6A force-close carries, as an APR fraction. Wider than a
@@ -524,7 +524,7 @@ export function createPairPricer(deps: AppDeps) {
 
   const marketOr404 = (markets: BorosMarket[], marketId: number): BorosMarket => {
     const m = markets.find((x) => x.marketId === marketId);
-    if (!m) throw new CoreError(`unknown Boros market ${marketId}`, 'symbol-invalid');
+    if (!m) throw new CoreError(`Unknown Boros market ${marketId}`, 'symbol-invalid');
     return m;
   };
 
@@ -710,7 +710,7 @@ export function borosPairRoutes(deps: AppDeps) {
   const assertNotUpdating = (): void => {
     if (isUpdating()) {
       throw new CoreError(
-        'the app is updating — it will restart shortly, then you can send this again',
+        'The app is updating. It restarts shortly, then you can send this again.',
         'validation',
       );
     }
@@ -719,7 +719,7 @@ export function borosPairRoutes(deps: AppDeps) {
   const assertAgentNotExpired = async (): Promise<void> => {
     const refuseExpired = (): never => {
       throw new CoreError(
-        'the Boros agent approval has expired — approve a new agent key before trading.',
+        'Your Boros login has expired. Log in again before trading.',
         'auth',
       );
     };
@@ -740,7 +740,7 @@ export function borosPairRoutes(deps: AppDeps) {
     if (approval.state === 'expired') refuseExpired();
     if (approval.state === 'not-approved') {
       throw new CoreError(
-        'the Boros agent key is not approved on-chain (the approval was rejected or revoked) — log in again before trading.',
+        'Your Boros login was rejected or revoked. Log in again before trading.',
         'auth',
       );
     }
@@ -958,7 +958,7 @@ export function borosPairRoutes(deps: AppDeps) {
           });
         }
         if (simulation.legs.length === 2 && simulation.receiveLeg === null) {
-          throw new CoreError('the two legs do not offset — no spread to trade', 'validation');
+          throw new CoreError('The two legs do not offset — no spread to trade', 'validation');
         }
 
         /**
@@ -1002,7 +1002,7 @@ export function borosPairRoutes(deps: AppDeps) {
 
         const legOrders = simulation.legs.map((leg, i) => orderFor(leg, clientOrderIds[i]));
         if (legOrders.every((o) => o === null)) {
-          throw new CoreError('no leg has anything to trade', 'validation');
+          throw new CoreError('No leg has anything to trade', 'validation');
         }
 
         // A second request that priced concurrently with this one lands here
@@ -1298,7 +1298,7 @@ export function borosPairRoutes(deps: AppDeps) {
       const address = configuredRoot();
       if (!address) {
         throw new CoreError(
-          'no Boros root address is configured on this install.',
+          'No Boros root address is configured on this install.',
           'not-configured',
         );
       }
@@ -1341,8 +1341,8 @@ export function borosPairRoutes(deps: AppDeps) {
           const flattens = preOpen > 0 && sizeOverride >= preOpen;
           if (!flattens && value !== null && value <= MIN_ORDER_VALUE_USD) {
             throw new CoreError(
-              `this close is worth $${value.toFixed(2)}, and Boros takes nothing at or under ` +
-                `$${MIN_ORDER_VALUE_USD} — close more of the position, or all of it.`,
+              `This close is worth $${value.toFixed(2)}. Boros takes no order of ` +
+                `$${MIN_ORDER_VALUE_USD} or less. Close more of the position, or all of it.`,
               'size-too-small',
             );
           }
@@ -1454,7 +1454,7 @@ export function borosPairRoutes(deps: AppDeps) {
             // "any", not "the": cancelOrders sends cancelAll and reports no
             // count, so the route cannot claim anything was actually resting.
             `${msg} — any resting orders on this market have already been cancelled, and that ` +
-              `is not undone. Check your open orders before retrying.`,
+              `is not undone. Check your open orders before you send again.`,
             err instanceof CoreError ? err.category : 'venue-rejected',
           );
         }

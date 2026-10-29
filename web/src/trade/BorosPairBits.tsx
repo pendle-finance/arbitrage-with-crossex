@@ -955,7 +955,7 @@ export function acknowledgementText(
   // fixed 2dp printed a 0.0123 BTC position as "0.01 BTC" in the one line
   // that binds the user to what happens to it.
   const held = size(Math.abs(sizing.currentSize));
-  const side = t(sizing.currentSize > 0 ? 'pairTicket.bits.long' : 'pairTicket.bits.short');
+  const side = t(sizing.currentSize > 0 ? 'common.long' : 'common.short');
   if (sizing.flips) {
     const opened = size(Math.abs(sizing.resultingSize));
     return t('pairTicket.borosBits.ackFlip', { market: leg.marketName, side, held, unit: collateral, opened });

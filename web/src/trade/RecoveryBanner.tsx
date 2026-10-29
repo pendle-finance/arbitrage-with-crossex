@@ -87,7 +87,7 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
               </button>
             )}
         <button type="button" className="btn-ghost-xs" onClick={() => ack.mutate(alert.id)}>
-          {t('trade.recovery.ack')}
+          {t('common.dismiss')}
         </button>
       </div>
     </div>

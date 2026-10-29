@@ -1,5 +1,4 @@
 import { Check } from 'lucide-react';
-import type { TFunction } from 'i18next';
 import { useId, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
@@ -9,9 +8,9 @@ import { Spinner } from './Spinner';
 /** Shared key/secret form (first-run setup guide + Settings drawer).
  * A 404/405/network failure on PUT (a backend without the credentials service)
  * renders as a friendly inline message rather than a raw error. */
-function refusedText(err: unknown, t: TFunction): string | null {
+function refusedReason(err: unknown): string | null {
   if (!(err instanceof ApiError) || err.category !== 'auth') return null;
-  return t('app.credentials.refused', { reason: err.label ?? err.message.replace(/\.$/, '') });
+  return err.label ?? err.message.replace(/\.$/, '');
 }
 
 export function CredentialsForm({
@@ -50,7 +49,7 @@ export function CredentialsForm({
   const serviceMissing =
     err instanceof ApiError &&
     (err.httpStatus === 404 || err.httpStatus === 405 || err.category === 'network');
-  const refused = refusedText(err, t);
+  const refused = refusedReason(err);
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-3">
@@ -90,7 +89,8 @@ export function CredentialsForm({
           </p>
         ) : refused ? (
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-            {refused}
+            {t('app.credentials.refused')}
+            <span className="block text-rose-400/80">{t('app.credentials.refusedDetail', { reason: refused })}</span>
           </p>
         ) : (
           <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">

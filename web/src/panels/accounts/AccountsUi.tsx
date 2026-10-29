@@ -3,7 +3,7 @@
  * accounts in trouble?" for CrossEx AND Boros, plus its two echoes — the
  * header status and the Positions warning.
  */
-import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Skeleton } from '../../components/Skeleton';
@@ -215,7 +215,9 @@ export function AccountsAlert({ view }: { view?: AccountsView | null }) {
           {t('accounts.ui.worstAlert', { venue: worst.venue, name: worst.name, pct: fmtPct(worst.mmUsed ?? 0, 0) })}
         </span>
       )}
-      <span className="ml-auto text-ink-300">{t('accounts.ui.viewAccounts')}</span>
+      <span className="ml-auto inline-flex items-center gap-1 text-ink-300">
+        {t('accounts.ui.viewAccounts')} <ChevronRight size={12} aria-hidden />
+      </span>
     </button>
   );
 }

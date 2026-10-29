@@ -141,7 +141,7 @@ describe('AssetCard — roll over', () => {
     // and a rollable pair opens EXPANDED, so the action is already on
     // screen (his call 2026-09-18). No click on the row: that would fold it.
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
-    expect(within(panel).getByText('ready to roll')).toBeInTheDocument();
+    expect(within(panel).getByText('Ready to roll')).toBeInTheDocument();
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
 
     // The popup names the pair; with nothing to roll into there is no target,
@@ -152,7 +152,7 @@ describe('AssetCard — roll over', () => {
     expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
     // No maturity lists a market at BOTH venues, so there is nothing to roll
     // into -- the table says so rather than inventing a target.
-    expect(await within(dialog).findByText(/No later maturity lists a market at BOTH venues/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/No later maturity on both venues yet/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
@@ -195,7 +195,7 @@ describe('AssetCard — roll over', () => {
     expect(note).toHaveTextContent(/two perp entry fees plus slippage/);
     // The three "when" cases, including the DCA reason for rolling early.
     expect(note).toHaveTextContent(`In the last ${EXPIRY_WARN_DAYS} days`);
-    expect(note).toHaveTextContent(/DCA into the longer maturity/);
+    expect(note).toHaveTextContent(/enter the longer maturity in parts/);
     expect(note).toHaveTextContent(/When the next maturity pays more/);
     expect(note).toHaveTextContent(/Right when it matures/);
     // "matures", never "settles" (his call 2026-09-20).
@@ -308,8 +308,8 @@ describe('AssetCard — roll over', () => {
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     // A generous wait: the context and the probe are two round trips, and the
     // full suite runs this file under load.
-    expect(await within(panel).findByText('roll opportunity', undefined, { timeout: 10_000 })).toBeInTheDocument();
-    expect(within(panel).queryByText('ready to roll')).not.toBeInTheDocument();
+    expect(await within(panel).findByText('Roll opportunity', undefined, { timeout: 10_000 })).toBeInTheDocument();
+    expect(within(panel).queryByText('Ready to roll')).not.toBeInTheDocument();
     const banner = await screen.findByRole('button', { name: /Roll over now/ }, { timeout: 10_000 });
     expect(banner.closest('[data-tone]')).toHaveAttribute('data-tone', 'loud');
     // The new rate is the bold figure; the current one sits dimmed beside it.
@@ -391,7 +391,7 @@ describe('AssetCard — roll over', () => {
     renderCard(tiny);
 
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
-    expect(await within(panel).findByText('ready to roll')).toBeInTheDocument();
+    expect(await within(panel).findByText('Ready to roll')).toBeInTheDocument();
     await waitFor(() => expect(contextServed).toBe(true));
     await new Promise((r) => setTimeout(r, 300));
     expect(sims).toBe(0);
@@ -405,7 +405,7 @@ describe('AssetCard — roll over', () => {
     const row = within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros legs missing/ });
     expect(row).toHaveAttribute('aria-expanded', 'true');
     // Both gaps are named, each with its own action, plus the one for both.
-    expect(within(panel).getAllByText('missing 100 ETH')).toHaveLength(2);
+    expect(within(panel).getAllByText('Missing 100 ETH')).toHaveLength(2);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
     expect(within(panel).getByRole('button', { name: 'Open both Boros legs' })).toBeInTheDocument();
     // … and the other way out: stop farming it.
@@ -421,7 +421,7 @@ describe('AssetCard — roll over', () => {
     renderCard(g);
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     expect(within(panel).getByRole('button', { name: /Gate LONG \/ Hyperliquid SHORT Boros leg missing/ })).toBeInTheDocument();
-    expect(within(panel).getAllByText('missing 100 ETH')).toHaveLength(1);
+    expect(within(panel).getAllByText('Missing 100 ETH')).toHaveLength(1);
     expect(within(panel).getAllByRole('button', { name: 'Open leg' })).toHaveLength(1);
     expect(within(panel).queryByRole('button', { name: 'Open both Boros legs' })).not.toBeInTheDocument();
     expect(within(panel).getByRole('button', { name: 'Close perps' })).toBeEnabled();
@@ -441,14 +441,14 @@ describe('AssetCard — roll over', () => {
     renderCard({ ...base, perpOpen: [], borosOpen: base.borosOpen.filter((l) => l.venue === 'GATE') });
     panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     expect(within(panel).getByText('Ungrouped legs')).toBeInTheDocument();
-    expect(within(panel).getByText('1 YU')).toBeInTheDocument();
+    expect(within(panel).getByText('1 Boros leg')).toBeInTheDocument();
     expect(within(panel).queryByText(/Boros legs? missing/)).not.toBeInTheDocument();
   });
 
   it('a pair maturing in 40 days: no banner, no flag, a folded card — and a plain Roll over button inside it', async () => {
     renderCard(book(40));
     expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
-    expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ready to roll')).not.toBeInTheDocument();
     // Nothing reminds outside the window: the card stays folded.
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     expect(within(panel).queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
@@ -462,7 +462,7 @@ describe('AssetCard — roll over', () => {
     expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'Roll over — Gate / Hyperliquid' })).toBeInTheDocument();
     // Opening it by hand raises no banner and no flag.
     expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
-    expect(screen.queryByText('ready to roll')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ready to roll')).not.toBeInTheDocument();
   });
 
   it("F37 half roll closes the card's 6 ETH, not the leg's 10", async () => {

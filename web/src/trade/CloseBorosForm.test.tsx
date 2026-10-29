@@ -265,9 +265,9 @@ describe('CloseBorosForm — saying that it landed', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     // The tolerance box sits behind the "Max: X%" toggle.
     fireEvent.click(await screen.findByRole('button', { name: /%$/ }));
-    const slip = await screen.findByLabelText(/Close slippage tolerance/);
+    const slip = await screen.findByLabelText(/Close max slippage/);
     fireEvent.change(slip, { target: { value: '20' } });
-    expect(await screen.findByText(/slippage must be in \(0, 10\]/)).toBeInTheDocument();
+    expect(await screen.findByText(/Must be above 0 and at most 10%/)).toBeInTheDocument();
     await waitFor(() => expect(armed()).toBeDisabled());
     fireEvent.change(slip, { target: { value: '5' } });
     await waitFor(() => expect(armed()).toBeEnabled());
@@ -578,13 +578,13 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: size }]} />);
 
-    expect(await screen.findByRole('button', { name: `max ${text}` })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: `Max ${text}` })).toBeInTheDocument();
     const input = screen.getByLabelText(/Close size, applied to all legs/) as HTMLInputElement;
     expect(input.value).not.toContain(',');
     fireEvent.change(input, { target: { value: '100' } });
-    expect(await screen.findByText(/partial close/)).toBeInTheDocument();
+    expect(await screen.findByText(/Partial close/)).toBeInTheDocument();
     fireEvent.change(input, { target: { value: '99999999' } });
-    expect(await screen.findByText(`size must be above 0 and at most ${text}`)).toBeInTheDocument();
+    expect(await screen.findByText(`Must be above 0 and at most ${text}`)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
   });
 });
@@ -888,9 +888,9 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
       [60, single],
       [59, spread],
     ]);
-    const chip = await screen.findByText(new RegExp(`filled ${filledText} ETH — ${leftText} ETH of what you asked for is still open`));
+    const chip = await screen.findByText(new RegExp(`Filled ${filledText} ETH — ${leftText} ETH of what you asked for is still open`));
     expect(chip).toBeInTheDocument();
-    expect(screen.getAllByText('closed')).toHaveLength(2);
+    expect(screen.getAllByText('Closed')).toHaveLength(2);
     expect(screen.getByLabelText(/Close size, applied to all legs/)).toHaveValue(leftText);
 
     await holdAll();

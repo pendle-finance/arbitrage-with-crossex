@@ -4,12 +4,12 @@
     "venueWallet": "CrossEx {{name}} 钱包",
     "leg": {
       "buyUsdc": "在 CrossEx 买入 USDC",
-      "toSpot": "CrossEx 划转至 Gate 现货",
+      "toSpot": "CrossEx Gate 钱包划转至 Gate 现货",
       "toHyperliquid": "Gate 现货划转至 CrossEx Hyperliquid 钱包",
       "toLighter": "Gate 现货划转至 CrossEx Lighter 钱包",
       "fromHyperliquid": "CrossEx Hyperliquid 钱包划转至 Gate 现货",
       "fromLighter": "CrossEx Lighter 钱包划转至 Gate 现货",
-      "toGate": "Gate 现货划转至 CrossEx",
+      "toGate": "Gate 现货划转至 CrossEx Gate 钱包",
       "sellUsdc": "卖出 USDC 换成 USDT"
     },
     "noLegs": "暂无持仓，无需再平衡。",
@@ -21,7 +21,7 @@
     "card": {
       "even": "再平衡",
       "repay": "清偿债务",
-      "custom": "自定义划转"
+      "custom": "自定义金额"
     },
     "presetOff": {
       "even": "暂无持仓",
@@ -66,7 +66,7 @@
       "convertAcross": "将 {{move}} USDC 从 {{from}}兑换至 {{to}}",
       "and": "{{a}}和 {{b}}",
       "loopInto": "在 CrossEx 买入 USDC，经 Gate 现货转入 {{wallets}}。",
-      "loopOut": "将 USDC 从 {{wallets}}经 Gate 现货转入 CrossEx，再卖出换成 USDT。",
+      "loopOut": "将 USDC 从 {{wallets}}经 Gate 现货转出，再卖出换成 USDT，存入 CrossEx USDT 钱包。",
       "loopAcross": "将 USDC 从 {{from}}经 Gate 现货转入 {{to}}。"
     },
     "hover": {
@@ -93,12 +93,12 @@
         "spotLoop": "现货循环",
         "convert": "兑换",
         "path": {
-          "usdtToHyperliquid": "USDT 至 Hyperliquid",
-          "hyperliquidToUsdt": "Hyperliquid 至 USDT",
-          "usdtToLighter": "USDT 至 Lighter",
-          "lighterToUsdt": "Lighter 至 USDT",
-          "hyperliquidToLighter": "Hyperliquid 至 Lighter",
-          "lighterToHyperliquid": "Lighter 至 Hyperliquid"
+          "usdtToHyperliquid": "USDT · CrossEx → USDC · Hyperliquid",
+          "hyperliquidToUsdt": "USDC · Hyperliquid → USDT · CrossEx",
+          "usdtToLighter": "USDT · CrossEx → USDC · Lighter",
+          "lighterToUsdt": "USDC · Lighter → USDT · CrossEx",
+          "hyperliquidToLighter": "USDC · Hyperliquid → USDC · Lighter",
+          "lighterToHyperliquid": "USDC · Lighter → USDC · Hyperliquid"
         },
         "time": {
           "min2": "约 2 分钟",
@@ -113,7 +113,7 @@
         "twoSwaps": "0.4%，兑换两次",
         "recommended": "推荐：15 分钟内完成的最便宜路线。"
       },
-      "presets": "按仓位平衡：按仓位规模分配权益。清偿债务：从权益最多的钱包划转刚好足够的金额，使每个负余额钱包归零。自定义金额：按您输入的金额划转。",
+      "presets": "按仓位平衡：按仓位规模分配权益。清偿债务：从权益最多的钱包偿还所有借款。自定义金额：按您输入的金额划转。",
       "custom": "从一个 CrossEx 钱包向另一个划转此金额。费用从到账金额中扣除。",
       "walletUsdt": "CrossEx 钱包。Gate、Binance、OKX 和 Bybit 腿的保证金。",
       "walletUsdc": "CrossEx 钱包。Hyperliquid 腿的保证金。",
@@ -121,7 +121,7 @@
       "walletGate": "CrossEx 钱包。现货买入剩余的 USDC，仍计为保证金。再平衡会将其清空。",
       "now": "权益 = 现金 + 未实现盈亏。",
       "interestNow": {
-        "lead": "CrossEx 钱包为负时，Gate 每小时收取利息。",
+        "lead": "CrossEx 钱包有借款时，Gate 每小时收取利息。",
         "head": {
           "wallet": "钱包",
           "interest": "利息",
@@ -131,8 +131,8 @@
         "hyperliquid": "10,000 USDC 以内免息，超出部分计息",
         "lighter": "全额计息，无免息额度"
       },
-      "borrowing": "钱包为负即为借款。顶部的保证金卡片显示其占用的初始保证金。",
-      "route": "资金的划转方式。费用包含 Gate 手续费和现货价差。现货循环会一直运行到划转完成，不论需要多少轮。",
+      "borrowing": "钱包为负即为借款。上方账户卡片中的“初始保证金占用”显示其占用的保证金。",
+      "route": "资金的划转方式。费用包含 Gate 手续费和现货价差。",
       "mix": "现货循环最多 {{rounds}}，其余部分兑换。",
       "recommended": "15 分钟内完成的最便宜路线。",
       "noDirectTransfer": "Gate 不支持 CrossEx 钱包之间直接划转。",
@@ -147,7 +147,7 @@
       "onTheWay": "正经 Gate 现货在途，不计为保证金。",
       "gateSpot": "不计为保证金。",
       "gateSpotAssets": "不计为保证金，无权益或盈亏。",
-      "abandon": "停止运行。资金保留在当前位置。",
+      "abandon": "彻底结束再平衡。资金保留在当前位置。",
       "fee": "本次划转的 Gate 手续费。",
       "time": "常规耗时。转入或转出 CrossEx Hyperliquid 和 Lighter 钱包可能更久。",
       "minimum": "转入或转出 CrossEx Hyperliquid 和 Lighter 钱包的 Gate 最低金额，含手续费。",
@@ -155,15 +155,15 @@
       "upToInto": "您的 Gate 现货余额。"
     },
     "verdict": {
-      "noBorrow": "无借款，无需划转或再平衡。",
+      "noBorrow": "无借款，无需划转。",
       "balanced": "各钱包已与仓位占比一致，无需划转。",
       "noCashToMove": "权益不平衡，但没有可划转的现金。",
-      "noInterest": "暂未产生利息，无需划转或再平衡。",
+      "noInterest": "暂未产生利息，无需划转。",
       "rateUnknown": "无法读取借款利率。划转前请先确认费用。",
       "notWorthIt": "暂不划算：费用超过可节省的 30 天利息。",
       "worthIt": "建议再平衡。",
       "repayWorthIt": "建议清偿债务。",
-      "repayNoLegsSub": "有债务时无法提取现金。",
+      "repayNoLegsSub": "钱包有借款时无法提取现金。",
       "paysBack": "费用相当于可节省的 {{days}} 利息。"
     },
     "fact": {
@@ -213,7 +213,7 @@
     "whereCaption": "资金所在位置",
     "onTheWay": "在途",
     "waitsLine": "新交易任务和划转将等待其完成。",
-    "started": "{{age}} 前开始。可关闭此窗口，运行会继续。",
+    "started": "{{age}} 前开始。可关闭此窗口，再平衡会继续。",
     "finishedLead": "已完成。以下为各钱包当前余额。",
     "abandonTransit": "放弃后，{{qty}} {{coin}} 将留在途中，到账前不计为保证金。",
     "abandonSpot": "放弃后，这 {{qty}} {{coin}} 将留在 Gate 现货。",
@@ -239,7 +239,7 @@
     "lessThanDay": "不到 1 天",
     "days_other": "{{n}} 天",
     "spotHas": "<term></term>中有 <b>{{amount}}</b>，转入后才能使用。",
-    "lastRunLeft": "上次运行在 Gate 现货中留下 <b>{{amount}}</b>。",
+    "lastRunLeft": "上次再平衡在 Gate 现货中留下 <b>{{amount}}</b>。",
     "transfer": "划转"
   },
   "rebalanceBits": {
@@ -255,7 +255,7 @@
   },
   "rebalanceSection": {
     "loadFailed": "无法加载再平衡。{{message}}",
-    "readAgain": "重新读取",
+    "readAgain": "刷新",
     "stoppedOpen": "已停止 · 打开",
     "hours_other": "{{n}} 小时",
     "minutes_other": "{{n}} 分钟",
@@ -274,7 +274,7 @@
     "minimum": "最低金额",
     "youGet": "到账",
     "apiManagement": "API 管理",
-    "addSpotRead": "添加现货读取权限以查看现货余额。",
+    "addSpotRead": "将现货交易设为只读，即可查看 Gate 现货余额。",
     "how": "如何添加",
     "lock": {
       "rebalance": "划转将等待再平衡结束。",
@@ -324,7 +324,7 @@
     "loadFailed": "无法加载账户",
     "title": "CrossEx 资产",
     "nonZeroOnly": "· 仅显示非零",
-    "emptyTitle": "暂无非零余额",
+    "emptyTitle": "暂无余额",
     "emptyHint": "向 CrossEx 存入抵押品即可开始。"
   },
   "closePair": {
@@ -332,7 +332,7 @@
     "wholePosition": "整个仓位",
     "ofHeld": "交易所持有 {{held}}",
     "sizeLabel": "平仓数量 · 两条腿",
-    "maxTitle": "两条腿平掉该组合的全部份额",
+    "maxTitle": "平掉整个组合",
     "max": "最大",
     "sizeAria": "平仓数量，同时用于两条腿",
     "sizeInvalid": "数量须大于 0 且不超过 {{max}} {{base}}",
@@ -346,17 +346,15 @@
       "pnl": "盈亏",
       "estFee": "预估手续费"
     },
-    "buy": "买入",
-    "sell": "卖出",
-    "marketTitle": "以市价 IOC 发送，成交价不超出交易所的价格限制区间。",
-    "marketIoc": "市价 IOC",
-    "slipInvalid": "滑点须在 (0, 10] 之间",
+    "marketTitle": "以市价单发送，成交价不超出交易所的价格限制区间。",
+    "marketIoc": "市价",
+    "slipInvalid": "滑点须大于 0% 且不超过 10%。",
     "slipAria": "滑点 %",
-    "slipTitle": "第一条腿限价的区间：中间价 ± 此值。对冲腿以市价成交。",
-    "slipHint": "第一条腿限价可接受的距中间价最大偏离。规模大或盘口薄时可能需要更宽的区间。",
+    "slipTitle": "第一条腿的限价：中间价 ± 此值。",
+    "slipHint": "规模大或盘口薄时可调高。",
     "closeBoth": "两腿平仓",
-    "pairNote": "第一条腿为只减仓 IOC 限价单，价格为中间价 ± 滑点；对冲腿以市价发送，处于交易所自身的价格区间内。两者都不会增加仓位，也不会挂在盘口。",
-    "mechanics": "<b>只减仓</b> — 第一条腿以中间价 ± 滑点限价；对冲腿以市价成交。两者都不会增加仓位，也不会挂在盘口。"
+    "pairNote": "第一条腿：中间价 ± 滑点的限价单。第二条腿：市价单，处于交易所限价范围内。",
+    "mechanics": "<b>只减仓</b>。两条腿都不会增加仓位，也不会挂在盘口。"
   },
   "tracked": {
     "renewLogin": "为 {{address}} 续期登录",
@@ -381,6 +379,6 @@
     "worstStrip": "{{venue}} {{name}} 维持保证金占用 {{pct}}",
     "healthy": "健康",
     "worstAlert": "· {{venue}} {{name}} 维持保证金占用 {{pct}}",
-    "viewAccounts": "查看账户 ›"
+    "viewAccounts": "查看账户"
   }
 }

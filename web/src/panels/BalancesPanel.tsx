@@ -91,7 +91,11 @@ const assetColumns = (): Column<AssetRow>[] => [
   },
   {
     key: 'upnl',
-    header: t('accounts.balances.upnl'),
+    header: (
+      <span className="tip-label" title={t('accounts.rebalance.bar.upnl')}>
+        {t('accounts.balances.upnl')}
+      </span>
+    ),
     align: 'right',
     render: (row) =>
       row.kind === 'crossex' ? <SignedNumber value={row.asset.upnl} format={(n) => num(n, 2)} /> : null,

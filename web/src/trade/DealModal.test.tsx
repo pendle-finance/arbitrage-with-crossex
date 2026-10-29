@@ -322,7 +322,7 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0.02', unhedged: '0.03' },
       }),
     );
-    expect(await screen.findByText(/Halted — operator needed — hedge failed 3x/)).toBeInTheDocument();
+    expect(await screen.findByText(/Halted — needs you — hedge failed 3x/)).toBeInTheDocument();
     expect(screen.getByText(/Unhedged/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Resume/ })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Convert now' })).not.toBeInTheDocument();

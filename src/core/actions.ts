@@ -247,13 +247,13 @@ export async function resolveActions(
 
     // ---- symbol/rule validation (all kinds) ----
     if (!rule) {
-      violations.push({ code: 'symbol-not-found', message: `${symbol} not found on CrossEx` });
+      violations.push({ code: 'symbol-not-found', message: `${symbol} is not on CrossEx` });
     } else {
       if (rule.state !== 'live') {
-        violations.push({ code: 'symbol-not-live', message: `${symbol} is not tradable (state=${rule.state})` });
+        violations.push({ code: 'symbol-not-live', message: `${symbol} can't be traded right now` });
       }
       if (rule.businessType !== 'FUTURE') {
-        violations.push({ code: 'not-a-perp', message: `${symbol} is ${rule.businessType}, not a FUTURE perp` });
+        violations.push({ code: 'not-a-perp', message: `${symbol} is not a perp` });
       }
     }
 
@@ -268,7 +268,7 @@ export async function resolveActions(
     // A maker-hedge maker leg is post-only BY DEFINITION: the whole mode exists to
     // earn maker fees, and a crossing limit would silently pay taker. Force POC.
     if (input.kind === 'open-limit' && input.pairRole === 'maker' && tif !== 'POC') {
-      if (input.tif !== undefined) warnings.push(`maker leg tif forced to POC (was ${input.tif})`);
+      if (input.tif !== undefined) warnings.push(`Maker leg is post-only (was ${input.tif})`);
       tif = 'POC';
     }
     // Execute mode always carries a resolved qty, so the reference price is only
@@ -280,7 +280,7 @@ export async function resolveActions(
     if (input.kind === 'open-limit') {
       const p = Number(input.price);
       if (!Number.isFinite(p) || p <= 0) {
-        violations.push({ code: 'price-invalid', message: `limit price "${input.price}" is not a positive number` });
+        violations.push({ code: 'price-invalid', message: `Limit price "${input.price}" is not a positive number` });
       } else if (rule) {
         // A POC order rests: snap AWAY from crossing so the snap itself can't
         // turn it into a would-cross reject. Every other tif may legitimately be
@@ -290,7 +290,7 @@ export async function resolveActions(
             ? formatRestPrice(p, input.side, symbol, rule.tickSize)
             : formatLimitPrice(p, symbol, rule.tickSize);
         if (price !== input.price) {
-          warnings.push(`price adjusted to venue tick/precision rules: ${input.price} → ${price}`);
+          warnings.push(`Price rounded to the venue's price step: ${input.price} → ${price}`);
         }
       } else {
         price = input.price;
@@ -318,7 +318,7 @@ export async function resolveActions(
         // (preview validates it with a live reference; Gate enforces it at the venue).
         const minNotional = sizingRef ? Number(rule.minNotional ?? 0) : 0;
         if (!sizingRef && Number(rule.minNotional ?? 0) > 0) {
-          warnings.push('min-notional not re-checked (no reference price at execute time)');
+          warnings.push('Minimum order value not re-checked (no reference price at send time)');
         }
         const r = resolveQty({
           notional: input.qty ? undefined : input.notional,
@@ -351,19 +351,19 @@ export async function resolveActions(
       const max = limit?.leverage ?? 0;
       leverage = { requested: input.leverage, max };
       if (max > 0 && input.leverage > max) {
-        violations.push({ code: 'leverage-exceeds-max', message: `leverage ${input.leverage}x exceeds max ${max}x for ${symbol}` });
+        violations.push({ code: 'leverage-exceeds-max', message: `Leverage ${input.leverage}x is above the max ${max}x for ${symbol}` });
       }
       const size = positionSizeUsd(positions, symbol, input.side, qty, estNotional);
       if (limit && size && !input.reduceOnly && breaksLimit(size.before, size.after, limit)) {
         violations.push({
           code: 'exceeds-max-position',
-          message: `this open takes the ${symbol} position to ${usd(size.after)}, above its ${usd(limit.maxUsd)} limit (${LIMIT_NOTE})`,
+          message: `This open takes ${symbol} to ${usd(size.after)}, above its limit of ${usd(limit.maxUsd)} (${LIMIT_NOTE})`,
         });
       }
     }
 
     if (opts.mode === 'preview' && !ref && !price) {
-      warnings.push('no reference price available — estimates unavailable');
+      warnings.push('No reference price, so no estimates');
     }
 
     resolved.push({
@@ -411,7 +411,7 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
     if (!sizeA || !sizeB) continue;
     if (Boolean(inA.qty) !== Boolean(inB.qty)) {
       for (const l of legs) {
-        l.violations.push({ code: 'pair-qty-mismatch', message: 'pair legs are sized differently — one in coins, one in dollars; size both the same way' });
+        l.violations.push({ code: 'pair-qty-mismatch', message: 'Pair legs are sized differently: one in coins, one in dollars. Size both the same way.' });
       }
       continue;
     }
@@ -441,7 +441,7 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
       });
       for (const l of legs) {
         if (Number(l.qty) !== shared.qty) {
-          l.warnings.push(`size set to ${shared.qtyStr} (was ${l.qty || '—'}) so both legs trade the same amount`);
+          l.warnings.push(`Size set to ${shared.qtyStr} (was ${l.qty || '—'}) so both legs trade the same amount`);
         }
         l.qty = shared.qtyStr;
         if (ref) {
@@ -478,7 +478,7 @@ async function resolveClose(
 ): Promise<ResolvedAction> {
   const slippage = input.slippagePct ?? DEFAULT_SLIPPAGE;
   if (!Number.isFinite(slippage) || slippage <= 0 || slippage > 10) {
-    violations.push({ code: 'slippage-invalid', message: `slippage ${input.slippagePct}% must be in (0, 10]` });
+    violations.push({ code: 'slippage-invalid', message: `Max slippage ${input.slippagePct}% must be in (0, 10]` });
   }
 
   const pos = positions.find((p) => (p.symbol ?? '').toUpperCase() === symbol && Number(p.positionQty ?? 0) !== 0);
@@ -489,7 +489,7 @@ async function resolveClose(
   let closing: ResolvedAction['closing'];
 
   if (!pos) {
-    violations.push({ code: 'no-position', message: `no open position on ${symbol}` });
+    violations.push({ code: 'no-position', message: `No open position on ${symbol}` });
   } else {
     const posQty = Math.abs(Number(pos.positionQty ?? 0));
     side = direction(pos.positionSide, pos.positionQty ?? 0) === 'LONG' ? 'SELL' : 'BUY';
@@ -497,12 +497,12 @@ async function resolveClose(
     if (input.qty) {
       const requested = Number(input.qty);
       if (!Number.isFinite(requested) || requested <= 0) {
-        violations.push({ code: 'qty-invalid', message: `close qty "${input.qty}" is not a positive number` });
+        violations.push({ code: 'qty-invalid', message: `Close size "${input.qty}" is not a positive number` });
       } else if (requested > posQty + 1e-12) {
-        violations.push({ code: 'qty-exceeds-position', message: `close qty ${input.qty} exceeds position ${posQty}` });
+        violations.push({ code: 'qty-exceeds-position', message: `Close size ${input.qty} is above the position ${posQty}` });
       } else {
         qty = roundToStep(requested, lot, 'down');
-        if (!isMultipleOf(requested, lot)) warnings.push(`close qty floored to lot ${lot}: ${input.qty} → ${qty}`);
+        if (!isMultipleOf(requested, lot)) warnings.push(`Close size rounded down to the lot ${lot}: ${input.qty} → ${qty}`);
       }
     } else {
       qty = roundToStep(posQty, lot, 'down');
@@ -510,12 +510,12 @@ async function resolveClose(
     // A dust position (or a partial-close request) smaller than one lot floors to
     // '0.0000' — a truthy string that would otherwise pass a zero-qty order to Gate.
     if (qty && Number(qty) <= 0) {
-      violations.push({ code: 'below-min-size', message: `position ${posQty} is smaller than one lot (${lot}) — nothing to close` });
+      violations.push({ code: 'below-min-size', message: `Position ${posQty} is smaller than one lot (${lot}) — nothing to close` });
       qty = '';
     }
     const mark = Number(pos.markPrice ?? 0) || Number(pos.entryPrice ?? 0);
     if (!(mark > 0)) {
-      violations.push({ code: 'ref-price-unavailable', message: `no mark price for ${symbol} — cannot price the close` });
+      violations.push({ code: 'ref-price-unavailable', message: `No mark price for ${symbol} — cannot price the close` });
     } else if (qty && violations.every((v) => v.code !== 'slippage-invalid')) {
       price = marketableClosePrice(mark, side, slippage, symbol, rule?.tickSize ?? DEFAULT_STEP);
       estNotional = Number(qty) * mark;

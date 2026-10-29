@@ -36,12 +36,13 @@
   },
   "copyCommand": "复制命令",
   "credentials": {
-    "refused": "Gate 拒绝了此密钥：{{reason}}。请确认密钥已完整粘贴。",
+    "refused": "Gate 拒绝了此密钥。请确认已完整粘贴 API 密钥和 Secret Key，并检查密钥权限。",
+    "refusedDetail": "Gate 返回：{{reason}}",
     "apiKey": "API 密钥",
     "keyPlaceholder": "Gate API 密钥",
     "apiSecret": "Secret Key",
     "secretPlaceholder": "Gate API Secret Key",
-    "serviceMissing": "凭证服务暂不可用",
+    "serviceMissing": "密钥校验暂不可用。请稍后刷新页面。",
     "saved": "凭证已保存",
     "checking": "正在向 Gate 验证…",
     "save": "保存凭证"
@@ -53,14 +54,14 @@
   "freshness": {
     "stale": "数据滞后 {{age}} · 重试中",
     "ago": "{{age}}前",
-    "refetchAll": "刷新所有面板",
-    "refetchStrategy": "刷新策略数据"
+    "refetchAll": "全部刷新",
+    "refetchStrategy": "刷新"
   },
   "spreadName": "{{base}} Spread",
   "sections": "分区",
   "venue": {
     "quotes": "以 {{quote}} 计价",
-    "viaCrossex": "经由 CrossEx（已连接的 Gate 账户）"
+    "viaCrossex": "经由 CrossEx（您的 Gate 账户）"
   },
   "side": {
     "buy": "买入",
@@ -71,20 +72,20 @@
     "title": "长按以确认"
   },
   "waterfall": {
-    "nowTitle": "当前盈亏 {{pnl}} — 资金费 + Boros 结算与利率按市值计价 − 手续费 − 开仓滑点",
+    "nowTitle": "当前盈亏 {{pnl}}：资金费 + Boros 结算 + 利率盈亏 − 手续费 − 开仓滑点",
     "now": "当前 {{value}}"
   },
   "guideHint": {
     "title": "第一次使用？",
-    "body": "上方的 <b>📖 用户指南</b> 解释了机会页各项假设的含义，以及如何开好一个组合。第一次真实下单前，值得花五分钟读一读。",
+    "body": "<b>📖 用户指南</b> 解释了机会页的各项假设，以及如何开一个组合。第一次下单前请先阅读。",
     "open": "打开指南"
   },
   "tryAgain": "重试",
   "guide": {
     "httpError": "GitHub 返回 HTTP {{status}}",
     "loading": "正在加载用户指南",
-    "loadFailed": "无法加载指南 — {{error}}",
-    "openOnGithub": "指南托管在 GitHub 上，可直接在那里打开：",
+    "loadFailed": "无法加载指南：{{error}}",
+    "openOnGithub": "在 GitHub 上打开：",
     "renderedFrom": "内容来自 GitHub 上的 <a>{{doc}}</a>。"
   },
   "unknownLower": "未知",
@@ -114,11 +115,11 @@
     "youreOn": "当前版本：<v>v{{version}}</v>。",
     "howTo": "更新方式",
     "auto": "自动更新",
-    "manual": "在终端中手动运行",
+    "manual": "自己运行命令",
     "autoNote": "在本机安装 v{{version}} 并重启应用，约需一分钟。您的密钥和交易记录不受影响。",
     "startingShort": "启动中…",
     "updateTo": "更新到 v{{version}}",
-    "paste": "将以下命令粘贴到终端中运行。",
+    "paste": "将以下命令粘贴到 Terminal（macOS）或 PowerShell（Windows）中运行。",
     "os": "操作系统",
     "codeChanges": "查看代码改动",
     "changelog": "GitHub 上的完整更新日志"
@@ -158,7 +159,7 @@
     "max": "最大值为 {{value}}"
   },
   "walletError": {
-    "noWallet": "未检测到浏览器钱包。请安装 MetaMask（或其他注入式钱包）后刷新页面。",
+    "noWallet": "未检测到浏览器钱包。请安装 Rabby 或 MetaMask，然后刷新页面。",
     "rejected": "钱包连接被拒绝。",
     "connectFailed": "无法连接钱包。",
     "noAccount": "钱包未返回任何账户。",
@@ -236,7 +237,7 @@
     "loggedOut": "已退出登录。链上授权会一直保留，直到您在 Boros 中撤销。"
   },
   "telegram": {
-    "walletName": "{{coin}} {{wallet}} 钱包",
+    "walletName": "CrossEx {{wallet}} 钱包",
     "floorBorrow": "{{name}} · 借款超过 {{amount}}（前 {{amount}} 免息）",
     "floorEquity": "{{name}} · 权益低于 {{amount}}",
     "interestLead": "钱包开始",
@@ -280,12 +281,12 @@
     "linkedElsewhere": "提醒绑定的是 <a>{{other}}</a>，而不是 <b>{{viewed}}</b>。请以此钱包登录来设置它的提醒。"
   },
   "api": {
-    "network": "调用 {{path}} 时网络出错：{{error}}",
-    "backendHint": "后端是否在 localhost:6688 上运行？",
+    "network": "请求 {{path}} 时网络出错：{{error}}",
+    "backendHint": "无法连接终端。请确认终端正在运行，然后刷新页面。",
     "http": "{{path}} 返回 HTTP {{status}}",
     "httpUnexpected": "{{path}} 返回 HTTP {{status}}，响应内容异常",
     "saveFailed": "保存失败，请重试。",
-    "importTimeout": "导入在 10 秒内未响应。"
+    "importTimeout": "资产设置导入在 10 秒内未响应。"
   },
   "age": {
     "s": "{{n}}秒",

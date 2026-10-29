@@ -94,7 +94,7 @@ describe('the card, by the grouping DoD', () => {
       {
         venue: 'HYPERLIQUID',
         side: 'SHORT',
-        held: 'Hyperliquid SHORT holds 10 ETH at 30 Oct.',
+        held: 'Hyperliquid Short holds 10 ETH at 30 Oct.',
         room: 0,
         roomBase: 0,
         legs: [{ size: expect.any(Number), sizeBase: expect.closeTo(10, 9), maturity: DATES.O }],
@@ -124,7 +124,7 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(['G L 2', 'H S 2', ...B15_CLOSED_FOUR]));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/no rate leg/);
+      const found = cardsTitled(/No Boros leg/);
       expect(found).toHaveLength(1);
       return found;
     });
@@ -170,7 +170,7 @@ describe('the card, by the grouping DoD', () => {
     const first = renderCard(groupOf(book));
     await showPairs(user);
     const [card] = await waitFor(() => {
-      const found = cardsTitled(/no rate leg/);
+      const found = cardsTitled(/No Boros leg/);
       expect(found).toHaveLength(1);
       return found;
     });
@@ -184,7 +184,7 @@ describe('the card, by the grouping DoD', () => {
     renderCard(groupOf(book));
     await showPairs(user);
     const [again] = await waitFor(() => {
-      const found = cardsTitled(/no rate leg/);
+      const found = cardsTitled(/No Boros leg/);
       expect(found).toHaveLength(1);
       return found;
     });
@@ -287,7 +287,7 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(await blockedReasons(user, deadOpens(card))).toContain('Close the Wrong side Hyperliquid LONG at 30 Oct to open here.');
+    expect(await blockedReasons(user, deadOpens(card))).toContain('Close the Hyperliquid Long tagged "Wrong side" (30 Oct) to open here.');
     expect(textOf(card)).not.toContain('to open here');
   });
 
@@ -309,8 +309,8 @@ describe('the card, by the grouping DoD', () => {
   });
 
   describe('Funding Bundles never opens into a Wrong side leg', () => {
-    const FLIP_O = 'Close the Wrong side Hyperliquid LONG at 30 Oct to open here.';
-    const borosOpens = () => screen.queryAllByRole('button', { name: /^(open (both )?Boros legs?|Open more)$/ });
+    const FLIP_O = 'Close the Hyperliquid Long tagged "Wrong side" (30 Oct) to open here.';
+    const borosOpens = () => screen.queryAllByRole('button', { name: /^(Open (both )?Boros legs?|Open more)$/ });
     const isDead = (b: HTMLElement) => b.getAttribute('aria-disabled') === 'true';
     async function showBundles(user: ReturnType<typeof userEvent.setup>) {
       await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
@@ -339,9 +339,9 @@ describe('the card, by the grouping DoD', () => {
       const user = userEvent.setup();
       renderCard(groupOf(['G L 1', 'H S 1', 'G LONG 1 O', 'H SHORT 0.5 O', 'H LONG 0.5 N']));
       await showBundles(user);
-      const open = await screen.findByRole('button', { name: 'open Boros leg' });
+      const open = await screen.findByRole('button', { name: 'Open Boros leg' });
       expect(open).toHaveAttribute('aria-disabled', 'true');
-      expect(await blockedReason(user, open)).toBe('Close the Wrong side Hyperliquid LONG at 27 Nov to open here.');
+      expect(await blockedReason(user, open)).toBe('Close the Hyperliquid Long tagged "Wrong side" (27 Nov) to open here.');
       await user.click(open);
       expect(prefill.current).toBeNull();
     });
@@ -378,7 +378,7 @@ describe('the card, by the grouping DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    const line = 'Close the Wrong side Spread HL-GATE LONG at 27 Nov to open here.';
+    const line = 'Close the Spread HL-GATE Long tagged "Wrong side" (27 Nov) to open here.';
     expect(await blockedReasons(user, deadOpens(card))).toEqual([line, line]);
     expect(textOf(card)).not.toContain('to open here');
   });
@@ -393,8 +393,8 @@ describe('the card, by the grouping DoD', () => {
       return found;
     });
     const titles = await blockedReasons(user, deadOpens(card));
-    expect(titles).toContain('Close the Wrong side Hyperliquid LONG at 27 Nov to open here.');
-    expect(titles.join(' ')).not.toContain('Close the Wrong side Hyperliquid LONG at 30 Oct');
+    expect(titles).toContain('Close the Hyperliquid Long tagged "Wrong side" (27 Nov) to open here.');
+    expect(titles.join(' ')).not.toContain('Close the Hyperliquid Long tagged "Wrong side" (30 Oct)');
   });
 
   it('the wrong-side hover names the venue the spread points against', async () => {
@@ -431,7 +431,7 @@ describe('the card, by the grouping DoD', () => {
     expect(textOf(card)).not.toContain('is in Ungrouped');
     const ungrouped = cardList().find((el) => /Ungrouped legs/.test(textOf(el))) as HTMLElement;
     await expand(user, ungrouped);
-    expect(textOf(ungrouped)).toContain('no Boros hedge');
+    expect(textOf(ungrouped)).toContain('No Boros hedge');
   });
 
   it('close-first hover only when it blocks', async () => {

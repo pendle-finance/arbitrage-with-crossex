@@ -476,7 +476,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     await confirmPair();
 
     // Partial: the wizard names the unmatched size and the ticket stays live.
-    expect(await screen.findByText(/400 USDT is unmatched/, undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(/differ by 400 USDT/, undefined, { timeout: 4000 })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
 
     // Complete the deficient leg through the ticket's own report.
@@ -500,7 +500,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     server.use(...tradableHandlers([PARTIAL_600, COMPLETION_FAIL]), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...WIZ, notionalUsd: 1000 });
     await confirmPair();
-    await screen.findByText(/400 USDT is unmatched/, undefined, { timeout: 4000 });
+    await screen.findByText(/differ by 400 USDT/, undefined, { timeout: 4000 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Complete now at market' }));
     const complete = await screen.findByRole('button', { name: /^Confirm · complete leg/ }, { timeout: 4000 });
@@ -515,7 +515,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     ).toBeInTheDocument();
     // …and the 400 stays flagged; nothing claims the rate is locked. (The old
     // merge zeroed the residual here and rendered the receipt.)
-    expect(screen.getByText(/400 USDT is unmatched/)).toBeInTheDocument();
+    expect(screen.getByText(/differ by 400 USDT/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
   }, 20_000);
 
@@ -528,7 +528,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     server.use(...tradableHandlers([UNEVEN_PARTIAL, RETRY_300]), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...WIZ, notionalUsd: 1000 });
     await confirmPair();
-    await screen.findByText(/200 USDT is unmatched/, undefined, { timeout: 4000 });
+    await screen.findByText(/differ by 200 USDT/, undefined, { timeout: 4000 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     const retry = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ }, { timeout: 4000 });
@@ -538,7 +538,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // The retry's own clean report shows inside the ticket (300 hedged)…
     await screen.findByText(/300 USDT hedged/, undefined, { timeout: 4000 });
     // …but the BOOK is 1000/800: still lopsided, still no "Rate locked ✓".
-    expect(screen.getByText(/200 USDT is unmatched/)).toBeInTheDocument();
+    expect(screen.getByText(/differ by 200 USDT/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Continue anyway/ }));
@@ -562,7 +562,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     fireEvent.pointerDown(confirm);
 
     expect(
-      await screen.findByText(/Only one side of the rate pair is on/, undefined, { timeout: 4000 }),
+      await screen.findByText(/Only one rate leg is open/, undefined, { timeout: 4000 }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Continue anyway/ })).not.toBeInTheDocument();
@@ -570,7 +570,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // And leaving THIS is guarded: one leg on is exposure, whatever made it.
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(
-      await screen.findByText(/until the perp legs open you hold directional exposure/),
+      await screen.findByText(/perps not open: you carry price risk/),
     ).toBeInTheDocument();
   }, 15_000);
 
@@ -585,12 +585,12 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
-    await screen.findByText(/Only one side of the rate pair is on/, undefined, { timeout: 4000 });
+    await screen.findByText(/Only one rate leg is open/, undefined, { timeout: 4000 });
 
     // Leaving with one side on must NOT be silent: the rate is locked and
     // unhedged, which is directional exposure the user has to be told about.
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(await screen.findByText(/not hedged/, undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(/perps not open: you carry price risk/, undefined, { timeout: 4000 })).toBeInTheDocument();
   }, 20_000);
 });
 
@@ -624,7 +624,7 @@ describe('StrategyWizard — leaving and closing are deliberate', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(
-      await screen.findByText(/until the perp legs open you hold directional exposure/),
+      await screen.findByText(/perps not open: you carry price risk/),
     ).toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'Escape' });
     // Still open, still warning.

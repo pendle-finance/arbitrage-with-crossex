@@ -39,13 +39,15 @@ function RoleChip({ role }: { role: Role }) {
   return <Chip sm tone={ROLE_TONE[role]}>{t(ROLE_LABEL[role])}</Chip>;
 }
 
-/** "LMT IOC" / "LMT POC" / "MKT" from the joined order (join=1), when present. */
+/** "LMT IOC" / "Post-only" / "MKT" from the joined order (join=1), when present. */
 function orderTypeLabel(t: Trade): string | null {
   if (!t.orderType) return null;
   const type = t.orderType.toUpperCase();
   if (type === 'MARKET') return tr('opportunities.trades.typeMarket');
+  const tif = (t.orderTif ?? '').toUpperCase();
+  if (tif === 'POC') return tr('opportunities.orders.postOnly');
   const base = type === 'LIMIT' ? tr('opportunities.trades.typeLimit') : type;
-  return t.orderTif ? `${base} ${t.orderTif.toUpperCase()}` : base;
+  return tif ? `${base} ${tif}` : base;
 }
 
 interface OrderGroup {

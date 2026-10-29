@@ -497,7 +497,7 @@ describe('runJob rounds at the fresh fit', () => {
 
     const job = h.jobs.read()!;
     expect(job.status).toBe('halted');
-    expect(job.haltReason).toBe('Free margin is too low for the next round.');
+    expect(job.haltReason).toBe('Not enough free margin for the next round.');
     expect(job.stepIndex).toBe(0);
     expect(h.onHalt).toHaveBeenCalledTimes(1);
   });
@@ -4458,7 +4458,7 @@ describe('runJob sends no step a second time on its own after an unknown result'
 
       let job = h.jobs.read()!;
       expect(job).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited, stepIndex: 0 });
-      expect(job.haltReason).toBe('Gate is rate-limiting this account. Nothing was sent. Press Resume in a minute.');
+      expect(job.haltReason).toBe('Gate is limiting requests from this account. Nothing was sent. Press Resume in a minute.');
       expect(job.steps[0]).toMatchObject({ quoteId: 'q1', venueId: null, qty: null });
       expect(job.steps[0]).not.toHaveProperty('sentAt');
       expect(h.disk[0]).toMatchObject({ quoteId: 'q1', qty: h.firstTo });

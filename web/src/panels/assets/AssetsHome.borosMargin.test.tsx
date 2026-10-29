@@ -93,14 +93,14 @@ describe('AssetsHome and account health', () => {
     renderWithClient(<AssetsHome />);
     await screen.findByText('ETH');
     expect(screen.queryByText('Boros account')).toBeNull();
-    expect(screen.queryByRole('button', { name: /View accounts/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /View Accounts/ })).toBeNull();
   });
 
   it('one line points at Accounts when an account nears liquidation, naming it', async () => {
     // 4,700 of maintenance on 5,000 of balance: 94% used, past the 91% line.
     serve(view([bucket({ maintMarginUsd: 4700, equityUsd: 5000 })]));
     renderWithClient(<AssetsHome />);
-    const line = await screen.findByRole('button', { name: /View accounts/ });
+    const line = await screen.findByRole('button', { name: /View Accounts/ });
     expect(line).toHaveTextContent('1 account near liquidation');
     expect(line).toHaveTextContent('Boros USDT cross at 94% MM used');
   });

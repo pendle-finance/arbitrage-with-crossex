@@ -553,7 +553,7 @@ describe('readRollFills', () => {
   it('is unknown, not rolled or partial, when the venue reports a fill FOK cannot produce', () => {
     const r = readRollFills([fill(155), fill(101), fill(156, { filledSize: SIZE * 0.6, shortfallSize: SIZE * 0.4 }), fill(102)], KEYS);
     expect(r.status).toBe('unknown');
-    expect(r.reason!.message).toMatch(/FOK legs cannot produce/);
+    expect(r.reason!.message).toMatch(/a fill that should not happen/);
     expect(readRollFills([fill(155), fill(101), fill(156)], KEYS).status).toBe('unknown');
   });
 });

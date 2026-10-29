@@ -404,7 +404,7 @@ describe('GET /api/opportunities', () => {
     const res = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
-    expect(data.warnings.join(' ')).toMatch(/Perp fees assume the VIP 0 Gate CrossEx schedule/);
+    expect(data.warnings.join(' ')).toMatch(/Perp fees assume VIP 0\. Add your Gate API key/);
     // Never claims the listings or leverage are missing — they aren't.
     expect(data.warnings.join(' ')).not.toMatch(/symbol list/);
 
@@ -435,7 +435,7 @@ describe('GET /api/opportunities', () => {
     const res = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
-    expect(data.warnings.join(' ')).toMatch(/Couldn't load the CrossEx symbol list right now/);
+    expect(data.warnings.join(' ')).toMatch(/Couldn't load the CrossEx market list/);
     // The Boros spread still prices; the perp side degrades to null.
     const group = data.groups[0];
     expect(group.pairs[0].grossSpreadApr).toBeGreaterThan(0);

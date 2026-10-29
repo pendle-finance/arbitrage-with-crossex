@@ -29,7 +29,7 @@ import type { BorosLegFill, BorosLegSizing, BorosPairResult, BorosPairSimulation
 import { useBorosPairContext } from '../api/queries';
 import { Modal } from '../components/Modal';
 import { isUsdCollateral } from '../lib/boros';
-import { sig } from '../lib/fmt';
+import { prettyVenue, sig } from '../lib/fmt';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosPairTicket } from './BorosPairTicket';
 import { PairResultReport, legSubmitted, marketName } from './BorosPairBits';
@@ -327,8 +327,8 @@ function WizardBody({
    * empty gap between separators.
    */
   const venuePair = [
-    w.borosShortVenue ? t('trade.wizard.venueShort', { venue: w.borosShortVenue.toLowerCase() }) : null,
-    w.borosLongVenue ? t('trade.wizard.venueLong', { venue: w.borosLongVenue.toLowerCase() }) : null,
+    w.borosShortVenue ? t('trade.wizard.venueShort', { venue: prettyVenue(w.borosShortVenue) }) : null,
+    w.borosLongVenue ? t('trade.wizard.venueLong', { venue: prettyVenue(w.borosLongVenue) }) : null,
   ]
     .filter((p): p is string => p !== null)
     .join(' / ');
@@ -480,7 +480,7 @@ function WizardBody({
           <div className="flex flex-col gap-3">
             <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.05] px-3 py-2.5 text-[12.5px] leading-relaxed text-ink-100">
               <span className="mr-2 inline-flex items-center gap-1 font-semibold text-emerald-400"><Check size={14} aria-hidden />{t('trade.wizard.submitted')}</span>
-              {book.spread.marketId !== 0 ? t('trade.wizard.doneThree') : t('trade.wizard.doneFour')}
+              {t('trade.wizard.done')}
             </div>
             <button
               type="button"

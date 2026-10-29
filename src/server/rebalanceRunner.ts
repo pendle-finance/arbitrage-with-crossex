@@ -837,7 +837,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           if (phase === 'send') step.quoteId = null;
           halt(
             spec.kind === 'transfer' && amount !== null && isSpotShortfall(spec.from, c)
-              ? spotShortfallFailText(c.message, spec.coin, amount)
+              ? spotShortfallFailText(refusalReason(err), spec.coin, amount)
               : haltReasonFor(err),
           );
         } else {
@@ -895,7 +895,7 @@ export async function runTransfer(deps: TransferRunnerDeps): Promise<void> {
       }
       if (isRefusal(classified)) {
         if (isSpotShortfall(transfer.from, classified)) {
-          end('failed', null, spotShortfallFailText(classified.message, transfer.coin, transfer.amount));
+          end('failed', null, spotShortfallFailText(refusalReason(err), transfer.coin, transfer.amount));
           return;
         }
         const reason = haltReasonFor(err);

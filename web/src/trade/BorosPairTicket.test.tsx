@@ -278,7 +278,7 @@ describe('BorosPairTicket', () => {
 
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
     // The header chip says View only; the ticket does not repeat it.
-    expect(screen.queryByText('View only')).toBeNull();
+    expect(screen.queryByText('View-only')).toBeNull();
     expect(screen.queryByText('Logged in')).toBeNull();
     expect(screen.queryByText('0x1111…1111')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
@@ -386,7 +386,7 @@ describe('BorosPairTicket', () => {
 
     const labels = [...(screen.getByLabelText('Leg B') as HTMLSelectElement).options].map((o) => o.textContent);
     // Collateral named, no date — and a market at another maturity is still a market.
-    expect(labels).toEqual(['select a market…', 'Binance ETHUSDT · USDT', 'Bybit ETH · USDT']);
+    expect(labels).toEqual(['Select market', 'Binance ETHUSDT · USDT', 'Bybit ETH · USDT']);
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {
@@ -432,12 +432,12 @@ describe('BorosPairTicket', () => {
     );
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
-    const max = await screen.findByRole('button', { name: /^max 10,000 USDT$/ });
+    const max = await screen.findByRole('button', { name: /^Max 10,000 USDT$/ });
     await user.click(max);
     expect((screen.getByLabelText(/^Size per leg/) as HTMLInputElement).value).toBe('10000');
 
     await user.click(screen.getByRole('radio', { name: 'Single' }));
-    expect(await screen.findByRole('button', { name: /^max 16,666\.6/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Max 16,666\.6/ })).toBeInTheDocument();
   });
 
   it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
@@ -509,8 +509,8 @@ describe('BorosPairTicket', () => {
 
     // Per-leg override: leg A alone widens.
     // The tolerance controls sit behind the "Max:" disclosure now.
-    await user.click(screen.getByTitle(/Change the tolerance/));
-    await user.click(screen.getByRole('button', { name: 'set each leg separately' }));
+    await user.click(screen.getByTitle(/Max slippage per leg|Change max slippage/));
+    await user.click(screen.getByRole('button', { name: 'Set each leg separately' }));
     const slipA = screen.getByLabelText('Leg A %');
     await user.clear(slipA);
     await user.type(slipA, '0.8');
@@ -548,9 +548,9 @@ describe('BorosPairTicket', () => {
     // it: the heading and the three-column grid are gone, so what is pinned is
     // that each market's ENDING position is on screen and that the netting
     // rule is still stated somewhere the user can reach it.
-    expect((await screen.findAllByTitle(/whole exposure there/i)).length).toBe(2);
+    expect((await screen.findAllByTitle(/whole position there/i)).length).toBe(2);
     expect(screen.getAllByText(/→/).length).toBeGreaterThan(0);
-    const netted = (await screen.findAllByTitle(/whole exposure there/i))[0];
+    const netted = (await screen.findAllByTitle(/whole position there/i))[0];
     expect(netted).toHaveTextContent(/150,000/);
     expect(netted).toHaveTextContent(/50,000/);
   });
@@ -614,7 +614,7 @@ describe('BorosPairTicket', () => {
     // so the hover is asserted to carry BOTH clauses, not just the reassuring
     // one. It now lives on the confirm control itself.
     const atomicity = confirm.getAttribute("title") ?? "";
-    expect(atomicity).toMatch(/One atomic batch/i);
+    expect(atomicity).toMatch(/Sent together/i);
     expect(atomicity).toMatch(/can still fill short/i);
   });
 
@@ -841,7 +841,7 @@ describe('BorosPairTicket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getAllByText('rejected').length).toBe(2);
+    expect(report.getAllByText('Rejected').length).toBe(2);
     // The actual venue error, verbatim — that is the whole diagnostic.
     expect(report.getAllByText('MarketNotEntered(155)').length).toBe(1);
     expect(report.getAllByText(/its own message is below/i).length).toBe(2);
@@ -887,8 +887,8 @@ describe('BorosPairTicket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getAllByText('no prepaid gas').length).toBe(2);
-    expect(report.getAllByText(/separate from your trading collateral/i).length).toBe(2);
+    expect(report.getAllByText('No prepaid gas').length).toBe(2);
+    expect(report.getAllByText(/kept apart from collateral/i).length).toBe(2);
   });
 
   it('renders nothing about gas when the balance covers the order', async () => {
@@ -977,7 +977,7 @@ describe('BorosPairTicket', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     // Whose guarantee "reduce-only" is still qualified — on the badge that
     // makes the claim, instead of a paragraph shown every time Close is picked.
-    expect(screen.getByTitle(/Boros has no reduce-only order type/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Boros has no reduce-only order/i)).toBeInTheDocument();
   });
 
   it('surfaces a server blocker with its shortfall framed as a top-up', async () => {
@@ -1074,7 +1074,7 @@ describe('BorosPairTicket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getByText('partially filled')).toBeInTheDocument();
+    expect(report.getByText('Partly filled')).toBeInTheDocument();
     expect(report.getByText(/40,000 USDT on leg B is unhedged/i)).toBeInTheDocument();
     expect(report.getByText(/not enough depth/i)).toBeInTheDocument();
     expect(report.getByText(/^Binance ETHUSDT 31 Aug 2026 · /)).toBeInTheDocument();
@@ -1596,7 +1596,7 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
 
     await user.click(chip('Coin', 'BTC'));
     const options = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
-    expect(options).toEqual(['select a market…', 'OKX BTC · BTC']);
+    expect(options).toEqual(['Select market', 'OKX BTC · BTC']);
   });
 
   it('clears the legs when the coin changes', async () => {
@@ -1632,7 +1632,7 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
       expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     const labels = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
-    expect(labels).toEqual(['select a market…', 'Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
+    expect(labels).toEqual(['Select market', 'Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
   });
 });
 
@@ -1677,12 +1677,12 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await user.click(screen.getByTitle(/Change the tolerance/));
+    await user.click(screen.getByTitle(/Max slippage per leg|Change max slippage/));
     const slip = screen.getByLabelText(/Max slippage/);
     await user.clear(slip);
     await user.type(slip, '50');
 
-    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+    expect(await screen.findByText(/Max slippage must be above 0/)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled(),
     );
@@ -1700,19 +1700,19 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await user.click(screen.getByTitle(/Change the tolerance/));
+    await user.click(screen.getByTitle(/Max slippage per leg|Change max slippage/));
     const slip = screen.getByLabelText(/Max slippage/);
     await user.clear(slip);
     await user.type(slip, '0');
 
-    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+    expect(await screen.findByText(/Max slippage must be above 0/)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled(),
     );
 
     // A cleared box is the same dishonesty — empty on screen, seed on the wire.
     await user.clear(slip);
-    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+    expect(await screen.findByText(/Max slippage must be above 0/)).toBeInTheDocument();
   });
 });
 
@@ -1893,7 +1893,7 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getByText('partially filled')).toBeInTheDocument();
+    expect(report.getByText('Partly filled')).toBeInTheDocument();
     expect(report.getByText(/^ETH Spread HL-GATE 27 Nov 2026 · short/)).toBeInTheDocument();
     expect(report.queryByText('Fee')).not.toBeInTheDocument();
     expect(report.queryByRole('button', { name: 'Complete now at market' })).not.toBeInTheDocument();
@@ -1911,7 +1911,7 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(sent[0].legs[0].size * 0.6 + sent[1].legs[0].size).toBeCloseTo(SIZE, 6);
 
     const receipt = within(await screen.findByRole('status'));
-    expect(await receipt.findByText('filled')).toBeInTheDocument();
+    expect(await receipt.findByText('Filled')).toBeInTheDocument();
     expect(receipt.getByText(/^ETH Spread HL-GATE 27 Nov 2026 · short/)).toBeInTheDocument();
     expect(receipt.getByText('Fee')).toBeInTheDocument();
     expect(receipt.getByText('0.000017 ETH')).toBeInTheDocument();
@@ -2047,7 +2047,7 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     expect(tradeOn()).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /^max\s*0\.05 ETH/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Max\s*0\.05 ETH/ })).toBeInTheDocument();
   });
 
   it('a 3.64 spread with one 0.36 Gate single held: Reduce-only stays on the spread, max 3.64', async () => {
@@ -2057,7 +2057,7 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     expect(tradeOn()).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /^max\s*3\.64 ETH/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Max\s*3\.64 ETH/ })).toBeInTheDocument();
   });
 
   it('a close with one single held and an empty spread goes to the singles', async () => {

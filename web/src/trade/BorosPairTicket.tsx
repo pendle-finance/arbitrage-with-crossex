@@ -1177,7 +1177,7 @@ export function BorosPairTicket({
               }
               onClick={() => setSizeStr(fieldValue(availableToTrade))}
             >
-              {t('pairTicket.closeBoros.maxLower')}{' '}
+              {t('common.max')}{' '}
               <span className="text-link underline decoration-link/40 underline-offset-2">
                 {sigGrouped(availableToTrade)} {rowA?.collateral ?? ''}
               </span>
@@ -1202,7 +1202,7 @@ export function BorosPairTicket({
             }
             className={`input num pr-16 ${sizeErr ? '!border-rose-500/60' : ''}`}
             inputMode="decimal"
-            placeholder={oneMarket ? t('pairTicket.boros.sizeLower') : t('pairTicket.pair.sizePerLegPlaceholder')}
+            placeholder={oneMarket ? t('common.size') : t('pairTicket.pair.sizePerLegPlaceholder')}
             aria-invalid={sizeErr ? true : undefined}
             aria-describedby={sizeErr ? 'boros-size-error' : undefined}
             value={sizeStr}
@@ -1314,7 +1314,7 @@ export function BorosPairTicket({
                 {slipOpen && (
                   <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
                     <span className="text-[10.5px] leading-relaxed text-ink-400">
-                      {t('pairTicket.boros.slipEditorHint')}
+                      {t('trade.close.bandHint')}
                     </span>
                     <div className="flex items-center gap-1.5">
                       {['0.2', '0.4', '1', '2'].map((q) => (

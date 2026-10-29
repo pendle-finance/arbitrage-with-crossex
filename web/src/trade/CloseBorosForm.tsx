@@ -569,7 +569,7 @@ export function CloseBorosForm({
             title={closable.length > 1 ? t('pairTicket.closeBoros.closeWholeEvery') : t('pairTicket.closeBoros.closeWhole')}
             onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
           >
-            {t('pairTicket.closeBoros.maxLower')}{' '}
+            {t('common.max')}{' '}
             <span className="text-link underline decoration-link/40 underline-offset-2">
               {`${sigGrouped(maxCloseSize)} ${unit0}`}
             </span>
@@ -793,7 +793,7 @@ export function CloseBorosForm({
             invalidText={t('pairTicket.closeBoros.slipInvalid', { max: MAX_SLIP_PCT })}
             inputAriaLabel={t('pairTicket.closeBoros.slipAria')}
             title={t('pairTicket.closeBoros.slipTitle')}
-            hint={t('pairTicket.closeBoros.slipHint')}
+            hint={t('trade.close.bandHint')}
           />
         </div>
       </EstimateCard>

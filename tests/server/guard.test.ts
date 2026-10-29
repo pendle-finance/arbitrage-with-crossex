@@ -17,7 +17,7 @@ describe('host/origin guard', () => {
     expect(res.statusCode).toBe(403);
     expect(res.json()).toEqual({
       ok: false,
-      error: { category: 'auth', message: 'forbidden host/origin' },
+      error: { category: 'auth', message: 'Requests from this address are refused. Open the terminal on this computer.' },
     });
   });
 

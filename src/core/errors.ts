@@ -55,24 +55,27 @@ export class CoreError extends Error {
 /** Ordered label-substring → category rules. Gate's exact CrossEx labels are only
  * partly documented, so match case-insensitive substrings and let callers log any
  * label that falls through to `unknown` (the table grows from recorded truth). */
-const LABEL_RULES: Array<{ match: RegExp; category: ErrorCategory; hint?: string }> = [
+const LABEL_RULES: Array<{ match: RegExp; category: ErrorCategory; plain: string }> = [
   // Permission is an auth problem, not a funds problem — must beat the balance rule.
-  { match: /INVALID_KEY|INVALID_SIGNATURE|FORBIDDEN|MISSING_REQUIRED_HEADER|INVALID_CREDENTIALS|PERMISSION/, category: 'auth', hint: 'Check the API key/secret and its CrossEx permission in Settings.' },
-  { match: /TOO_MANY|RATE_LIMIT/, category: 'rate-limited' },
-  { match: /POST_ONLY|POC_/, category: 'post-only-would-cross', hint: 'A post-only order would have crossed the book.' },
-  { match: /REDUCE_ONLY/, category: 'reduce-only-violation' },
-  { match: /LEVERAGE|RISK_LIMIT/, category: 'leverage' },
-  { match: /CAN_NOT_DELETE_LARGE_POSITION/, category: 'venue-rejected', hint: 'Close via a reduce-only marketable limit instead of the position endpoint.' },
-  { match: /MIN_NOTIONAL|SIZE_TOO_SMALL|MIN_SIZE|TOO_SMALL/, category: 'size-too-small' },
-  { match: /MAX_MARKET_SIZE|MAX_LIMIT_SIZE|SIZE_TOO_LARGE|TOO_LARGE/, category: 'size-too-large' },
-  { match: /SIGNIFICANT_FIGURES|PRICE/, category: 'price-limit', hint: 'Price outside the venue’s allowed band or precision.' },
+  { match: /INVALID_KEY|INVALID_SIGNATURE|FORBIDDEN|MISSING_REQUIRED_HEADER|INVALID_CREDENTIALS|PERMISSION/, category: 'auth', plain: 'Gate refused this request. Check the Gate API key and its CrossEx permission in Settings.' },
+  { match: /TOO_MANY|RATE_LIMIT/, category: 'rate-limited', plain: 'Gate is limiting requests from this account. Try again in a minute.' },
+  { match: /POST_ONLY|POC_/, category: 'post-only-would-cross', plain: 'The post-only order would have filled at once. Move the price off the market.' },
+  { match: /REDUCE_ONLY/, category: 'reduce-only-violation', plain: 'A reduce-only order would not shrink a position. Check your positions, then try again.' },
+  { match: /LEVERAGE|RISK_LIMIT/, category: 'leverage', plain: "Gate refused the leverage or position limit. Lower the size, then try again." },
+  // Gate's one-step close (POST /crossex/position) takes dust only; the terminal closes with reduce-only orders.
+  { match: /CAN_NOT_DELETE_LARGE_POSITION/, category: 'venue-rejected', plain: "Gate's one-step close takes only tiny positions. Use the Close button instead." },
+  { match: /MIN_NOTIONAL|SIZE_TOO_SMALL|MIN_SIZE|TOO_SMALL/, category: 'size-too-small', plain: "The order is below Gate's minimum size or value. Increase the size." },
+  { match: /MAX_MARKET_SIZE|MAX_LIMIT_SIZE|SIZE_TOO_LARGE|TOO_LARGE/, category: 'size-too-large', plain: "The order is above Gate's largest order size. Lower the size." },
+  { match: /SIGNIFICANT_FIGURES|PRICE/, category: 'price-limit', plain: 'The price is outside what Gate accepts. Refresh the price and try again.' },
   // Anchor INSUFFICIENT to a funds word so INSUFFICIENT_PERMISSION (handled above) can't reach here.
-  { match: /BALANCE|MARGIN|INSUFFICIENT_(BALANCE|MARGIN|AVAILABLE|FUND)|NOT_ENOUGH|TRANSFER_AMOUNT_INSUFFICIENT/, category: 'insufficient-margin' },
+  { match: /BALANCE|MARGIN|INSUFFICIENT_(BALANCE|MARGIN|AVAILABLE|FUND)|NOT_ENOUGH|TRANSFER_AMOUNT_INSUFFICIENT/, category: 'insufficient-margin', plain: 'Not enough free margin on CrossEx. Add margin or lower the size.' },
   // Order/position "not found" is a stale-state validation error, NOT a bad symbol —
   // must beat the broad SYMBOL/NOT_FOUND rule below.
-  { match: /ORDER_NOT_FOUND|ORDER_CLOSED|ORDER_FINISHED|POSITION_NOT_FOUND|NO_POSITION/, category: 'validation' },
-  { match: /SYMBOL|CONTRACT_NOT_FOUND|NOT_FOUND/, category: 'symbol-invalid' },
+  { match: /ORDER_NOT_FOUND|ORDER_CLOSED|ORDER_FINISHED|POSITION_NOT_FOUND|NO_POSITION/, category: 'validation', plain: 'Gate no longer has this order or position. Refresh to see where it stands.' },
+  { match: /SYMBOL|CONTRACT_NOT_FOUND|NOT_FOUND/, category: 'symbol-invalid', plain: 'Gate does not list this market on CrossEx. Pick another market.' },
 ];
+
+const labelRuleFor = (label: string | undefined) => (label ? LABEL_RULES.find((rule) => rule.match.test(label.toUpperCase())) : undefined);
 
 /** Classify any thrown error (Gate SDK/axios/CoreError/other) for the API envelope. */
 export function classifyGateError(err: unknown): ClassifiedError {
@@ -89,24 +92,21 @@ export function classifyGateError(err: unknown): ClassifiedError {
   const message = describeError(err);
 
   if (status === 401 || status === 403) {
-    return { category: 'auth', label, message, httpStatus: status, retryable: false, hint: 'Check the API key/secret in Settings.' };
+    return { category: 'auth', label, message, httpStatus: status, retryable: false, hint: 'Check the Gate API key and secret in Settings.' };
   }
   if (status === 429) {
     return { category: 'rate-limited', label, message, httpStatus: status, retryable: true };
   }
   if (label) {
-    const upper = label.toUpperCase();
-    for (const rule of LABEL_RULES) {
-      if (rule.match.test(upper)) {
-        return {
-          category: rule.category,
-          label,
-          message,
-          httpStatus: status,
-          retryable: rule.category === 'rate-limited',
-          hint: rule.hint,
-        };
-      }
+    const rule = labelRuleFor(label);
+    if (rule) {
+      return {
+        category: rule.category,
+        label,
+        message: `${rule.plain} (Gate: ${label})`,
+        httpStatus: status,
+        retryable: rule.category === 'rate-limited',
+      };
     }
     return { category: 'unknown', label, message, httpStatus: status, retryable: false };
   }
@@ -147,9 +147,10 @@ export function plainErrorFor(err: unknown): Pick<ClassifiedError, 'message' | '
   if (isKeyRefused(e)) return { message: 'Gate refused the API key.', hint: 'Check it in Settings.' };
   const data = e?.response?.data;
   const reason = refusalReason(err);
+  const rule = labelRuleFor(data?.label);
   return {
     message: data?.label || data?.message ? asSentence(reason) : reason,
-    hint: e?.response?.status === 401 ? undefined : classifyGateError(err).hint,
+    hint: e?.response?.status === 401 ? undefined : classifyGateError(err).hint ?? (rule?.category === 'auth' ? rule.plain : undefined),
   };
 }
 

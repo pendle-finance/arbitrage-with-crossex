@@ -286,7 +286,7 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
   const bundlesArm = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
     await user.click(screen.getByRole('button', { name: /^OKX/ }));
-    await user.click(await screen.findByRole('button', { name: 'open both Boros legs' }));
+    await user.click(await screen.findByRole('button', { name: 'Open both Boros legs' }));
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     return flow?.borosOpenPrefill;
   };
@@ -314,9 +314,9 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
     renderCard(case5Book());
     await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
     await user.click(screen.getByRole('button', { name: /^OKX/ }));
-    const rows = (await screen.findAllByText('not open yet')).map((el) => el.closest('tr') as HTMLElement);
+    const rows = (await screen.findAllByText('Not open yet')).map((el) => el.closest('tr') as HTMLElement);
     expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) expect(within(row).getByText('missing 1 BTC')).toBeInTheDocument();
+    for (const row of rows) expect(within(row).getByText('Missing 1 BTC')).toBeInTheDocument();
     expect(screen.queryByText('missing')).not.toBeInTheDocument();
   });
 
@@ -346,7 +346,7 @@ describe('an open past what the venue lacks: the ticket learns of the held leg',
       [perp('BTC', 'GATE', 'LONG', perps), perp('BTC', 'HYPERLIQUID', 'SHORT', perps)],
       [leg('BTC', 'GATE', 'LONG', 3, NOV), leg('BTC', 'HYPERLIQUID', 'SHORT', 3, DEC)],
     );
-  const held = `Gate LONG holds 3 BTC at ${fmtDateShort(NOV)}.`;
+  const held = `Gate Long holds 3 BTC at ${fmtDateShort(NOV)}.`;
 
   it('perps 3: the card takes the later HL leg (score date term) and opens the whole Gate leg', async () => {
     const user = userEvent.setup();
@@ -379,8 +379,8 @@ describe('an open past what the venue lacks: the ticket learns of the held leg',
     await showPairs(user);
     const opens = await screen.findAllByRole('button', { name: 'Open leg' });
     expect(opens.map((b) => b.getAttribute('title'))).toEqual([
-      'Open only the Gate LONG Boros leg, at 3 BTC',
-      'Open only the Hyperliquid SHORT Boros leg, at 1 BTC',
+      'Open only the Gate Long Boros leg, at 3 BTC',
+      'Open only the Hyperliquid Short Boros leg, at 1 BTC',
     ]);
     expect(opens.some((b) => b.getAttribute('aria-disabled') === 'true')).toBe(false);
     await user.click(opens[0]);

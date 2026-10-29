@@ -112,15 +112,15 @@ export function ordersRoutes(deps: AppDeps) {
         const pair = store?.getPair(pairId);
         return !!pair && pair.b === null && pair.limitPrice !== null;
       };
-      const refuse = (o: { pairId: string }): never => {
+      const refuse = (): never => {
         throw new CoreError(
-          `order ${id} belongs to deal ${o.pairId} and is managed by the engine — use that deal's Stop control instead of cancelling it by hand`,
+          `Order ${id} belongs to a running deal. Press the deal's Stop button instead.`,
           'validation',
         );
       };
       /** Refuse, UNLESS it is a plain resting order — then stop that deal. */
       const refuseOrStop = (o: { pairId: string }) => {
-        if (!isPlainRestingOrder(o.pairId)) refuse(o);
+        if (!isPlainRestingOrder(o.pairId)) refuse();
         commands.stop(deps.engine!.store, o.pairId);
         deps.engine!.wake?.();
         deps.cache.bust('openOrders');
@@ -146,7 +146,7 @@ export function ordersRoutes(deps: AppDeps) {
           text = String((body as { text?: unknown })?.text ?? '');
         } catch {
           throw new CoreError(
-            `cannot cancel ${id} right now: a running deal has an order awaiting venue confirmation, and the venue could not confirm ${id} is not that order — retry shortly, or stop the deal with its Stop control`,
+            `Can't cancel ${id} yet. A running deal may own it. Try again shortly, or press the deal's Stop button.`,
             'validation',
           );
         }

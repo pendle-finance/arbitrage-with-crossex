@@ -135,7 +135,7 @@ describe('POST /api/deals', () => {
       ok: false,
       error: {
         category: 'validation',
-        message: 'a rebalance is still running. Wait for it to finish before starting a deal.',
+        message: 'A rebalance is still running. Wait for it to finish, then start the deal.',
         retryable: true,
       },
     });
@@ -162,7 +162,7 @@ describe('POST /api/deals', () => {
     });
     res = await app.inject({ method: 'POST', url: '/api/deals/deal-halted/resume', headers: HOST });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('a rebalance is still running. Wait for it to finish before resuming a deal.');
+    expect(res.json().error.message).toBe('A rebalance is still running. Wait for it to finish, then resume the deal.');
     expect(store.getPair('deal-halted')!.mode).toBe('HALTED');
 
     running.status = 'halted';
@@ -391,7 +391,7 @@ describe('POST /api/deals', () => {
         payload: makerPayload(),
       });
       expect(res.statusCode, c.why).toBe(400);
-      expect(res.json().error.message, c.why).toMatch(/hedge leg could never be submitted/);
+      expect(res.json().error.message, c.why).toMatch(/hedge leg can't be sent/);
     }
     expect(w.store.listPairs()).toHaveLength(0);
   });
@@ -423,7 +423,7 @@ describe('POST /api/deals', () => {
         payload: makerPayload(), // qty 0.152 > cap 0.1
       });
       expect(res.statusCode, c.why).toBe(400);
-      expect(res.json().error.message, c.why).toMatch(/exceeds .* max (MARKET|LIMIT) order size/);
+      expect(res.json().error.message, c.why).toMatch(/is above .*'s largest (market|limit) order/);
     }
     expect(w.store.listPairs()).toHaveLength(0);
   });
@@ -526,7 +526,7 @@ describe('POST /api/deals', () => {
       payload: makerPayload({ leverage: { a: 50 } }),
     });
     expect(res.statusCode).toBe(400);
-    expect(res.json().error.message).toMatch(/leverage set failed/);
+    expect(res.json().error.message).toMatch(/Couldn't set leverage/);
     expect(w.store.listPairs()).toHaveLength(0);
   });
 
@@ -552,7 +552,7 @@ describe('POST /api/deals', () => {
       // the old code sent whatever it was given and wrapped the venue's refusal
       // as "leverage set failed", which is also a 400 and hides the real cause.
       expect(res.json().error.message, String(lev)).toMatch(/must be (a number|between 1 and 20x)/);
-      expect(res.json().error.message, String(lev)).not.toMatch(/leverage set failed/);
+      expect(res.json().error.message, String(lev)).not.toMatch(/Couldn't set leverage/);
       expect(w.store.listPairs()).toHaveLength(0);
     }
   });
@@ -624,7 +624,7 @@ describe('POST /api/deals', () => {
     expect(res.statusCode, res.body).toBe(400);
     expect(res.json().error).toMatchObject({
       category: 'leverage',
-      message: `CrossEx returned no leverage limit for ${A_CONTRACT} — nothing was sent; try again`,
+      message: `CrossEx returned no leverage limit for ${A_CONTRACT}. Nothing was sent. Try again.`,
     });
     expect(sets).toBe(0);
     expect(w.store.listPairs()).toHaveLength(0);
@@ -794,7 +794,7 @@ describe('POST /api/deals', () => {
 
     expect(res.statusCode, res.body).toBe(400);
     expect(res.json().error.message).toBe(
-      `this deal takes the ${A_CONTRACT} position to $1,130, above its $980 limit (2% under the CrossEx risk-limit cap) — nothing was sent`,
+      `This deal takes ${A_CONTRACT} to $1,130, above its limit of $980 (2% under the CrossEx risk-limit cap). Nothing was sent.`,
     );
     expect(w.store.listPairs()).toHaveLength(0);
   });
@@ -838,7 +838,7 @@ describe('POST /api/deals', () => {
 
     expect(second.statusCode, second.body).toBe(400);
     expect(second.json().error.message).toBe(
-      `this deal takes the ${A_CONTRACT} position to $1,200, above its $980 limit (2% under the CrossEx risk-limit cap) — nothing was sent`,
+      `This deal takes ${A_CONTRACT} to $1,200, above its limit of $980 (2% under the CrossEx risk-limit cap). Nothing was sent.`,
     );
     expect(w.store.listPairs()).toHaveLength(1);
   });
@@ -867,7 +867,7 @@ describe('POST /api/deals', () => {
     });
 
     expect(res.statusCode, res.body).toBe(400);
-    expect(res.json().error.message).toMatch(/position to \$1,100, above its \$980 limit/);
+    expect(res.json().error.message).toMatch(/to \$1,100, above its limit of \$980/);
   });
 
   it('lets a trade that shrinks a position above the cap through', async () => {
@@ -902,7 +902,7 @@ describe('POST /api/deals', () => {
 
     expect(res.statusCode, res.body).toBe(400);
     expect(res.json().error.message).toBe(
-      `no price for ${A_CONTRACT} to check the position size — nothing was sent; try again`,
+      `No price for ${A_CONTRACT} to check the position size. Nothing was sent. Try again.`,
     );
     expect(w.store.listPairs()).toHaveLength(0);
   });

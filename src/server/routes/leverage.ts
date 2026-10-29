@@ -7,7 +7,7 @@ import { TTL } from '../cache';
 export function requirePositionLimit(map: Map<string, PositionLimit | null>, symbol: string): PositionLimit {
   const limit = map.get(symbol);
   if (!limit) {
-    throw new CoreError(`CrossEx returned no leverage limit for ${symbol} — nothing was sent; try again`, 'leverage');
+    throw new CoreError(`CrossEx returned no leverage limit for ${symbol}. Nothing was sent. Try again.`, 'leverage');
   }
   return limit;
 }

@@ -133,7 +133,7 @@ const GAS_CREDIT_POLLS = 20;
  * filled": 10 reads, 3 s apart (5 compute units each). */
 const TRACE_POLLS = 10;
 const TRACE_POLL_MS = 3_000;
-const MAY_HAVE_FILLED_HINT = ', so it may or may not have filled. Check the position on Boros before re-issuing.';
+const MAY_HAVE_FILLED_HINT = ', so it may or may not have filled. Check the position on Boros before you send again.';
 
 /** The backend's per-call error for the calls that did NOT fail when a
  * `requireSuccess` batch is refused in simulation (send-txs.service). */
@@ -1089,7 +1089,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       return reqs.map((req) =>
         unknownLeg(
           req,
-          'Boros accepted the batch but returned no transaction hash, so the fill state is unknown. Check the position on Boros before re-issuing.',
+          'Boros accepted the batch but returned no transaction hash, so the fill state is unknown. Check the position on Boros before you send again.',
         ),
       );
     }
@@ -1099,7 +1099,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (!byIndex) {
         return unknownLeg(
           req,
-          `Submitted as ${txHash} but no status came back, so this leg may or may not have filled. Check the position on Boros before re-issuing.`,
+          `Submitted as ${txHash} but no status came back, so this leg may or may not have filled. Check the position on Boros before you send again.`,
         );
       }
       const status = byIndex.get(legResponses[i]?.index ?? submissionIndex(i));
@@ -1111,7 +1111,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (!status) {
         return unknownLeg(
           req,
-          `Submitted as ${txHash} but no status came back for this leg, so it may or may not have filled. Check the position on Boros before re-issuing.`,
+          `Submitted as ${txHash} but no status came back for this leg, so it may or may not have filled. Check the position on Boros before you send again.`,
         );
       }
       if (status.error) return failedLeg(req, status.error, 'this-leg');
