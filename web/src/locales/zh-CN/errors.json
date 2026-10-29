@@ -381,6 +381,7 @@
   "alertLegacyBaskets": "升级时有旧版订单组仍在执行：{{ids}}。请手动检查 Gate 挂单和持仓（旧引擎无法核对它们）",
   "dealUnhedgedSuffix": "{{inner}}（未对冲 {{size}} — 低于 {{contract}} 的最小手数，无法下单）",
   "dealResidualSuffix": "{{inner}}（未建仓剩余 {{size}} — 低于交易所最小下单量或无法成交）",
+  "dealResidualStopped": "{{inner}}（未建仓剩余 {{size}} — 停止前未成交）",
   "dealStopped": "已停止",
   "dealConverted": "已转市价完成",
   "dealTargetReached": "已达目标数量",

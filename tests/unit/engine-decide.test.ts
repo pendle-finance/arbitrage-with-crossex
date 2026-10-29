@@ -227,6 +227,23 @@ describe('decide edges', () => {
     expect(ours.type).not.toBe('setMode'); // converges (re-places) instead
   });
 
+  it('a stopped deal names its unfilled rest as stopped, a halted one as blocked', () => {
+    const settled = [
+      order({ state: 'CLOSED', cumQty: '0.05', closeReason: 'cancelled', cancelRequested: 1 }),
+      hedgeOrder({ state: 'CLOSED', qty: '0.05', cumQty: '0.05', closeReason: 'filled' }),
+    ];
+    const stopped = pairRow({ mode: 'STOPPING' });
+    expect(decide(stopped, project(stopped, settled), 0, ctx)).toMatchObject({
+      type: 'finish',
+      report: { reason: 'stopped (unacquired residual 0.102 — not filled before the stop)' },
+    });
+    const halted = pairRow({ mode: 'STOPPING', haltReason: 'hedge failed 3x' });
+    expect(decide(halted, project(halted, settled), 0, ctx)).toMatchObject({
+      type: 'finish',
+      report: { reason: 'hedge failed 3x (unacquired residual 0.102 — below the venue minimum or blocked)' },
+    });
+  });
+
   it('a poc insta-cancel is NOT a STOP', () => {
     const pair = pairRow();
     const a = decide(
