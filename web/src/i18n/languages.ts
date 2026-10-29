@@ -4,8 +4,8 @@
  * add a row here. `locales.test.ts` then checks every key and placeholder.
  */
 export const LANGUAGES = [
-  { code: 'en', label: 'English', short: 'EN', dateLocale: 'en-GB' },
-  { code: 'zh-CN', label: '简体中文', short: '中文', dateLocale: 'zh-CN' },
+  { code: 'en', label: 'English', dateLocale: 'en-GB' },
+  { code: 'zh-CN', label: '简体中文', dateLocale: 'zh-CN' },
 ] as const;
 
 export type Language = (typeof LANGUAGES)[number]['code'];

@@ -72,6 +72,20 @@ describe('SettingsDrawer', () => {
     );
   });
 
+  it('language picker switches the terminal and saves the choice', async () => {
+    const user = userEvent.setup();
+    mockAllDone();
+    renderDrawer();
+    const picker = await screen.findByRole('radiogroup', { name: 'Language' });
+    expect(within(picker).getByRole('radio', { name: 'English' })).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(within(picker).getByRole('radio', { name: '简体中文' }));
+
+    expect(await screen.findByRole('radio', { name: '简体中文', checked: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '语言' })).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('crossex.language.v1') ?? 'null')).toBe('zh-CN');
+  });
+
   it('setup rows', async () => {
     mockAllDone();
     renderDrawer();

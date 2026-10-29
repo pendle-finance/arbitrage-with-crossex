@@ -6,6 +6,6 @@
     "A Boros send that times out no longer says nothing traded: the terminal checks what filled",
     "The pair ticket warns when the two legs would fill to different sizes",
     "Opportunities sizes every card by the capital you put in, $200k by default",
-    "Every screen can show Simplified Chinese: pick 中文 in the header"
+    "Every screen can show Simplified Chinese: pick 简体中文 in Settings"
   ]
 }

@@ -10,7 +10,6 @@ import { DisclaimerGate } from './components/DisclaimerGate';
 import { FinishSetupPill } from './components/FinishSetupPill';
 import { FreshnessIndicator } from './components/FreshnessIndicator';
 import { TooltipLayer } from './components/TooltipLayer';
-import { LanguageSwitch } from './components/LanguageSwitch';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { markGuideHintDone, UserGuideHint } from './components/UserGuideHint';
 import { TableSkeleton } from './components/Skeleton';
@@ -41,9 +40,9 @@ const UserGuideModal = lazy(() =>
 );
 
 
-export default function App() {
+export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMount?: boolean } = {}) {
   const { t } = useTranslation();
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(settingsOpenOnMount);
   const [settingsFocus, setSettingsFocus] = useState<SetupStep | null>(null);
   const [guideOpen, setGuideOpen] = useState(false);
   const [guideSection, setGuideSection] = useState<string | undefined>(undefined);
@@ -122,7 +121,6 @@ export default function App() {
       <UpdateIndicator />
       {isTrading && <SetupPrompt onOpen={openSettingsAt} />}
       <FreshnessIndicator />
-      <LanguageSwitch />
       <ActiveWalletChip onOpen={openSettings} showWallet={isTrading} />
     </>
   );
