@@ -13,4 +13,5 @@ export function FixedRate({ apr }: { apr: number }) {
 
 /** The same words as plain text, for a line that runs on past the rate. */
 export const fixedRateText = (t: TFunction, apr: number): string =>
-  t(apr >= 0 ? 'common.receiveRate' : 'common.payRate', { rate: fmtPct(Math.abs(apr)) });
+  // −0 is a long entered at 0%: it pays.
+  t(apr > 0 || Object.is(apr, 0) ? 'common.receiveRate' : 'common.payRate', { rate: fmtPct(Math.abs(apr)) });

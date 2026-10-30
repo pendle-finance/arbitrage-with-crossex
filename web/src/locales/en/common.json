@@ -3,6 +3,8 @@
   "short": "Short",
   "longUpper": "LONG",
   "shortUpper": "SHORT",
+  "longAction": "Long",
+  "shortAction": "Short",
   "open": "Open",
   "close": "Close",
   "closePosition": "Close",

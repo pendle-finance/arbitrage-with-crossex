@@ -761,7 +761,7 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const receiveLeg = receiveLegOf(legs);
   if (legs.length === 2 && receiveLeg === null) {
     reasons.push(
-      'Both legs point the same way, so they do not offset — no spread is quoted. Flip one leg to trade a spread.',
+      'Both markets point the same way, so they do not offset — no spread is quoted. Flip one to trade a spread.',
     );
   }
 
@@ -1005,7 +1005,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   if (sim.legs.length === 2 && sim.receiveLeg === null) {
     blockers.push({
       code: 'legs-do-not-offset',
-      message: 'Both legs point the same way — flip one to trade a spread',
+      message: 'Both markets point the same way — flip one to trade a spread',
     });
   }
 

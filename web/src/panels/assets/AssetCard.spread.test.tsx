@@ -413,6 +413,17 @@ describe('AssetCard with a spread leg', () => {
     expect(errors.filter((e) => /same key/.test(e))).toEqual([]);
   });
 
+  it('the head chip says Not fully hedged when a Boros position is held but too small, not that it is missing', async () => {
+    // The Gate single covers 0.05 of 0.3: a deficit, not a missing leg — the card lists it.
+    const part = { ...single(60, 'GATE', 'LONG', 0.048), sizeToken: 0.05, notionalUsd: 0.05 * PX };
+    renderCard({ ...book([part]), perpOpen: [perp('HYPERLIQUID', 'SHORT', 0.3), perp('GATE', 'LONG', 0.3)] });
+    const head = (text: string) => screen.queryAllByText(text).filter((el) => !el.closest('div.overflow-x-auto'));
+    expect(await screen.findAllByText('Not fully hedged')).not.toHaveLength(0);
+    expect(head('Not fully hedged')).toHaveLength(1);
+    expect(head('Boros position missing')).toHaveLength(0);
+    expect(head('Boros positions missing')).toHaveLength(0);
+  });
+
   it('a spread and 2 singles with no perps are 2 Boros-only cards with their own keys', async () => {
     const user = userEvent.setup();
     const errors: string[] = [];

@@ -290,8 +290,8 @@ function cardChips(pair: OpportunityPair): CardChip[] {
     });
   }
   for (const [side, leg] of [
-    ['short', pair.shortLeg],
     ['long', pair.longLeg],
+    ['short', pair.shortLeg],
   ] as const) {
     if (!leg.crossexSymbol) {
       chips.push({
@@ -827,34 +827,13 @@ const OpportunityCard = memo(function OpportunityCard({
                 below would overflow. */}
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               <VenueBox
-                venue={prettyVenue(pair.shortLeg.venue)}
-                why={t('opportunities.card.fundingRich')}
-                fixedApr={spreadLeg || !shortBoros ? null : (shortBoros.execApr ?? shortBoros.midApr)}
-                positive
-              >
-                <LegRow
-                  n={1}
-                  side="short"
-                  label={t('opportunities.card.shortBase', { base })}
-                  kind="CrossEx"
-                  note={
-                    pair.capital.shortLeverageMax === null
-                      ? ''
-                      : t('opportunities.card.upToLeverage', { max: pair.capital.shortLeverageMax })
-                  }
-                />
-                {!spreadLeg && shortBoros && (
-                  <BorosLegRow n={2} leg={shortBoros} label={t('opportunities.card.shortBase', { base })} />
-                )}
-              </VenueBox>
-              <VenueBox
                 venue={prettyVenue(pair.longLeg.venue)}
                 why={t('opportunities.card.fundingCheap')}
                 fixedApr={spreadLeg || !longBoros ? null : (longBoros.execApr ?? longBoros.midApr)}
                 positive={false}
               >
                 <LegRow
-                  n={spreadLeg ? 2 : 3}
+                  n={1}
                   side="long"
                   label={t('opportunities.card.longBase', { base })}
                   kind="CrossEx"
@@ -865,7 +844,28 @@ const OpportunityCard = memo(function OpportunityCard({
                   }
                 />
                 {!spreadLeg && longBoros && (
-                  <BorosLegRow n={4} leg={longBoros} label={t('opportunities.card.longBase', { base })} />
+                  <BorosLegRow n={2} leg={longBoros} label={t('opportunities.card.longBase', { base })} />
+                )}
+              </VenueBox>
+              <VenueBox
+                venue={prettyVenue(pair.shortLeg.venue)}
+                why={t('opportunities.card.fundingRich')}
+                fixedApr={spreadLeg || !shortBoros ? null : (shortBoros.execApr ?? shortBoros.midApr)}
+                positive
+              >
+                <LegRow
+                  n={spreadLeg ? 2 : 3}
+                  side="short"
+                  label={t('opportunities.card.shortBase', { base })}
+                  kind="CrossEx"
+                  note={
+                    pair.capital.shortLeverageMax === null
+                      ? ''
+                      : t('opportunities.card.upToLeverage', { max: pair.capital.shortLeverageMax })
+                  }
+                />
+                {!spreadLeg && shortBoros && (
+                  <BorosLegRow n={4} leg={shortBoros} label={t('opportunities.card.shortBase', { base })} />
                 )}
               </VenueBox>
               {spreadLeg?.spreadVenues && (
