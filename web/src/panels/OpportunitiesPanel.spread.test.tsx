@@ -48,7 +48,7 @@ describe('OpportunitiesPanel — spread market', () => {
       'https://boros.pendle.finance/markets/59?form=market&direction=short',
     );
 
-    const legLabels = ['Short ETH', 'Long ETH', 'Short ETH Spread HL-GATE'].map((label) => screen.getByText(label));
+    const legLabels = ['Long ETH', 'Short ETH', 'Short ETH Spread HL-GATE'].map((label) => screen.getByText(label));
     expect(legLabels[0].compareDocumentPosition(legLabels[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(legLabels[1].compareDocumentPosition(legLabels[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText('ETH Spread HL-GATE')).toBeInTheDocument();

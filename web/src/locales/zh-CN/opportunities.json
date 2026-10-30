@@ -132,7 +132,7 @@
     "capitalModelled": "本金（模型最低值）",
     "capitalCaption": "本金（模型最低值）",
     "lockedInTitle": "开仓时支付。",
-    "futureTitle": "之后收取：持仓期间或平仓时。",
+    "futureTitle": "之后扣除：持仓期间或平仓时。",
     "capitalModelledTitle": "这笔交易至少需要缴纳的保证金：Boros 初始保证金，加上每个永续按其最大杠杆计算的保证金。"
   },
   "filters": {

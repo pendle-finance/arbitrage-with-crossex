@@ -65,7 +65,7 @@ import { uuid } from '../../lib/uuid';
 import { useNow } from '../../lib/useNow';
 import { pairSharePayload } from '../sharePayload';
 import type { SharePayloadV1 } from '../../lib/shareCodec';
-import { FixedRate } from '../../components/FixedRate';
+import { FixedRate, fixedRateText } from '../../components/FixedRate';
 import { SignedNumber } from '../../components/SignedNumber';
 import {
   fmtDateLocal,
@@ -229,12 +229,14 @@ const MissingChip = ({ held, target, unit, base }: { held: number; target: numbe
 );
 
 /** The amber head chip names what is missing. "Hedge" alone read as the perps
- * on the open flow and as Boros here (Kevin's review, #13). */
+ * on the open flow and as Boros here (Kevin's review, #13). Only a side with
+ * no leg at all is "missing": an undersized or wrong-way leg is still on the
+ * card, so a deficit falls back to "Not fully hedged". */
 function missingChipText(gaps: HedgeGapRow[]): string {
   const venuesOf = (leg: 'perp' | 'boros') => new Set(gaps.filter((g) => g.leg === leg).map((g) => g.venue)).size;
   const perps = venuesOf('perp');
   const boros = venuesOf('boros');
-  if (perps > 0 && boros > 0) return t('assetCard.head.missingHedge');
+  if (gaps.some((g) => g.kind !== 'missing') || (perps > 0 && boros > 0)) return t('assetCard.head.missingHedge');
   if (boros > 0) return t(boros > 1 ? 'assetCard.perpOnly.legsMissing' : 'assetCard.perpOnly.legMissing');
   return t(perps > 1 ? 'assetCard.borosOnly.perpsMissing' : 'assetCard.borosOnly.perpMissing');
 }
@@ -4803,11 +4805,13 @@ function InactiveBorosRow({
       {/* The rate it was locked at — the number a matured leg is judged by.
           Known while the chain still lists the position; a market closed
           early and gone from the account has no record left to read. */}
-      <td className="num text-right" title={entryApr !== null ? t(side ? (side === 'SHORT' ? 'assetCard.row.lockedFixedReceived' : 'assetCard.row.lockedFixedPaid') : 'assetCard.row.lockedFixed', { pct: fmtPct(entryApr) }) : t('assetCard.row.noOpenFill')}>
+      <td className="num text-right" title={entryApr !== null ? t('assetCard.row.lockedFixed', { pct: side ? fixedRateText(t, side === 'SHORT' ? entryApr : -entryApr) : fmtPct(entryApr) }) : t('assetCard.row.noOpenFill')}>
         {entryApr !== null ? (
           <>
-            {fmtPct(entryApr)}
-            <div className="text-[10px] text-ink-500">{t(side ? (side === 'SHORT' ? 'assetCard.row.lockedReceive' : 'assetCard.row.lockedPay') : 'assetCard.row.locked')}</div>
+            {/* Worded by the cash flow, as on every other locked rate: a short
+                entered below zero pays. */}
+            {side ? <FixedRate apr={side === 'SHORT' ? entryApr : -entryApr} /> : fmtPct(entryApr)}
+            <div className="text-[10px] text-ink-500">{t('assetCard.row.locked')}</div>
           </>
         ) : (
           <span className="text-ink-600">—</span>

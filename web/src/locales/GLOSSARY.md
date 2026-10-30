@@ -45,8 +45,8 @@ reads the same word in both apps.
 |---|---|
 | funding rate | 资金费率 |
 | perp, perpetual | 永续合约 (tight space: 永续) |
-| Long / Short (side, tag, button) | 做多 / 做空 (as Boros) |
-| long / short inside a sentence | 多头 / 空头 |
+| Long / Short (side, tag, button: `common.longUpper`, `common.longAction`) | 做多 / 做空 (as Boros) |
+| long / short inside a sentence (`common.long`) | 多头 / 空头 |
 | go long / go short (action) | 做多 / 做空 |
 | leg (a perp only; the Boros ticket says Market A / Market B) | 腿 |
 | Boros position (the Boros side anywhere else, single or spread) | Boros 仓位 |

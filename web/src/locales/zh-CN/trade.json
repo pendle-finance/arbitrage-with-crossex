@@ -177,8 +177,8 @@
     "pressHold": "长按确认"
   },
   "wizard": {
-    "venueShort": "空头 {{venue}}",
-    "venueLong": "多头 {{venue}}",
+    "venueShort": "做空 {{venue}}",
+    "venueLong": "做多 {{venue}}",
     "finishTitle": "完成此策略",
     "openTitle": "开启此策略",
     "leaveWarning": "利率已锁定，永续腿尚未开仓：您承担价格风险。持仓标签页会提供完成对冲的入口。",

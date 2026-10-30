@@ -61,7 +61,7 @@
     "fixedEarning": "Fixed earning",
     "onCapital": "on capital",
     "borosTrade": "Boros trade fees",
-    "borosTradeTitle": "Boros fees paid to open these positions. Settlement fees are already in the locked rate.",
+    "borosTradeTitle": "Boros fees paid to open these positions. Settlement fees are already taken out of Fixed earning.",
     "perpEntryTileTitle": "Perp trading fees already paid on this pair.",
     "perpExitTileTitle": "Both perps closed at maturity at your taker rates. Boros positions mature with no close cost.",
     "profitTitle": "Carry over the whole hedge, minus the fees charged above.",
@@ -371,13 +371,9 @@
     "closedEarly": "Closed early. Was due {{date}}",
     "closed": "Closed",
     "peakTitle": "Largest size held in the window.",
-    "lockedFixed": "Locked {{pct}} fixed.",
-    "lockedFixedReceived": "Locked {{pct}} fixed, received.",
-    "lockedFixedPaid": "Locked {{pct}} fixed, paid.",
+    "lockedFixed": "Locked fixed rate: {{pct}}.",
     "noOpenFill": "No opening fill in this window.",
     "locked": "Locked",
-    "lockedReceive": "Locked · receive",
-    "lockedPay": "Locked · pay",
     "settleNetTitle": "Settlements, net of settlement fees.",
     "tradeEarlyTitle": "Realized rate PnL from closing early, before its trade fee.",
     "wholeClosed": "The whole position was closed",
@@ -481,7 +477,7 @@
     "noRateLegs": "no Boros positions",
     "closeName": "Close {{name}}",
     "noPerps": "no perps",
-    "borosStaysOpen": "The Boros position stays open. Without the perps it is no longer hedged: until you close it or it matures, you carry the funding rate risk.",
+    "borosStaysOpen": "The Boros side stays open. Without the perps it is no longer hedged: until you close it or it matures, you carry the funding rate risk.",
     "perpsStayOpen": "The perps stay open and keep paying or receiving floating funding, with no locked rate to offset it."
   },
   "breakdown": {
@@ -509,7 +505,7 @@
     "borosByMarket": "Boros — by market",
     "rebates": "Settlement rebates",
     "noBoros": "No Boros activity in this window.",
-    "note": "Settlement is net of its fee, already in the locked rate. Fees are trade fees.",
+    "note": "Settlement is net of its fee. Fees are trade fees.",
     "rebateNote": "Boros settlement-fee rebates are added into PnL. Claim them on your Boros account page <a>here</a>."
   }
 }

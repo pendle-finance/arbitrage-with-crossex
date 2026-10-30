@@ -131,7 +131,7 @@ export function DirectionToggle({
             }
             onClick={() => onChange(d)}
           >
-            {directionLabel(d)}
+            {t(long ? 'common.longAction' : 'common.shortAction')}
           </button>
         );
       })}

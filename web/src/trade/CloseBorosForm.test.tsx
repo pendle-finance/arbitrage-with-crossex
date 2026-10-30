@@ -371,7 +371,7 @@ describe('CloseBorosForm — the venue minimum', () => {
     // partner. Neither describes this close, and neither may block it.
     server.use(
       ...quoting([
-        { code: 'legs-do-not-offset', message: 'Both legs point the same way — flip one to trade a spread.' },
+        { code: 'legs-do-not-offset', message: 'Both markets point the same way — flip one to trade a spread.' },
         { code: 'flip-unacknowledged', message: 'Tick the acknowledgement.' },
         { code: 'below-min-order-value', leg: 1, marketId: MARKET + 1, message: 'partner leg is worth $0.00' },
       ]),

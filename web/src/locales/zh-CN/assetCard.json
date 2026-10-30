@@ -61,7 +61,7 @@
     "fixedEarning": "固定收益",
     "onCapital": "按本金计",
     "borosTrade": "Boros 交易手续费",
-    "borosTradeTitle": "开这些仓位时支付的 Boros 手续费。结算手续费已计入锁定利率。",
+    "borosTradeTitle": "开这些仓位时支付的 Boros 手续费。结算手续费已从固定收益中扣除。",
     "perpEntryTileTitle": "本组合已支付的永续交易手续费。",
     "perpExitTileTitle": "两条永续在到期时按您的吃单费率平仓。Boros 仓位到期无平仓成本。",
     "profitTitle": "整个对冲期的息差收益，减去上面计入的手续费。",
@@ -369,13 +369,9 @@
     "closedEarly": "已提前平仓。原定 {{date}} 到期",
     "closed": "已平仓",
     "peakTitle": "时间窗口内持有的最大规模。",
-    "lockedFixed": "锁定固定利率 {{pct}}。",
-    "lockedFixedReceived": "锁定固定利率 {{pct}}，收取。",
-    "lockedFixedPaid": "锁定固定利率 {{pct}}，支付。",
+    "lockedFixed": "锁定固定利率：{{pct}}。",
     "noOpenFill": "此时间窗口内无开仓成交。",
     "locked": "已锁定",
-    "lockedReceive": "已锁定 · 收取",
-    "lockedPay": "已锁定 · 支付",
     "settleNetTitle": "结算，已扣除结算手续费。",
     "tradeEarlyTitle": "提前平仓的已实现利率盈亏，未扣交易手续费。",
     "wholeClosed": "整个仓位已平仓",
@@ -504,7 +500,7 @@
     "borosByMarket": "Boros — 按市场",
     "rebates": "结算返佣",
     "noBoros": "此时间窗口内无 Boros 活动。",
-    "note": "结算已扣除结算手续费，该费用已体现在锁定利率中。手续费指交易手续费。",
+    "note": "结算已扣除结算手续费。手续费指交易手续费。",
     "rebateNote": "Boros 结算手续费返佣已计入盈亏，可在您的 Boros 账户页面领取（<a>此处</a>）。"
   }
 }
