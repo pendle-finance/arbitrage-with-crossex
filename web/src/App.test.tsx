@@ -141,7 +141,7 @@ describe('App tab shell', () => {
     // /api/opportunities fixture resolves).
     expect(
       await within(panel('opportunities')).findByRole('button', {
-        name: /^Open this strategy — ETH Short/,
+        name: /^Open this strategy — ETH Long/,
       }),
     ).toBeInTheDocument();
     expect(panel('opportunities')).toBeVisible();

@@ -424,7 +424,7 @@ describe('OpportunitiesPanel — collapse', () => {
     await waitFor(() => expect(toggles()).toHaveLength(1));
     expect(screen.getByText('7.0%')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: /^Open this strategy — ETH Short Hyperliquid/ }),
+      screen.getByRole('button', { name: /^Open this strategy — ETH Long [A-Za-z]+ \/ Short Hyperliquid/ }),
     ).toBeInTheDocument();
     expect(toggles()[0]).toHaveTextContent('More details');
     expect(toggles()[0]).toHaveAttribute('aria-expanded', 'false');
@@ -982,7 +982,7 @@ describe('OpportunitiesPanel → wizard intent, perp half', () => {
     const panelModes = screen.getByRole('radiogroup', { name: 'Perp entry mode' });
     await userEvent.click(within(panelModes).getByRole('radio', { name: /Limit \+ hedge/ }));
     await userEvent.click(
-      screen.getByRole('button', { name: /^Open this strategy — ETH Short Hyperliquid/ }),
+      screen.getByRole('button', { name: /^Open this strategy — ETH Long [A-Za-z]+ \/ Short Hyperliquid/ }),
     );
 
     await waitFor(() => expect(wizardSeen).toHaveLength(1));
@@ -1096,8 +1096,8 @@ describe('OpportunitiesPanel — every viable pair', () => {
       '4.0%',
     ]);
     // The two ETH cards are told apart by their legs, in the toggle's name too.
-    expect(toggles()[0]).toHaveAccessibleName(/ETH Short Hyperliquid \/ Long Binance/);
-    expect(toggles()[2]).toHaveAccessibleName(/ETH Short Hyperliquid \/ Long Gate/);
+    expect(toggles()[0]).toHaveAccessibleName(/ETH Long Binance \/ Short Hyperliquid/);
+    expect(toggles()[2]).toHaveAccessibleName(/ETH Long Gate \/ Short Hyperliquid/);
   });
 
   it('still drops the pairs that price no APR or a loss', async () => {
@@ -1152,7 +1152,7 @@ describe('OpportunitiesPanel → wizard intent, runner-up pairs', () => {
 
     await waitFor(() => expect(toggles()).toHaveLength(2));
     // The RUNNER-UP — the card the old one-per-group list could not even show.
-    await userEvent.click(executeFor(/^Open this strategy — ETH Short Hyperliquid \/ Long Gate/));
+    await userEvent.click(executeFor(/^Open this strategy — ETH Long Gate \/ Short Hyperliquid/));
 
     await waitFor(() => expect(wizardSeen).toHaveLength(1));
     const sent = wizardSeen[0];
