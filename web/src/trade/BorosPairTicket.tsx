@@ -219,8 +219,8 @@ export function BorosPairTicket({
   /** The coin picked with no leg holding one yet; a picked leg's own coin
    * always wins (see `coin`). */
   const [coinPick, setCoinPick] = useState<string | null>(null);
-  const [dirA, setDirA] = useState<BorosLegDirection>('short');
-  const [dirB, setDirB] = useState<BorosLegDirection>('long');
+  const [dirA, setDirA] = useState<BorosLegDirection>('long');
+  const [dirB, setDirB] = useState<BorosLegDirection>('short');
   const [sizeStr, setSizeStr] = useState('');
   /** Boros the card's venues hold at other dates, from the last prefill. */
   const [overlaps, setOverlaps] = useState<BorosOverlap[]>([]);

@@ -577,8 +577,8 @@ const OpportunityCard = memo(function OpportunityCard({
           <TokenIcon symbol={base} size={20} />
           {base}
         </span>
-        <SideVenue side="SHORT" venue={pair.shortLeg.venue} />
         <SideVenue side="LONG" venue={pair.longLeg.venue} />
+        <SideVenue side="SHORT" venue={pair.shortLeg.venue} />
         {/* On the LEFT with the trade's identity, not beside "matures": the
             date is the band's one right-hand fact. No separate "rollover
             opportunity" chip — a box that starts ticked says the same thing
