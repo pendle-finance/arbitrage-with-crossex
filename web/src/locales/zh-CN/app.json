@@ -1,8 +1,8 @@
 {
   "language": "语言",
-  "openOrders_other": "{{count}} 笔当前委托",
+  "openOrders_other": "{{count}} 笔委托",
   "userGuide": "用户指南",
-  "userGuideTitle": "如何读懂机会扫描结果，并开好一个组合",
+  "userGuideTitle": "如何读懂机会扫描结果，并建立组合",
   "tabs": {
     "opportunities": "机会",
     "positions": "持仓",
@@ -12,7 +12,7 @@
     "fees": "手续费"
   },
   "orderTicket": "手动下单",
-  "orderTicketTitle": "自由下 Boros 和 CrossEx 订单。",
+  "orderTicketTitle": "手动自定义下单（Boros 和 CrossEx）。",
   "settings": "设置",
   "wallet": {
     "notLoggedIn": "未登录",
@@ -221,9 +221,9 @@
   "borosWallet": {
     "nowShowing": "当前显示 <a>{{wallet}}</a>，即用于交易的钱包。",
     "install": "请安装 Rabby 或 MetaMask 以登录。",
-    "loginEnds": "登录将于 {{date}} 到期。该密钥无法提款。",
+    "loginEnds": "登录将于 {{date}} 过期。该密钥无法提款。",
     "noWithdraw": "该密钥无法提款。",
-    "loginEndedOn": "登录已于 {{date}} 结束。Boros 会拒绝订单。",
+    "loginEndedOn": "登录已于 {{date}} 过期。Boros 会拒绝订单。",
     "loginEnded": "登录已结束。Boros 会拒绝订单。",
     "loggedInHere": "本终端已登录：<a>{{wallet}}</a>",
     "oneSignature": "只需一次免费签名。该密钥无法提款。",
@@ -232,7 +232,7 @@
     "continueWithout": "不登录，继续",
     "logOut": "退出登录",
     "logOutLabel": "退出 {{wallet}} 的登录？",
-    "logOutQuestion": "退出 <a>{{wallet}}</a> 的登录？仓位保持不变。",
+    "logOutQuestion": "退出 <a>{{wallet}}</a> 的登录？仓位不会被平仓。",
     "loggingOut": "正在退出…",
     "loggedOut": "已退出登录。链上授权会一直保留，直到您在 Boros 中撤销。"
   },

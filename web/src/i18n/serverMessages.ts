@@ -39,7 +39,7 @@ const RULES: readonly Rule[] = [
   [/^The price is outside what Gate accepts\. Refresh the price and try again\.$/, 'hintPriceBand'],
   [/^Gate refused this key\. Check the key, the secret and its CrossEx permission\.$/, 'hintCredentialsRejected'],
   [/^Gate is limiting requests from this account\. Try again in a minute\.$/, 'hintRateLimited'],
-  [/^A reduce-only order would not shrink a position\. Check your positions, then try again\.$/, 'hintReduceOnly'],
+  [/^This reduce-only order would not shrink any position: its side or size does not match what you hold\. Check your positions, then try again\.$/, 'hintReduceOnly'],
   [/^Gate refused the leverage or position limit\. Lower the size, then try again\.$/, 'hintLeverage'],
   [/^The order is below Gate's minimum size or value\. Increase the size\.$/, 'hintSizeSmall'],
   [/^The order is above Gate's largest order size\. Lower the size\.$/, 'hintSizeLarge'],

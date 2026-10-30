@@ -803,7 +803,7 @@ describe('RollOverModal — the review page', () => {
     // The gate warning renders (the two-batch flow dropped these).
     expect(within(dialog).getByText(/auto-top-up gas by about \$2/)).toBeInTheDocument();
     // The margin figures and the shortfall line come straight from gate.margin.
-    const required = within(dialog).getByText('Required margin');
+    const required = within(dialog).getByText('Margin required');
     const row = required.parentElement!.parentElement as HTMLElement;
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
     // Before → after, as the venue simulated it.
@@ -841,7 +841,7 @@ describe('RollOverModal — the review page', () => {
     const next = await within(dialog).findByRole('button', { name: 'Roll over' });
     await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
     await user.click(next);
-    const required = await within(dialog).findByText('Required margin');
+    const required = await within(dialog).findByText('Margin required');
     const row = required.parentElement!.parentElement as HTMLElement;
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
     expect(within(dialog).getByText(/895 ETH → 900 ETH/)).toBeInTheDocument();

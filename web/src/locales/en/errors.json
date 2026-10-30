@@ -10,7 +10,7 @@
   "hintPriceBand": "The price is outside what Gate accepts. Refresh the price and try again.",
   "hintCredentialsRejected": "Gate refused this key. Check the key, the secret and its CrossEx permission.",
   "hintRateLimited": "Gate is limiting requests from this account. Try again in a minute.",
-  "hintReduceOnly": "A reduce-only order would not shrink a position. Check your positions, then try again.",
+  "hintReduceOnly": "This reduce-only order would not shrink any position: its side or size does not match what you hold. Check your positions, then try again.",
   "hintLeverage": "Gate refused the leverage or position limit. Lower the size, then try again.",
   "hintSizeSmall": "The order is below Gate's minimum size or value. Increase the size.",
   "hintSizeLarge": "The order is above Gate's largest order size. Lower the size.",

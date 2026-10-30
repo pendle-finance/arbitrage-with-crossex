@@ -66,7 +66,7 @@ import {
   prettyVenue,
   sig,
 } from '../lib/fmt';
-import { readJson, writeJson } from '../lib/storage';
+import { OPPORTUNITIES_STORAGE_KEY, readJson, writeJson } from '../lib/storage';
 import { useDebounced } from '../lib/useDebounced';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 import { StrategyFreshness } from './HomeControls';
@@ -88,7 +88,7 @@ import {
 } from './opportunityFilters';
 import { localizeServerText } from '../i18n/serverMessages';
 
-export const OPPORTUNITIES_STORAGE_KEY = 'crossex.opportunities.v2';
+export { OPPORTUNITIES_STORAGE_KEY };
 
 /** v1 coupled the notional to the Boros entry mode ('market-100k'); v2 splits
  * them into two independent knobs, so v1 blobs are migrated once and dropped. */
@@ -699,6 +699,9 @@ const OpportunityCard = memo(function OpportunityCard({
                 </span>
               )}
             </Stat>
+            <Stat label={t('opportunities.card.collateral')} tip>
+              <span title={t('opportunities.card.collateralTitle', { collateral: group.collateral })}>{group.collateral}</span>
+            </Stat>
             <Stat label={t('opportunities.card.return')} tip>
               {estProfitUsd === null ? (
                 <Dash why={t('opportunities.card.noNetApr')} />
@@ -1068,19 +1071,20 @@ export function OpportunitiesPanel() {
     }));
     return heldPerpsOf(books);
   }, [exposure, borosMarkets, spreadMarkets]);
-  const rows = useMemo(
-    () =>
-      toRows(
-        data?.groups ?? [],
-        shownKeysRef.current,
-        held,
-        // Fold the rebate into ranking AND the viability cutoff exactly when the
-        // cards credit it, so a pair only profitable after the rebate is neither
-        // hidden nor mis-ranked against the discounted APR it displays.
-        hasRebate && includeRebate ? rebate : null,
-      ),
-    [data?.groups, held, hasRebate, includeRebate, rebate],
-  );
+  const { rows, hidden } = useMemo(() => {
+    const stats = { hidden: 0 };
+    const built = toRows(
+      data?.groups ?? [],
+      shownKeysRef.current,
+      held,
+      // Fold the rebate into ranking AND the viability cutoff exactly when the
+      // cards credit it, so a pair only profitable after the rebate is neither
+      // hidden nor mis-ranked against the discounted APR it displays.
+      hasRebate && includeRebate ? rebate : null,
+      stats,
+    );
+    return { rows: built, hidden: stats.hidden };
+  }, [data?.groups, held, hasRebate, includeRebate, rebate]);
   const visible = useMemo(() => applyFilters(rows, filters), [rows, filters]);
 
   // What the NEXT toRows call treats as already on screen — the hysteresis band
@@ -1298,6 +1302,7 @@ export function OpportunitiesPanel() {
           filters={filters}
           onChange={updateFilters}
           shown={visible.length}
+          hidden={hidden}
         />
       )}
       {rows.length === 0 ? (

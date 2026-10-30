@@ -61,7 +61,7 @@
     "moreDetails": "More details",
     "capitalTitleThree": "The minimum capital this trade posts across the 2 perps and the spread position.",
     "capitalTitleFour": "The minimum capital this trade posts across the 2 perps and the 2 Boros positions.",
-    "return": "Return",
+    "return": "Est. profit",
     "noNetApr": "No net APR — nothing to project",
     "returnTitle": "Estimated profit at maturity on {{notional}} per position",
     "notionalTitle": "{{notional}} per position",
@@ -84,8 +84,10 @@
     "netLocks": "Locks a <b>{{spread}}</b> funding spread at",
     "netLeverage": "<b>{{lev}}</b> effective leverage →",
     "netApr": "<apr>{{apr}} APR</apr> on <b>{{capital}}</b> capital",
-    "midTitle": "Mid {{mid}} before book impact",
-    "afterImpact": "at <v>{{apr}}</v> after impact"
+    "midTitle": "Mid {{mid}} before book impact. Card rates are before settlement fees.",
+    "afterImpact": "at <v>{{apr}}</v> after impact",
+    "collateral": "Collateral",
+    "collateralTitle": "The Boros positions are margined in {{collateral}}: post {{collateral}} on Boros to open them."
   },
   "waterfall": {
     "borosTaker": "Boros taker fee",
@@ -129,7 +131,10 @@
     "profitByMaturity": "Est. profit at maturity",
     "profitCaption": "est. profit at maturity",
     "capitalModelled": "Capital (modeled min)",
-    "capitalCaption": "capital (modeled min)"
+    "capitalCaption": "capital (modeled min)",
+    "lockedInTitle": "Paid when you open the position.",
+    "futureTitle": "Charged later: while the position runs, or when it closes.",
+    "capitalModelledTitle": "The least margin this trade must post: Boros initial margin, plus each perp's margin at its max leverage."
   },
   "filters": {
     "popoverAria": "Filter opportunities by venue, maturity and APR",
@@ -146,7 +151,9 @@
     "any": "Any",
     "minDaysTitle": "Only cards that mature in more than this many days.",
     "days": "days",
-    "needsNumber": "Enter a number"
+    "needsNumber": "Enter a number",
+    "hidden_one": "{{count}} more not fillable or not profitable at this capital",
+    "hidden_other": "{{count}} more not fillable or not profitable at this capital"
   },
   "trades": {
     "roleMaker": "Maker",

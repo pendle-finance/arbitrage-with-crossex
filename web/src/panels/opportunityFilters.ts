@@ -84,8 +84,13 @@ export function toRows(
    * a rebated one who turned the toggle off sees the undiscounted list they
    * asked for. */
   rebate?: Rebate | null,
+  /** Filled with how many pairs were left out, so the bar can say why the
+   * count shrinks as capital grows (Kevin's review, #14): at a large size the
+   * Boros book cannot fill them (no APR), or they price a loss. */
+  stats?: { hidden: number },
 ): OpportunityRow[] {
   const rows: OpportunityRow[] = [];
+  if (stats) stats.hidden = 0;
   for (const group of groups) {
     for (const served of group.pairs) {
       const tag = held ? heldTagFor(held, group.underlying, served, group.maturity) : null;
@@ -100,11 +105,17 @@ export function toRows(
       const heldPriced = tag ? repriceHeld(served, served.notionalUsd) : served;
       const priced = rebate ? applyRebate(heldPriced, rebate, served.notionalUsd) : heldPriced;
       const apr = priced.netFixedAprOnCapital;
-      if (apr === null || !Number.isFinite(apr)) continue;
+      if (apr === null || !Number.isFinite(apr)) {
+        if (stats) stats.hidden += 1;
+        continue;
+      }
       const key = `${group.tokenId}:${group.maturity}:${pair.borosLegs.map((leg) => leg.marketId).join(':')}`;
       // A pair already on screen holds its place down to the band; a new one
       // still has to clear zero to earn a slot.
-      if (apr < (shownKeys?.has(key) ? HYSTERESIS_APR : 0)) continue;
+      if (apr < (shownKeys?.has(key) ? HYSTERESIS_APR : 0)) {
+        if (stats) stats.hidden += 1;
+        continue;
+      }
       rows.push({
         key,
         group,

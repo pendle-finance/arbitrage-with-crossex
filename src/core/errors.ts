@@ -60,7 +60,7 @@ const LABEL_RULES: Array<{ match: RegExp; category: ErrorCategory; plain: string
   { match: /INVALID_KEY|INVALID_SIGNATURE|FORBIDDEN|MISSING_REQUIRED_HEADER|INVALID_CREDENTIALS|PERMISSION/, category: 'auth', plain: 'Gate refused this request. Check the Gate API key and its CrossEx permission in Settings.' },
   { match: /TOO_MANY|RATE_LIMIT/, category: 'rate-limited', plain: 'Gate is limiting requests from this account. Try again in a minute.' },
   { match: /POST_ONLY|POC_/, category: 'post-only-would-cross', plain: 'The post-only order would have filled at once. Move the price off the market.' },
-  { match: /REDUCE_ONLY/, category: 'reduce-only-violation', plain: 'A reduce-only order would not shrink a position. Check your positions, then try again.' },
+  { match: /REDUCE_ONLY/, category: 'reduce-only-violation', plain: 'This reduce-only order would not shrink any position: its side or size does not match what you hold. Check your positions, then try again.' },
   { match: /LEVERAGE|RISK_LIMIT/, category: 'leverage', plain: "Gate refused the leverage or position limit. Lower the size, then try again." },
   // Gate's one-step close (POST /crossex/position) takes dust only; the terminal closes with reduce-only orders.
   { match: /CAN_NOT_DELETE_LARGE_POSITION/, category: 'venue-rejected', plain: "Gate's one-step close takes only tiny positions. Use the Close button instead." },

@@ -216,6 +216,7 @@ export function OpportunityFilterBar({
   filters,
   onChange,
   shown,
+  hidden = 0,
 }: {
   /** Every viable row, unfiltered — the facets count against this. */
   rows: OpportunityRow[];
@@ -223,6 +224,8 @@ export function OpportunityFilterBar({
   onChange: (next: OpportunityFilters) => void;
   /** How many cards survive `filters` — the "showing N of M" numerator. */
   shown: number;
+  /** Pairs left out at this capital: the book cannot fill them, or they lose money. */
+  hidden?: number;
 }) {
   const { t } = useTranslation();
   const minDaysId = useId();
@@ -289,6 +292,7 @@ export function OpportunityFilterBar({
         <span className="ml-auto flex items-center gap-2">
           <span className="num text-[11px] text-ink-400" aria-live="polite">
             {t('opportunities.filters.showing', { shown, total: rows.length })}
+            {hidden > 0 && ` · ${t('opportunities.filters.hidden', { count: hidden })}`}
           </span>
           <button
             ref={triggerRef}

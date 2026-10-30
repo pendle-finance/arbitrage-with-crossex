@@ -1160,7 +1160,7 @@ export function BorosPairTicket({
         <div className="flex items-baseline justify-between gap-3">
           <label htmlFor="boros-size" className="text-[11.5px] text-ink-200">
             {/* "per leg" only means something when there are two. */}
-            {oneMarket ? t('common.size') : t('pairTicket.pair.sizePerLeg')}
+            {oneMarket ? t('common.size') : t('pairTicket.boros.sizePerMarket')}
           </label>
           {availableToTrade !== null && (
             <button
@@ -1193,16 +1193,16 @@ export function BorosPairTicket({
             id="boros-size"
             aria-label={
               rowA
-                ? t(oneMarket ? 'pairTicket.boros.sizeAria' : 'pairTicket.pair.sizePerLegAria', {
+                ? t(oneMarket ? 'pairTicket.boros.sizeAria' : 'pairTicket.boros.sizePerMarketAria', {
                     unit: simulation?.collateral || rowA.collateral || t('pairTicket.boros.collateralWord'),
                   })
                 : oneMarket
                   ? t('common.size')
-                  : t('pairTicket.pair.sizePerLeg')
+                  : t('pairTicket.boros.sizePerMarket')
             }
             className={`input num pr-16 ${sizeErr ? '!border-rose-500/60' : ''}`}
             inputMode="decimal"
-            placeholder={oneMarket ? t('common.size') : t('pairTicket.pair.sizePerLegPlaceholder')}
+            placeholder={oneMarket ? t('common.size') : t('pairTicket.boros.sizePerMarket')}
             aria-invalid={sizeErr ? true : undefined}
             aria-describedby={sizeErr ? 'boros-size-error' : undefined}
             value={sizeStr}

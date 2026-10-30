@@ -8,6 +8,7 @@ import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { SegmentedToggle } from '../components/SegmentedToggle';
+import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
@@ -15,6 +16,14 @@ import { FieldLabel } from './SymbolCombobox';
 import { ChevronDown, RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
+
+/** The ticket starts on the perp entry picked on Opportunities (default: 2
+ * market orders), so one setting has one default on both screens. */
+export function storedExecMode(): ExecMode {
+  return readJson<ExecMode>(OPPORTUNITIES_STORAGE_KEY, 'market', (p) =>
+    (p as { entryMode?: unknown } | null)?.entryMode === 'maker-hedge' ? 'maker' : 'market',
+  );
+}
 export const TIMEOUT_CHOICES = [
   { value: '60', label: '1m' },
   { value: '300', label: '5m' },

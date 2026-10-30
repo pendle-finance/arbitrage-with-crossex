@@ -42,7 +42,7 @@
     "capitalTitle": "Today's initial margin across the perps and the Boros positions.",
     "estFixedApr": "Est. fixed APR",
     "estFixedAprTitle": "Locked rate after fees, on the pair's capital. Grey: the same lock as a spread on notional.",
-    "profitAtMaturity": "Profit at maturity",
+    "profitAtMaturity": "Est. profit at maturity",
     "profitTitle": "Carry over the whole hedge at the locked rate, minus the fees charged."
   },
   "positionViews": "Position views",
@@ -129,7 +129,7 @@
     "rollOverTitle": "Move the Boros positions to a later maturity.",
     "rollOver": "Roll over"
   },
-  "legLetterLabel": "Leg {{letter}}",
+  "legLetterLabel": "Market {{letter}}",
   "batch": {
     "labelMargin": "{{label}} margin",
     "slipInvalid": "Must be greater than 0 and at most {{max}}%.",
@@ -174,7 +174,7 @@
     "cancelPart": "Your orders on the {{date}} markets are cancelled, also for the part you keep. Place them again after the roll.",
     "cancelAll": "Open orders on the {{date}} markets are cancelled with the roll.",
     "canFund": "Can it fund?",
-    "requiredMargin": "Required margin",
+    "requiredMargin": "Margin required",
     "forNewLegs": "for the new positions",
     "requiredTitle": "Initial margin the new positions post, summed.",
     "availableMargin": "Available margin",
@@ -425,7 +425,7 @@
     "hedged": "Hedged",
     "toComplete": "To complete the hedge",
     "openAsk": "Open {{ask}}",
-    "missingHedge": "Missing hedge",
+    "missingHedge": "Not fully hedged",
     "noCancelTitle": "The perps do not cancel across venues. Price risk is live.",
     "noCancel": "Perps don’t cancel",
     "updatingWindow": "Updating…",
@@ -479,11 +479,12 @@
     "restoreTitle": "Count the whole position in the farm again.",
     "restore": "Restore"
   },
-  "closePair": "Close pair",
   "closeModal": {
     "noRateLegs": "no Boros positions",
     "closeName": "Close {{name}}",
-    "noPerps": "no perps"
+    "noPerps": "no perps",
+    "borosStaysOpen": "The Boros position stays open. Without the perps it is no longer hedged: until you close it or it matures, you carry the funding rate risk.",
+    "perpsStayOpen": "The perps stay open and keep paying or receiving floating funding, with no locked rate to offset it."
   },
   "breakdown": {
     "title": "{{base}} — PnL breakdown",
