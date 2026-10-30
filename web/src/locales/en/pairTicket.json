@@ -230,6 +230,7 @@
     "swapSides": "Swap sides",
     "swapSidesHint": "Swap long and short on the spread",
     "marketLetter": "Market {{letter}}",
+    "borosMarketLetter": "Boros market {{letter}}",
     "swapMarkets": "Swap markets",
     "swapMarketsHint": "Swap the two markets between their slots",
     "marketPayFixed": "Market · pay fixed",

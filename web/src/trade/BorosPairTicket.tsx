@@ -1022,7 +1022,7 @@ export function BorosPairTicket({
       ) : mode === 'pair' ? (
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
           <div className="relative min-w-0">
-            <MarketCard label={t('pairTicket.boros.marketLetter', { letter: 'A' })} row={slotA} side={slotDirA} locked={guided}>
+            <MarketCard label={t(guided ? 'pairTicket.boros.borosMarketLetter' : 'pairTicket.boros.marketLetter', { letter: 'A' })} row={slotA} side={slotDirA} locked={guided}>
               <MarketSelect
                 id="boros-leg-a"
                 label=""
@@ -1067,7 +1067,7 @@ export function BorosPairTicket({
           </button>
           )}
           <div className="relative min-w-0">
-            <MarketCard label={t('pairTicket.boros.marketLetter', { letter: 'B' })} row={slotB} side={slotDirA === 'short' ? 'long' : 'short'} locked={guided}>
+            <MarketCard label={t(guided ? 'pairTicket.boros.borosMarketLetter' : 'pairTicket.boros.marketLetter', { letter: 'B' })} row={slotB} side={slotDirA === 'short' ? 'long' : 'short'} locked={guided}>
               <MarketSelect
                 id="boros-leg-b"
                 label=""

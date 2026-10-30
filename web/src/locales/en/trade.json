@@ -197,7 +197,8 @@
     "viewPosition": "View my position",
     "close": "Close",
     "lockRate": "Lock the rate",
-    "hedgePerps": "Hedge the perps"
+    "hedgePerps": "Hedge the perps",
+    "onVenue": "on {{venue}}"
   },
   "deal": {
     "modeOpening": "Maker resting — awaiting fills",

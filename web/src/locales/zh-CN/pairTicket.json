@@ -227,6 +227,7 @@
     "swapSides": "互换方向",
     "swapSidesHint": "互换利差的多头与空头",
     "marketLetter": "市场 {{letter}}",
+    "borosMarketLetter": "Boros 市场 {{letter}}",
     "swapMarkets": "互换市场",
     "swapMarketsHint": "互换两个位置上的市场",
     "marketPayFixed": "市场 · 支付固定",
