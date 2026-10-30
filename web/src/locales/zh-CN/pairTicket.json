@@ -85,7 +85,7 @@
     "residualYours": "此仓位仍有 {{amount}} 未平 — 您只平了一部分。剩余部分可随时平仓。",
     "residualOthers": "交易所上另有 {{amount}} 未平 — 那是同一仓位中其他组合的份额，不属于此组合。",
     "daysShort": "{{n}} 天",
-    "locked": "锁定 {{rate}}",
+    "locked": "固定{{rate}}",
     "mark": "标记利率 {{rate}}",
     "leavesBundles": "将同时退出两个分组：<i0/>{{a}} 和 <i1/>{{b}}。",
     "closeSizeAll": "平仓规模 · 所有仓位",

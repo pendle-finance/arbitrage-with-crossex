@@ -284,7 +284,7 @@
     "closePerpWhole": "以只减仓方式平掉这条永续腿。",
     "closePerpSlice": "以只减仓方式平掉这条永续腿未配对的部分。组合保留其份额。",
     "yuMaturityTitle": "到期日。没有其他仓位在这天到期。",
-    "lockedTitle": "该仓位锁定的固定利率，已扣除结算手续费。负数表示该仓位支付。",
+    "lockedTitle": "该仓位锁定的固定利率，未扣除结算手续费。",
     "closeYuAria": "平 {{venue}} {{side}} YU",
     "closeYuWhole": "以市价平掉这个 Boros 仓位。",
     "closeYuSlice": "以市价平掉这个 Boros 仓位未配对的部分。组合保留其份额。"
@@ -342,8 +342,8 @@
   "openMore": "加仓",
   "bundleHead": {
     "notionalTitle": "持仓中永续的名义规模；没有永续时为 Boros 仓位的名义规模。",
-    "fixedAprTitle": "该交易所的对冲固定利率，按其持仓中的 Boros 仓位加权，已扣除结算手续费。",
-    "fixedApr": "固定 APR",
+    "fixedAprTitle": "该交易所对冲所用的固定利率，按其持仓中的 Boros 仓位加权，已扣除结算手续费。组合的各腿显示的是扣费前的利率。",
+    "fixedApr": "净固定 APR",
     "fundingTitle": "永续资金费 + Boros 结算，已扣除结算手续费。",
     "funding": "资金费结算",
     "tradeTitle": "Boros 已实现利率盈亏 + 永续已实现价格盈亏 + 永续未实现盈亏。",
@@ -393,8 +393,6 @@
     "active": "{{n}} 条活跃",
     "inactive": "{{n}} 条非活跃",
     "onQty": "，规模 {{qty}}",
-    "receive": "收取",
-    "pay": "支付",
     "tradingFees": "交易手续费",
     "offsets": "* 不同交易所之间相互抵消。",
     "entryMark": "开仓价 → 标记价",

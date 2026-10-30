@@ -55,5 +55,7 @@
   "all": "All",
   "unknown": "Unknown",
   "error": "Error",
-  "viewOnly": "View-only"
+  "viewOnly": "View-only",
+  "payRate": "pay {{rate}}",
+  "receiveRate": "receive {{rate}}"
 }

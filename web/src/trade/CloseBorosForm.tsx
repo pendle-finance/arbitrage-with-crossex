@@ -22,6 +22,7 @@ import { Check, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { BorosLegFill, BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
+import { fixedRateText } from '../components/FixedRate';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
 import { daysToMaturity, knownRate } from '../lib/boros';
@@ -538,7 +539,7 @@ export function CloseBorosForm({
               valueSub={
                 l.entryApr !== undefined || knownRate(l.markApr) ? (
                   <>
-                    {l.entryApr !== undefined ? t('pairTicket.closeBoros.locked', { rate: fmtPct(l.entryApr) }) : ''}
+                    {l.entryApr !== undefined ? t('pairTicket.closeBoros.locked', { rate: fixedRateText(t, l.side === 'SHORT' ? l.entryApr : -l.entryApr) }) : ''}
                     {l.entryApr !== undefined && knownRate(l.markApr) ? ' · ' : ''}
                     {knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : ''}
                   </>

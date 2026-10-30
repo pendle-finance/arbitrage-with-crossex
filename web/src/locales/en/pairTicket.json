@@ -86,7 +86,7 @@
     "residualYours": "{{amount}} of this position is still open — you closed part of it. Close the rest whenever you like.",
     "residualOthers": "{{amount}} more is open on the venue — that is another pair's share of the same position, not yours.",
     "daysShort": "{{n}}d",
-    "locked": "locked {{rate}}",
+    "locked": "{{rate}} fixed",
     "mark": "mark {{rate}}",
     "leavesBundles": "Leaves both bundles: <i0/>{{a}} and <i1/>{{b}}.",
     "closeSizeAll": "Close size · all positions",
