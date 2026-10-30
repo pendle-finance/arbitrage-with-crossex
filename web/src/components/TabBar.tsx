@@ -3,7 +3,7 @@
  * left sidebar, so narrow viewports spend their width on content.
  *
  * Opportunities and Positions are the primary tabs (what the terminal is FOR)
- * and are rendered large and cyan-highlighted; Balances / Open Orders / Trades /
+ * and are rendered large and cyan-highlighted; Balances / Limit orders / Trades /
  * Fees are reference views, rendered small and dim after a divider. Panels stay
  * MOUNTED while inactive (hidden via the `hidden` attribute) so react-query
  * polling and live count badges keep working off-screen.
@@ -11,6 +11,7 @@
  * The strip itself is PpTabsNav's `glow` variant: the chosen tab is marked by
  * an underline inside its own box plus an info wash rising from that edge.
  */
+import { useTranslation } from 'react-i18next';
 import { createContext, Fragment, useContext, type ReactNode } from 'react';
 
 export const ACTIVE_TAB_KEY = 'crossex:activeTab:v1';
@@ -49,13 +50,14 @@ export function TabBar({
   /** Header controls that share this row — freshness, settings. */
   right?: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     // Mirrors <main>'s grid in App.tsx (max-w, px-5, gap-5) so the strip's
     // rule and the content column share one left edge.
     <div className="mx-auto flex max-w-[1500px] items-stretch gap-5 px-5">
       <div
         role="tablist"
-        aria-label="Sections"
+        aria-label={t('app.sections')}
         className="flex min-w-0 flex-1 items-stretch overflow-x-auto"
       >
         {tabs.map((t, i) => {

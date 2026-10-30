@@ -1,5 +1,6 @@
 import { ArrowRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
 import { useInstallWatch, useRunUpdate, useUpdateLog, useVersion } from '../api/queries';
 import { INSTALL_CMD, INSTALL_CMD_WINDOWS, REPO_URL } from '../lib/app';
@@ -52,6 +53,7 @@ function UpdateProgress({
   logPath: string;
   onRetry: () => void;
 }) {
+  const { t } = useTranslation();
   const { step, phase, done, failed, plain } = readUpdateLog(text);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -64,12 +66,12 @@ function UpdateProgress({
   const slow = !done && !failed && elapsed > SLOW_MS;
   const pct = done ? 100 : Math.round(((phase + 1) / (UPDATE_PHASES.length + 1)) * 100);
   const headline = failed
-    ? 'The update failed. Your previous version is running again.'
+    ? t('app.update.failed')
     : done
-      ? 'Updated. Reloading this page…'
+      ? t('app.update.reloading')
       : offline
-        ? 'Restarting the app…'
-        : (step ?? 'Starting the installer…');
+        ? t('app.update.restarting')
+        : (step ?? t('app.update.starting'));
 
   return (
     <div
@@ -131,25 +133,25 @@ function UpdateProgress({
 
       <p className="mt-2.5 text-[12px] text-ink-400">
         {failed
-          ? 'Your keys and trade history are untouched. Try again, or run the command yourself.'
+          ? t('app.update.failedNote')
           : slow
-            ? 'This is taking longer than usual. The installer’s own output is below.'
-            : 'Installation running in the background. This page reloads itself when it is done.'}
+            ? t('app.update.slowNote')
+            : t('app.update.runningNote')}
       </p>
 
       <details className="mt-2">
         <summary className="cursor-pointer text-[11px] text-ink-500 hover:text-ink-300">
-          Show log
+          {t('app.update.showLog')}
         </summary>
         <pre className="num mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md border border-ink-800 bg-ink-950 p-2 text-[10px] leading-relaxed text-ink-400">
-          {plain.trim() || 'nothing yet'}
+          {plain.trim() || t('app.update.nothingYet')}
         </pre>
         <p className="num mt-1 break-all text-[10px] text-ink-600">{logPath}</p>
       </details>
 
       {failed && (
         <button type="button" className="btn mt-2.5 text-xs" onClick={onRetry}>
-          Try again
+          {t('app.tryAgain')}
         </button>
       )}
     </div>
@@ -157,6 +159,7 @@ function UpdateProgress({
 }
 
 export function UpdateIndicator() {
+  const { t } = useTranslation();
   const { data } = useVersion();
   const runUpdate = useRunUpdate();
   const [open, setOpen] = useState(false);
@@ -219,23 +222,27 @@ export function UpdateIndicator() {
         onClick={() => setOpen(true)}
         title={
           running
-            ? 'The update is installing — click to watch it'
-            : `Version ${data.latest} is available — click to review and update`
+            ? t('app.update.installingTitle')
+            : t('app.update.availableTitle', { version: data.latest })
         }
         className="hdr-ctl border-amber-500/50 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20"
       >
-        {running ? 'Updating…' : `Update v${data.latest}`}
+        {running ? t('app.update.updating') : t('app.update.pill', { version: data.latest })}
       </button>
       {open && (
         <Modal
-          title={running ? `Updating to v${data.latest}` : `Update available — v${data.latest}`}
+          title={running ? t('app.update.updatingTo', { version: data.latest }) : t('app.update.available', { version: data.latest })}
           onClose={() => setOpen(false)}
           widthClass="w-[560px]"
         >
           <div className="flex flex-col gap-4 px-5 py-5 text-sm leading-relaxed text-ink-200">
             <div>
               <p className="text-[13px] text-ink-400">
-                You&rsquo;re on <span className="num">v{data.current ?? 'unknown'}</span>.
+                <Trans
+                  i18nKey="app.update.youreOn"
+                  values={{ version: data.current ?? t('app.unknownLower') }}
+                  components={{ v: <span className="num" /> }}
+                />
               </p>
               {data.highlights.length > 0 && (
                 <ul className="mt-1.5 list-disc space-y-1 pl-5 text-[13px] text-ink-300">
@@ -265,18 +272,17 @@ export function UpdateIndicator() {
                 <SegmentedToggle
                   fill
                   value={route}
-                  ariaLabel="How to update"
+                  ariaLabel={t('app.update.howTo')}
                   onChange={setRoute}
                   options={[
-                    { value: 'auto', label: 'Update for me' },
-                    { value: 'manual', label: 'Run it in my terminal' },
+                    { value: 'auto', label: t('app.update.auto') },
+                    { value: 'manual', label: t('app.update.manual') },
                   ]}
                 />
                 {route === 'auto' ? (
                   <>
                     <p className="text-[12px] text-ink-400">
-                      Installs v{data.latest} on this machine and restarts the app. It takes about a
-                      minute. Your keys and trade history are not touched.
+                      {t('app.update.autoNote', { version: data.latest })}
                     </p>
                     <button
                       type="button"
@@ -287,16 +293,16 @@ export function UpdateIndicator() {
                         runUpdate.mutate();
                       }}
                     >
-                      {runUpdate.isPending ? 'Starting…' : `Update to v${data.latest}`}
+                      {runUpdate.isPending ? t('app.update.startingShort') : t('app.update.updateTo', { version: data.latest })}
                     </button>
                   </>
                 ) : (
                   <>
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-[12px] text-ink-400">Paste this into a terminal.</p>
+                      <p className="text-[12px] text-ink-400">{t('app.update.paste')}</p>
                       <SegmentedToggle
                         value={os}
-                        ariaLabel="Operating system"
+                        ariaLabel={t('app.update.os')}
                         onChange={setOs}
                         options={(['macos', 'windows'] as Os[]).map((v) => ({
                           value: v,
@@ -323,10 +329,10 @@ export function UpdateIndicator() {
 
             <div className="flex flex-wrap gap-x-4 gap-y-1">
               <a href={changesUrl} target="_blank" rel="noreferrer" className={LINK_CLASS}>
-                Read the code changes <ArrowRight size={12} aria-hidden className="inline" />
+                {t('app.update.codeChanges')} <ArrowRight size={12} aria-hidden className="inline" />
               </a>
               <a href={CHANGELOG_URL} target="_blank" rel="noreferrer" className={LINK_CLASS}>
-                Full changelog on GitHub <ArrowRight size={12} aria-hidden className="inline" />
+                {t('app.update.changelog')} <ArrowRight size={12} aria-hidden className="inline" />
               </a>
             </div>
           </div>

@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
-import { fmtDateLocal } from '../lib/fmt';
+import { fmtDateLocal, fmtDateShort } from '../lib/fmt';
 import { renderWithClient } from '../test/utils';
 import { SPREAD_OPP_MARKET_ID, SPREAD_OPP_MATURITY } from '../test/fixtures';
 import { BorosPairTicket } from './BorosPairTicket';
@@ -220,11 +220,11 @@ function handlers(opts: {
 async function fillTicket(user: ReturnType<typeof userEvent.setup>) {
   // The selects are disabled and empty until the context query lands.
   await waitFor(() =>
-    expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
   );
-  await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
-  await user.selectOptions(screen.getByLabelText('Leg B'), String(BN));
-  await user.type(screen.getByLabelText(/^Size per leg/), '100000');
+  await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
+  await user.selectOptions(screen.getByLabelText('Market B'), String(BN));
+  await user.type(screen.getByLabelText(/^Size per market/), '100000');
 }
 
 beforeEach(() => {
@@ -278,7 +278,7 @@ describe('BorosPairTicket', () => {
 
     expect(await screen.findByRole('button', { name: 'Log in to trade 0x2222…2222' })).toBeInTheDocument();
     // The header chip says View only; the ticket does not repeat it.
-    expect(screen.queryByText('View only')).toBeNull();
+    expect(screen.queryByText('View-only')).toBeNull();
     expect(screen.queryByText('Logged in')).toBeNull();
     expect(screen.queryByText('0x1111…1111')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Connect wallet' })).toBeNull();
@@ -353,7 +353,7 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     // No browser wallet in this test, so the card says how to get one.
     expect(await screen.findByText('Install Rabby or MetaMask, then reload.')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Leg A')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Market A')).not.toBeInTheDocument();
   });
 
   it('states each leg\'s side as a label — a spread has one long and one short', () => {
@@ -379,14 +379,14 @@ describe('BorosPairTicket', () => {
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
+    await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
     expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
 
-    const labels = [...(screen.getByLabelText('Leg B') as HTMLSelectElement).options].map((o) => o.textContent);
+    const labels = [...(screen.getByLabelText('Market B') as HTMLSelectElement).options].map((o) => o.textContent);
     // Collateral named, no date — and a market at another maturity is still a market.
-    expect(labels).toEqual(['select a market…', 'Binance ETHUSDT · USDT', 'Bybit ETH · USDT']);
+    expect(labels).toEqual(['Select market', 'Binance ETHUSDT · USDT', 'Bybit ETH · USDT']);
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {
@@ -395,7 +395,7 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(await screen.findByText('Estimated spread')).toBeInTheDocument();
+    expect(await screen.findByText('Est. spread after settlement fees')).toBeInTheDocument();
     expect(screen.getByText('4.50%')).toBeInTheDocument(); // estimate — the lead
     // Both are net; the pre-cost 4.8% must appear nowhere. That the figures
     // ARE net is the property worth pinning — the caption saying so was
@@ -432,12 +432,12 @@ describe('BorosPairTicket', () => {
     );
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
-    const max = await screen.findByRole('button', { name: /^max 10,000 USDT$/ });
+    const max = await screen.findByRole('button', { name: /^Max 10,000 USDT$/ });
     await user.click(max);
-    expect((screen.getByLabelText(/^Size per leg/) as HTMLInputElement).value).toBe('10000');
+    expect((screen.getByLabelText(/^Size per market/) as HTMLInputElement).value).toBe('10000');
 
     await user.click(screen.getByRole('radio', { name: 'Single' }));
-    expect(await screen.findByRole('button', { name: /^max 16,666\.6/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Max 16,666\.6/ })).toBeInTheDocument();
   });
 
   it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
@@ -509,9 +509,9 @@ describe('BorosPairTicket', () => {
 
     // Per-leg override: leg A alone widens.
     // The tolerance controls sit behind the "Max:" disclosure now.
-    await user.click(screen.getByTitle(/Change the tolerance/));
-    await user.click(screen.getByRole('button', { name: 'set each leg separately' }));
-    const slipA = screen.getByLabelText('Leg A %');
+    await user.click(screen.getByTitle(/Max slippage per market|Change max slippage/));
+    await user.click(screen.getByRole('button', { name: 'Set each market separately' }));
+    const slipA = screen.getByLabelText('Market A %');
     await user.clear(slipA);
     await user.type(slipA, '0.8');
 
@@ -548,9 +548,9 @@ describe('BorosPairTicket', () => {
     // it: the heading and the three-column grid are gone, so what is pinned is
     // that each market's ENDING position is on screen and that the netting
     // rule is still stated somewhere the user can reach it.
-    expect((await screen.findAllByTitle(/whole exposure there/i)).length).toBe(2);
+    expect((await screen.findAllByTitle(/whole position there/i)).length).toBe(2);
     expect(screen.getAllByText(/→/).length).toBeGreaterThan(0);
-    const netted = (await screen.findAllByTitle(/whole exposure there/i))[0];
+    const netted = (await screen.findAllByTitle(/whole position there/i))[0];
     expect(netted).toHaveTextContent(/150,000/);
     expect(netted).toHaveTextContent(/50,000/);
   });
@@ -593,7 +593,7 @@ describe('BorosPairTicket', () => {
     expect(box).toBeChecked();
 
     // Changing the size changes WHAT is being acknowledged — it must not carry.
-    await user.type(screen.getByLabelText(/^Size per leg/), '0');
+    await user.type(screen.getByLabelText(/^Size per market/), '0');
     await waitFor(() => expect(screen.getByRole('checkbox', { name: /I understand/ })).not.toBeChecked());
   });
 
@@ -607,15 +607,35 @@ describe('BorosPairTicket', () => {
     expect(confirm).toBeInTheDocument();
     // The button states the COUNT ("2 Boros market orders"); the market cards
     // name the two markets, so the selects carry them by accessible name.
-    expect(screen.getByLabelText('Leg A')).toHaveDisplayValue('Hyperliquid ETH · USDT');
-    expect(screen.getByLabelText('Leg B')).toHaveDisplayValue('Binance ETHUSDT · USDT');
+    expect(screen.getByLabelText('Market A')).toHaveDisplayValue('Hyperliquid ETH · USDT');
+    expect(screen.getByLabelText('Market B')).toHaveDisplayValue('Binance ETHUSDT · USDT');
     // Atomic acceptance is the promise; a full fill is NOT. Both halves must
     // still be stated together — overselling the batch is the failure mode —
     // so the hover is asserted to carry BOTH clauses, not just the reassuring
     // one. It now lives on the confirm control itself.
     const atomicity = confirm.getAttribute("title") ?? "";
-    expect(atomicity).toMatch(/One atomic batch/i);
+    expect(atomicity).toMatch(/Sent together/i);
     expect(atomicity).toMatch(/can still fill short/i);
+  });
+
+  it('warns when the books fill the legs unevenly and offers the size both legs fill', async () => {
+    const user = userEvent.setup();
+    const sizes: unknown[] = [];
+    server.use(
+      ...handlers({
+        sim: { hedgedSize: 60_000, unhedgedSize: 40_000 },
+        onSimulate: (body) => sizes.push((body.legs as { size: number }[])[0].size),
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+
+    expect(
+      await screen.findByText('Only 60,000 USDT fills on both markets. 40,000 USDT would be left unhedged.'),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Use 60,000 USDT' }));
+    expect(screen.getByLabelText(/^Size per market/)).toHaveValue('60000');
+    await waitFor(() => expect(sizes).toContain(60_000));
   });
 
   it('renders ETH-collateral sizes at real precision, never rounded to 0', async () => {
@@ -663,7 +683,7 @@ describe('BorosPairTicket', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await screen.findByText('Estimated spread');
+    await screen.findByText('Est. spread after settlement fees');
     // The COMBINED margin survives at ETH scale. The per-leg margins are no
     // longer shown — only the combined figure has to clear the account — so
     // the total is what this now pins.
@@ -719,7 +739,7 @@ describe('BorosPairTicket', () => {
     const { container } = renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await screen.findByText('Estimated spread');
+    await screen.findByText('Est. spread after settlement fees');
     expect(screen.getAllByText(/4,100/).length).toBeGreaterThan(0);
     expect(container.textContent).not.toContain('4100');
     expect(container.textContent).not.toContain('4.1k');
@@ -764,7 +784,7 @@ describe('BorosPairTicket', () => {
     const { container } = renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await screen.findByText('Estimated spread');
+    await screen.findByText('Est. spread after settlement fees');
     expect(screen.getAllByText(/12,345,678\.9/).length).toBeGreaterThan(0);
     expect(container.textContent).not.toMatch(/e\+/i);
     expect(container.textContent).not.toContain('12345678.9');
@@ -821,7 +841,7 @@ describe('BorosPairTicket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getAllByText('rejected').length).toBe(2);
+    expect(report.getAllByText('Rejected').length).toBe(2);
     // The actual venue error, verbatim — that is the whole diagnostic.
     expect(report.getAllByText('MarketNotEntered(155)').length).toBe(1);
     expect(report.getAllByText(/its own message is below/i).length).toBe(2);
@@ -867,8 +887,8 @@ describe('BorosPairTicket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getAllByText('no prepaid gas').length).toBe(2);
-    expect(report.getAllByText(/separate from your trading collateral/i).length).toBe(2);
+    expect(report.getAllByText('No prepaid gas').length).toBe(2);
+    expect(report.getAllByText(/kept apart from collateral/i).length).toBe(2);
   });
 
   it('renders nothing about gas when the balance covers the order', async () => {
@@ -878,7 +898,7 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     // Pair ticket: the fee covers both legs, and the label says so.
-    await screen.findByText('Trade fee · 2 legs');
+    await screen.findByText('Trade fee · 2 markets');
     expect(screen.queryByText(/prepaid gas/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Top up gas/i })).not.toBeInTheDocument();
   });
@@ -951,13 +971,13 @@ describe('BorosPairTicket', () => {
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     // The option's accessible name carries its "reduce-only" sub-label.
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     // Whose guarantee "reduce-only" is still qualified — on the badge that
     // makes the claim, instead of a paragraph shown every time Close is picked.
-    expect(screen.getByTitle(/Boros has no reduce-only order type/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Boros has no reduce-only order/i)).toBeInTheDocument();
   });
 
   it('surfaces a server blocker with its shortfall framed as a top-up', async () => {
@@ -1054,8 +1074,8 @@ describe('BorosPairTicket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getByText('partially filled')).toBeInTheDocument();
-    expect(report.getByText(/40,000 USDT on leg B is unhedged/i)).toBeInTheDocument();
+    expect(report.getByText('Partly filled')).toBeInTheDocument();
+    expect(report.getByText(/40,000 USDT on market B is unhedged/i)).toBeInTheDocument();
     expect(report.getByText(/not enough depth/i)).toBeInTheDocument();
     expect(report.getByText(/^Binance ETHUSDT 31 Aug 2026 · /)).toBeInTheDocument();
     expect(report.queryByText(/^Leg [AB] · /)).not.toBeInTheDocument();
@@ -1093,8 +1113,8 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     expect(await screen.findByText('Estimated rate')).toBeInTheDocument();
-    expect(screen.queryByText('Estimated spread')).not.toBeInTheDocument();
-    expect(screen.queryByText('Trade fee · 2 legs')).not.toBeInTheDocument();
+    expect(screen.queryByText('Est. spread after settlement fees')).not.toBeInTheDocument();
+    expect(screen.queryByText('Trade fee · 2 markets')).not.toBeInTheDocument();
   });
 
   it('a pair that came back with NO imbalance offers Retry, never Complete', async () => {
@@ -1161,9 +1181,9 @@ describe('BorosPairTicket', () => {
     // Leg B carries the surplus, so leg A is the one still short — arming both
     // at 40k (the old behaviour) would have grown the book at the same
     // imbalance and doubled the exposure.
-    expect(screen.getByLabelText(/^Size per leg/)).toHaveValue('40000');
-    expect(screen.getByText(/Completing leg A only/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /complete leg A/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Size per market/)).toHaveValue('40000');
+    expect(screen.getByText(/Completing market A only/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /complete market A/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /2 Boros market orders/i })).not.toBeInTheDocument();
 
     // …and the request says so, so the server trades one leg.
@@ -1190,8 +1210,8 @@ describe('BorosPairTicket', () => {
     // Leg A fell 40k short and leg B filled in FULL — re-arming BOTH legs at
     // 40k would trade 40k on top of leg B's finished fill. Only the short leg
     // re-arms, as a single-leg completion.
-    expect(screen.getByLabelText(/^Size per leg/)).toHaveValue('40000');
-    expect(screen.getByText(/Completing leg A only/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Size per market/)).toHaveValue('40000');
+    expect(screen.getByText(/Completing market A only/i)).toBeInTheDocument();
   });
 
   it('retries BOTH legs at the smaller shortfall when both fell short', async () => {
@@ -1225,7 +1245,7 @@ describe('BorosPairTicket', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     // One shared size must not overshoot EITHER leg's own gap, so the smaller
     // shortfall re-arms both; the leftover imbalance is what Complete is for.
-    expect(screen.getByLabelText(/^Size per leg/)).toHaveValue('25000');
+    expect(screen.getByLabelText(/^Size per market/)).toHaveValue('25000');
     expect(screen.queryByText(/Completing leg/i)).not.toBeInTheDocument();
   });
 
@@ -1300,10 +1320,10 @@ describe('BorosPairTicket — market list', () => {
     renderWithClient(<BorosPairTicket />);
 
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
     expect(
-      within(screen.getByLabelText('Leg A')).getByRole('option', { name: 'Hyperliquid SOL · SOL' }),
+      within(screen.getByLabelText('Market A')).getByRole('option', { name: 'Hyperliquid SOL · SOL' }),
     ).toBeInTheDocument();
   });
 });
@@ -1316,12 +1336,12 @@ describe('BorosPairTicket — the size unit', () => {
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    expect(screen.getByText(/^Size per leg$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Size per market$/)).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
-    expect(screen.getByLabelText('Size per leg (USDT)')).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
+    expect(screen.getByLabelText('Size per market (USDT)')).toBeInTheDocument();
     expect(screen.queryByText(/\(collateral\)/)).not.toBeInTheDocument();
   });
 
@@ -1330,10 +1350,10 @@ describe('BorosPairTicket — the size unit', () => {
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    await user.selectOptions(screen.getByLabelText('Leg A'), '400');
-    expect(screen.getByLabelText('Size per leg (BTC)')).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText('Market A'), '400');
+    expect(screen.getByLabelText('Size per market (BTC)')).toBeInTheDocument();
   });
 });
 
@@ -1395,8 +1415,8 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
 
     // Both legs on 902/903 (Sep). Before the fix leg B armed 901 (Dec) and the
     // ticket reported "different maturity" about a pair nobody chose.
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('903'));
-    expect(screen.getByLabelText('Leg B')).toHaveValue('902');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('903'));
+    expect(screen.getByLabelText('Market B')).toHaveValue('902');
     expect(screen.queryByText(/different maturity/)).not.toBeInTheDocument();
   });
 
@@ -1421,8 +1441,49 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(''));
-    expect(screen.getByLabelText('Leg B')).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(''));
+    expect(screen.getByLabelText('Market B')).toHaveValue('');
+  });
+});
+
+describe('BorosPairTicket — a leg the venue already holds at another date', () => {
+  const EARLY = MATURITY - 30 * 86_400;
+  const held = 'Hyperliquid SHORT holds 10 ETH at 30 Oct.';
+  const prefill = (room: number): Omit<BorosOpenPrefill, 'nonce'> => ({
+    base: 'ETH',
+    longVenue: null,
+    shortVenue: 'Hyperliquid',
+    maturity: MATURITY,
+    size: 4000,
+    overlaps: [{ venue: 'HYPERLIQUID', side: 'SHORT', held, room, roomBase: room / 1000, legs: [{ size: 10_000, sizeBase: 10, maturity: EARLY }] }],
+  });
+  const oneVenue = () =>
+    handlers({ ctx: context({ markets: [marketRow({ marketId: 902, name: 'Hyperliquid ETH Sep', venue: 'Hyperliquid' })] }) });
+
+  it('says how much the open covers twice, and until when, at the size typed', async () => {
+    server.use(...oneVenue());
+    const user = userEvent.setup();
+    renderWithClient(<BorosPrefillHarness prefill={prefill(0)} />);
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+    const until = fmtDateShort(EARLY);
+    expect(await screen.findByText(`${held} This open covers $4,000 twice until ${until}.`)).toBeInTheDocument();
+    const box = screen.getByRole('textbox', { name: /size/i });
+    await user.clear(box);
+    await user.type(box, '2500');
+    expect(await screen.findByText(`${held} This open covers $2,500 twice until ${until}.`)).toBeInTheDocument();
+  });
+
+  it('says nothing while the open fits in what the perp still lacks', async () => {
+    server.use(...oneVenue());
+    const user = userEvent.setup();
+    renderWithClient(<BorosPrefillHarness prefill={prefill(4000)} />);
+    await user.click(screen.getByRole('button', { name: 'fire' }));
+    const box = screen.getByRole('textbox', { name: /size/i });
+    await waitFor(() => expect(box).toHaveValue('4000'));
+    expect(screen.queryByText(/twice until/)).not.toBeInTheDocument();
+    await user.clear(box);
+    await user.type(box, '5000');
+    expect(await screen.findByText(`${held} This open covers $1,000 twice until ${fmtDateShort(EARLY)}.`)).toBeInTheDocument();
   });
 });
 
@@ -1453,13 +1514,13 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
     // The cue lands both legs on the shared Sep maturity, and the picker says so.
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('920'));
-    expect(screen.getByLabelText('Leg B')).toHaveValue('922');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('920'));
+    expect(screen.getByLabelText('Market B')).toHaveValue('922');
     expect(chip('Maturity', fmtDateLocal(SEP))).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(chip('Maturity', fmtDateLocal(DEC)));
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('921'));
-    expect(screen.getByLabelText('Leg B')).toHaveValue('923');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('921'));
+    expect(screen.getByLabelText('Market B')).toHaveValue('923');
   });
 
   it('settles both legs on a maturity the two markets share when a market is picked', async () => {
@@ -1479,13 +1540,13 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    await user.selectOptions(screen.getByLabelText('Leg A'), '960');
-    await user.selectOptions(screen.getByLabelText('Leg B'), '962');
+    await user.selectOptions(screen.getByLabelText('Market A'), '960');
+    await user.selectOptions(screen.getByLabelText('Market B'), '962');
 
-    expect(screen.getByLabelText('Leg A')).toHaveValue('961');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('962');
+    expect(screen.getByLabelText('Market A')).toHaveValue('961');
+    expect(screen.getByLabelText('Market B')).toHaveValue('962');
     const dates = within(screen.getByRole('group', { name: 'Maturity' })).getAllByRole('button').map((b) => b.textContent);
     expect(dates).toEqual([expect.stringContaining(fmtDateLocal(DEC))]);
   });
@@ -1509,11 +1570,11 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    await user.selectOptions(screen.getByLabelText('Leg A'), '970');
-    await user.selectOptions(screen.getByLabelText('Leg B'), '971');
-    await user.type(screen.getByLabelText(/^Size per leg/), '1000');
+    await user.selectOptions(screen.getByLabelText('Market A'), '970');
+    await user.selectOptions(screen.getByLabelText('Market B'), '971');
+    await user.type(screen.getByLabelText(/^Size per market/), '1000');
 
     expect(
       await screen.findByText("Gate ETH Dec · USDT and Hyperliquid ETH Sep · USDT share no maturity, so they can't be paired."),
@@ -1534,8 +1595,8 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     expect(screen.queryByRole('group', { name: 'Maturity' })).toBeNull();
 
     await user.click(chip('Coin', 'BTC'));
-    const options = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
-    expect(options).toEqual(['select a market…', 'OKX BTC · BTC']);
+    const options = [...(screen.getByLabelText('Market A') as HTMLSelectElement).options].map((o) => o.textContent);
+    expect(options).toEqual(['Select market', 'OKX BTC · BTC']);
   });
 
   it('clears the legs when the coin changes', async () => {
@@ -1543,13 +1604,13 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
+    await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
     expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(chip('Coin', 'BTC'));
-    expect(screen.getByLabelText('Leg A')).toHaveValue('');
+    expect(screen.getByLabelText('Market A')).toHaveValue('');
     expect(chip('Coin', 'BTC')).toHaveAttribute('aria-pressed', 'true');
   });
 
@@ -1568,10 +1629,10 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     );
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    const labels = [...(screen.getByLabelText('Leg A') as HTMLSelectElement).options].map((o) => o.textContent);
-    expect(labels).toEqual(['select a market…', 'Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
+    const labels = [...(screen.getByLabelText('Market A') as HTMLSelectElement).options].map((o) => o.textContent);
+    expect(labels).toEqual(['Select market', 'Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
   });
 });
 
@@ -1616,12 +1677,12 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await user.click(screen.getByTitle(/Change the tolerance/));
+    await user.click(screen.getByTitle(/Max slippage per market|Change max slippage/));
     const slip = screen.getByLabelText(/Max slippage/);
     await user.clear(slip);
     await user.type(slip, '50');
 
-    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+    expect(await screen.findByText(/Max slippage must be above 0/)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled(),
     );
@@ -1639,19 +1700,19 @@ describe('BorosPairTicket — slippage is stated, not silently clamped', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    await user.click(screen.getByTitle(/Change the tolerance/));
+    await user.click(screen.getByTitle(/Max slippage per market|Change max slippage/));
     const slip = screen.getByLabelText(/Max slippage/);
     await user.clear(slip);
     await user.type(slip, '0');
 
-    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+    expect(await screen.findByText(/Max slippage must be above 0/)).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled(),
     );
 
     // A cleared box is the same dishonesty — empty on screen, seed on the wire.
     await user.clear(slip);
-    expect(await screen.findByText(/Max slippage must be greater than 0/)).toBeInTheDocument();
+    expect(await screen.findByText(/Max slippage must be above 0/)).toBeInTheDocument();
   });
 });
 
@@ -1733,8 +1794,8 @@ describe('BorosPairTicket — spread ticket', () => {
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
     expect(await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ })).toBeInTheDocument();
-    expect(screen.getByLabelText('Leg A')).toHaveValue('211');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveValue('211');
+    expect(screen.getByLabelText('Market B')).toHaveValue('209');
     expect(screen.queryByText('ETH Spread HL-GATE')).not.toBeInTheDocument();
     expect(screen.queryByText(/Tick Reduce-only/)).not.toBeInTheDocument();
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
@@ -1756,16 +1817,16 @@ describe('BorosPairTicket — spread ticket', () => {
     // The same layout as a hand-picked pair: the singles in the slots, and
     // "Trade on" naming the one spread market the order goes to.
     expect(await screen.findByText('ETH Spread HL-GATE')).toBeInTheDocument();
-    expect(screen.getByText('Market A')).toBeInTheDocument();
-    expect(screen.getByLabelText('Leg A')).toHaveValue('211');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('209');
+    expect(screen.getByText('Boros market A')).toBeInTheDocument();
+    expect(screen.getByLabelText('Market A')).toHaveValue('211');
+    expect(screen.getByLabelText('Market B')).toHaveValue('209');
     expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue('0.121');
 
     expect(await screen.findByText('Liquidation APR')).toBeInTheDocument();
     expect(screen.queryByText(/ liquidation APR$/)).not.toBeInTheDocument();
     expect(screen.getByText('Margin')).toBeInTheDocument();
     expect(screen.getByText('Trade fee')).toBeInTheDocument();
-    expect(screen.getByText('Estimated spread')).toBeInTheDocument();
+    expect(screen.getByText('Est. spread after settlement fees')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
 
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
@@ -1832,7 +1893,7 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeInTheDocument(), { timeout: 3_000 });
 
     const report = within(screen.getByRole('status'));
-    expect(report.getByText('partially filled')).toBeInTheDocument();
+    expect(report.getByText('Partly filled')).toBeInTheDocument();
     expect(report.getByText(/^ETH Spread HL-GATE 27 Nov 2026 · short/)).toBeInTheDocument();
     expect(report.queryByText('Fee')).not.toBeInTheDocument();
     expect(report.queryByRole('button', { name: 'Complete now at market' })).not.toBeInTheDocument();
@@ -1850,7 +1911,7 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(sent[0].legs[0].size * 0.6 + sent[1].legs[0].size).toBeCloseTo(SIZE, 6);
 
     const receipt = within(await screen.findByRole('status'));
-    expect(await receipt.findByText('filled')).toBeInTheDocument();
+    expect(await receipt.findByText('Filled')).toBeInTheDocument();
     expect(receipt.getByText(/^ETH Spread HL-GATE 27 Nov 2026 · short/)).toBeInTheDocument();
     expect(receipt.getByText('Fee')).toBeInTheDocument();
     expect(receipt.getByText('0.000017 ETH')).toBeInTheDocument();
@@ -1858,14 +1919,14 @@ describe('BorosPairTicket — spread ticket', () => {
 
   /** The "Trade on" line naming the spread the order goes to, when it shows. */
   const tradeOn = () => screen.queryByText('ETH Spread HL-GATE');
-  /** The free ticket with Hyperliquid in slot A and Gate in slot B. */
-  const pickHlGate = async (user: ReturnType<typeof userEvent.setup>) => {
+  /** The free ticket short Hyperliquid: Gate in slot A (long), Hyperliquid in slot B (short). */
+  const pickShortHl = async (user: ReturnType<typeof userEvent.setup>) => {
     renderWithClient(<BorosPairTicket />);
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    await user.selectOptions(screen.getByLabelText('Leg A'), '209');
-    await user.selectOptions(screen.getByLabelText('Leg B'), '211');
+    await user.selectOptions(screen.getByLabelText('Market A'), '211');
+    await user.selectOptions(screen.getByLabelText('Market B'), '209');
   };
   type SimBody = { legs: { marketId: number; direction: string; size: number }[] };
 
@@ -1873,19 +1934,19 @@ describe('BorosPairTicket — spread ticket', () => {
     const bodies: Record<string, unknown>[] = [];
     server.use(...spreadHandlers((b) => bodies.push(b)));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
 
     // One layout either way: the pickers keep the singles, and "Trade on" says the spread takes the order.
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
-    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+    expect(screen.getByLabelText('Market A')).toHaveValue('211');
+    expect(screen.getByLabelText('Market B')).toHaveValue('209');
     expect(screen.getByRole('group', { name: 'Maturity' })).toBeInTheDocument();
     expect(screen.queryByText(/1 Boros order instead of 2/)).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
 
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
     const last = bodies[bodies.length - 1] as SimBody;
-    // Slot A short on Hyperliquid = short the spread, whose first venue is Hyperliquid.
+    // Short on Hyperliquid (slot B) = short the spread, whose first venue is Hyperliquid.
     expect(last.legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short', size: 0.121 })]);
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
   });
@@ -1898,10 +1959,10 @@ describe('BorosPairTicket — spread ticket', () => {
       }),
     );
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(screen.getByText('ETH Spread GATE-HL')).toBeInTheDocument());
     await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
-    // Slot A short on Hyperliquid = short leg 2 = long a spread listed Gate first.
+    // Short on Hyperliquid = short leg 2 = long a spread listed Gate first.
     await waitFor(() =>
       expect((bodies[bodies.length - 1] as SimBody | undefined)?.legs).toEqual([
         expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'long', size: 0.121 }),
@@ -1912,12 +1973,12 @@ describe('BorosPairTicket — spread ticket', () => {
   it('offers no way to put a pair with a tradable spread on its singles', async () => {
     server.use(...spreadHandlers(() => {}));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     expect(screen.queryByRole('radiogroup', { name: 'Trade on' })).not.toBeInTheDocument();
     expect(screen.queryByText('2 single markets')).not.toBeInTheDocument();
     // Re-picking the same singles lands back on the spread.
-    await user.selectOptions(screen.getByLabelText('Leg A'), '209');
+    await user.selectOptions(screen.getByLabelText('Market A'), '211');
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
   });
@@ -1926,12 +1987,12 @@ describe('BorosPairTicket — spread ticket', () => {
     const bodies: Record<string, unknown>[] = [];
     server.use(...spreadHandlers((b) => bodies.push(b)));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Swap markets' }));
     // The pickers show the singles in their new slots.
-    expect(screen.getByLabelText('Leg A')).toHaveValue('211');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveValue('209');
+    expect(screen.getByLabelText('Market B')).toHaveValue('211');
     await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
     await waitFor(() =>
       expect((bodies[bodies.length - 1] as SimBody | undefined)?.legs).toEqual([
@@ -1940,9 +2001,9 @@ describe('BorosPairTicket — spread ticket', () => {
     );
 
     // Single trades leg A alone: the spread hands back its first single
-    // (Gate, now in slot A) instead of clearing the pick.
+    // (Hyperliquid, now in slot A) instead of clearing the pick.
     await user.click(screen.getByRole('radio', { name: 'Single' }));
-    expect(screen.getByRole('combobox', { name: 'Market' })).toHaveValue('211');
+    expect(screen.getByRole('combobox', { name: 'Market' })).toHaveValue('209');
     expect(tradeOn()).not.toBeInTheDocument();
   });
 
@@ -1952,27 +2013,27 @@ describe('BorosPairTicket — spread ticket', () => {
   ])('keeps the singles when the spread is %s', async (_label, spread) => {
     server.use(...spreadHandlers(() => {}, { spread }));
     const user = userEvent.setup();
-    await pickHlGate(user);
-    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+    await pickShortHl(user);
+    expect(screen.getByLabelText('Market A')).toHaveValue('211');
+    expect(screen.getByLabelText('Market B')).toHaveValue('209');
     expect(tradeOn()).not.toBeInTheDocument();
   });
 
   it('a close goes back to the singles when the spread holds nothing', async () => {
     server.use(...spreadHandlers(() => {}));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     await waitFor(() => expect(tradeOn()).not.toBeInTheDocument());
-    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+    expect(screen.getByLabelText('Market A')).toHaveValue('211');
+    expect(screen.getByLabelText('Market B')).toHaveValue('209');
   });
 
   it('a close stays on the spread when the spread holds the position', async () => {
     server.use(...spreadHandlers(() => {}, { spread: { currentSize: -0.121 } }));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     expect(tradeOn()).toBeInTheDocument();
@@ -1982,38 +2043,38 @@ describe('BorosPairTicket — spread ticket', () => {
   it('a close stays on the spread when both singles are held too', async () => {
     server.use(...spreadHandlers(() => {}, { spread: { currentSize: 0.05 }, singles: { currentSize: 0.2 } }));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     expect(tradeOn()).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /^max\s*0\.05 ETH/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Max\s*0\.05 ETH/ })).toBeInTheDocument();
   });
 
   it('a 3.64 spread with one 0.36 Gate single held: Reduce-only stays on the spread, max 3.64', async () => {
     server.use(...spreadHandlers(() => {}, { spread: { currentSize: 3.64 }, gateSingle: { currentSize: 0.36 } }));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     expect(tradeOn()).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /^max\s*3\.64 ETH/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Max\s*3\.64 ETH/ })).toBeInTheDocument();
   });
 
   it('a close with one single held and an empty spread goes to the singles', async () => {
     server.use(...spreadHandlers(() => {}, { gateSingle: { currentSize: 0.36 } }));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     await waitFor(() => expect(tradeOn()).not.toBeInTheDocument());
-    expect(screen.getByLabelText('Leg A')).toHaveValue('209');
-    expect(screen.getByLabelText('Leg B')).toHaveValue('211');
+    expect(screen.getByLabelText('Market A')).toHaveValue('211');
+    expect(screen.getByLabelText('Market B')).toHaveValue('209');
   });
 
   it('an open with a single held still trades on the spread (ED-6607)', async () => {
     server.use(...spreadHandlers(() => {}, { spread: { currentSize: 3.64 }, gateSingle: { currentSize: 0.36 } }));
     const user = userEvent.setup();
-    await pickHlGate(user);
+    await pickShortHl(user);
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     expect(screen.getByRole('checkbox', { name: 'Reduce-only' })).not.toBeChecked();
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
@@ -2059,15 +2120,15 @@ describe('BorosPairTicket — spread ticket', () => {
       <BorosPrefillHarness prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: LATER, size: 300, sizeBase: 0.121 }} />,
     );
     await waitFor(() =>
-      expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
     );
-    await user.selectOptions(screen.getByLabelText('Leg A'), '209');
-    await user.selectOptions(screen.getByLabelText('Leg B'), '211');
+    await user.selectOptions(screen.getByLabelText('Market A'), '209');
+    await user.selectOptions(screen.getByLabelText('Market B'), '211');
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: 'fire' }));
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue('221'));
-    expect(screen.getByLabelText('Leg B')).toHaveValue('219');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('221'));
+    expect(screen.getByLabelText('Market B')).toHaveValue('219');
     expect(tradeOn()).not.toBeInTheDocument();
     await waitFor(() =>
       expect((bodies[bodies.length - 1] as SimBody).legs.map((l) => l.marketId)).toEqual([221, 219]),

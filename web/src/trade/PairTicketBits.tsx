@@ -3,10 +3,12 @@
  * the shared row/affix primitives the single ticket reuses. Pure/prop-driven —
  * PairTicket owns all state and the preview query. */
 import { useMemo, useState, type ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { SegmentedToggle } from '../components/SegmentedToggle';
+import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
@@ -14,6 +16,14 @@ import { FieldLabel } from './SymbolCombobox';
 import { ChevronDown, RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
+
+/** The ticket starts on the perp entry picked on Opportunities (default: 2
+ * market orders), so one setting has one default on both screens. */
+export function storedExecMode(): ExecMode {
+  return readJson<ExecMode>(OPPORTUNITIES_STORAGE_KEY, 'market', (p) =>
+    (p as { entryMode?: unknown } | null)?.entryMode === 'maker-hedge' ? 'maker' : 'market',
+  );
+}
 export const TIMEOUT_CHOICES = [
   { value: '60', label: '1m' },
   { value: '300', label: '5m' },
@@ -86,7 +96,7 @@ export function EstimateCard({
   estimating,
   isError,
   aside,
-  label = 'Estimate',
+  label,
   sub,
   step,
   children,
@@ -105,6 +115,7 @@ export function EstimateCard({
   sub?: ReactNode;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   const now = useNow(1_000);
   const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
   return (
@@ -122,15 +133,15 @@ export function EstimateCard({
                 : 'text-[12px] font-normal leading-[14.52px] text-ink-300'
             }
           >
-            {label}
+            {label ?? t('pairTicket.bits.estimate')}
           </span>
           {sub && <span className="num text-[11px] text-ink-400">{sub}</span>}
         </span>
         <span className="flex items-center gap-2 text-[11px] text-ink-400">
           <span className="num">
-            {isError ? 'preview failed' : estimating ? 'estimating…' : (
+            {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('trade.execute.pricing') : (
               <>
-                <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? `${age} ago` : '—'}
+                <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
               </>
             )}
           </span>
@@ -164,17 +175,18 @@ export function LegCard({
   value: ReactNode;
   valueSub?: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3 card px-3 py-2">
       <Chip tone={kind === 'Boros' ? 'blue' : 'neutral'} className="shrink-0 font-semibold">
-        {kind}
+        {kind === 'Perp' ? t('common.perp') : kind}
       </Chip>
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center gap-1.5 text-[12.5px] font-semibold text-ink-50">
           {spreadVenues ? <SpreadIcon venues={spreadVenues} size={16} /> : <VenueIcon venue={venue} size={16} />}
           <span className="truncate">{venue}</span>
           <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
-            {side}
+            {t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
           </Chip>
         </span>
         {sub && <span className="truncate text-[11px] text-ink-400">{sub}</span>}
@@ -226,19 +238,20 @@ export function SlippageLine({
   hint: string;
   quick?: string[];
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-[12px] text-ink-200" title={title}>
-          Slippage
+          {t('pairTicket.bits.slippage')}
         </span>
         <span className="num text-[12px] text-ink-400">
-          Est. <span className="text-ink-50">{est ?? '—'}</span>
-          {' / '}Max:{' '}
+          {t('pairTicket.bits.est')} <span className="text-ink-50">{est ?? '—'}</span>
+          {' / '}{t('pairTicket.bits.max')}{' '}
           <button
             type="button"
             className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
-            title="Change the tolerance"
+            title={t('pairTicket.bits.changeTolerance')}
             onClick={onToggle}
           >
             {max}
@@ -279,9 +292,10 @@ export function SlippageLine({
 /** A leverage figure, "10x long / 50x short" or "50x", with the "venue max"
  * qualification dimmed beside it. */
 export function LeverageValue({ text }: { text: string | null }) {
+  const { t } = useTranslation();
   return text ? (
     <>
-      {text} <span className="text-[11px] font-normal text-ink-400">venue max</span>
+      {text} <span className="text-[11px] font-normal text-ink-400">{t('pairTicket.bits.venueMax')}</span>
     </>
   ) : (
     '—'
@@ -310,29 +324,30 @@ function VenueSelect({
 }) {
   const otherVenue = otherValue ? parseSymbol(otherValue).exchange : null;
   const long = tone === 'long';
+  const { t } = useTranslation();
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex items-center gap-2">
         <Chip sm tone={long ? 'green' : 'red'} className="font-semibold">
-          {long ? 'LONG' : 'SHORT'}
+          {t(long ? 'common.longUpper' : 'common.shortUpper')}
         </Chip>
         <span className="text-[12px] font-normal text-ink-300">
-          {long ? 'pays funding' : 'receives funding'}
+          {t(long ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
         </span>
       </div>
       <div className="relative">
         <select
-          aria-label={`${long ? 'LONG' : 'SHORT'} venue`}
+          aria-label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
           className="select"
           value={value ?? ''}
           onChange={(e) => onPick(e.target.value)}
         >
-          <option value="">{loading ? 'loading venues…' : 'Select venue'}</option>
+          <option value="">{loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}</option>
           {(venues ?? []).map((r) => (
             <option key={r.symbol} value={r.symbol} disabled={r.exchange === otherVenue}>
               {prettyVenue(r.exchange)}
               {r.quote !== 'USDT' ? ` · ${r.quote}` : ''}
-              {r.exchange === otherVenue ? ` (${long ? 'short' : 'long'} venue)` : ''}
+              {r.exchange === otherVenue ? ` (${t(long ? 'pairTicket.bits.shortVenue' : 'pairTicket.bits.longVenue')})` : ''}
             </option>
           ))}
         </select>
@@ -362,13 +377,14 @@ export function PairVenues({
   onShort: (s: string) => void;
   onSwap: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
       <VenueSelect tone="long" value={longSym} otherValue={shortSym} onPick={onLong} venues={venues} loading={loading} />
       <button
         type="button"
-        aria-label="Swap venues"
-        title="Swap the long and short venues"
+        aria-label={t('pairTicket.bits.swapVenues')}
+        title={t('pairTicket.bits.swapVenuesHint')}
         disabled={!longSym && !shortSym}
         onClick={onSwap}
         className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
@@ -415,50 +431,55 @@ export function MakerHedgeControls({
   timeoutSec: TimeoutChoice;
   onTimeout: (v: TimeoutChoice) => void;
 }) {
+  const { t } = useTranslation();
   const makerSym = makerLegPick === 'long' ? longSym : shortSym;
-  const makerVenue = makerSym ? parseSymbol(makerSym).exchange : makerLegPick === 'long' ? 'LONG' : 'SHORT';
+  const makerVenue = makerSym ? parseSymbol(makerSym).exchange : t(makerLegPick === 'long' ? 'common.longUpper' : 'common.shortUpper');
   const makerQuote = makerSym ? parseSymbol(makerSym).quote || 'USDT' : 'USDT';
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2" data-maker-panel>
         <span className="flex items-center gap-2 text-[11.5px]">
-          <span className="text-ink-200">Maker leg</span>
+          <span className="text-ink-200">{t('pairTicket.bits.makerLeg')}</span>
           <Chip sm tone="cyan">
             {makerVenue}
           </Chip>
-          <span className="text-ink-400" title="Auto-chosen: the cheapest maker+taker fee combo">
-            auto
+          <span className="text-ink-400" title={t('pairTicket.bits.autoHint')}>
+            {t('pairTicket.bits.auto')}
           </span>
         </span>
         {makerSaving !== null && makerSaving > 0 && (
-          <span className="text-[11px] text-ink-400" title="Open-fee saving vs both legs taker">
-            <span className="num text-emerald-400">saves ≈ {sig(makerSaving)} USDT</span> vs both taker
+          <span className="text-[11px] text-ink-400" title={t('pairTicket.bits.savingHint')}>
+            <Trans
+              i18nKey="pairTicket.bits.saving"
+              values={{ amount: sig(makerSaving) }}
+              components={{ g: <span className="num text-emerald-400" /> }}
+            />
           </span>
         )}
       </div>
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-2">
-          <FieldLabel htmlFor="pair-maker-price">Maker price</FieldLabel>
+          <FieldLabel htmlFor="pair-maker-price">{t('pairTicket.bits.makerPrice')}</FieldLabel>
           <span
             className="text-[11px] text-ink-400"
-            title="Defaults to one bid–ask gap behind the touch and follows the book until you type a price."
+            title={t('pairTicket.bits.makerPriceHint')}
           >
             {pricePinned ? (
               <>
-                pinned —{' '}
+                {t('pairTicket.bits.pinned')}{' '}
                 <button type="button" className="underline underline-offset-2 hover:text-ink-100" onClick={onTrackTouch}>
-                  track book
+                  {t('pairTicket.bits.trackBook')}
                 </button>
               </>
             ) : (
-              'tracking the book — type to pin'
+              t('pairTicket.bits.tracking')
             )}
             {!pricePinned && touchIsFallback && (
               <span
                 className="ml-1 text-amber-400/90"
-                title="Order book unavailable. The price is a cross-venue mid estimate — verify before executing."
+                title={t('pairTicket.bits.bookUnavailableHint')}
               >
-                ≈ est. (book unavailable)
+                {t('pairTicket.bits.bookUnavailable')}
               </span>
             )}
           </span>
@@ -468,7 +489,7 @@ export function MakerHedgeControls({
             id="pair-maker-price"
             className="input num pr-14"
             inputMode="decimal"
-            placeholder="fetching touch…"
+            placeholder={t('pairTicket.bits.fetchingTouch')}
             value={priceStr}
             onChange={(e) => onPriceInput(e.target.value)}
           />
@@ -476,16 +497,16 @@ export function MakerHedgeControls({
       </div>
       <div className="flex flex-col gap-1.5">
         <FieldLabel>
-          <span title="Unfilled remainder cancels and completes as market orders on both venues after this long">
-            Convert to taker after
+          <span title={t('pairTicket.bits.convertHint')}>
+            {t('pairTicket.bits.convertAfter')}
           </span>
         </FieldLabel>
         <SegmentedToggle
-          ariaLabel="Maker timeout"
+          ariaLabel={t('pairTicket.bits.convertAfter')}
           fill
           value={timeoutSec}
           onChange={onTimeout}
-          options={TIMEOUT_CHOICES.map((t) => ({ value: t.value, label: t.label }))}
+          options={TIMEOUT_CHOICES.map((c) => ({ value: c.value, label: t('pairTicket.bits.minutes', { n: Number(c.value) / 60 }) }))}
         />
       </div>
     </div>
@@ -498,6 +519,7 @@ export function MakerHedgeControls({
 
 /** One leg of the estimate table: venue chip (+ maker), est price, slippage, est fee. */
 function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: PreviewResult | undefined }) {
+  const { t } = useTranslation();
   if (!p) return null;
   const isMaker = 'pairRole' in p.input && p.input.pairRole === 'maker';
   return (
@@ -510,8 +532,8 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
               {parseSymbol(p.symbol).exchange}
             </Chip>
             {isMaker && (
-              <Chip sm tone="cyan" title="Rests post-only one bid–ask gap behind the same-side touch; the other leg auto-hedges as it fills">
-                maker
+              <Chip sm tone="cyan" title={t('pairTicket.bits.makerChipHint')}>
+                {t('pairTicket.bits.maker')}
               </Chip>
             )}
             <span className="text-[11px] text-ink-400">{label}</span>
@@ -521,7 +543,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
           {p.fillEstimate ? sig(p.fillEstimate.avgPrice) : isMaker && p.price ? sig(p.price) : '—'}
         </td>
         <td className="num py-1.5 text-right text-[12px] text-ink-300">
-          {p.fillEstimate ? <SlippageBadge est={p.fillEstimate} /> : isMaker ? 'rests' : '—'}
+          {p.fillEstimate ? <SlippageBadge est={p.fillEstimate} /> : isMaker ? t('pairTicket.bits.rests') : '—'}
         </td>
         <td className="num py-1.5 text-right text-[12px] text-ink-50">
           {p.fees ? (
@@ -539,7 +561,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
       {p.fillEstimate?.partialDepth && (
         <tr>
           <td colSpan={4} className="pb-1 text-[10.5px] text-amber-400">
-            {parseSymbol(p.symbol).exchange}: partial depth — estimate extrapolated past the book
+            {t('pairTicket.bits.partialDepth', { venue: parseSymbol(p.symbol).exchange })}
           </td>
         </tr>
       )}
@@ -579,6 +601,7 @@ export function PairEstimate({
   /** The book + market-impact graph (already sized to this ticket). */
   book: ReactNode;
 }) {
+  const { t } = useTranslation();
   const [showBook, setShowBook] = useState(true);
   const sharedQty = legLong?.qty || legShort?.qty || '';
   const base = legLong ? parseSymbol(legLong.symbol).base : legShort ? parseSymbol(legShort.symbol).base : '';
@@ -610,14 +633,14 @@ export function PairEstimate({
           type="button"
           aria-pressed={showBook}
           onClick={() => setShowBook((v) => !v)}
-          title="Show or hide the live book and market-impact graph"
+          title={t('pairTicket.bits.bookHint')}
           className={`btn-ghost-xs ${
             showBook
               ? '!border-info/50 bg-info/[0.14] !text-pastel-blue'
               : ''
           }`}
         >
-          <span aria-hidden>▤</span> Book
+          <span aria-hidden>▤</span> {t('pairTicket.bits.book')}
         </button>
       }
     >
@@ -625,9 +648,9 @@ export function PairEstimate({
         <>
           <div className="flex items-end justify-between gap-3">
             <div className="flex flex-col">
-              <span className="text-[12.5px] text-ink-50">Trade cost</span>
+              <span className="text-[12.5px] text-ink-50">{t('pairTicket.bits.tradeCost')}</span>
               <span className="text-[11px] text-ink-400">
-                {mode === 'maker' ? 'open maker + taker' : 'open ×2 taker'}
+                {mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
               </span>
             </div>
             <span className="num text-lg font-semibold text-ink-50">
@@ -640,39 +663,39 @@ export function PairEstimate({
           <table className="w-full">
             <thead>
               <tr className="text-[12px] font-normal text-ink-300">
-                <th className="pb-1 text-left">leg</th>
-                <th className="pb-1 text-right">est price</th>
-                <th className="pb-1 text-right">slip</th>
-                <th className="pb-1 text-right">est fee</th>
+                <th className="pb-1 text-left">{t('pairTicket.bits.colLeg')}</th>
+                <th className="pb-1 text-right">{t('pairTicket.bits.colPrice')}</th>
+                <th className="pb-1 text-right">{t('pairTicket.bits.colSlip')}</th>
+                <th className="pb-1 text-right">{t('pairTicket.preview.estFee')}</th>
               </tr>
             </thead>
             <tbody>
-              <LegRow label="long" tone="green" p={legLong} />
-              <LegRow label="short" tone="red" p={legShort} />
+              <LegRow label={t('common.long')} tone="green" p={legLong} />
+              <LegRow label={t('common.short')} tone="red" p={legShort} />
             </tbody>
           </table>
 
           <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
             {sharedQty && (
               <EstimateRow
-                label="Shared qty"
-                sub={binding ? `lot-bound by ${binding.exchange} (${binding.lot})` : undefined}
+                label={t('pairTicket.bits.sharedQty')}
+                sub={binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
                 value={`${sig(sharedQty)}${base ? ` ${base}` : ''}`}
               />
             )}
             {spreadBps !== null && (
               <EstimateRow
-                label="Net entry spread"
-                sub="long − short, of ref"
+                label={t('pairTicket.bits.netSpread')}
+                sub={t('pairTicket.bits.netSpreadSub')}
                 value={
                   <span className={spreadBps <= 0 ? 'text-emerald-400' : 'text-rose-400'}>{spreadBps.toFixed(1)} bps</span>
                 }
               />
             )}
-            <EstimateRow label="Leverage" value={<LeverageValue text={leverage} />} />
+            <EstimateRow label={t('pairTicket.bits.leverage')} value={<LeverageValue text={leverage} />} />
             <EstimateRow
-              label="Margin required"
-              title="Initial margin the two legs post together — each leg's notional over its leverage"
+              label={t('pairTicket.bits.marginRequired')}
+              title={t('pairTicket.bits.marginRequiredHint')}
               value={marginRequired !== null ? `≈ ${fmtUsd(marginRequired)}` : '—'}
               strong
             />

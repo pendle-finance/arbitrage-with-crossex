@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { EmptyState } from './EmptyState';
 
 /** Standard "couldn't load X" state for a failed query, with an optional Retry. */
@@ -12,6 +13,7 @@ export function QueryError({
   onRetry?: () => void;
   className?: string;
 }) {
+  const { t } = useTranslation();
   const el = (
     <EmptyState
       icon="⚠"
@@ -20,7 +22,7 @@ export function QueryError({
       action={
         onRetry ? (
           <button type="button" className="btn-primary" onClick={onRetry}>
-            Retry
+            {t('common.retry')}
           </button>
         ) : undefined
       }

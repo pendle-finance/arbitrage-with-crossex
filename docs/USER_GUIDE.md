@@ -24,12 +24,14 @@ In this guide, we will cover:
 
 Perp traders pay (or earn) a floating funding rate. On [Boros](https://boros.pendle.finance), that funding rate is itself tradable - and the same coin's funding often carries **different implied fixed rates on different venues**: say ETH funding priced at 8% APR on Hyperliquid but 5% on Binance. The strategy locks in that gap.
 
-One position is 4 legs, all at the same notional:
+One arbitrage holds 2 perps and 2 Boros positions, all at the same notional:
 
-- **2 rate legs on Boros** - short the funding of the expensive market (you *receive* its fixed rate) and long the funding of the cheap one (you *pay* its fixed rate). Receive 8%, pay 5% → ~3% locked until the market's maturity.
-- **2 perp legs via CrossEx** - a short perp on the first venue, a long perp on the second, both opened through [Gate CrossEx](https://www.gate.com/crossex) under one **unified margin** account. Each perp leg's funding cancels the floating funding its Boros leg owes, and the two perps cancel each other's price exposure - with the shared margin, one leg's gain collateralises the other's loss.
+- **2 Boros positions** - short the funding of the expensive market (you *receive* its fixed rate) and long the funding of the cheap one (you *pay* its fixed rate). Receive 8%, pay 5% → ~3% locked until the market's maturity.
+- **2 perp legs via CrossEx** - a short perp on the first venue, a long perp on the second, both opened through [Gate CrossEx](https://www.gate.com/crossex) under one **unified margin** account. Each perp leg's funding cancels the floating funding its Boros position owes, and the two perps cancel each other's price exposure - with the shared margin, one leg's gain collateralises the other's loss.
 
-Once everything nets out there is no price exposure and no floating-rate exposure left - just the fixed spread, earned on the notional until maturity. The Opportunities scan prices that spread at your size, subtracts every cost it can model (Boros fees and price impact, perp fees and slippage, entry and exit), and shows what remains as a **net fixed APR on the capital** the four legs actually consume as margin.
+Some venue pairs have a Boros **spread market**, such as "ETH Spread HL-GATE": one Boros market that pays the funding gap between the two venues. Where Boros lists one, a single spread position replaces the 2 Boros positions, with one Boros order, one Boros fee and one margin. The arbitrage is then 2 perps + 1 spread position.
+
+Once everything nets out there is no price exposure and no floating-rate exposure left - just the fixed spread, earned on the notional until maturity. The Opportunities scan prices that spread at your size, subtracts every cost it can model (Boros fees and price impact, perp fees and slippage, entry and exit), and shows what remains as a **net fixed APR on the capital** the perps and the Boros side actually consume as margin.
 
 Boros Academy walks through this strategy in more depth: [Fixed-Return Funding Arbitrage](https://docs.pendle.finance/boros-academy/advanced-strategies/fixed-return-funding-arbitrage).
 
@@ -39,95 +41,106 @@ Boros Academy walks through this strategy in more depth: [Fixed-Return Funding A
 You will use the tool for 3 things, in order:
 
 ### A. Discover and understand opportunities
-A few things to note about the assumptions:
-- Your current Gate VIP level is **already factored in**
-- Other than that, its all about understanding the other assumptions:
-![The assumptions bar above the Opportunities scan — notional, perp entry, perp exit cost and Boros entry](./Assumptions.png)
-- For perp entry, **"Limit + hedge"** means the terminal will place a limit order on exchange A, wait for it to be filled, and immediately market order on the other exchange to hedge. This will save on perp fees (because *maker* fees is cheaper than *taker* fees)
-- For perp exit cost, if you do not need to close the Perp positions (and be able to lock in another Boros spread in a subsequent 4-legged position), you can **Omit** it (instead of **Include**), which saves the perp fees.
-- On Boros, **"At mark rate"** assumes you can enter the Boros legs without any price impact *(which could be unrealistic)*. **"Market at size"** assumes you do market orders on Boros for both legs. An optimised execution is to try to fill limit orders on one or two legs, to reduce price impact (and fees).
+The bar above the **Opportunities** scan sets the assumptions every card is priced with:
+![The assumptions bar above the Opportunities scan: Capital, Perp entry and Perps at maturity](./Assumptions.png)
+- **Capital** is the margin you post across every position. Each card sizes its own notional to use this amount. The default is $200,000, and the presets are $10k, $100k, $500k and $1M.
+- For **Perp entry**, **"2 market orders"** opens both perp legs at market. **"Limit + hedge"** means the terminal will place a limit order on exchange A, wait for it to be filled, and immediately market order on the other exchange to hedge. This will save on perp fees (because *maker* fees are cheaper than *taker* fees).
+- For **Perps at maturity**, **"Roll over"** (the default) assumes you keep the perp legs open at maturity and lock another Boros spread on them at a later maturity, so no closing fee is charged. **"Close positions"** charges the fees and slippage to close both perp legs at maturity.
+- The Boros positions are always priced as market orders at your size. Each Boros position shows its rate "after impact"; hover it to see the mid rate. Filling one of two single Boros positions with a limit order can do better (see section 4).
+- Perp fees follow your Gate VIP tier once your Gate API key is connected. Without a key, a note above the cards says the fees assume the VIP 0 schedule.
+- **Include rebate in APR** shows only when your logged-in Boros account has a settlement-fee rebate. It is on by default and adds the rebate to every card's APR and Return.
+- Above $1M of notional per position, a note says the perp slippage is estimated at $1M. Above that size, split (TWAP) the perp side.
 
-Other than that, the details are pretty self-explanatory. Try toggling the assumptions to see how it affects the PnL items.
-![Opportunities details](./OpportunitiesDetails.png)
+Each card shows its **APR** on capital, the **Capital** it posts, the **Return** by maturity and the **Notional** per position. Tick **"I already hold the perps"** on a card when you already hold those perps, for example to roll over: the card then charges no perp entry fees or entry slippage. It is ticked for you when you already hold the same pair at a sooner maturity.
 
-Note that you can click **"Execute it"** on an opportunity to pre-populate the forms for executing it.
+**More details** breaks a card down: the positions on each venue, the **Est. profit at maturity** and **Capital (modeled min)** waterfalls, and the **Net effect** line. Try changing the assumptions to see how each cost moves.
+![More details on an opportunity: the Est. profit at maturity and Capital (modeled min) waterfalls, and the Net effect line](./OpportunitiesDetails.png)
 
-### B. Execute a 4-legged Funding Rate Arbitrage position
-It's recommended to **open the Boros legs first**, before opening the Perp legs. This is because the price impact from opening Boros position is higher and more uncertain, so you should "lock in" the Boros spread first before executing the whole 4-legged position.
+Click **"Open this strategy"** on an opportunity to open it step by step: first **Lock the rate** (the Boros order), then **Hedge the perps** (the perp pair, sized from the card and your Perp entry choice). Each form is filled in for you, and you confirm each order yourself.
 
-Do **set your Boros address**, so that your Boros position can be tracked.
+### B. Execute a Funding Rate Arbitrage position
+It's recommended to **open the Boros side first**, before opening the perp legs. This is because the price impact from opening Boros position is higher and more uncertain, so you should "lock in" the Boros spread first before executing the whole position.
+
+Do **connect your Boros wallet** and log in with it (in the setup steps, or in **Settings**), so that your Boros position can be tracked and traded.
 
 #### Executing the 2 perp legs
 
 
 Executing with **"2 market orders"** is relatively straight forward.
 
-As for executing the **"Limit + hedge"** default option, there are a few things to note:
-1. The Limit (maker) side is auto chosen to minimise total fees
-2. This is the default flow:
-   - There is an **initial Maker price** (that is automatically set to be slightly beyond the best bid/best ask). You can also manually set this.
-   - After you click **"Execute pair"**, a limit order is immediately placed at the initial maker price.
-   - Whenever the limit order is filled (or partially filled), we automatically execute taker order (market order) to hedge the amount that were filled, repeat until the whole limit order is fully filled.
-   - If the **countdown until convert** (default to 5 min) goes to zero and the trade is still not fully executed, the system will cancel the limit order and complete the pair through market orders. If you do not wish for this to happen, you can click **Stop** before the time runs out.
-3. If the limit order is still not filled for some time (for example when you set a manual price that is far away), you can click **"Re-peg to touch"** to move the limit order close to the best bid/best ask. There is also an option to **Re-peg to a custom price**.
-![Re-peg to touch](./RepegToTouch.png)
+As for executing with **"Limit + hedge"**, there are a few things to note:
+1. The Limit (maker) side is auto chosen to minimise total fees. The form shows it as **Maker leg … Auto**.
+2. This is the flow:
+   - The **Maker price** tracks the book: it sits one bid–ask gap behind the best bid/best ask and follows the market. Type a price to pin it; **track book** un-pins it.
+   - Press and hold **"Execute pair"** to confirm. A limit order is immediately placed at the maker price, and the deal window opens.
+   - Whenever the limit order is filled (or partially filled), the terminal automatically sends a market order on the other exchange to hedge the amount that was filled, and repeats until the whole limit order is filled.
+   - **Convert to taker after** (1m, 5m or 15m; 5m by default) sets a countdown. If it reaches zero and the limit order is still not fully filled, the terminal cancels the limit order and completes the pair with market orders. The deal window shows the time left.
+3. The deal window has four controls while the limit order rests:
+   - **Convert now** cancels the rest of the limit order and completes both legs with market orders now.
+   - **Re-peg to touch** moves the limit order to the current best bid/best ask on its side. Use it when the limit order has not filled for some time (for example when you typed a price that is far away).
+   - Type a price in the box and click **Re-peg to price** to move the limit order to that price.
+   - **Stop** ends the deal: it cancels the limit order, hedges whatever already filled, and finishes there. Press it before the countdown ends if you do not want the rest completed at market.
+![The deal window: Re-peg to touch moves the limit order to the best price on its side](./RepegToTouch.png)
 
 **Important:**
 - You should try executing a **test amount first**, to get familiar with the flow, before executing a bigger amount
 - When executing a large position, it's recommended to manually **break it into a few executions** (for example, do 5x 100k instead of 500k in one go)
 
 ### C. Monitor your position
-Once opened, there's not much maintenance you need to do on a 4-legged position, except for when to close the two perp legs at maturity (if you don't roll over
+Once opened, there's not much maintenance you need to do on a position, except for when to close the two perp legs at maturity (if you don't roll over
 into the next maturity).
 
-What's most useful is to understand and breakdown the PnL for your positions.
-![Current position](./CurrentPosition.png)
+What's most useful is to understand and break down the PnL for your positions. The **Positions** tab shows one card per coin.
+![A coin card on the Positions tab: Total PnL, Current APR, Current capital and the Fixed Rate Pairs list](./CurrentPosition.png)
 
-Each open position has two assumptions you can toggle, and both move the numbers *and* the waterfall charts:
+The top of each card shows:
+- **Total PnL**, with its ROI and the all-time cost. Click the pie icon next to it for the PnL breakdown.
+- **Current APR**: the fixed APR your pairs lock, and about how much that earns per day. When part of the book is not locked, it shows the fixed and the floating part.
+- **Current capital**: the initial margin your counted positions need, on Gate and on Boros.
+- **PnL waterfall** shows the PnL as bars: fixed funding, Boros trade, Boros trade fees, perp fees, perp basis and settlement rebate, then the net.
 
-**Perp exit cost** — what happens to the perp legs at maturity:
-- **Include**. This is the default, and you need to incur another set of Perp trading fees. The chart uses the same fees and slippage as when you opened the perp legs.
-- **Omit (rolling over)**: this means you don't need to pay perp fees for closing, which boosts your overall return. To do this, you need to be able to lock a decent spread on Boros, on the same perp pair, on a next maturity.
+Below them are two tabs:
+- **Fixed Rate Pairs** (the default) lists each pair: a Boros position matched with its perps, with its **Notional**, **Capital**, **Est. fixed APR** and **Profit at maturity**.
+- **Funding Bundles** lists the perp funding and the Boros settlements per venue, for live and finished positions.
 
-**Perp entry cost** — whether this position is charged what it cost to open the perp legs:
-- **Include**. The default, and correct whenever you opened the perp legs for this position.
-- **Omit (rolled over)**: use this when the perp legs were *already open* and you rolled them into this maturity. They paid their fees and crossed their spread during the previous position, but Gate reports a position's fees cumulatively and its entry price from the original open — so without this toggle, this position gets billed for money it never spent. Omitting moves the Current PnL as well as the projection.
+Click a pair to open it. It shows its positions and these buttons:
+- **Share** makes a public link and image of the pair. Your wallet address is not included.
+- **Close perps** closes both perp legs, reduce-only.
+- **Close Boros** closes the pair's Boros positions. The perps stay open.
+- **Roll over** moves the Boros positions to a later maturity. It is highlighted when the pair is due.
 
-Under **Include**, the **▾** button next to it itemises that cost so you can charge only *some* of it — useful when a book was built across several executions (a venue migration, a top-up, legs inherited from a previous maturity). Everything is ticked by default, the button shows how many parts are still charged (e.g. *Include (3 of 4)*), and your ticks are remembered per position. There are two kinds of row, and they are not equally precise:
+When a position is shared with another pair, Close perps and Close Boros close only this pair's share.
 
-- **Entry slip** rows are **per execution**, each with its date, the two venues crossed and the size matched. Untick the ones whose fills belonged to an earlier strategy.
-- **Fees** rows are **per leg**, marked *position life*. Gate reports a position's trading fees as a single cumulative number and nothing records them per trade, so they genuinely cannot be split by date — the terminal shows them per leg rather than inventing a split. Note this also means a leg you have since migrated away from contributes nothing at all, since it is no longer an open position.
+#### Fees on a pair
 
-#### When one venue leg belongs to two positions
+**Fees ›** under a pair's profit opens its fees window:
+![The fees window of a pair: the Charge switches, the fee figures and the profit at maturity](./PairFees.png)
 
-Run HL/OKX and HL/Binance at the same time and the HL side is **one** position everywhere you look: Gate reports a single row at a blended entry price, and Boros reports a single position at a blended fixed rate. Neither says which part is which strategy.
+It shows the pair's **Fixed earning**, the **Boros trade fees** it paid, the **Perp entry fees**, the **Est. perp exit fees** and the **Est. profit at maturity**. The two **Charge** switches pick which perp fees count against this pair:
+- **Perp entry fees**: what opening the perps cost. It is ticked, unless the perps were opened more than 3 days before the Boros position. Then the perps most likely came from an earlier pair you rolled over, and they paid their fees there.
+- **Est. perp exit fees**: closing both perps at maturity at your venues' taker fees. It starts unticked, because perps are usually rolled over. Tick it if you mean to close them.
 
-The terminal splits it back apart, and shows each position as its own box — its own size, its own entry prices, its own locked rate. It works from the execution record: the local deal journal, and your own fill history at the venue (each fill carries the order tag this terminal writes, so a fill can be matched back to the deal that made it). Where that record is complete, the split is a **measurement** — the chip on the box says *split measured*.
+The switches change only that pair's Est. fixed APR and Profit at maturity. They are not saved: a reload sets them back.
 
-Where it isn't — positions opened elsewhere, or older than the fill history reaches — the terminal pairs the legs by how close their prices and open times are, and the box says *split unconfirmed*. Then:
+#### When one position belongs to two pairs
 
-- The sizes are still right: they come from the pairing itself, not from the prices.
-- The **crossing cost is reported as unknown**, not estimated. The venue's blended entry price is an average across *both* strategies, so charging it to either one would invent a number.
-- The **locked spread** falls back to the blended rate, which still nets out correctly across the two positions but is not exactly what either one locked.
+Run HL/Gate and HL/Binance at the same time, and the HL side is **one** position at Gate, at one blended entry price. The terminal splits it by size between the pairs that use it. Each pair shows its slice, for example **(52.00%)**. Hover it to see the whole position, this pair's part and the other cards.
 
-**Adjust split** on the box is how you correct it. Type the size this position really holds and **Pin size**; the pinned size holds and everything unpinned is re-solved around it. **Detach** says these two legs are not a strategy together at all — both are then reported as unhedged. **Back to automatic** hands the pair back to the solver. Pins are remembered per tracked address.
+A position that no pair uses shows under **Ungrouped positions**, tagged **not in a pair**. A Boros position on the wrong side for its perp is tagged **Wrong side**: it adds to that perp's funding risk instead of hedging it. Close it before you open the hedge.
 
-If a venue position later shrinks below a pin, the pin is **clamped and reported** — never silently rescaled — and if a size ends up belonging to no position at all, it gets its own **unhedged** box rather than quietly disappearing.
+#### Leaving a position out
+
+If a position, or part of one, is not part of the arb (for example one you trade by hand), on a Boros position open the **⋯** menu on its row in Fixed Rate Pairs and pick **Exclude**. For any position, you can also use the row's **Edit** button on the Funding Bundles tab. Set how much of it to exclude. That part moves to the **Excluded** section, out of the hedge, the PnL and the capital. **Restore** counts the whole position again. Exclusions are saved on the terminal.
 
 #### What counts as your capital
 
-Every APR on a position is a return *on capital*, so what goes into that number decides whether a position looks good. The perp side is always the initial margin those legs consume. For the Boros side there are two readings, and **Settings → Capital counted per position** picks one:
-
-- **Posted balance** (default) — the collateral account's balance, split across the positions it backs. Right when that account exists for these positions and nothing else.
-- **Margin used** — only the initial margin the Boros legs post. Use this if you also keep trading money in the same collateral account: otherwise that idle cash is counted as capital these positions needed, which inflates capital and drags every APR down.
-
-The choice is remembered per browser and applies to every position box and the totals strip.
+Every APR on a position is a return *on capital*. Capital is the initial margin the positions post today: the perps' initial margin on Gate, plus the Boros positions' initial margin. A pair's capital is the sum over its positions. Idle cash in your accounts does not count.
 
 #### Rebalancing USDC and USDT
 
 Your CrossEx account has three wallets. Every venue except Hyperliquid and Lighter margins and settles in USDT. Hyperliquid and Lighter settle in USDC, so each has its own USDC wallet, which starts at 0.
 
-Opening a leg does not borrow. Its margin comes from your whole account. A wallet moves only when its legs pay or receive: hourly funding, fees, and profit or loss. When a wallet's legs lose more than it holds, the wallet goes negative and Gate lends you the coin: USDC for the Hyperliquid and Lighter legs, USDT for the legs on every other venue. Gate counts the unrealised loss too, so a borrow can show while the cash is still positive.
+Opening a perp leg does not borrow. Its margin comes from your whole account. A wallet moves only when its legs pay or receive: hourly funding, fees, and profit or loss. When a wallet's legs lose more than it holds, the wallet goes negative and Gate lends you the coin: USDC for the Hyperliquid and Lighter legs, USDT for the legs on every other venue. Gate counts the unrealised loss too, so a borrow can show while the cash is still positive.
 
 The borrow costs two things. Gate holds 20% of it as initial margin and 10% as maintenance margin. It also pays interest:
 
@@ -139,23 +152,33 @@ The borrow costs two things. Gate holds 20% of it as initial margin and 10% as m
 
 A Lighter borrow of $50 pays interest on all $50. A Hyperliquid borrow of $50 pays nothing.
 
-A hedged pair is delta-neutral, but not margin-neutral. Gate liquidates the account when the margin balance falls to the maintenance margin, and the maintenance margin grows with a move against a USDC leg on Hyperliquid or Lighter: each leg's maintenance margin scales with its notional, and the losing leg drives its wallet negative, a borrow that adds 10% of itself to the maintenance margin. Each card on the Positions tab carries a chip like `Liquidation: ETH @ ~$3,150 (+37%)`: the price of the coin at which the account liquidates if only that coin moves and every other coin holds still. It turns amber inside 30% and red inside 15%. A coin that can fall to $0 or rise without limit and never liquidate the account reads `No HYPE price liquidates the account`. If Gate's margin figures are missing, the chip reads `No liquidation estimate` rather than claiming safety. The same nearest line sits in the hover of the IM and MM gauges in the header.
+A hedged pair is delta-neutral, but not margin-neutral. Gate liquidates the account when the margin balance falls to the maintenance margin, and the maintenance margin grows with a move against a USDC leg on Hyperliquid or Lighter: each leg's maintenance margin scales with its notional, and the losing leg drives its wallet negative, a borrow that adds 10% of itself to the maintenance margin. Each coin's card on the Positions tab carries a chip like `Liquidation ~$3,150 (+37%)`: the price of the coin at which the account liquidates if only that coin moves and every other coin holds still. Hover it to see the losing leg. It turns amber inside 30% and red inside 15%. A coin that can fall to $0 or rise without limit and never liquidate the account reads `No liquidation price`. If Gate's margin figures are missing, the chip reads `No liquidation estimate` rather than claiming safety.
 
-The Accounts tab shows every account first: Gate CrossEx and each Boros account, with available against balance, initial margin used and maintenance margin used. An account liquidates when maintenance margin used reaches 100%. Below it is the CrossEx assets table. Under the table are your borrow, its interest now and the interest paid, then **Rebalance** and **Manual Transfer**. Hover a figure to see each wallet. Rebalance splits your CrossEx equity across the three wallets by position size. Each wallet's share is its legs at mark price, divided by all legs. Equity is cash plus unrealized profit or loss.
+The Accounts tab shows every account first: Gate CrossEx and each Boros account, with available against balance, initial margin used and maintenance margin used. An account liquidates when maintenance margin used reaches 100%. Below it is the CrossEx assets table. Under the table are your borrow, its interest now and the interest paid, then the rebalance button and **Manual transfer**. The button reads **Rebalance**, or **Clear debt** when clearing the debt is the better move. Hover a figure to see each wallet. Rebalance splits your CrossEx equity across the three wallets by position size. Each wallet's share is its legs at mark price, divided by all legs. Equity is cash plus unrealized profit or loss.
 
-Example: $500 of positions on Gate, $250 on Hyperliquid and $250 on Lighter give 50%, 25% and 25%. With $1,000 of equity, the wallets aim for $500, $250 and $250. A wallet with no legs sends all its money to the wallets that have legs. With no open positions, there is nothing to rebalance.
+Example: $500 of positions on Gate, $250 on Hyperliquid and $250 on Lighter give 50%, 25% and 25%. With $1,000 of equity, the wallets aim for $500, $250 and $250. A wallet with no legs sends all its money to the wallets that have legs. With no open positions, there is nothing to rebalance, but Clear debt and Custom amount still work.
 
-In the Rebalance window, the **Position share** column shows each wallet's share and the position size behind it, for example `49% · $1,774`. The USDC · Lighter row shows only when it has legs, money or a move.
+The Rebalance window has three ways to move money. It opens on the one the Accounts tab recommends:
 
-USDC · Gate is one more CrossEx wallet for USDC. It counts as margin. Rebalance sells what is in it, in both directions, when it is worth 3 USDT or more.
+- **Balance positions** splits your equity by position size, as above.
+- **Clear debt** moves just enough to repay every borrow, from the wallet with the most equity.
+- **Custom amount** moves the amount you type, from the wallet you pick to the wallet you pick. **Use a preset** goes back.
 
-Press **Rebalance** to open the Rebalance window. It lists the routes, and **Show steps** lists every step. Press and hold **Hold to rebalance** to start. There is no direction to pick and no amount to type. The button moves every wallet toward its share. When more than one wallet sends or receives, one hold runs every move, one after another. Convert always shows. A Spot loop row shows only when it costs less than Convert and its plan takes 15 minutes or less. The app marks the cheapest route as **Recommended** and picks it first. You can pick another route. The routes are:
+A preset with nothing to do is greyed, with the reason in its hover: `No open positions` or `No borrow`.
 
-- **Spot loop**: runs rounds until every wallet reaches its share. A last amount under the transfer minimum moves by Convert. If a round comes out smaller while it runs, the job can add a round, so the run can pass 15 minutes.
+The window draws each wallet as a bar, captioned **After rebalance**, with its equity at the right. Hover a bar to see its cash, its unrealized PnL and its balanced target; a gold marker shows the target. The USDT and Hyperliquid rows always show. The USDC · Lighter row shows only when it has legs, money or a move.
+
+USDC · Gate is one more CrossEx wallet for USDC, left over from a spot buy. It counts as margin, and a rebalance empties it. A round into Hyperliquid or Lighter sends that USDC on into the venue wallet. A round out to USDT sells it. A Convert sells it when it is worth 3 USDT or more.
+
+The window lists the routes, and **Show steps** lists every step. Press and hold the button to start: **Hold to rebalance**, **Hold to clear debt** or **Hold to move**. When the window does not recommend the move, the button adds "anyway", for example **Hold to rebalance anyway**. When more than one wallet sends or receives, one hold runs every move, one after another. Convert and Spot loop always show. When Spot loop cannot run, its row is greyed with the reason, for example `The move is under the 11 USDC minimum.` The app marks the cheapest route that takes 15 minutes or less as **Recommended** and lists it first. You can pick another route. The routes are:
+
+- **Spot loop**: runs rounds until every wallet reaches its target, at most 100 rounds. A last amount under the transfer minimum moves by Convert. If a round comes out smaller while it runs, the job can add a round, so the run can pass 15 minutes.
 - **Spot loop, then Convert**: runs the rounds that fit in 15 minutes and give the lowest cost, then moves the rest with Convert.
 - **Convert**: an instant swap inside CrossEx. It costs 0.2% of the amount moved. USDC between Hyperliquid and Lighter swaps twice, through USDT, so it costs about 0.4%. Gate takes at most 500,000 in one Convert, so a larger move runs as several Converts, 2 s apart.
 
-The window shows the **Fee** and the **Interest** your borrow pays in 30 days, now and after the move. When the fee is less than 30 days of the interest it saves, the Accounts tab and the window read `Rebalance is recommended.` with the days under it, for example `The fee equals 12 days of the interest it saves.` When the fee is more than 30 days of that interest, they read `Not worth it yet`. You can still rebalance. A Hyperliquid borrow under 10,000 USDC pays no interest, so with no other borrow they read `No interest payment yet`.
+The window shows the **Fee**, the **Interest** your borrow pays a month, now and after the move, and what the move **Frees**: the initial margin the repaid borrow stops locking. When the fee is 30 days or fewer of the interest it saves, the Accounts tab and the window read `Rebalance recommended.` (or `Clear debt recommended.`) with the days under it, for example `The fee equals 12 days of the interest it saves.` When the fee is more than 30 days of that interest, they read `Not worth it yet`. You can still move. A Hyperliquid borrow under 10,000 USDC pays no interest, so with no other borrow they read `No interest payment yet`. With no borrow at all they read `No borrow. No transfer or rebalancing necessary.`
+
+If the fee rises by more than $1 or 5% while the window is open, **Refresh route** replaces the hold button. Press it to price the move again.
 
 A round moves money through Gate spot, because Gate has no direct transfer between CrossEx wallets. Time and cost are for one round. Cost adds the spot fee and spread when the round buys or sells USDC.
 
@@ -172,21 +195,21 @@ A round moves 11 USDC or more. A round from Hyperliquid to Lighter moves 12 or m
 
 Each round leaves at least 112% of initial margin in the account. With $29.41 of initial margin, at least $32.94 of margin balance stays. Gate refuses a move that would leave less than 110%. A borrow locks 20% of its size as initial margin. Early rounds are small, and later rounds grow as the borrow shrinks.
 
-A finished run shows **Moved**, the amount that landed after fees. The chip reads **Balanced**, or **Done** when less landed than planned.
+A finished run shows **Moved**, the amount that landed after fees. After Balance positions the chip reads **Balanced**, or **Done** when less landed than planned. After Clear debt or Custom amount it reads **Done**.
 
-You cannot stop a run once it starts. A failed step stops it. An app restart stops it too. When Gate is already moving a step's money, the app first waits for that step to land, then stops. New deals and transfers wait until the run ends.
+You cannot stop a run once it starts. A failed step stops it. An app restart stops it too. When Gate is already moving a step's money, the app first waits for that step to land, then stops. New deals and transfers wait while the run is running. A stopped run still blocks transfers, but not deals.
 
-A stopped run shows **Resume** and **Abandon**. Resume first looks up the last send on Gate by its tag. When that lookup misses, it sweeps Gate's order history for the same tag. When Gate cannot confirm the order, the run stays stopped. Press Resume again. When Gate does not show a send after 2 min, the run stops. Resume looks again, and sends the step again only when Gate still does not show it. When Gate rate-limits the account, the run stops with **Gate is rate-limiting this account**. Nothing was sent. Press Resume a minute later. Gate allows 100 Convert quotes a day per account. When they are used up, the run stops and says so. Press Resume later: Gate's count clears within 24 hours. The app never sends a step twice on its own.
+A stopped run shows **Resume** and **Abandon**. Resume first looks up the last send on Gate by its tag. When that lookup misses, it sweeps Gate's order history for the same tag. When Gate cannot confirm the order, the run stays stopped. Press Resume again. When Gate does not show a send after 2 min, the run stops. Resume looks again, and sends the step again only when Gate still does not show it. When Gate rate-limits the account, the run stops with **Gate is limiting requests from this account**. Nothing was sent. Press Resume a minute later. Gate allows 100 Convert quotes a day per account. When they are used up, the run stops and says so. Press Resume later: Gate's count clears within 24 hours. The app never sends a step twice on its own.
 
 When a run stops, a banner at the top of every tab shows where the money is. Click **View** to open the Accounts tab.
 
-After Abandon, any money left in Gate spot is plain spot money. Move it with Manual Transfer.
+After Abandon, any money left in Gate spot is plain spot money. Move it with Manual transfer.
 
-#### Manual Transfer between Gate spot and CrossEx
+#### Manual transfer between Gate spot and CrossEx
 
-The **Manual Transfer** button next to Rebalance opens a window. It moves USDT and USDC between your Gate spot wallet and your four CrossEx wallets. Gate's own website cannot do this.
+The **Manual transfer** button next to Rebalance opens a window. It moves USDT and USDC between your Gate spot wallet and your four CrossEx wallets. Gate's own website cannot do this.
 
-Without Spot Trading Read Only on your key, the Assets table shows `Add Spot read permission to see spot balances.` The Gate spot tile in Manual Transfer then reads `balance hidden`. When an open Gate spot order holds part of a spot balance, hover the balance to see how much is free.
+Without Spot Trading Read Only on your key, the Assets table shows `Set Spot Trading to Read Only to see Gate spot balances.` The Gate spot tile in Manual transfer then reads `Balance hidden`. When an open Gate spot order holds part of a spot balance, hover that balance in the CrossEx assets table to see how much is free. The Gate spot tile in Manual transfer shows only the free amount.
 
 Two tabs set the direction. **Into CrossEx** moves money from Gate spot into a CrossEx wallet. **Out of CrossEx** moves money from a CrossEx wallet to Gate spot.
 
@@ -194,8 +217,8 @@ There are eight paths, one for each wallet in each direction:
 
 | Wallet | Coin | Into CrossEx | Out of CrossEx | Minimum |
 |---|---|---|---|---|
-| USDT · CrossEx | USDT | Free, about 3 s | Free, about 3 s | None |
-| USDC · Gate | USDC | Free, about 5 s | Free, about 5 s | None |
+| USDT · CrossEx | USDT | Free, about 3 s | Free, about 3 s | Gate's minimum, shown in the window |
+| USDC · Gate | USDC | Free, about 5 s | Free, about 5 s | Gate's minimum, shown in the window |
 | USDC · Hyperliquid | USDC | $0.05, about 2 min | $1.00, about 6.5 min | 11 USDC, fee included |
 | USDC · Lighter | USDC | $1.03, about 4 min | Free, about 3 min | 11 USDC, fee included |
 
@@ -206,21 +229,21 @@ Transfers wait while a rebalance runs or is stopped, or while a deal is still wo
 A deal waits a few seconds after a transfer starts, until Gate has taken the money.
 
 ## 4. How to maximise return
-These few factors move the needle the most in maximising your return on the 4-legged Funding Rate Arbitrage
+These few factors move the needle the most in maximising your return on the Funding Rate Arbitrage
 1. Reduce perp fees with a **higher VIP tier** in Gate.
    * Play around with the VIP tier assumption in https://boros.pendle.finance/arbitrage-crossex, and you will see the immediate impact of your VIP tier on the potential returns.
    * As an example, my current VIP8 tier boosts a particular opportunity from **11.3% APR** to **16.2% APR**. For reference, I need a 400k capital in Gate to get VIP8 tier.
 2. **Rolling over**
-   * Being able to roll over an existing 4-legged position into the next maturity is a powerful boost to your return
-   * The boost is two-fold: the existing position will escape the perp closing fees, and the new position will escape the perp opening fees. Just change the **Perp exit cost** assumption from **Include** to **Omit (rolling over)** to see the impact on the return (and on the next position, untick the inherited executions under **Perp entry cost**, since those legs already paid).
-   * If you manage to keep rolling over, the subsequent 4-legged position wont have to pay **a single cent of perp fees** (for both entry and exit), which boosts the return even more.
+   * Being able to roll over an existing position into the next maturity is a powerful boost to your return
+   * The boost is two-fold: the existing position will escape the perp closing fees, and the new position will escape the perp opening fees. On **Opportunities**, compare **Perps at maturity** set to **Close positions** with **Roll over** to see the impact on the return. Tick **"I already hold the perps"** on the next maturity's card to drop the perp entry fees. On a pair you hold, the **Fees ›** window shows the same with its **Perp entry fees** and **Est. perp exit fees** switches.
+   * If you manage to keep rolling over, the subsequent position won't have to pay **a single cent of perp fees** (for both entry and exit), which boosts the return even more.
 3. Reduce perp fees + slipapge through an optimised execution of **Limit + hedge**
    * The goal is to minimise slipapge when executing the **Limit + hedge**. Its even possible to get possible slippage (for example, short Hyperliquid ETH at 1601, long OKX ETH at 1600)
    * Its best to execute when the market is generally more calm, reducing risks for big slippage
    * Its best to break a big trade (lets say 1M notional) into multiple rounds, to reduce the average slippage
    * To be the most careful, always **manually set the maker price** at a price relatively further away, and do the execution in the **Deal modal**. At the deal modal, its a *mini-game* of re-pegging the limit order price decently close to market, patiently wait for it to get hit (say by other impatient users on the perp), trying to get an optimised slippage.
 4. Optimise **Boros spread**
-   * To optimise for the spread you are locking, try to use **limit orders** to fill at least one Boros leg, and do a **market order** on the other leg. Sometimes, it can give you a much higher spread.
+   * To optimise for the spread you are locking, with two single Boros markets, try to use a **limit order** on one and a **market order** on the other. Sometimes, it can give you a much higher spread.
    * That said, sometimes when a decent opportunity are there that you can just market order, you could just take it (otherwise, some other users might take it before you)
 
 ## 5. Risk Disclosure
@@ -228,6 +251,6 @@ These few factors move the needle the most in maximising your return on the 4-le
 - **Cross-margin risk** - CrossEx manages margin across exchanges for you.
 - **Spread risk** - rare, but the perp legs could diverge enough to trigger liquidation.
 - **Boros liquidation risk** - a big enough move against your locked-in spread can break the hedge; keep a margin buffer.
-- **Execution risk** - if a leg doesn't open hedged, check after execution.
+- **Execution risk** - if a position doesn't open hedged, check after execution.
 
 Ultimately, you should **do your own research**, make sense of all the different risks and rewards, and make the decisions for yourself.

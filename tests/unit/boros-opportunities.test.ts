@@ -15,8 +15,12 @@ import {
   borosLiquidationApr,
   borosLiquidationRate,
   buildOpportunities,
+  clippedCrossCostUsd,
+  crossCostUsd,
   groupBorosMarkets,
   normalizeUnderlying,
+  notionalForCapital,
+  PERP_SLIPPAGE_CLIP_USD,
   perpInitialMarginUsd,
   walkBorosBook,
   type BuildOpportunitiesInput,
@@ -24,6 +28,7 @@ import {
 } from '../../src/core/boros/opportunities';
 import { SECONDS_IN_YEAR } from '../../src/core/boros/venue';
 import type { NormalizedBook } from '../../src/core/estimate/books';
+import type { PositionLimit } from '../../src/core/positionLimit';
 import { imInputs } from '../helpers/boros-fixtures';
 
 const NOW = 1_752_000_000;
@@ -38,6 +43,9 @@ const FLOOR = 1.00005 ** (770 * 2) - 1;
 /** Venue max leverage, deliberately different per venue. */
 const HL_LEVERAGE = 10;
 const BN_LEVERAGE = 20;
+/** Venue max leverage per symbol, with no practical cap on the position. */
+const limits = (rows: [string, number][]): Map<string, PositionLimit> =>
+  new Map(rows.map(([symbol, leverage]) => [symbol, { leverage, maxUsd: 1e15 }]));
 
 const HL_SYMBOL = 'HYPERLIQUID_FUTURE_ETH_USDC';
 const BN_SYMBOL = 'BINANCE_FUTURE_ETH_USDT';
@@ -109,7 +117,7 @@ function input(over: Partial<BuildOpportunitiesInput> = {}): BuildOpportunitiesI
       ['BINANCE:ETH', BN_SYMBOL],
     ]),
     crossexVenues: new Set(['BINANCE', 'BYBIT', 'GATE', 'HYPERLIQUID', 'KRAKEN', 'LIGHTER', 'OKX']),
-    leverageMaxBySymbol: new Map([
+    positionLimitBySymbol: limits([
       [HL_SYMBOL, HL_LEVERAGE],
       [BN_SYMBOL, BN_LEVERAGE],
     ]),
@@ -473,7 +481,7 @@ describe('buildOpportunities — capital and the APR on capital', () => {
 
   it('a missing leverage row nulls capital only, naming the venue and symbol', () => {
     const out = buildOpportunities(
-      input({ leverageMaxBySymbol: new Map([[HL_SYMBOL, HL_LEVERAGE]]) }),
+      input({ positionLimitBySymbol: limits([[HL_SYMBOL, HL_LEVERAGE]]) }),
       opts(),
     );
     const pair = out.groups[0].pairs[0];
@@ -765,7 +773,7 @@ describe('buildOpportunities — degraded modes', () => {
           ['HYPERLIQUID:ETH', HL_SYMBOL],
           ['LIGHTER:ETH', LT_SYMBOL],
         ]),
-        leverageMaxBySymbol: new Map([
+        positionLimitBySymbol: limits([
           [HL_SYMBOL, HL_LEVERAGE],
           [LT_SYMBOL, 50],
         ]),
@@ -801,7 +809,7 @@ describe('buildOpportunities — degraded modes', () => {
           ['BINANCE:ETH', BN_SYMBOL],
           ['LIGHTER:ETH', LT_SYMBOL],
         ]),
-        leverageMaxBySymbol: new Map([
+        positionLimitBySymbol: limits([
           [HL_SYMBOL, HL_LEVERAGE],
           [BN_SYMBOL, BN_LEVERAGE],
           [LT_SYMBOL, 50],
@@ -861,7 +869,7 @@ describe('buildOpportunities — degraded modes', () => {
     const out = buildOpportunities(
       input({
         symbolsByVenueBase: new Map(),
-        leverageMaxBySymbol: new Map(),
+        positionLimitBySymbol: new Map(),
         venueBooks: new Map([
           ['HYPERLIQUID:ETH', perpBook(0.1)],
           ['BINANCE:ETH', perpBook(0.1)],
@@ -993,7 +1001,7 @@ describe('buildOpportunities — ranking keys on the capital basis', () => {
       ]),
       // OKX has no risk-limit row → every pair touching it prices on notional
       // only, even though its notional spread is the widest in the group.
-      leverageMaxBySymbol: new Map([
+      positionLimitBySymbol: limits([
         [HL_SYMBOL, HL_LEVERAGE],
         [BN_SYMBOL, BN_LEVERAGE],
       ]),
@@ -1043,7 +1051,7 @@ describe('buildOpportunities — ranking keys on the capital basis', () => {
           ['HYPERLIQUID:SOL', HL_SOL],
           ['BINANCE:SOL', BN_SOL],
         ]),
-        leverageMaxBySymbol: new Map([
+        positionLimitBySymbol: limits([
           [HL_SYMBOL, HL_LEVERAGE],
           [BN_SYMBOL, BN_LEVERAGE],
           [HL_SOL, 100],
@@ -1071,5 +1079,110 @@ describe('buildOpportunities — meta', () => {
       entryMode: 'maker-hedge',
       exitMode: 'roll',
     });
+  });
+});
+
+// Sizing by capital: each pair is priced at the notional whose modelled
+// capital equals the target, and walks its Boros books at that notional.
+describe('notionalForCapital', () => {
+  it('inverts a linear capital to the exact notional', () => {
+    expect(notionalForCapital((n) => n / 7, 100_000)).toBeCloseTo(700_000, 3);
+  });
+
+  it('is null when the capital cannot be modelled at any size', () => {
+    expect(notionalForCapital(() => null, 100_000)).toBeNull();
+  });
+});
+
+describe('buildOpportunities — capital target', () => {
+  const kIM = imInputs.kIM;
+  /** Canonical fixture's capital per $1 of notional (see the capital block). */
+  const perDollar =
+    (0.0899 * 30 * kIM) / 365 + (FLOOR * 30 * kIM) / 365 + 1 / HL_LEVERAGE + 1 / BN_LEVERAGE;
+
+  it('sizes the pair to the capital typed, and reports the notional it solved', () => {
+    const out = buildOpportunities(input(), opts({ capitalUsd: 100_000 }));
+    const pair = out.groups[0].bestPair!;
+    expect(pair.capitalUsd! / 100_000).toBeCloseTo(1, 8);
+    expect(pair.notionalUsd).toBeCloseTo(100_000 / perDollar, 0);
+    expect(out.meta.notionalUsd).toBeNull();
+    expect(out.meta.capitalUsd).toBe(100_000);
+  });
+
+  it('a notional request prices every pair at that notional', () => {
+    const pair = buildOpportunities(input(), opts()).groups[0].bestPair!;
+    expect(pair.notionalUsd).toBe(N);
+  });
+
+  it('walks each Boros book at the pair notional, not a shared one', () => {
+    // $200k at 8.99%, then deep at 8.50%: past $200k the short leg locks less.
+    const books = new Map(input().borosBooks);
+    books.set(155, { marketId: 155, bids: [[0.0899, 200_000], [0.085, 20_000_000]], asks: [[0.0901, 20_000_000]] });
+    const out = buildOpportunities(input({ borosBooks: books }), opts({ capitalUsd: 100_000 }));
+    const pair = out.groups[0].bestPair!;
+    const n = pair.notionalUsd;
+    expect(n).toBeGreaterThan(200_000);
+    const vwap = (200_000 * 0.0899 + (n - 200_000) * 0.085) / n;
+    expect(pair.borosLegs[0].execApr).toBeCloseTo(vwap, 10);
+    expect(pair.capitalUsd! / 100_000).toBeCloseTo(1, 8);
+    // No shared size: the group rows quote no exec rate.
+    expect(out.groups[0].markets.every((m) => m.execShortApr === null && m.bookStatus === 'not-fetched')).toBe(true);
+  });
+
+  it('a target past the Boros depth leaves the pair with no locked rate', () => {
+    const books = new Map(input().borosBooks);
+    books.set(155, { marketId: 155, bids: [[0.0899, 50_000]], asks: [[0.0901, 20_000_000]] });
+    const pair = buildOpportunities(input({ borosBooks: books }), opts({ capitalUsd: 100_000 })).groups[0].pairs[0];
+    expect(pair.execSpreadApr).toBeNull();
+    expect(pair.netFixedAprOnCapital).toBeNull();
+  });
+
+  it('a pair whose capital cannot be modelled says it cannot be sized', () => {
+    const pair = buildOpportunities(
+      input({ positionLimitBySymbol: limits([[HL_SYMBOL, HL_LEVERAGE]]) }),
+      opts({ capitalUsd: 100_000 }),
+    ).groups[0].pairs[0];
+    expect(pair.capitalUsd).toBeNull();
+    expect(pair.netFixedAprOnCapital).toBeNull();
+    expect(pair.reasons.some((r) => r.includes("can't be sized to $100,000 of capital"))).toBe(true);
+  });
+});
+
+// Perp slippage past one clip: a leg bigger than PERP_SLIPPAGE_CLIP_USD is
+// priced at the clip's crossing RATE on its full notional (TWAP'd in clips),
+// never by walking the whole book in one go.
+describe('clippedCrossCostUsd', () => {
+  const MID = 100;
+  // Asks thin out with distance from mid: $0.5M at +1, $1M at +2, then $10M at
+  // +10, so a walk past the clip gets much worse per unit.
+  const BOOK: NormalizedBook = {
+    bids: [[99, 1e9]],
+    asks: [
+      [101, 5_000],
+      [102, 10_000],
+      [110, 100_000],
+    ],
+    ts: 0,
+  };
+
+  it('is the plain walk at or below one clip', () => {
+    for (const n of [250_000, PERP_SLIPPAGE_CLIP_USD]) {
+      expect(clippedCrossCostUsd(BOOK, 'BUY', n, MID)).toEqual(crossCostUsd(BOOK, 'BUY', n / MID, MID));
+    }
+  });
+
+  it('prices a $10M leg at ten times the $1M cost', () => {
+    const clip = crossCostUsd(BOOK, 'BUY', PERP_SLIPPAGE_CLIP_USD / MID, MID)!;
+    const ten = clippedCrossCostUsd(BOOK, 'BUY', 10 * PERP_SLIPPAGE_CLIP_USD, MID)!;
+    expect(ten.costUsd).toBeCloseTo(10 * clip.costUsd, 6);
+    expect(ten.exhausted).toBe(false);
+  });
+
+  it('never exceeds the one-shot walk of the full notional', () => {
+    for (const n of [1.5e6, 3e6, 10e6, 50e6]) {
+      const clipped = clippedCrossCostUsd(BOOK, 'BUY', n, MID)!.costUsd;
+      const oneShot = crossCostUsd(BOOK, 'BUY', n / MID, MID)!.costUsd;
+      expect(clipped).toBeLessThanOrEqual(oneShot);
+    }
   });
 });

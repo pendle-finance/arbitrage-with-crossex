@@ -70,7 +70,7 @@ export const isVenue = (value: string): value is Venue => (VENUES as readonly st
 
 const PAUSED_REASON = 'Gate paused USDC transfers.';
 const CLOSED_REASON = 'The spot market for USDC is closed.';
-const NO_ROUND_REASON = 'Free margin is too low for an 11 USDC round.';
+const NO_ROUND_REASON = 'Not enough free margin for an 11 USDC round.';
 const NO_CASH_REASON = 'Not enough cash for an 11 USDC round.';
 const USDT_SHORT_REASON = 'A Convert between Hyperliquid and Lighter needs USDT · CrossEx cash of -1 or more.';
 const underMinimumReason = (minimum: number): string => `The move is under the ${minimum} USDC minimum.`;

@@ -22,6 +22,7 @@ import {
   type ReactNode,
   type RefObject,
 } from 'react';
+import { useTranslation } from 'react-i18next';
 import { microLabelClass } from '../components/Th';
 import { useDebounced } from '../lib/useDebounced';
 import {
@@ -141,6 +142,7 @@ function FilterPopover({
   onDismiss: () => void;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   const dialogRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
@@ -192,14 +194,14 @@ function FilterPopover({
         id={id}
         ref={dialogRef}
         role="dialog"
-        aria-label="Filter opportunities by venue, maturity and APR"
+        aria-label={t('opportunities.filters.popoverAria')}
         className="fixed max-h-[calc(100vh-16px)] w-[320px] overflow-y-auto rounded border border-ink-600 bg-ink-900 p-3"
         style={pos ?? { top: 96, left: 16 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-2.5 flex items-center justify-between gap-2">
-          <span className="text-xs font-semibold text-ink-100">Filters</span>
-          <button type="button" aria-label="dismiss" className="btn-ghost-xs px-1.5" onClick={onDismiss}>
+          <span className="text-xs font-semibold text-ink-100">{t('opportunities.filters.filters')}</span>
+          <button type="button" aria-label={t('opportunities.filters.dismissAria')} className="btn-ghost-xs px-1.5" onClick={onDismiss}>
             <X size={12} aria-hidden />
           </button>
         </div>
@@ -214,6 +216,7 @@ export function OpportunityFilterBar({
   filters,
   onChange,
   shown,
+  hidden = 0,
 }: {
   /** Every viable row, unfiltered — the facets count against this. */
   rows: OpportunityRow[];
@@ -221,7 +224,10 @@ export function OpportunityFilterBar({
   onChange: (next: OpportunityFilters) => void;
   /** How many cards survive `filters` — the "showing N of M" numerator. */
   shown: number;
+  /** Pairs left out at this capital: the book cannot fill them, or they lose money. */
+  hidden?: number;
 }) {
+  const { t } = useTranslation();
   const minDaysId = useId();
   const moreId = useId();
   // Asset is the dimension a reader SCANS by; venue, maturity and the APR floor
@@ -273,11 +279,11 @@ export function OpportunityFilterBar({
     <div
       className="mb-3 flex flex-col gap-2 px-0.5"
       role="group"
-      aria-label="Filter opportunities"
+      aria-label={t('opportunities.filters.barAria')}
     >
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <FacetGroup
-          label="Asset"
+          label={t('opportunities.filters.asset')}
           options={f.assets}
           poolSize={f.poolSize.assets}
           onToggle={(v) => onChange({ ...filters, assets: toggleValue(filters.assets, v) })}
@@ -285,7 +291,8 @@ export function OpportunityFilterBar({
 
         <span className="ml-auto flex items-center gap-2">
           <span className="num text-[11px] text-ink-400" aria-live="polite">
-            showing {shown} of {rows.length}
+            {t('opportunities.filters.showing', { shown, total: rows.length })}
+            {hidden > 0 && ` · ${t('opportunities.filters.hidden', { count: hidden })}`}
           </span>
           <button
             ref={triggerRef}
@@ -293,8 +300,12 @@ export function OpportunityFilterBar({
             aria-haspopup="dialog"
             aria-expanded={moreOpen}
             aria-controls={moreOpen ? moreId : undefined}
-            aria-label={hiddenActive > 0 ? `Filters, ${hiddenActive} active` : 'Filters'}
-            title="Venue and how far out it matures"
+            aria-label={
+              hiddenActive > 0
+                ? t('opportunities.filters.filtersActive', { count: hiddenActive })
+                : t('opportunities.filters.filters')
+            }
+            title={t('opportunities.filters.triggerTitle')}
             onClick={() => setMoreOpen((v) => !v)}
             className={`flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ${
               hiddenActive > 0
@@ -303,7 +314,7 @@ export function OpportunityFilterBar({
             }`}
           >
             <Funnel size={12} aria-hidden />
-            Filters
+            {t('opportunities.filters.filters')}
             {hiddenActive > 0 && (
               <span className="num rounded bg-cyan-500/20 px-1 text-[10px] leading-4 text-cyan-200">
                 {hiddenActive}
@@ -316,35 +327,35 @@ export function OpportunityFilterBar({
       {moreOpen && (
         <FilterPopover id={moreId} anchorRef={triggerRef} onDismiss={dismiss}>
           <FacetGroup
-            label="Venue"
+            label={t('common.venue')}
             options={f.venues}
             poolSize={f.poolSize.venues}
-            titleOf={(v) => `Opportunities with either leg on ${v}`}
+            titleOf={(v) => t('opportunities.filters.venueTitle', { venue: v })}
             onToggle={(v) => onChange({ ...filters, venues: toggleValue(filters.venues, v) })}
           />
           <span className="flex flex-wrap items-center gap-1.5">
             <label htmlFor={minDaysId} className={`${microLabelClass} mr-0.5`}>
-              Matures in more than
+              {t('opportunities.filters.maturesMoreThan')}
             </label>
             <input
               id={minDaysId}
               type="text"
               inputMode="numeric"
               autoComplete="off"
-              placeholder="any"
+              placeholder={t('opportunities.filters.any')}
               value={minDaysText}
               onChange={(e) => setMinDaysText(e.target.value)}
-              title="Keep only cards maturing in MORE than this many days."
+              title={t('opportunities.filters.minDaysTitle')}
               aria-invalid={minDaysBad}
               aria-describedby={minDaysBad ? `${minDaysId}-err` : undefined}
               className={`input num h-[26px] w-16 !px-2 !py-0 text-[11px] ${
                 minDaysBad ? 'border-rose-500/60' : ''
               }`}
             />
-            <span className="text-[11px] text-ink-400">days</span>
+            <span className="text-[11px] text-ink-400">{t('opportunities.filters.days')}</span>
             {minDaysBad && (
               <span id={`${minDaysId}-err`} role="alert" className="text-[11px] text-rose-300">
-                needs a plain number
+                {t('opportunities.filters.needsNumber')}
               </span>
             )}
           </span>
@@ -352,7 +363,7 @@ export function OpportunityFilterBar({
           {active && (
             <div className="flex justify-end border-t border-ink-800 pt-2.5">
               <button type="button" className="btn-ghost-xs" onClick={() => onChange(NO_FILTERS)}>
-                Clear filters
+                {t('opportunities.panel.clearFilters')}
               </button>
             </div>
           )}

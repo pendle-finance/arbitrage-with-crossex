@@ -3,6 +3,71 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.8 — 2026-10-27
+
+TLDR: Fixed Rate Pairs pairs your legs by venue at any Boros date. You can exclude part of a
+Boros leg from the arbitrage. A Boros send that times out no longer reads as "nothing traded".
+Opportunities sizes every card by the capital you put in. Every screen can show Simplified Chinese.
+
+- **Simplified Chinese.** The Language toggle in Settings switches every screen, hover and error
+  to Simplified Chinese. The choice is saved per browser. Boros and Gate names, tickers and
+  market names stay in English. The terms follow the Boros app's Chinese. The user guide has a
+  Chinese copy with Chinese screenshots, and both guides now describe today's screens: Capital,
+  Roll over, Open this strategy, the deal window, Fixed Rate Pairs, the fees window, Exclude and
+  the Rebalance presets. Messages from the terminal's server are translated too, including a
+  finished deal's result; raw text from Gate or
+  Boros stays in English. Translations live in `web/src/locales/<language>/`, one file per
+  screen area, so a wrong line is a one-line fix and a new language is a new folder.
+- **Fixed Rate Pairs pairs legs by venue at any date.** Each card pairs your perps and Boros
+  legs by venue and side, at any Boros date. After a half roll, the new date gets its card and
+  the old leg goes to Ungrouped. A leg on the wrong side shows a `Wrong side` tag at any date,
+  and its row has a faint red tint. A USDC perp shows `no Boros hedge`: Boros tracks the USDT
+  perp's funding, not the USDC one's.
+- **After a half roll, the other leg opens at the new date.** Before, a card refused to open a
+  Boros leg while the venue still held one at the old date. Now it opens, and the Boros ticket
+  says how much of it covers the perp twice and until when, at the size you type. For example:
+  "Hyperliquid SHORT holds 10 ETH at 30 Oct. This open covers 4 ETH twice until 30 Oct."
+- **Exclude part of a Boros leg.** The `⋯` menu on a Boros row has one item, Exclude. It opens
+  the same size popup as Edit on Funding Bundles. Nothing saves until you press Save. The
+  excluded part moves to an Excluded list on both tabs, with Restore and Edit. Exclusions now
+  live on the terminal, so a new browser keeps them. The first load moves the exclusions your
+  browser saved to the terminal.
+- **A blocked open says why.** An open that cannot go is a grey button. Its hover gives the
+  reason, for example "Close the Wrong side Gate LONG at 30 Oct to open here". On Funding Bundles,
+  Open more no longer opens into a Boros leg that you hold the wrong way.
+- **Current APR counts hedged pairs only.** The asset card's Current APR no longer counts a
+  Boros leg whose perps moved to another pair, nor its margin.
+- **Close perps closes the card's size.** On a card that shares a venue position with another
+  card, Close perps sends only that card's size.
+- **The pair ticket warns about an uneven fill.** On a thin book the two legs can fill to
+  different sizes. The ticket now says how much would be left unhedged. A Use button sets the
+  size that fills on both legs.
+- **A Boros send that times out is checked.** Before, a 408 from Boros read as "rejected,
+  nothing traded" while Boros was still sending the batch. Sending again could double the
+  position. Now the terminal asks Boros for the batch and reads each leg's fill. It says "may
+  or may not have filled" only when Boros has no answer after 30 seconds.
+- **A close at a few cents of gas goes through.** Before, Boros refused it for gas on every
+  try. Now the terminal sends it once more with a $1 gas top-up.
+- **Opportunities sizes by capital.** The size box now sets Capital: the margin you post on all
+  legs, which is what the APR is on. Each card finds the notional per leg that uses exactly
+  that capital, walks the Boros and perp books at that size, and shows it. The default is $200k
+  of capital. The Notional per leg mode is gone; a saved notional pick opens on your saved
+  capital, or on $200k. The presets now include $1M. The Custom button is gone: click the box and
+  type any amount, or pick a preset. Open this strategy fills the ticket at the
+  card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
+  another, and a note under the size says so.
+- **Perp legs stop under the CrossEx position cap.** CrossEx gives a perp its top leverage
+  only up to a size cap, for example $50M on Gate BTC and $1M on Gate HYPE. Gate refuses an
+  order past it. Before, Opportunities priced cards past that cap, and an open past it failed
+  after the first leg. Now every perp stops 2% under its cap. A card sizes up to that limit and
+  says "This pair takes at most $X of capital". An open past it is refused before anything is
+  sent. The check counts deals still working and orders resting on the same perp. A trade
+  that shrinks a position always goes through. A market pair sends its Gate leg first.
+- **Smaller things.** Every leg row shows its venue icon. The open-only roll review names the
+  spread market it opens, for example "ETH Spread HL-GATE".
+
+Existing installs get this through the in-app Update.
+
 ## 1.7.7 — 2026-10-21
 
 TLDR: Boros login works when the page is not opened at localhost. A login that Boros does

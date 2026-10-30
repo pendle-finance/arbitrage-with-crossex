@@ -4,12 +4,13 @@
  * trade the wallet on screen? Then it offers the one action that changes that.
  */
 import { useState, type ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { ApiError } from '../../api/client';
 import { useBorosAgent, useForgetBorosAgent } from '../../api/queries';
 import { WalletStateTag } from '../../components/ActiveWalletChip';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { InlineConfirm } from '../../components/InlineConfirm';
-import { BorosLogInButton, NOT_APPROVED_TEXT } from '../../trade/BorosAgentSetup';
+import { BorosLogInButton } from '../../trade/BorosAgentSetup';
 import { fmtDateShort } from '../../lib/fmt';
 import { hasInjectedWallet } from '../../lib/wallet';
 import { short } from '../HomeControls';
@@ -18,6 +19,7 @@ import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
 
 export function BorosWalletRow(p: SetupRowProps) {
+  const { t } = useTranslation();
   const { address, upgradeNote, dismissUpgradeNote } = useTrackedAddress();
   const active = useActiveWallet();
   const agent = useBorosAgent().data;
@@ -36,10 +38,14 @@ export function BorosWalletRow(p: SetupRowProps) {
   const upgrade = upgradeNote ? (
     <div className="flex items-center gap-3 rounded-lg border border-ink-700 px-3 py-2 text-xs text-ink-300">
       <span>
-        Now showing <span className="num text-ink-100">{short(upgradeNote)}</span>, the wallet that trades.
+        <Trans
+          i18nKey="app.borosWallet.nowShowing"
+          values={{ wallet: short(upgradeNote) }}
+          components={{ a: <span className="num text-ink-100" /> }}
+        />
       </span>
       <button type="button" className="btn-link ml-auto" onClick={dismissUpgradeNote}>
-        Dismiss
+        {t('common.dismiss')}
       </button>
     </div>
   ) : null;
@@ -47,7 +53,7 @@ export function BorosWalletRow(p: SetupRowProps) {
   const logIn = hasWallet ? (
     <BorosLogInButton renew={active.endsSoon !== null} onDone={() => p.onDone()} />
   ) : (
-    <p className="text-xs text-ink-400">Install Rabby or MetaMask to log in.</p>
+    <p className="text-xs text-ink-400">{t('app.borosWallet.install')}</p>
   );
 
   let body: ReactNode;
@@ -57,7 +63,9 @@ export function BorosWalletRow(p: SetupRowProps) {
     body = (
       <>
         <p className="text-xs text-ink-400">
-          {agent?.expiry ? `Login ends ${fmtDateShort(agent.expiry, { year: 'numeric' })}. ` : ''}The key cannot withdraw.
+          {agent?.expiry
+            ? t('app.borosWallet.loginEnds', { date: fmtDateShort(agent.expiry, { year: 'numeric' }) })
+            : t('app.borosWallet.noWithdraw')}
         </p>
         {active.endsSoon !== null && logIn}
       </>
@@ -68,7 +76,9 @@ export function BorosWalletRow(p: SetupRowProps) {
     body = (
       <>
         <p className="text-xs text-rose-300">
-          Login ended{agent?.expiry ? ` ${fmtDateShort(agent.expiry, { year: 'numeric' })}` : ''}. Boros refuses orders.
+          {agent?.expiry
+            ? t('app.borosWallet.loginEndedOn', { date: fmtDateShort(agent.expiry, { year: 'numeric' }) })
+            : t('app.borosWallet.loginEnded')}
         </p>
         {logIn}
       </>
@@ -76,7 +86,7 @@ export function BorosWalletRow(p: SetupRowProps) {
   } else if (active.state === 'not-approved') {
     body = (
       <>
-        <p className="text-xs text-rose-300">{NOT_APPROVED_TEXT}</p>
+        <p className="text-xs text-rose-300">{t('trade.agent.notApproved')}</p>
         {logIn}
       </>
     );
@@ -85,10 +95,14 @@ export function BorosWalletRow(p: SetupRowProps) {
       <>
         {otherLoggedIn ? (
           <p className="text-xs text-ink-400">
-            Logged in here: <span className="num text-ink-200">{short(otherLoggedIn)}</span>
+            <Trans
+              i18nKey="app.borosWallet.loggedInHere"
+              values={{ wallet: short(otherLoggedIn) }}
+              components={{ a: <span className="num text-ink-200" /> }}
+            />
           </p>
         ) : (
-          <p className="text-xs text-ink-400">One free signature. The key cannot withdraw.</p>
+          <p className="text-xs text-ink-400">{t('app.borosWallet.oneSignature')}</p>
         )}
         {logIn}
       </>
@@ -98,7 +112,7 @@ export function BorosWalletRow(p: SetupRowProps) {
   return (
     <SetupRowFrame
       n={2}
-      title="Boros wallet"
+      title={t('app.borosWallet.title')}
       row={p}
       isDone={address !== null}
       doneTone={
@@ -117,7 +131,7 @@ export function BorosWalletRow(p: SetupRowProps) {
       }
       isWarn={active.state === 'expired' || active.state === 'not-approved'}
       alert={upgrade}
-      skipConsequence="No Boros trades, and Positions shows no Boros legs."
+      skipConsequence={t('app.borosWallet.skip')}
     >
       {body}
       {/* A connected wallet counts the step as done, which takes the Skip
@@ -126,7 +140,7 @@ export function BorosWalletRow(p: SetupRowProps) {
           now. Without this the page was a dead end (audit 2026-09-24). */}
       {p.variant === 'setup' && address && !active.canTrade && active.state !== 'logging-in' && (
         <button type="button" className="btn-link self-end text-ink-400" onClick={() => p.onDone()}>
-          Continue without logging in
+          {t('app.borosWallet.continueWithout')}
         </button>
       )}
       {error && (
@@ -138,21 +152,23 @@ export function BorosWalletRow(p: SetupRowProps) {
       {isOwnLogin && !askLogOut && active.state !== 'logging-in' && (
         <div className="flex items-center gap-4">
           <button type="button" className="btn-link ml-auto text-ink-400" onClick={() => setAskLogOut(true)}>
-            Log out
+            {t('app.borosWallet.logOut')}
           </button>
         </div>
       )}
       {isOwnLogin && askLogOut && loggedIn && (
         <InlineConfirm
           tone="warn"
-          label={`Log out ${short(loggedIn)}?`}
+          label={t('app.borosWallet.logOutLabel', { wallet: short(loggedIn) })}
           question={
-            <>
-              Log out <span className="num">{short(loggedIn)}</span>? Positions stay open.
-            </>
+            <Trans
+              i18nKey="app.borosWallet.logOutQuestion"
+              values={{ wallet: short(loggedIn) }}
+              components={{ a: <span className="num" /> }}
+            />
           }
-          confirmLabel="Log out"
-          busyLabel="Logging out…"
+          confirmLabel={t('app.borosWallet.logOut')}
+          busyLabel={t('app.borosWallet.loggingOut')}
           busy={forget.isPending}
           onConfirm={async () => {
             setError(null);
@@ -163,7 +179,7 @@ export function BorosWalletRow(p: SetupRowProps) {
               return;
             }
             setAskLogOut(false);
-            setNote('Logged out. The on-chain approval stays until you revoke it in Boros.');
+            setNote(t('app.borosWallet.loggedOut'));
           }}
           onCancel={() => setAskLogOut(false)}
         />

@@ -45,12 +45,12 @@ describe('TradeRail', () => {
     renderWithClient(<TradeRail />);
 
     // Under perps: the perp execution modes are reachable.
-    expect(screen.getByRole('radiogroup', { name: 'Pair execution mode' })).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Perp entry mode' })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('radio', { name: 'Boros rates' }));
     // Switching venue takes the whole perp ticket away — its execution modes and
     // its coin picker included. Nothing perp-shaped sits beside the Boros ticket.
-    expect(screen.queryByRole('radiogroup', { name: 'Pair execution mode' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('radiogroup', { name: 'Perp entry mode' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radiogroup', { name: 'Perp ticket mode' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Coin search')).not.toBeInTheDocument();
   });

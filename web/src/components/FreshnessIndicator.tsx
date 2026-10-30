@@ -1,4 +1,5 @@
 import { RotateCw } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAccount, useOpenOrders, usePositions } from '../api/queries';
 import { fmtAge } from '../lib/fmt';
@@ -24,11 +25,12 @@ export function FreshnessButton({
    * is the same height as everything beside it. Colours stay below. */
   className?: string;
 }) {
+  const { t } = useTranslation();
   const now = useNow(1000);
   if (!dataUpdatedAt)
     return (
       <span className="num inline-flex items-center gap-1.5 text-xs text-ink-500">
-        <RotateCw size={12} aria-hidden /> loading
+        <RotateCw size={12} aria-hidden /> {t('app.loadingLower')}
       </span>
     );
   const age = fmtAge(now - dataUpdatedAt);
@@ -44,10 +46,10 @@ export function FreshnessButton({
       }`}
     >
       {staleError ? (
-        `stale ${age} · retrying`
+        t('app.freshness.stale', { age })
       ) : (
         <span className="inline-flex items-center gap-1.5">
-          <RotateCw size={12} aria-hidden /> {age} ago
+          <RotateCw size={12} aria-hidden /> {t('app.freshness.ago', { age })}
         </span>
       )}
     </button>
@@ -62,6 +64,7 @@ export function FreshnessIndicator() {
   const positions = usePositions();
   const orders = useOpenOrders();
   const qc = useQueryClient();
+  const { t } = useTranslation();
 
   const queries = [account, positions, orders];
   // The STALEST of the three: a freshness clock that reports the newest
@@ -74,7 +77,7 @@ export function FreshnessIndicator() {
     <FreshnessButton
       dataUpdatedAt={newest}
       staleError={staleError}
-      title="Refetch all panels"
+      title={t('app.freshness.refetchAll')}
       className="hdr-ctl font-normal"
       onRefetch={() => void qc.invalidateQueries()}
     />

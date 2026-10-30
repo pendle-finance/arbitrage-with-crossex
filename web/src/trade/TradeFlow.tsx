@@ -12,6 +12,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DealModal } from './DealModal';
 import type { ExecMode } from './PairTicketBits';
+import type { BorosOverlap } from './borosOverlap';
 
 export interface PairPrefill {
   base: string;
@@ -83,6 +84,9 @@ export interface BorosOpenPrefill {
   size: number;
   /** The same leg in BASE-COIN units (the perp's own quantity). */
   sizeBase?: number;
+  /** Boros the venues already hold at other dates on these sides; the ticket
+   * warns when the size it sends covers part of a perp twice. */
+  overlaps?: BorosOverlap[];
   /** Monotonic — a new prefill with identical content still re-applies. */
   nonce: number;
 }

@@ -6,10 +6,15 @@ interface ToastItem {
   id: number;
   kind: ToastKind;
   text: string;
+  key?: string;
+}
+
+interface ToastOptions {
+  key?: string;
 }
 
 interface ToastApi {
-  push: (kind: ToastKind, text: string) => void;
+  push: (kind: ToastKind, text: string, opts?: ToastOptions) => void;
 }
 
 const ToastCtx = createContext<ToastApi | null>(null);
@@ -41,9 +46,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const push = useCallback(
-    (kind: ToastKind, text: string) => {
+    (kind: ToastKind, text: string, opts?: ToastOptions) => {
       const id = ++seq.current;
-      setToasts((prev) => [...prev, { id, kind, text }]);
+      const key = opts?.key;
+      setToasts((prev) => [
+        ...prev.filter((t) => key === undefined || t.key !== key),
+        { id, kind, text, key },
+      ]);
       setTimeout(() => dismiss(id), 5000);
     },
     [dismiss],

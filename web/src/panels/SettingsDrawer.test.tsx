@@ -72,6 +72,20 @@ describe('SettingsDrawer', () => {
     );
   });
 
+  it('language picker switches the terminal and saves the choice', async () => {
+    const user = userEvent.setup();
+    mockAllDone();
+    renderDrawer();
+    const picker = await screen.findByRole('radiogroup', { name: 'Language' });
+    expect(within(picker).getByRole('radio', { name: 'English' })).toHaveAttribute('aria-checked', 'true');
+
+    await user.click(within(picker).getByRole('radio', { name: '简体中文' }));
+
+    expect(await screen.findByRole('radio', { name: '简体中文', checked: true })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '语言' })).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem('crossex.language.v1') ?? 'null')).toBe('zh-CN');
+  });
+
   it('setup rows', async () => {
     mockAllDone();
     renderDrawer();
@@ -116,7 +130,7 @@ describe('SettingsDrawer', () => {
     await clickEdit('Telegram alerts');
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByRole('switch', { name: 'Close to liquidation' })).toHaveAttribute(
+    expect(await within(telegram).findByRole('switch', { name: 'Near liquidation' })).toHaveAttribute(
       'aria-checked',
       'true',
     );
@@ -162,18 +176,18 @@ describe('SettingsDrawer', () => {
     const user = await clickEdit('Telegram alerts');
     const telegram = row('Telegram alerts');
 
-    await within(telegram).findByRole('switch', { name: 'Close to liquidation' });
+    await within(telegram).findByRole('switch', { name: 'Near liquidation' });
     expect(within(telegram).getAllByRole('switch').map((s) => s.textContent)).toEqual([
-      'Close to liquidation',
+      'Near liquidation',
       'Started paying interest',
       'Close to maturity',
-      'Roll-over opportunity',
+      'Rollover opportunity',
     ]);
-    expect(within(telegram).getByText('daily in the last 7 days, with maturities to roll to')).toBeInTheDocument();
+    expect(within(telegram).getByText('Daily in the last 7 days, with maturities to roll to')).toBeInTheDocument();
     expect(
-      within(telegram).getByText('a later maturity pays a better APR'),
+      within(telegram).getByText('A later maturity pays a better APR'),
     ).toBeInTheDocument();
-    await user.click(within(telegram).getByRole('switch', { name: 'Roll-over opportunity' }));
+    await user.click(within(telegram).getByRole('switch', { name: 'Rollover opportunity' }));
 
     await waitFor(() => expect(patched).toEqual({ rollover: false }));
   });
@@ -205,7 +219,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('not set up')).toHaveClass('text-amber-400');
+    expect(await within(telegram).findByText('Not set up')).toHaveClass('text-amber-400');
     expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
@@ -215,7 +229,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
+    expect(await within(telegram).findByText('Not set up')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
@@ -225,7 +239,7 @@ describe('SettingsDrawer', () => {
     renderDrawer();
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('not set up')).toBeInTheDocument();
+    expect(await within(telegram).findByText('Not set up')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Set up' })).toBeInTheDocument();
     expect(within(telegram).queryByRole('button', { name: 'Expand' })).toBeNull();
   });
@@ -288,7 +302,7 @@ describe('SettingsDrawer', () => {
     const telegram = row('Telegram alerts');
     // Closed row: it reads like a row never set up; the opened row names the wallet.
     expect(await within(telegram).findByRole('button', { name: 'Set up' })).toBeInTheDocument();
-    expect(within(telegram).getByText('not set up')).toBeInTheDocument();
+    expect(within(telegram).getByText('Not set up')).toBeInTheDocument();
   });
 
   it('telegram sets up alerts for the new wallet with the same key', async () => {
@@ -359,7 +373,7 @@ describe('SettingsDrawer · focus step', () => {
     renderWithClient(<FocusHarness initial="telegram" />);
     const telegram = row('Telegram alerts');
 
-    expect(await within(telegram).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
+    expect(await within(telegram).findByText('A 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(within(telegram).getByRole('button', { name: 'Collapse' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Replace credentials' })).toBeNull();
     expect(screen.queryByRole('radio', { name: 'Paste address' })).toBeNull();
@@ -368,11 +382,11 @@ describe('SettingsDrawer · focus step', () => {
   it('new focus step opens the new row', async () => {
     mockAllDone(telegramInfo());
     renderWithClient(<FocusHarness initial="telegram" />);
-    await within(row('Telegram alerts')).findByText('a 20% price move would liquidate a leg');
+    await within(row('Telegram alerts')).findByText('A 20% price move would liquidate a leg');
     act(() => drive.focus('gateKey'));
 
     expect(await screen.findByRole('button', { name: 'Replace credentials' })).toBeInTheDocument();
-    expect(within(row('Telegram alerts')).queryByText('a 20% price move would liquidate a leg')).toBeNull();
+    expect(within(row('Telegram alerts')).queryByText('A 20% price move would liquidate a leg')).toBeNull();
   });
 
   it('reopening opens the focus step again', async () => {
@@ -383,7 +397,7 @@ describe('SettingsDrawer · focus step', () => {
     await user.click(screen.getByRole('button', { name: 'close' }));
     act(() => drive.setOpen(true));
 
-    expect(await within(row('Telegram alerts')).findByText('a 20% price move would liquidate a leg')).toBeInTheDocument();
+    expect(await within(row('Telegram alerts')).findByText('A 20% price move would liquidate a leg')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Log out' })).toBeNull();
   });
 

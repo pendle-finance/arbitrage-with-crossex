@@ -96,6 +96,21 @@ describe('toRows', () => {
     expect(toRows([group])).toHaveLength(1);
   });
 
+  it('counts every pair it leaves out: unpriced, NaN and priced losses', () => {
+    const group = makeOpportunityGroup({
+      pairs: [
+        pair(0.09, 'HYPERLIQUID', 'BINANCE'),
+        pair(null, 'HYPERLIQUID', 'GATE'),
+        pair(-0.01, 'BYBIT', 'GATE'),
+        pair(-0.02, 'OKX', 'BINANCE'),
+      ],
+    });
+    const stats = { hidden: 0 };
+
+    expect(toRows([group], undefined, undefined, null, stats)).toHaveLength(1);
+    expect(stats.hidden).toBe(3);
+  });
+
   it('ranks across groups on the APR, not on the server’s per-group order', () => {
     const eth = makeOpportunityGroup({
       tokenId: 3,
@@ -180,7 +195,7 @@ describe('toRows', () => {
       marketIds: null,
       active: true,
     };
-    const rows = toRows([group], undefined, undefined, { config: rebate, notionalUsd: OPP_NOTIONAL });
+    const rows = toRows([group], undefined, undefined, rebate);
     expect(rows).toHaveLength(1);
     const creditedNet = execSpreadApr - (totalUsd - 0.016 * OPP_NT) / OPP_NT; // +1.5%
     expect(rows[0].apr).toBeCloseTo((creditedNet * OPP_NT) / ((base.capitalUsd as number) * years), 9);
@@ -224,7 +239,7 @@ describe('toRows', () => {
       [makeOpportunityGroup({ pairs: [losing] })],
       undefined,
       undefined,
-      { config: rebate, notionalUsd: OPP_NOTIONAL },
+      rebate,
     );
     expect(rows).toHaveLength(0);
   });

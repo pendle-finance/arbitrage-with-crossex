@@ -3,9 +3,11 @@
  * accounts in trouble?" for CrossEx AND Boros, plus its two echoes — the
  * header status and the Positions warning.
  */
-import { AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronRight } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Skeleton } from '../../components/Skeleton';
+import { t } from '../../i18n';
 import { fmtPct, fmtTokenQty, fmtUsd } from '../../lib/fmt';
 import {
   RISK_MM_USED,
@@ -39,7 +41,7 @@ function Usage({ used, barClass, textClass, ticks = false }: { used: number | nu
           </>
         )}
       </span>
-      <span className={`num w-10 text-right ${textClass}`}>{used === null ? 'n/a' : fmtPct(used, 0)}</span>
+      <span className={`num w-10 text-right ${textClass}`}>{used === null ? t('accounts.ui.na') : fmtPct(used, 0)}</span>
     </span>
   );
 }
@@ -48,7 +50,7 @@ function VerdictIcon({ level, size = 14 }: { level: RiskLevel; size?: number }) 
   return level === 'ok' ? <CheckCircle2 size={size} aria-hidden /> : <AlertTriangle size={size} aria-hidden />;
 }
 
-const money = (usd: number | null) => (usd === null ? 'n/a' : fmtUsd(usd));
+const money = (usd: number | null) => (usd === null ? t('accounts.ui.na') : fmtUsd(usd));
 const headCell = 'pb-2 text-[12px] font-normal text-ink-400';
 
 function Row({ r }: { r: AccountRow }) {
@@ -62,7 +64,7 @@ function Row({ r }: { r: AccountRow }) {
             <span>
               <span className="text-ink-50">{fmtTokenQty(r.token.available, r.token.symbol)}</span>
               <span className="text-ink-500">
-                {' '}/ {r.token.balance === null ? 'n/a' : fmtTokenQty(r.token.balance, r.token.symbol)}
+                {' '}/ {r.token.balance === null ? t('accounts.ui.na') : fmtTokenQty(r.token.balance, r.token.symbol)}
               </span>
             </span>
             <span className="text-[11.5px] text-ink-500">
@@ -88,6 +90,7 @@ function Row({ r }: { r: AccountRow }) {
 
 /** Top of the Accounts tab: the verdict, then every account in one format. */
 export function AccountsOverview() {
+  const { t } = useTranslation();
   const v = useAccountsView();
   if (!v) return null;
   const group = (venue: 'CrossEx' | 'Boros') => {
@@ -115,9 +118,9 @@ export function AccountsOverview() {
     );
   };
   return (
-    <section aria-label="Accounts" className="card flex flex-col gap-4 p-4">
+    <section aria-label={t('accounts.ui.title')} className="card flex flex-col gap-4 p-4">
       <div className="flex flex-wrap items-center gap-3">
-        <h2 className="text-[14px] font-semibold text-ink-50">Accounts</h2>
+        <h2 className="text-[14px] font-semibold text-ink-50">{t('accounts.ui.title')}</h2>
         <span className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-[12.5px] font-semibold ${BOX[v.level]}`}>
           <VerdictIcon level={v.level} />
           {verdictText(v)}
@@ -133,13 +136,16 @@ export function AccountsOverview() {
         </colgroup>
         <thead>
           <tr className="text-left">
-            <th className={headCell}>Account</th>
-            <th className={`${headCell} text-right`}>Available / Balance</th>
-            <th className={`${headCell} pl-10`} title="Initial margin ÷ balance: how much of the account your positions hold.">
-              <span className="tip-label">IM used</span>
+            <th className={headCell}>{t('common.account')}</th>
+            <th className={`${headCell} text-right`}>{t('accounts.ui.availableBalance')}</th>
+            <th className={`${headCell} pl-10`} title={t('accounts.ui.imTitle')}>
+              <span className="tip-label">{t('accounts.ui.imUsed')}</span>
             </th>
-            <th className={headCell} title="Maintenance margin ÷ balance. The account liquidates at 100%; amber from 67%, red from 91%.">
-              <span className="tip-label">MM used</span>
+            <th
+              className={headCell}
+              title={t('accounts.ui.mmTitle', { watch: fmtPct(WATCH_MM_USED, 0), risk: fmtPct(RISK_MM_USED, 0) })}
+            >
+              <span className="tip-label">{t('accounts.ui.mmUsed')}</span>
             </th>
           </tr>
         </thead>
@@ -155,14 +161,15 @@ export function AccountsOverview() {
 /** The header, minimal: is anything at risk (and which account), then each
  * venue's available against its balance. One click opens Accounts. */
 export function AccountStatusStrip({ children }: { children?: ReactNode }) {
+  const { t } = useTranslation();
   const v = useAccountsView();
   if (!v) return <div className="ml-auto" />;
-  const stat = (label: string, t: { availableUsd: number; balanceUsd: number } | null) =>
-    t === null ? null : (
+  const stat = (label: string, total: { availableUsd: number; balanceUsd: number } | null) =>
+    total === null ? null : (
       <span className="flex items-baseline gap-1.5 whitespace-nowrap">
         <span className="text-ink-400">{label}</span>
-        <span className="num font-medium text-ink-50">{fmtUsd(t.availableUsd, 0)}</span>
-        <span className="num text-ink-500">/ {fmtUsd(t.balanceUsd, 0)}</span>
+        <span className="num font-medium text-ink-50">{fmtUsd(total.availableUsd, 0)}</span>
+        <span className="num text-ink-500">/ {fmtUsd(total.balanceUsd, 0)}</span>
       </span>
     );
   return (
@@ -171,11 +178,13 @@ export function AccountStatusStrip({ children }: { children?: ReactNode }) {
         type="button"
         onClick={openAccounts}
         className="flex items-center gap-4 rounded px-1.5 py-1 text-xs hover:bg-wash/[0.06]"
-        title="Available / balance per venue (Boros: every account summed). Open Accounts for each account."
+        title={t('accounts.ui.stripTitle')}
       >
         <span className={`flex items-center gap-1.5 whitespace-nowrap font-medium ${TEXT[v.level]}`}>
           <VerdictIcon level={v.level} size={13} />
-          {v.worst ? `${v.worst.venue} ${v.worst.name} ${fmtPct(v.worst.mmUsed ?? 0, 0)} MM used` : 'Healthy'}
+          {v.worst
+            ? t('accounts.ui.worstStrip', { venue: v.worst.venue, name: v.worst.name, pct: fmtPct(v.worst.mmUsed ?? 0, 0) })
+            : t('accounts.ui.healthy')}
         </span>
         {stat('Gate', v.totals.CrossEx)}
         {stat('Boros', v.totals.Boros)}
@@ -188,6 +197,7 @@ export function AccountStatusStrip({ children }: { children?: ReactNode }) {
 /** Positions: silent when healthy; one line pointing at Accounts otherwise.
  * Replaces the per-account Boros block. */
 export function AccountsAlert({ view }: { view?: AccountsView | null }) {
+  const { t } = useTranslation();
   const own = useAccountsView();
   const v = view ?? own;
   if (!v || v.level === 'ok') return null;
@@ -202,10 +212,12 @@ export function AccountsAlert({ view }: { view?: AccountsView | null }) {
       <span className="font-semibold">{verdictText(v)}</span>
       {worst && (
         <span className="text-ink-200">
-          · {worst.venue} {worst.name} at {fmtPct(worst.mmUsed ?? 0, 0)} MM used
+          {t('accounts.ui.worstAlert', { venue: worst.venue, name: worst.name, pct: fmtPct(worst.mmUsed ?? 0, 0) })}
         </span>
       )}
-      <span className="ml-auto text-ink-300">View accounts ›</span>
+      <span className="ml-auto inline-flex items-center gap-1 text-ink-300">
+        {t('accounts.ui.viewAccounts')} <ChevronRight size={12} aria-hidden />
+      </span>
     </button>
   );
 }

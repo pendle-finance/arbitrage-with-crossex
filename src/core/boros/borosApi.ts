@@ -129,6 +129,12 @@ const PREVIEW_READ_TTL_MS = 15_000;
 /** Boros books a payTreasury credit only once sync indexes it (9.4 s after the tx, staging 2026-10-21). */
 const GAS_CREDIT_POLLS = 20;
 
+/** How long an unsure send is traced before it stays "may or may not have
+ * filled": 10 reads, 3 s apart (5 compute units each). */
+const TRACE_POLLS = 10;
+const TRACE_POLL_MS = 3_000;
+const MAY_HAVE_FILLED_HINT = ', so it may or may not have filled. Check the position on Boros before you send again.';
+
 /** The backend's per-call error for the calls that did NOT fail when a
  * `requireSuccess` batch is refused in simulation (send-txs.service). */
 const BATCH_ABORTED = /Batch aborted: requireSuccess=true/i;
@@ -301,6 +307,13 @@ interface MarketOrderExecuted {
   marketId?: number;
   size?: string;
   side?: number;
+  /** The taker's MarketAcc. */
+  user?: string;
+}
+/** `/v1/send-txs/trace` for one (agent, nonce). */
+interface TraceResponse {
+  submissionStatus?: 'HAVENT_SEEN' | 'PROCESSING' | 'PROCESSED' | 'SEND_FAILED';
+  result?: { txHash?: string };
 }
 interface TxStatusItem {
   status?: string;
@@ -535,17 +548,20 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     reducing: boolean,
     marketId: number | undefined,
     pickMarket?: PlaceOrdersOptions['gasTopUpMarket'],
+    /** Top up whatever the balance: the relayer just refused it for gas. */
+    always = false,
   ): Promise<Hex[]> => {
     if (!config.collateralPriceUsd || marketId === undefined) return [];
     try {
       const balance = await readGasBalance();
-      // An EXIT is funded only when it genuinely cannot pay. The relayer's floor
-      // is 0 and an order's gas is a couple of cents, so anything above zero
-      // already covers a close — topping it up there would spend a dollar of
-      // margin, and add a `_checkIMStrict` that can revert, to buy nothing. An
-      // OPEN keeps the buffer: it is the order that should not stall next time.
+      // An EXIT is funded at debt, or when the relayer has just refused it for
+      // gas (`always`): a balance a few cents above zero can still be short of
+      // the cents a close costs. Topping up every low balance would spend a
+      // dollar of margin, and add a `_checkIMStrict` that can revert, on closes
+      // that did not need it. An OPEN keeps the buffer: it is the order that
+      // should not stall next time.
       const floor = reducing ? 0 : AUTO_TOP_UP_BELOW_USD;
-      if (balance === null || balance >= floor) return [];
+      if (balance === null || (!always && balance >= floor)) return [];
       // A negative budget is debt. Clear it and leave the full amount on top,
       // which is what Boros charges its own users in the same state.
       //
@@ -626,6 +642,84 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     ...emptyLeg(req),
     failure: { code: 'unknown', message },
   });
+  /** A leg read off the market orders it executed on-chain. */
+  const filledLeg = (req: BorosMarketOrderRequest, executed: MarketOrderExecuted[] = [], noneMessage = 'Nothing matched inside the rate bound.'): BorosLegFill => {
+    const filled = executed.reduce((sum, e) => sum + Number(formatUnits(BigInt(e.size ?? '0'), DECIMALS)), 0);
+    // An 18-decimal size cannot survive a float64 round-trip exactly: a full
+    // 100,000 fill comes back as 99999.99999999999, and without a dust band
+    // every complete fill would report a phantom residual.
+    const dust = Math.max(1e-12, req.size * 1e-9);
+    const shortfallRaw = req.size - filled;
+    const shortfall = shortfallRaw > dust ? shortfallRaw : 0;
+    return {
+      marketId: req.marketId,
+      direction: req.direction,
+      filledSize: filled,
+      shortfallSize: shortfall,
+      // No event carries an execution rate, and inventing one from the
+      // estimate would report a fill the user did not get.
+      execApr: null,
+      // The execution events carry no fee, so this is genuinely unsaid
+      // rather than zero.
+      feeSize: null,
+      failure:
+        shortfall > 0
+          ? {
+              code: 'insufficient-depth' as const,
+              message: filled === 0 ? noneMessage : `Only ${filled} of ${req.size} matched inside the rate bound.`,
+            }
+          : null,
+    };
+  };
+
+  /**
+   * What became of a batch whose answer never came back (a 408, a 5xx, a
+   * timeout, or a reply with no transaction). Boros keeps a trace per agent
+   * and nonce for 24 h. Null while the trace cannot settle it, so the caller
+   * keeps "may or may not have filled".
+   *
+   * The trace names the transaction but not each call's place in it (the
+   * relayer may merge other signers' calls into it), so a leg's fill is the
+   * market orders this account took on its market and side.
+   */
+  const tracedLegs = async (reqs: BorosMarketOrderRequest[], legSigned: SignedCall[]): Promise<BorosLegFill[] | null> => {
+    const trace = (s: SignedCall) =>
+      call<TraceResponse>('/v1/send-txs/trace', { agent: account.address, nonce: s.message.nonce }).catch(() => null);
+    let first: TraceResponse | null = null;
+    for (let poll = 0; poll < TRACE_POLLS; poll += 1) {
+      first = await trace(legSigned[0]);
+      if (first?.submissionStatus === 'PROCESSED' || first?.submissionStatus === 'SEND_FAILED') break;
+      if (poll < TRACE_POLLS - 1) await sleep(TRACE_POLL_MS);
+    }
+    // SEND_FAILED is set only when no transaction went out (trace.service).
+    if (first?.submissionStatus === 'SEND_FAILED') {
+      return reqs.map((req) => neverSentLeg(req, new Error('Boros could not send the batch, so nothing traded. Try again.')));
+    }
+    if (first?.submissionStatus !== 'PROCESSED') return null;
+    // One submission, one status. The transaction is named per call.
+    const rest = await Promise.all(legSigned.slice(1).map(trace));
+    const txHashes = [first, ...rest].map((t) => (t?.submissionStatus === 'PROCESSED' ? (t.result?.txHash ?? null) : undefined));
+    const byTx = new Map(
+      await Promise.all([...new Set(txHashes.filter((h): h is string => !!h))].map(async (h) => [h, await fillsByIndex(h)] as const)),
+    );
+    const marketAccs = await Promise.all(reqs.map((req) => marketAccFor(req.marketId)));
+    return reqs.map((req, i) => {
+      const txHash = txHashes[i];
+      if (txHash === undefined) return unknownLeg(req, `Boros did not say what became of this order${MAY_HAVE_FILLED_HINT}`);
+      // PROCESSED with no transaction for this call: its check before sending failed.
+      if (txHash === null) return neverSentLeg(req, new Error('Boros refused this order before sending it, so nothing traded.'));
+      const statuses = byTx.get(txHash);
+      // Two legs on one market and side cannot be told apart by their fills.
+      const twin = reqs.some((o, j) => j !== i && o.marketId === req.marketId && o.direction === req.direction);
+      if (!statuses || twin) return unknownLeg(req, `Submitted as ${txHash} but its fills could not be read${MAY_HAVE_FILLED_HINT}`);
+      const side = req.direction === 'long' ? SIDE_LONG : SIDE_SHORT;
+      const acc = marketAccs[i].toLowerCase();
+      const executed = [...statuses.values()]
+        .flatMap((s) => s.marketOrdersExecuted ?? [])
+        .filter((e) => e.marketId === req.marketId && e.side === side && e.user?.toLowerCase() === acc);
+      return filledLeg(req, executed, `Boros sent ${txHash}, and this order did not trade in it.`);
+    });
+  };
 
   /** `bulkCancels` calldata clearing every resting order on these markets. */
   const cancelCalldatas = async (marketIds: number[] = []): Promise<Hex[]> => {
@@ -918,6 +1012,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     /** Calls that run after the first `at` legs, ahead of the top-up (the
      * exits of the markets those closes empty). */
     between: Hex[] = [],
+    alwaysTopUp = false,
   ): Promise<BorosLegFill[]> => {
     let signed: SignedCall[];
     let topUpCount: number;
@@ -925,30 +1020,42 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
     try {
       // Every leg of a batch shares one collateral (an eligible pair must, and
       // a roll moves a position within its token), so the first leg names it.
-      const topUp = await autoTopUpCalldata(opts?.reducing === true, reqs[0]?.marketId, opts?.gasTopUpMarket);
+      const topUp = await autoTopUpCalldata(opts?.reducing === true, reqs[0]?.marketId, opts?.gasTopUpMarket, alwaysTopUp);
       topUpCount = topUp.length;
       signed = await signCalls([...leading, ...legCalldatas.slice(0, at), ...between, ...topUp, ...legCalldatas.slice(at)]);
     } catch (err) {
       return reqs.map((req) => neverSentLeg(req, err));
     }
-    let responses: TxResponse[];
-    try {
-      responses = await submitCalls(signed);
-    } catch (err) {
-      // A 4xx is a refusal at the door (nothing ran). A 5xx, a timeout or a
-      // dropped connection is not — the batch may have gone through.
-      const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
-      if (status !== undefined && status < 500) return reqs.map((req) => neverSentLeg(req, err));
-      throw err;
-    }
     // Everything below indexes BY LEG: the leading cancels come first, and the
     // `between` exits then the top-up occupy `inserted` slots starting at leg
     // `at`. Read leg results off a view with those slots removed, or a leg
     // reads another call's outcome as its own.
-    const afterLead = responses.slice(leading.length);
     const inserted = between.length + topUpCount;
-    const legResponses = [...afterLead.slice(0, at), ...afterLead.slice(at + inserted)];
     const submissionIndex = (i: number): number => leading.length + (i < at ? i : i + inserted);
+    const legSigned = reqs.map((_, i) => signed[submissionIndex(i)]);
+    let responses: TxResponse[];
+    try {
+      responses = await submitCalls(signed);
+    } catch (err) {
+      // A 4xx is a refusal at the door (nothing ran). A 408 is the relayer
+      // still sending it ("do not resubmit; poll /trace"). A 5xx, a timeout or
+      // a dropped connection may have gone through too.
+      const status = err instanceof CoreError ? (err.details as { status?: number } | undefined)?.status : undefined;
+      if (status !== undefined && status < 500 && status !== 408) {
+        // The relayer charges gas before it sends, and a close tops up only at
+        // debt, so a budget a few cents above zero is refused here. Nothing
+        // ran: send it once more carrying the top-up.
+        if (topUpCount === 0 && !alwaysTopUp && classifyLegFailure(err) === 'no-gas') {
+          return executeOnce(reqs, legCalldatas, opts, leading, between, true);
+        }
+        return reqs.map((req) => neverSentLeg(req, err));
+      }
+      const traced = await tracedLegs(reqs, legSigned);
+      if (traced) return traced;
+      throw err;
+    }
+    const afterLead = responses.slice(leading.length);
+    const legResponses = [...afterLead.slice(0, at), ...afterLead.slice(at + inserted)];
 
     // With `requireSuccess` the legs stand or fall together, so one error is
     // the whole batch's — the top-up's included: it is in the same submission,
@@ -977,10 +1084,12 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
 
     const txHash = responses.find((r) => r?.txHash)?.txHash;
     if (!txHash) {
+      const traced = await tracedLegs(reqs, legSigned);
+      if (traced) return traced;
       return reqs.map((req) =>
         unknownLeg(
           req,
-          'Boros accepted the batch but returned no transaction hash, so the fill state is unknown. Check the position on Boros before re-issuing.',
+          'Boros accepted the batch but returned no transaction hash, so the fill state is unknown. Check the position on Boros before you send again.',
         ),
       );
     }
@@ -990,7 +1099,7 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (!byIndex) {
         return unknownLeg(
           req,
-          `Submitted as ${txHash} but no status came back, so this leg may or may not have filled. Check the position on Boros before re-issuing.`,
+          `Submitted as ${txHash} but no status came back, so this order may or may not have filled. Check the position on Boros before you send again.`,
         );
       }
       const status = byIndex.get(legResponses[i]?.index ?? submissionIndex(i));
@@ -1002,45 +1111,14 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       if (!status) {
         return unknownLeg(
           req,
-          `Submitted as ${txHash} but no status came back for this leg, so it may or may not have filled. Check the position on Boros before re-issuing.`,
+          `Submitted as ${txHash} but no status came back for this order, so it may or may not have filled. Check the position on Boros before you send again.`,
         );
       }
       if (status.error) return failedLeg(req, status.error, 'this-leg');
 
       // Already grouped by the call that emitted them; filtered by market so a
       // merged submission cannot lend one leg another's fill.
-      const filled = (status.marketOrdersExecuted ?? [])
-        .filter((e) => e.marketId === undefined || e.marketId === req.marketId)
-        .reduce((sum, e) => sum + Number(formatUnits(BigInt(e.size ?? '0'), DECIMALS)), 0);
-
-      // An 18-decimal size cannot survive a float64 round-trip exactly: a full
-      // 100,000 fill comes back as 99999.99999999999, and without a dust band
-      // every complete fill would report a phantom residual.
-      const dust = Math.max(1e-12, req.size * 1e-9);
-      const shortfallRaw = req.size - filled;
-      const shortfall = shortfallRaw > dust ? shortfallRaw : 0;
-      return {
-        marketId: req.marketId,
-        direction: req.direction,
-        filledSize: filled,
-        shortfallSize: shortfall,
-        // No event carries an execution rate, and inventing one from the
-        // estimate would report a fill the user did not get.
-        execApr: null,
-        // The execution events carry no fee, so this is genuinely unsaid
-        // rather than zero.
-        feeSize: null,
-        failure:
-          shortfall > 0
-            ? {
-                code: 'insufficient-depth' as const,
-                message:
-                  filled === 0
-                    ? 'Nothing matched inside the rate bound.'
-                    : `Only ${filled} of ${req.size} matched inside the rate bound.`,
-              }
-            : null,
-      };
+      return filledLeg(req, status.marketOrdersExecuted?.filter((e) => e.marketId === undefined || e.marketId === req.marketId));
     });
   };
 
@@ -1052,8 +1130,17 @@ export function makeBorosApiOrderClient(config: BorosApiConfig): BorosOrderClien
       const cancels = await cancelCalldatas([marketId]);
       if (!cancels.length) return;
       previewReads.clear();
-      const topUp = await autoTopUpCalldata(true, marketId, gasTopUpMarket);
-      const res = await submitCalls(await signCalls([...cancels, ...topUp])).finally(() => previewReads.clear());
+      let topUp = await autoTopUpCalldata(true, marketId, gasTopUpMarket);
+      const send = () => signCalls([...cancels, ...topUp]).then(submitCalls);
+      const res = await send()
+        .catch(async (err: unknown) => {
+          // Refused at the door for gas a few cents above zero (see executeOnce).
+          if (topUp.length || classifyLegFailure(err) !== 'no-gas') throw err;
+          topUp = await autoTopUpCalldata(true, marketId, gasTopUpMarket, true);
+          if (!topUp.length) throw err;
+          return send();
+        })
+        .finally(() => previewReads.clear());
       // An empty result is "we cannot tell",
       // and reporting a cancel that may never have been submitted as done is
       // the one answer a remediation path must not give.

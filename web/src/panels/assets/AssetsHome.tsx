@@ -7,58 +7,98 @@
  *      per-leg exclusions for positions that aren't part of the farm.
  *   2. Lifetime PnL + capital since a user-chosen start date, from the
  *      venues' own records (open positions live, closed ones from history).
- *
- * Durable state is ONLY `crossex.assetView.v1` (start date + exclusions);
- * every number is a pure function of the venue feeds.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { AccountsAlert } from '../accounts/AccountsUi';
-import { useAccount, useAssetView, useAssetViewWindows, useBorosAgent, useFees, usePositions, useRebate } from '../../api/queries';
+import {
+  importAssetPrefs,
+  useAccount,
+  useAssetPrefs,
+  useAssetView,
+  useAssetViewWindows,
+  useBorosAgent,
+  useFees,
+  usePatchAssetPrefs,
+  usePositions,
+  useRebate,
+  type AssetPrefsPatch,
+} from '../../api/queries';
+import type { AssetViewPrefs } from '../../api/types';
 import { EmptyState } from '../../components/EmptyState';
 import { QueryError } from '../../components/QueryError';
 import { TableSkeleton } from '../../components/Skeleton';
 import { SignedNumber } from '../../components/SignedNumber';
 import { fmtPct, fmtUsd, num } from '../../lib/fmt';
 import { lineFor as lineIn, liquidationLines } from '../../lib/liquidation';
-import { useBookId } from '../bookId';
+import { bookKey, useBookId } from '../bookId';
 import { short } from '../HomeControls';
 import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
 import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
-import { legSinceParam, loadPrefs, savePrefs, type AssetViewPrefs } from './assetPrefsStore';
+import { clearLegacyPrefs, dropLegacyKeys, legacyExclusionsFor, legSinceParam, readLegacyPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
+import { sizesForWholeExclusions } from './excludeLeg';
 
+const NO_PREFS: AssetViewPrefs = { sinceByAsset: {}, exclusions: {}, legSince: {} };
 
 export function AssetsHome() {
+  const { t } = useTranslation();
   const { address } = useTrackedAddress();
   const viewOnly = useActiveWallet().viewOnly;
   const loggedInRoot = useBorosAgent().data?.root ?? null;
-  const bookId = useBookId(address);
+  const book = bookKey(useBookId(address));
 
-  const [prefs, setPrefs] = useState<AssetViewPrefs>(() => loadPrefs(bookId));
-  // A book switch swaps the whole prefs record — reload, don't carry over.
-  const [prefsBook, setPrefsBook] = useState(bookId);
-  if (prefsBook !== bookId) {
-    setPrefsBook(bookId);
-    setPrefs(loadPrefs(bookId));
-  }
-  /**
-   * FUNCTIONAL update. The leg-edit modal fires two writes on one Save
-   * (exclusion, then "counted from"); built off the render-time `prefs`
-   * the second spread the stale object and wiped the first — an exclusion
-   * that visibly saved and then was not there.
-   */
-  const update = (fn: (prev: AssetViewPrefs) => AssetViewPrefs) => {
-    setPrefs((prev) => {
-      const next = fn(prev);
-      savePrefs(bookId, next);
-      return next;
+  const [legacy, setLegacy] = useState<'none' | 'moving' | 'failed'>(() =>
+    readLegacyPrefs() === null ? 'none' : 'moving',
+  );
+  const moving = useRef(false);
+  useEffect(() => {
+    if (legacy !== 'moving' || moving.current) return;
+    moving.current = true;
+    importAssetPrefs(readLegacyPrefs()).then(
+      () => {
+        clearLegacyPrefs();
+        setLegacy('none');
+      },
+      () => setLegacy('failed'),
+    );
+  }, [legacy]);
+
+  const prefsQuery = useAssetPrefs(book, legacy !== 'moving' && address !== null);
+  const savePrefs = usePatchAssetPrefs(book);
+  const [legacyRev, bumpLegacy] = useReducer((n: number) => n + 1, 0);
+  const legacyExclusions = useMemo(
+    () => (legacy === 'failed' ? legacyExclusionsFor(book) : {}),
+    [legacy, book, legacyRev],
+  );
+  const prefs = useMemo(() => {
+    const saved = prefsQuery.data ?? NO_PREFS;
+    return legacy === 'failed' ? { ...saved, exclusions: { ...legacyExclusions, ...saved.exclusions } } : saved;
+  }, [prefsQuery.data, legacy, legacyExclusions]);
+  const save = (patch: AssetPrefsPatch) =>
+    savePrefs.mutate(patch, {
+      onSuccess: () => {
+        if (legacy !== 'failed') return;
+        dropLegacyKeys(book, patch);
+        bumpLegacy();
+      },
     });
-  };
 
   const legSince = legSinceParam(prefs.legSince);
   const query = useAssetView(address, undefined, legSince);
   const data = query.data;
+  const sized = useRef(new Set<string>());
+  useEffect(() => {
+    if (legacy === 'moving' || !data || !prefsQuery.data) return;
+    const legs = data.assets.flatMap((g) => g.borosOpen);
+    const fresh = Object.entries(sizesForWholeExclusions(prefsQuery.data.exclusions, legs)).filter(
+      ([key]) => !sized.current.has(`${book}|${key}`),
+    );
+    if (fresh.length === 0) return;
+    for (const [key] of fresh) sized.current.add(`${book}|${key}`);
+    save({ exclusions: Object.fromEntries(fresh) });
+  }, [legacy, data, prefsQuery.data, book]);
   // The account's own fee schedule (VIP tier) — prices the pairs' exit-fee
   // estimate; the model falls back to a flat rate while it loads.
   const feeRows = useFees().data;
@@ -168,18 +208,18 @@ export function AssetsHome() {
     <div className="mb-4 flex flex-wrap items-baseline gap-2">
       <h2
         className="text-[16px] font-semibold leading-[19.36px] text-ink-50"
-        title="Every leg grouped by its underlying asset."
+        title={t('assets.home.headingTitle')}
       >
-        Funding farm by asset
+        {t('assets.home.heading')}
       </h2>
       {address && <span className="num text-xs text-ink-500">{short(address)}</span>}
       {address && (
         <label
           className="ml-auto flex cursor-pointer items-center gap-2 whitespace-nowrap text-xs text-ink-300"
-          title="Show only assets with an open leg. Account totals still include every asset."
+          title={t('assets.home.hideInactiveTitle')}
         >
           <input type="checkbox" className="chk" checked={hideInactive} onChange={(e) => setHideInactive(e.target.checked)} />
-          <span>Hide inactive pairs</span>
+          <span>{t('assets.home.hideInactive')}</span>
           {hideInactive && inactive.length > 0 && <span className="num text-ink-500">({inactive.length})</span>}
         </label>
       )}
@@ -192,8 +232,8 @@ export function AssetsHome() {
         {header}
         <EmptyState
           icon="✦"
-          title="Connect your wallet to see your farm by asset"
-          hint="The asset view groups every perp and Boros leg by its underlying coin and reports the venues' own lifetime numbers."
+          title={t('assets.home.connectTitle')}
+          hint={t('assets.home.connectHint')}
           action={
             <div className="w-72 max-w-full">
               <ConnectWalletButton />
@@ -204,16 +244,23 @@ export function AssetsHome() {
     );
   }
 
-  if (query.isError) {
+  if (prefsQuery.isError || query.isError) {
     return (
       <section>
         {header}
-        <QueryError title="Couldn't load the asset view" error={query.error} onRetry={() => query.refetch()} />
+        <QueryError
+          title={t('assets.home.loadError')}
+          error={prefsQuery.error ?? query.error}
+          onRetry={() => {
+            if (prefsQuery.isError) void prefsQuery.refetch();
+            if (query.isError) void query.refetch();
+          }}
+        />
       </section>
     );
   }
 
-  if (!data) {
+  if (!data || !prefsQuery.data) {
     return (
       <section>
         {header}
@@ -231,11 +278,19 @@ export function AssetsHome() {
     <section>
       {/* Account health lives on Accounts; here only a warning when needed. */}
       <AccountsAlert />
+      {prefsQuery.data.unreadable && (
+        <p className="mb-4 text-xs text-ink-300">{t('assets.home.prefsUnreadable')}</p>
+      )}
+      {legacy === 'failed' && (
+        <p className="mb-4 text-xs text-ink-300">{t('assets.home.legacyFailed')}</p>
+      )}
       {viewOnly && address && loggedInRoot && (
         <p className="mb-4 text-xs text-ink-400">
-          Viewing <span className="num text-ink-200">{short(address)}</span>, not logged in: view-only. Perps are
-          your connected Gate account's; trading and fee rebates need the logged-in{' '}
-          <span className="num text-ink-200">{short(loggedInRoot)}</span>.
+          <Trans
+            i18nKey="assets.home.viewOnly"
+            values={{ address: short(address), root: short(loggedInRoot) }}
+            components={{ addr: <span className="num text-ink-200" />, owner: <span className="num text-ink-200" /> }}
+          />
         </p>
       )}
 
@@ -259,11 +314,11 @@ export function AssetsHome() {
             className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
             title={
               interestAvailable
-                ? 'What the farm kept, after borrow interest.'
-                : 'The cards summed. Borrow interest could not be read, so it is not subtracted.'
+                ? t('assets.home.totalPnlTitleWithInterest')
+                : t('assets.home.totalPnlTitleNoInterest')
             }
           >
-            Total Account PnL
+            {t('assets.home.totalPnl')}
           </div>
           <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
             <span className="num text-[34px] font-bold leading-none tracking-[-0.01em]">
@@ -281,15 +336,15 @@ export function AssetsHome() {
                   const byCoin = Object.entries(data?.interest?.byCoin ?? {});
                   return byCoin.length > 0
                     ? [
-                        'Borrow interest paid',
+                        t('assets.home.interestPaid'),
                         ...byCoin.map(([c, n]) => `${c}\t${num(n, 2)}`),
                         '---',
-                        `Total\t${fmtUsd(interestUsd)}`,
+                        `${t('assets.home.interestTotal')}\t${fmtUsd(interestUsd)}`,
                       ].join('\n')
-                    : `Borrow interest paid\t${fmtUsd(interestUsd)}`;
+                    : `${t('assets.home.interestPaid')}\t${fmtUsd(interestUsd)}`;
                 })()}
               >
-                after {fmtUsd(interestUsd)} borrow interest
+                {t('assets.home.afterInterest', { amount: fmtUsd(interestUsd) })}
               </span>
             )}
           </div>
@@ -298,16 +353,16 @@ export function AssetsHome() {
           <div className="flex flex-col gap-2">
             <div
               className="tip-label w-fit text-[14px] font-normal leading-[16.94px] text-ink-300"
-              title="PnL so far over capital × time, annualized. Approximate: capital is today's requirement."
+              title={t('assets.home.aprTitle')}
             >
-              Realized APR ≈
+              {t('assets.home.apr')}
             </div>
             <div className="num text-[24px] font-bold leading-[29.05px]">
               {blendedApr !== null ? <SignedNumber value={blendedApr} format={fmtPct} /> : '—'}
             </div>
           </div>
           <div className="flex flex-col gap-2 border-l border-ink-700 pl-9">
-            <div className="text-[14px] font-normal leading-[16.94px] text-ink-300">Capital at work</div>
+            <div className="text-[14px] font-normal leading-[16.94px] text-ink-300">{t('assets.home.capital')}</div>
             <div className="num text-[24px] font-semibold leading-[29.05px] text-ink-50">{fmtUsd(totalCapital)}</div>
           </div>
         </div>
@@ -322,14 +377,14 @@ export function AssetsHome() {
       {derived.length === 0 ? (
         <EmptyState
           icon="◦"
-          title="No positions or history found for this address"
-          hint="Open a position (or move the start date back) and the assets will appear here."
+          title={t('assets.home.emptyTitle')}
+          hint={t('assets.home.emptyHint')}
         />
       ) : (
         <div className="flex flex-col gap-8">
           {shown.length === 0 && (
             <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
-              No active pairs — {inactive.length} inactive hidden.
+              {t('assets.home.allInactive', { n: inactive.length })}
             </p>
           )}
           {shown.map(({ group, derived: d, sinceSec, storedSinceSec, backfilling, windowPending }) => (
@@ -343,33 +398,16 @@ export function AssetsHome() {
               defaultSinceSec={data.defaultSinceSec}
               backfilling={backfilling}
               supportedCoins={data.supportedCoins}
-              onChangeSince={(sec) => {
-                update((prev) => {
-                  const sinceByAsset = { ...prev.sinceByAsset };
-                  if (sec !== undefined && sec >= 0) sinceByAsset[group.base] = sec;
-                  else delete sinceByAsset[group.base];
-                  return { ...prev, sinceByAsset };
-                });
-              }}
+              onChangeSince={(sec) =>
+                save({ sinceByAsset: { [group.base]: sec !== undefined && sec >= 0 ? sec : null } })
+              }
               liquidation={lineFor(group.base)}
               exclusions={prefs.exclusions}
-              onExclude={(key, value) => {
-                update((prev) => {
-                  const exclusions = { ...prev.exclusions };
-                  if (value === undefined) delete exclusions[key];
-                  else exclusions[key] = value;
-                  return { ...prev, exclusions };
-                });
-              }}
+              onExclude={(key, value) => save({ exclusions: { [key]: value ?? null } })}
               legSince={prefs.legSince}
-              onLegSince={(key, sec) => {
-                update((prev) => {
-                  const next = { ...prev.legSince };
-                  if (sec === undefined || !(sec > 0)) delete next[key];
-                  else next[key] = sec;
-                  return { ...prev, legSince: next };
-                });
-              }}
+              onLegSince={(key, sec) =>
+                save({ legSince: { [key]: sec !== undefined && sec > 0 ? sec : null } })
+              }
             />
           ))}
         </div>

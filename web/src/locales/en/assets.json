@@ -1,0 +1,50 @@
+{
+  "spreadVenue": "Spread {{platform}}",
+  "bars": {
+    "fixedFundingTitle": "Fixed funding — Boros settlements {{settle}} (net of settlement fees) + perp funding {{funding}}, open and completed positions {{amount}}",
+    "fixedFunding": "Fixed funding",
+    "tradeTitle": "Boros trade PnL (gross of trade fees) {{amount}}",
+    "trade": "Boros trade",
+    "tradeFeeTitle": "Boros trade fees {{amount}}",
+    "tradeFee": "Boros trade fees",
+    "perpFeesTitle": "Perp trading fees, open + closed positions {{amount}}",
+    "perpFees": "Perp fees",
+    "basisTitle": "Perp basis: open uPnL + closed price PnL (near 0 when hedged) {{amount}}",
+    "basis": "Perp basis",
+    "rebateTitle": "Boros settlement-fee rebate credited back {{amount}}",
+    "rebate": "Settlement rebate",
+    "netTitle": "Net PnL {{amount}}",
+    "caption": "Fixed funding is the locked spread. Then Boros trade PnL, trade fees, perp fees and perp basis."
+  },
+  "home": {
+    "headingTitle": "Every position grouped by its underlying asset.",
+    "heading": "Funding farm by asset",
+    "hideInactiveTitle": "Show only assets with an open position. Account totals still include every asset.",
+    "hideInactive": "Hide assets with no position",
+    "connectTitle": "Connect your wallet to see your farm by asset",
+    "connectHint": "The asset view groups every perp and Boros position by its underlying coin and reports the venues' own lifetime numbers.",
+    "loadError": "Couldn't load the asset view",
+    "prefsUnreadable": "Saved exclusions could not be read. They were kept as a backup file.",
+    "legacyFailed": "Could not move this browser's saved exclusions to the terminal. It tries again on the next load.",
+    "viewOnly": "Viewing <addr>{{address}}</addr> (not logged in). Perps come from your Gate account. Log in as <owner>{{root}}</owner> to trade and get fee rebates.",
+    "totalPnlTitleWithInterest": "What the farm kept, after borrow interest.",
+    "totalPnlTitleNoInterest": "The cards summed. Borrow interest could not be read, so it is not subtracted.",
+    "totalPnl": "Total account PnL",
+    "interestPaid": "Borrow interest paid",
+    "interestTotal": "Total",
+    "afterInterest": "after {{amount}} borrow interest",
+    "aprTitle": "PnL so far over capital × time, annualized. Approximate: capital is today's requirement.",
+    "apr": "Realized APR ≈",
+    "capital": "Total current capital",
+    "emptyTitle": "No positions or history found for this address",
+    "emptyHint": "Open a position (or move the start date back) and the assets will appear here.",
+    "allInactive": "No asset has a position — {{n}} hidden."
+  },
+  "since": {
+    "allTime": "All time",
+    "since": "Since {{date}}",
+    "inputLabel": "Count {{base}} PnL from",
+    "options": "Date options",
+    "useDefault": "Use default (first position, {{date}})"
+  }
+}

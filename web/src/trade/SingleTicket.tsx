@@ -7,6 +7,7 @@
  */
 import { ChevronRight, TriangleAlert } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
 import { useTradeFlowOptional } from './TradeFlow';
 import type { ActionInput, Side } from '../api/types';
@@ -33,6 +34,7 @@ import { usePreviewDebounced } from './usePreview';
 type SizeMode = 'usdt' | 'base';
 
 export function SingleTicket() {
+  const { t } = useTranslation();
   /** The coin — picked by hand (venue still to choose) or implied by the symbol. */
   const [base, setBase] = useState<string | null>(null);
   const [symbol, setSymbol] = useState<string | null>(null);
@@ -202,13 +204,15 @@ export function SingleTicket() {
   /**
    * The biggest order the account can carry at the venue max: the notional
    * whose initial margin (with the preflight's buffer and fee reserve — the
-   * gate ExecuteControl enforces) equals the available margin. Stated in the
-   * box's unit, so clicking it fills the box with a number that will pass.
+   * gate ExecuteControl enforces) equals the available margin, and no more
+   * than the largest position CrossEx takes. Stated in the box's unit, so
+   * clicking it fills the box with a number that will pass.
    */
   const available = Number(account.data?.availableMargin ?? NaN);
+  const positionMaxUsd = detail.data?.positionMaxUsd || Infinity;
   const maxNotional =
     Number.isFinite(available) && available > 0 && levMax > 0
-      ? available / (PREFLIGHT_MARGIN_BUFFER / levMax + TAKER_FEE_RESERVE)
+      ? Math.min(positionMaxUsd, available / (PREFLIGHT_MARGIN_BUFFER / levMax + TAKER_FEE_RESERVE))
       : null;
   const maxSize =
     maxNotional === null ? null : sizeMode === 'usdt' ? maxNotional : ref && ref > 0 ? maxNotional / ref : null;
@@ -216,8 +220,8 @@ export function SingleTicket() {
     maxSize === null
       ? null
       : sizeMode === 'usdt'
-        ? `max ${fmtUsd(maxSize, 0)}`
-        : `max ${sig(maxSize, 4)} ${base ?? ''}`;
+        ? t('trade.single.maxUsd', { amount: fmtUsd(maxSize, 0) })
+        : t('trade.single.maxBase', { amount: sig(maxSize, 4), base: base ?? '' });
 
   // Initial margin this leg posts — from the same estimator (and the same live
   // positions/mode) the execute gate uses, so the figure and the gate agree.
@@ -264,43 +268,43 @@ export function SingleTicket() {
       />
 
       <div className="flex flex-col gap-1.5">
-        <FieldLabel>Side</FieldLabel>
+        <FieldLabel>{t('common.side')}</FieldLabel>
         {/* The side's colour rides on the switch: grass while Buy is live,
             rose while Sell is — the same two tones every position row uses. */}
         <SegmentedToggle<Side>
-          ariaLabel="Side"
+          ariaLabel={t('common.side')}
           fill
           className={side === 'BUY' ? 'seg-grass' : 'seg-rose'}
           value={side}
           onChange={changeSide}
           options={[
-            { value: 'BUY', label: 'Buy' },
-            { value: 'SELL', label: 'Sell' },
+            { value: 'BUY', label: t('trade.single.buy') },
+            { value: 'SELL', label: t('trade.single.sell') },
           ]}
         />
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <FieldLabel>Order</FieldLabel>
+        <FieldLabel>{t('common.order')}</FieldLabel>
         <SegmentedToggle<'MARKET' | 'LIMIT'>
-          ariaLabel="Order type"
+          ariaLabel={t('trade.single.orderType')}
           fill
           value={type}
           onChange={setType}
           options={[
-            { value: 'MARKET', label: 'Market' },
-            { value: 'LIMIT', label: 'Limit' },
+            { value: 'MARKET', label: t('trade.single.market') },
+            { value: 'LIMIT', label: t('trade.single.limit') },
           ]}
         />
       </div>
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-2">
-          <FieldLabel htmlFor="ticket-size">Size</FieldLabel>
+          <FieldLabel htmlFor="ticket-size">{t('common.size')}</FieldLabel>
           {maxLabel && (
             <button
               type="button"
-              title="The largest order your available margin carries at max leverage."
+              title={t('trade.single.maxTitle')}
               onClick={() => setSizeStr(fieldValue(maxSize as number))}
               className="num text-[11px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
             >
@@ -311,7 +315,7 @@ export function SingleTicket() {
         <AffixedInput
           affix={
             <SegmentedToggle<SizeMode>
-              ariaLabel="Size mode"
+              ariaLabel={t('trade.single.sizeMode')}
               className="seg-xs"
               value={sizeMode}
               onChange={(m) => {
@@ -320,7 +324,7 @@ export function SingleTicket() {
                 setSizeMode(m);
               }}
               options={[
-                { value: 'base', label: base || 'qty' },
+                { value: 'base', label: base || t('trade.single.qty') },
                 { value: 'usdt', label: 'USDT' },
               ]}
             />
@@ -330,7 +334,13 @@ export function SingleTicket() {
             id="ticket-size"
             className={`input num pr-[124px] ${sizeErr ? '!border-rose-500/60' : ''}`}
             inputMode="decimal"
-            placeholder={sizeMode === 'usdt' ? 'notional (USDT)' : `qty${base ? ` (${base})` : ''}`}
+            placeholder={
+              sizeMode === 'usdt'
+                ? t('trade.single.notionalPlaceholder')
+                : base
+                  ? t('trade.single.qtyBasePlaceholder', { base })
+                  : t('trade.single.qty')
+            }
             aria-invalid={sizeErr ? true : undefined}
             aria-describedby={sizeErr ? 'ticket-size-error' : undefined}
             value={sizeStr}
@@ -347,16 +357,16 @@ export function SingleTicket() {
       {type === 'LIMIT' && (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-baseline justify-between gap-2">
-            <FieldLabel htmlFor="ticket-price">Limit price</FieldLabel>
+            <FieldLabel htmlFor="ticket-price">{t('trade.single.limitPrice')}</FieldLabel>
             <span className="flex gap-1">
               <button type="button" className="btn-ghost-xs" disabled={!ref} onClick={() => setQuickPrice(1)}>
-                Mark
+                {t('trade.single.mark')}
               </button>
               <button type="button" className="btn-ghost-xs" disabled={!ref} onClick={() => setQuickPrice(0.999)}>
-                Mark −0.1%
+                {t('trade.single.markDown')}
               </button>
               <button type="button" className="btn-ghost-xs" disabled={!ref} onClick={() => setQuickPrice(1.001)}>
-                Mark +0.1%
+                {t('trade.single.markUp')}
               </button>
             </span>
           </div>
@@ -365,8 +375,8 @@ export function SingleTicket() {
               id="ticket-price"
               className={`input num pr-14 transition-colors ${priceFlash ? 'border-cyan-400 ring-1 ring-cyan-400/40' : ''}`}
               inputMode="decimal"
-              placeholder="price"
-              title={priceFlash ? 'adjusted to venue tick/precision rules' : undefined}
+              placeholder={t('trade.single.price')}
+              title={priceFlash ? t('trade.single.adjusted') : undefined}
               value={priceStr}
               onChange={(e) => {
                 setPriceStr(e.target.value);
@@ -380,17 +390,16 @@ export function SingleTicket() {
             />
           </AffixedInput>
           {priceFlash && (
-            <span className="text-[10px] text-cyan-300" title="adjusted to venue tick/precision rules">
-              adjusted to venue tick/precision rules
+            <span className="text-[10px] text-cyan-300" title={t('trade.single.adjusted')}>
+              {t('trade.single.adjusted')}
             </span>
           )}
           <span className="text-[10.5px] text-ink-400">
-            limits rest post-only (maker fee only) — a crossing price is rejected and re-quoted;
-            to take now, use Market
+            {t('trade.single.postOnlyNote')}
           </span>
           <label className="flex items-center gap-2 text-[11.5px] text-ink-200">
             <input type="checkbox" className="chk" checked={reduceOnly} onChange={(e) => setReduceOnly(e.target.checked)} />
-            reduce-only
+            {t('trade.single.reduceOnly')}
           </label>
         </div>
       )}
@@ -402,9 +411,12 @@ export function SingleTicket() {
               {type === 'MARKET' && p.fillEstimate && (
                 <div className="flex items-end justify-between gap-3">
                   <div className="flex flex-col">
-                    <span className="text-[12.5px] text-ink-50">Tentative avg fill</span>
+                    <span className="text-[12.5px] text-ink-50">{t('trade.single.tentativeFill')}</span>
                     <span className="text-[11px] text-ink-400">
-                      {p.fillEstimate.source.replace('-', ' ')} · {p.fillEstimate.confidence} confidence
+                      {t('trade.single.fillMeta', {
+                        source: t(`trade.single.source.${p.fillEstimate.source}` as const),
+                        confidence: t(`trade.single.confidence.${p.fillEstimate.confidence}` as const),
+                      })}
                     </span>
                   </div>
                   <span className="num flex items-baseline gap-1.5 text-lg font-semibold text-ink-50">
@@ -418,8 +430,8 @@ export function SingleTicket() {
               {type === 'LIMIT' && p.price && (
                 <div className="flex items-end justify-between gap-3">
                   <div className="flex flex-col">
-                    <span className="text-[12.5px] text-ink-50">Rests at</span>
-                    <span className="text-[11px] text-ink-400">post-only · fills only as a maker</span>
+                    <span className="text-[12.5px] text-ink-50">{t('trade.single.restsAt')}</span>
+                    <span className="text-[11px] text-ink-400">{t('trade.single.restsAtSub')}</span>
                   </div>
                   <span className="num text-lg font-semibold text-ink-50">{sig(p.price)}</span>
                 </div>
@@ -433,31 +445,30 @@ export function SingleTicket() {
                     <TriangleAlert size={12} aria-hidden />
                   </span>
                   <span>
-                    <span className="font-medium">Partial depth</span> — the estimate is extrapolated past what the book
-                    shows.
+                    <Trans i18nKey="trade.single.partialDepth" components={{ b: <span className="font-medium" /> }} />
                   </span>
                 </div>
               )}
               <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
                 {p.qty && (
                   <EstimateRow
-                    label="Qty"
+                    label={t('trade.single.qtyLabel')}
                     sub={
                       sizeMode === 'usdt' && p.estNotional > 0 && p.estNotional < sizeNum - 1e-9 ? (
-                        <span className="text-amber-400">real notional {fmtUsd(p.estNotional)} ≤ target</span>
+                        <span className="text-amber-400">{t('trade.single.realNotional', { amount: fmtUsd(p.estNotional) })}</span>
                       ) : undefined
                     }
                     value={`${sig(p.qty)}${base ? ` ${base}` : ''}`}
                   />
                 )}
-                <EstimateRow label="Est fee" sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
+                <EstimateRow label={t('trade.single.estFee')} sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
                 <EstimateRow
-                  label="Leverage"
-                  value={<LeverageValue text={levMax > 0 ? `${levMax}x` : symbol ? 'loading…' : null} />}
+                  label={t('trade.single.leverage')}
+                  value={<LeverageValue text={levMax > 0 ? `${levMax}x` : symbol ? t('common.loading') : null} />}
                 />
                 <EstimateRow
-                  label="Margin required"
-                  title="Initial margin this leg posts — its notional over the venue max leverage"
+                  label={t('trade.single.marginRequired')}
+                  title={t('trade.single.marginTitle')}
                   value={marginRequired !== null ? `≈ ${fmtUsd(marginRequired)}` : '—'}
                   strong
                 />
@@ -484,7 +495,7 @@ export function SingleTicket() {
           tone={side === 'BUY' ? 'buy' : 'sell'}
           label={
             <>
-              Execute now
+              {t('trade.single.executeNow')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -494,11 +505,11 @@ export function SingleTicket() {
           // "venue max" the UI promises.
           extraDisabled={Boolean(symbol) && levMax === 0}
           onExecuted={clearTicket}
-          detail={levMax > 0 ? <>Leverage {levMax}x (venue max)</> : undefined}
+          detail={levMax > 0 ? <>{t('trade.single.levDetail', { lev: levMax })}</> : undefined}
         />
         {/* Said under the button, where the pair ticket would show the other
             leg: this one has no hedge, and nothing else on the ticket says so. */}
-        <span className="text-[11px] text-ink-400">This leg is not hedged.</span>
+        <span className="text-[11px] text-ink-400">{t('trade.single.notHedged')}</span>
       </div>
     </div>
   );

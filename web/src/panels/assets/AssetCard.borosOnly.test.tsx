@@ -81,7 +81,7 @@ const renderCard = (group: AssetGroup) =>
   );
 
 /** The expanded card's leg table (the one with a "Leg" header). */
-const legTable = () => screen.getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+const legTable = () => screen.getByRole('columnheader', { name: 'Position' }).closest('table') as HTMLElement;
 
 beforeEach(() => {
   server.use(
@@ -92,12 +92,15 @@ beforeEach(() => {
   );
 });
 
+/** The pair cards' own chips — the coin's head chip names the same gap. */
+const pairChips = (text: string) => screen.getAllByText(text).filter((el) => el.closest('div.overflow-x-auto'));
+
 describe('BorosOnlyPairCard', () => {
   it('both perps missing: two gap rows and "Open both perps"', () => {
     renderCard(book([]));
-    expect(screen.getByText('Perp legs missing')).toBeInTheDocument();
+    expect(pairChips('Perp legs missing')).toHaveLength(1);
     const table = legTable();
-    expect(within(table).getAllByText('missing 100 ETH')).toHaveLength(2);
+    expect(within(table).getAllByText('Missing 100 ETH')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
   });
 
@@ -107,13 +110,13 @@ describe('BorosOnlyPairCard', () => {
     const rows = within(table).getAllByRole('row').slice(1);
     // Gate perp (40 of 100), Hyperliquid perp (0 of 100), two rate legs.
     expect(rows).toHaveLength(4);
-    const missing = rows.filter((r) => within(r).queryByText(/^missing /));
+    const missing = rows.filter((r) => within(r).queryByText(/^Missing /));
     expect(missing).toHaveLength(2);
-    expect(missing[0]).toHaveTextContent(/missing 60 ETH40 \/ 100 ETH/);
-    expect(missing[1]).toHaveTextContent(/missing 100 ETH0 \/ 100 ETH/);
+    expect(missing[0]).toHaveTextContent(/Missing 60 ETH40 \/ 100 ETH/);
+    expect(missing[1]).toHaveTextContent(/Missing 100 ETH0 \/ 100 ETH/);
     // The gaps differ (60 vs 100): one prefill would under-hedge the short side.
     expect(screen.queryByRole('button', { name: 'Open both perps' })).toBeNull();
-    expect(within(table).getAllByRole('button', { name: 'Open leg' })).toHaveLength(2);
+    expect(within(table).getAllByRole('button', { name: 'Open position' })).toHaveLength(2);
   });
 
   it('gaps that differ by under $25 a side are even: "Open both perps" stays, at the smaller gap', () => {
@@ -145,8 +148,8 @@ describe('BorosOnlyPairCard', () => {
     ];
     renderCard(g);
     const table = legTable();
-    expect(within(table).getByText('liq 1.50%')).toBeInTheDocument();
-    expect(within(table).getByText('liq 12.30%')).toBeInTheDocument();
+    expect(within(table).getByText('Liq. 1.50%')).toBeInTheDocument();
+    expect(within(table).getByText('Liq. 12.30%')).toBeInTheDocument();
   });
 
   it('shows N/A, as the Boros app does, past max(250%, 10 × |mark|)', () => {
@@ -157,11 +160,11 @@ describe('BorosOnlyPairCard', () => {
     ];
     renderCard(g);
     const table = legTable();
-    expect(within(table).getByText('liq N/A')).toHaveAttribute(
+    expect(within(table).getByText('Liq. N/A')).toHaveAttribute(
       'title',
-      'Position risk is low, so there is no liquidation rate for the time being.',
+      'Low risk. Boros shows no liquidation rate yet.',
     );
-    expect(within(table).getByText('liq 240.00%')).toBeInTheDocument();
+    expect(within(table).getByText('Liq. 240.00%')).toBeInTheDocument();
   });
 
   /** 100 ETH hedged at OLD, and the same venues' rate legs at NEW: what a roll that keeps the old legs leaves. */
@@ -180,16 +183,16 @@ describe('BorosOnlyPairCard', () => {
     ],
     borosHistory: [],
   });
-  const missingCard = () => screen.getByText('Perp legs missing').closest('div.overflow-x-auto') as HTMLElement;
+  const missingCard = () => pairChips('Perp legs missing')[0].closest('div.overflow-x-auto') as HTMLElement;
 
   it('a roll that keeps the old legs: the new date holds the perps, the old legs show what they lack (mozzarella 2026-10-17)', () => {
     renderCard(rolledBook(100));
     expect(screen.queryByText(/^Rolled · covered from/)).toBeNull();
     const card = missingCard();
-    expect(card).toHaveTextContent(`matures ${fmtDateLocal(NOW + 8 * DAY)}`);
-    const table = within(card).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+    expect(card).toHaveTextContent(`Matures ${fmtDateLocal(NOW + 8 * DAY)}`);
+    const table = within(card).getByRole('columnheader', { name: 'Position' }).closest('table') as HTMLElement;
     // The badge names the gap; Size keeps held / needed.
-    const gaps = within(table).getAllByText('missing 100 ETH');
+    const gaps = within(table).getAllByText('Missing 100 ETH');
     expect(gaps).toHaveLength(2);
     expect(gaps[0].closest('tr')).toHaveTextContent('0 / 100 ETH');
     expect(within(card).getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
@@ -197,11 +200,11 @@ describe('BorosOnlyPairCard', () => {
 
   it('a part perp left on the old card shows held / needed, and the badge the rest', () => {
     renderCard(rolledBook(100, 110));
-    const table = within(missingCard()).getByRole('columnheader', { name: 'Leg' }).closest('table') as HTMLElement;
+    const table = within(missingCard()).getByRole('columnheader', { name: 'Position' }).closest('table') as HTMLElement;
     const hl = within(table)
       .getAllByRole('row')
       .filter((r) => /HyperliquidCrossEx/.test(r.textContent ?? ''));
-    expect(hl.map((r) => r.textContent)).toEqual([expect.stringMatching(/^HyperliquidCrossExSHORTmissing 90 ETH10 \/ 100 ETH/)]);
+    expect(hl.map((r) => r.textContent)).toEqual([expect.stringMatching(/^HyperliquidCrossExSHORTMissing 90 ETH10 \/ 100 ETH/)]);
   });
 
   it('a Boros leg shared with another card shows its percent, and the hover breaks it down', () => {
@@ -211,10 +214,10 @@ describe('BorosOnlyPairCard', () => {
     const pct = within(legTable()).getByText('(66.67%)');
     expect(pct).toHaveAttribute(
       'title',
-      ['This pair uses 66.67% of the position', 'Whole position\t150 ETH', 'This pair\t100 ETH', 'Other cards\t50 ETH'].join('\n'),
+      ['This pair uses 66.67% of the position', 'Whole position\t150 ETH', 'This pair\t100 ETH', 'Other pairs\t50 ETH'].join('\n'),
     );
     // The ungrouped card holds the other 50 ETH.
-    fireEvent.click(screen.getByText('Ungrouped legs'));
+    fireEvent.click(screen.getByText('Ungrouped positions'));
     expect(screen.getByText('(33.33%)')).toHaveAttribute(
       'title',
       ['33.33% of the position is unpaired', 'Whole position\t150 ETH', 'Unpaired\t50 ETH', 'In pairs\t100 ETH'].join('\n'),
@@ -225,6 +228,6 @@ describe('BorosOnlyPairCard', () => {
     // 100 hedged at OLD; 500 opened at NEW. The perps go to NEW; 400 at NEW and all 100 at OLD lack perps.
     renderCard(rolledBook(500));
     expect(screen.queryByText(/^Rolled · covered from/)).toBeNull();
-    expect(screen.getAllByText('Perp legs missing')).toHaveLength(2);
+    expect(pairChips('Perp legs missing')).toHaveLength(2);
   });
 });

@@ -12,10 +12,6 @@ data/
 disclaimer.json
 # design scratch (not part of the shipped app)
 web/design/
-# live-suite artifacts
-tests/live/reports/
-tests/live/.last-run.json
-tests/live/.data-*/
 # recorded fixtures from live runs — contain REAL account data, never commit
 tests/fixtures/gate/recorded/
 # build output

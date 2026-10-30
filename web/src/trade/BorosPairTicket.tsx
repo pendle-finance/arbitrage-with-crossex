@@ -24,7 +24,9 @@
  */
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useTradeFlowOptional } from './TradeFlow';
+import { useTranslation } from 'react-i18next';
+import { useTradeFlowOptional, type BorosOpenPrefill } from './TradeFlow';
+import { doubledCover, type BorosOverlap } from './borosOverlap';
 import {
   useBorosAgent,
   useBorosPairContext,
@@ -49,7 +51,7 @@ import { SpreadIcon } from '../components/AssetIcon';
 import { amountError } from '../lib/amount';
 import { spreadName } from '../lib/spread';
 import { daysToMaturity, isUsdCollateral } from '../lib/boros';
-import { fieldValue, fmtDateLocal, fmtPct, sigGrouped } from '../lib/fmt';
+import { fieldValue, fmtDateLocal, fmtDateShort, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
@@ -67,7 +69,9 @@ import {
   PairResultReport,
   PositionArithmetic,
   SpreadReadout,
+  UnevenFillWarning,
 } from './BorosPairBits';
+import { localizeServerText } from '../i18n/serverMessages';
 
 /**
  * Mirrors SIMULATION_MAX_AGE_MS in src/core/boros/pair.ts. The server cannot
@@ -95,6 +99,59 @@ function floorTo1Sf(x: number): number {
 /** Client order ids must survive a lost response so a resend cannot double-fill,
  * but must be fresh for a genuinely new order. Keyed on the intent below. */
 const newOrderIds = () => [`a-${uuid()}`, `b-${uuid()}`];
+
+export type OpenMarketsPick = {
+  long: BorosPairMarketRow | undefined;
+  short: BorosPairMarketRow | undefined;
+  spread: BorosPairMarketRow | undefined;
+  onlyOne: boolean;
+};
+
+export function pickOpenMarkets(
+  markets: readonly BorosPairMarketRow[],
+  spreadMarkets: readonly BorosPairMarketRow[],
+  prefill: Pick<BorosOpenPrefill, 'base' | 'longVenue' | 'shortVenue' | 'maturity'>,
+): OpenMarketsPick {
+  const anyTerm = (venue: string | null) =>
+    venue === null
+      ? []
+      : markets.filter((m) => m.venue.toUpperCase() === venue.toUpperCase() && m.base.toUpperCase() === prefill.base.toUpperCase());
+  const at = (venue: string | null) => anyTerm(venue).filter((m) => prefill.maturity === undefined || m.maturity === prefill.maturity);
+  const soonest = (ms: BorosPairMarketRow[]): BorosPairMarketRow | undefined => [...ms].sort((a, b) => a.maturity - b.maturity)[0];
+  const shared = (ls: BorosPairMarketRow[], ss: BorosPairMarketRow[]) => {
+    const shortMaturities = new Set(ss.map((m) => m.maturity));
+    const l = soonest(ls.filter((m) => shortMaturities.has(m.maturity)));
+    return { long: l, short: l ? ss.find((m) => m.maturity === l.maturity) : undefined };
+  };
+  const longAt = at(prefill.longVenue);
+  const shortAt = at(prefill.shortVenue);
+  const onlyOne = (prefill.longVenue === null) !== (prefill.shortVenue === null);
+  let long: BorosPairMarketRow | undefined;
+  let short: BorosPairMarketRow | undefined;
+  if (longAt.length > 0 && shortAt.length > 0) {
+    ({ long, short } = shared(longAt, shortAt));
+  } else if (!onlyOne) {
+    ({ long, short } = shared(
+      longAt.length > 0 ? longAt : anyTerm(prefill.longVenue),
+      shortAt.length > 0 ? shortAt : anyTerm(prefill.shortVenue),
+    ));
+  } else {
+    long = soonest(longAt.length > 0 ? longAt : anyTerm(prefill.longVenue));
+    short = soonest(shortAt.length > 0 ? shortAt : anyTerm(prefill.shortVenue));
+  }
+  const sameVenue = (a: string, b: string | null) => b !== null && a.toUpperCase() === b.toUpperCase();
+  const spreads = onlyOne
+    ? []
+    : spreadMarkets.filter(
+        (m) =>
+          m.spreadVenues !== null &&
+          m.base.toUpperCase() === prefill.base.toUpperCase() &&
+          (prefill.maturity === undefined || m.maturity === prefill.maturity) &&
+          [prefill.longVenue, prefill.shortVenue].every((v) => (m.spreadVenues ?? []).some((k) => sameVenue(k, v))),
+      );
+  const spread = soonest(spreads.filter((m) => !m.closeOnly));
+  return { long, short, spread, onlyOne };
+}
 
 /** `active` = the ticket is the visible venue. A hidden-but-mounted ticket
  * (see TradeRail) keeps its report and completion state but stops polling the
@@ -152,6 +209,7 @@ export function BorosPairTicket({
    */
   onBusyChange?: (busy: boolean) => void;
 } = {}) {
+  const { t } = useTranslation();
   const agent = useBorosAgent();
   const { address, canTrade, loginLabel } = useActiveWallet();
   const context = useBorosPairContext(address, active);
@@ -161,9 +219,11 @@ export function BorosPairTicket({
   /** The coin picked with no leg holding one yet; a picked leg's own coin
    * always wins (see `coin`). */
   const [coinPick, setCoinPick] = useState<string | null>(null);
-  const [dirA, setDirA] = useState<BorosLegDirection>('short');
-  const [dirB, setDirB] = useState<BorosLegDirection>('long');
+  const [dirA, setDirA] = useState<BorosLegDirection>('long');
+  const [dirB, setDirB] = useState<BorosLegDirection>('short');
   const [sizeStr, setSizeStr] = useState('');
+  /** Boros the card's venues hold at other dates, from the last prefill. */
+  const [overlaps, setOverlaps] = useState<BorosOverlap[]>([]);
   const [intentRaw, setIntent] = useState<BorosPairIntent>('open');
   /**
    * The guided form opens the size typed, exactly like the free ticket.
@@ -200,50 +260,8 @@ export function BorosPairTicket({
     // ticket) was dropped and the ticket just sat empty. `marketsReady` in the
     // deps re-runs it the moment the list is there.
     if (!openNonce || !openPrefill || !marketsReady) return;
-    const at = (venue: string | null) =>
-      venue === null
-        ? []
-        : markets.filter(
-            (m) =>
-              m.venue.toUpperCase() === venue.toUpperCase() &&
-              m.base.toUpperCase() === openPrefill.base.toUpperCase() &&
-              // A venue lists the same base at several maturities; picking the
-              // wrong one gives two legs that cannot pair with each other.
-              (openPrefill.maturity === undefined || m.maturity === openPrefill.maturity),
-          );
-    const longAt = at(openPrefill.longVenue);
-    const shortAt = at(openPrefill.shortVenue);
-    /**
-     * ⚠ Resolve the two legs TOGETHER, on a maturity they SHARE.
-     *
-     * Taking each leg's first match independently is a bug the caller cannot
-     * fix from outside: the cue that opens a card's missing Boros legs has no
-     * maturity to send (that card has no Boros legs, so its maturity is the 0
-     * sentinel), and the venues then land wherever their own list order puts
-     * them. Observed live: Gate lists exactly one ETH market (25 Sep) while
-     * Hyperliquid lists 25 Dec FIRST — so the ticket armed Gate-Sep against
-     * HL-Dec, a pair that cannot trade. Each leg then filtered the other out
-     * of its own dropdown and the ticket reported "different maturity" about
-     * a pair the user never chose.
-     *
-     * The intersection is both the fix and the honest answer: when the two
-     * venues share no maturity there is no pair to arm, and leaving the legs
-     * unresolved beats arming an impossible one.
-     *
-     * Soonest shared maturity wins — the nearest expiry is the liquid one.
-     */
-    type Market = (typeof markets)[number];
-    const soonest = (ms: Market[]): Market | undefined =>
-      [...ms].sort((a, b) => a.maturity - b.maturity)[0];
-    let long: Market | undefined;
-    let short: Market | undefined;
-    /**
-     * One venue = one leg. A missing-leg row asks for exactly the leg it is
-     * missing, so opening a PAIR here would silently create a second position
-     * the card never asked for — and on a card that is already lopsided, that
-     * is the opposite of the repair the user clicked.
-     */
-    const onlyOne = (openPrefill.longVenue === null) !== (openPrefill.shortVenue === null);
+    const { long, short, spread, onlyOne } = pickOpenMarkets(markets, spreadMarkets, openPrefill);
+    const sameVenue = (a: string, b: string | null) => b !== null && a.toUpperCase() === b.toUpperCase();
     const anyTerm = (venue: string | null) =>
       venue === null
         ? []
@@ -252,58 +270,6 @@ export function BorosPairTicket({
               m.venue.toUpperCase() === venue.toUpperCase() &&
               m.base.toUpperCase() === openPrefill.base.toUpperCase(),
           );
-    const shared = (ls: Market[], ss: Market[]) => {
-      const shortMaturities = new Set(ss.map((m) => m.maturity));
-      const l = soonest(ls.filter((m) => shortMaturities.has(m.maturity)));
-      return { long: l, short: l ? ss.find((m) => m.maturity === l.maturity) : undefined };
-    };
-    if (longAt.length > 0 && shortAt.length > 0) {
-      ({ long, short } = shared(longAt, shortAt));
-    } else if (!onlyOne) {
-      // A PAIR was asked for, but one venue lists nothing at the requested
-      // maturity. Falling through to "each side's soonest" armed the other
-      // venue at the requested term against this one at ANY term — the very
-      // cross-maturity pair the intersection above exists to prevent. Re-
-      // resolve both sides on a maturity they share; none shared ⇒ no pair.
-      ({ long, short } = shared(
-        longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue),
-        shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue),
-      ));
-    } else {
-      // Single-leg prefills: only one side was asked for, so there is nothing
-      // to agree with and the soonest at that venue is the right default.
-      // If the asked-for maturity is not listed at this venue at all, the
-      // hedge is still perp↔YU on ONE venue and the term is the user's to
-      // pick — arm the venue's soonest market rather than an empty dropdown
-      // (the leg is missing; an unarmed ticket is not the safer state).
-      long = soonest(longAt.length > 0 ? longAt : anyTerm(openPrefill.longVenue));
-      short = soonest(shortAt.length > 0 ? shortAt : anyTerm(openPrefill.shortVenue));
-    }
-    /**
-     * ⚠ Always ASSIGN, never "assign if found".
-     *
-     * These used to be `if (long) setMarketA(...)`, which left a previous
-     * prefill's market in place whenever the new one resolved to nothing. A
-     * stale leg is not a harmless leftover here: each leg filters the other's
-     * dropdown by collateral and maturity, so one leftover 25 Dec market
-     * narrowed the other leg to the handful that could pair with IT — the
-     * ticket looked broken, showing one wrong-maturity option and a caption
-     * blaming a pair the user never chose. Clearing to null is always right:
-     * a market that could not be resolved is one this ticket must not claim.
-     */
-    const sameVenue = (a: string, b: string | null) => b !== null && a.toUpperCase() === b.toUpperCase();
-    const spreads = onlyOne
-      ? []
-      : spreadMarkets.filter(
-          (m) =>
-            m.spreadVenues !== null &&
-            m.base.toUpperCase() === openPrefill.base.toUpperCase() &&
-            (openPrefill.maturity === undefined || m.maturity === openPrefill.maturity) &&
-            [openPrefill.longVenue, openPrefill.shortVenue].every((v) => (m.spreadVenues ?? []).some((k) => sameVenue(k, v))),
-        );
-    // A close-only or paused spread cannot open, so the pair is armed as if
-    // there were none: on its two singles.
-    const spread = soonest(spreads.filter((m) => !m.closeOnly));
     if (spread?.spreadVenues) {
       setMarketA(spread.marketId);
       setMarketB(null);
@@ -332,6 +298,7 @@ export function BorosPairTicket({
     }
     if (!spread?.spreadVenues) setBehind(null);
     setIntent('open');
+    setOverlaps(openPrefill.overlaps ?? []);
     /**
      * A Boros size is denominated in the market's COLLATERAL, so the collateral
      * picks which figure to use — no price conversion, and nothing that can be
@@ -434,6 +401,28 @@ export function BorosPairTicket({
   const [slipOpen, setSlipOpen] = useState(false);
   const rowA = marketA !== null ? byId.get(marketA) ?? null : null;
   const rowB = marketB !== null ? byId.get(marketB) ?? null : null;
+  /** An open past what a venue's perp still lacks covers part of it twice
+   * until the venue's older Boros leg matures. Said at the size typed. */
+  const overlapWarnings = (() => {
+    if (intent !== 'open' || onlyLeg !== null || overlaps.length === 0 || !rowA) return [];
+    const flip = (d: BorosLegDirection): BorosLegDirection => (d === 'long' ? 'short' : 'long');
+    const legs: Array<{ venue: string; dir: BorosLegDirection; row: typeof rowA }> = rowA.spreadVenues
+      ? [
+          { venue: rowA.spreadVenues[0], dir: dirA, row: rowA },
+          { venue: rowA.spreadVenues[1], dir: flip(dirA), row: rowA },
+        ]
+      : [{ venue: rowA.venue, dir: dirA, row: rowA }];
+    if (mode === 'pair' && !rowA.spreadVenues && rowB) legs.push({ venue: rowB.venue, dir: dirB, row: rowB });
+    return overlaps.flatMap((o) => {
+      const leg = legs.find((l) => l.venue.toUpperCase() === o.venue.toUpperCase() && l.dir.toUpperCase() === o.side);
+      if (!leg) return [];
+      const usd = isUsdCollateral(leg.row.collateral);
+      const d = doubledCover(o, Number(sizeStr), usd, leg.row.maturity);
+      if (!d) return [];
+      const amount = usd ? `$${sigGrouped(d.size)}` : `${sigGrouped(d.size)} ${leg.row.collateral}`;
+      return [t('pairTicket.boros.heldTwice', { held: o.held, size: amount, date: fmtDateShort(d.until) })];
+    });
+  })();
 
   // §2: the coin first (as the perp ticket picks its coin first), then each
   // leg's MARKET — a venue's market for that coin and collateral, whatever its
@@ -857,12 +846,12 @@ export function BorosPairTicket({
       ? [
           {
             code: 'slippage-out-of-range',
-            message: `Max slippage must be greater than 0 and at most ${MAX_SLIP_PCT}% APR — the order would otherwise carry a rate bound you did not choose.`,
+            message: t('pairTicket.boros.slipOutOfRange', { max: MAX_SLIP_PCT }),
           },
         ]
       : []),
     ...(quoteStale
-      ? [{ code: 'stale-simulation', message: 'The quote is out of date — waiting for a fresh one.' }]
+      ? [{ code: 'stale-simulation', message: t('pairTicket.boros.staleQuote') }]
       : []),
     // Surfaced BEFORE the confirm, not as an AuthAgentExpired venue rejection
     // after it — the server's write routes refuse an expired key too.
@@ -870,7 +859,7 @@ export function BorosPairTicket({
       ? [
           {
             code: 'agent-expired',
-            message: 'Boros login expired.',
+            message: t('pairTicket.boros.loginExpired'),
           },
         ]
       : []),
@@ -940,26 +929,25 @@ export function BorosPairTicket({
         // so is the difference between completing a hedge and opening a new
         // directional position by accident.
         <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/[0.06] px-2.5 py-2 text-[11px] leading-relaxed text-cyan-100">
-          Completing leg {legLetter(onlyLeg)} only — one order, sized to the residual. The other leg is
-          untouched.{' '}
+          {t('pairTicket.boros.completingLeg', { letter: legLetter(onlyLeg) })}{' '}
           <button
             type="button"
             className="underline decoration-dotted hover:text-white"
             onClick={() => setOnlyLeg(null)}
           >
-            Trade both legs instead
+            {t('pairTicket.boros.tradeBoth')}
           </button>
         </div>
       )}
 
-      {context.isError && <QueryError title="Couldn’t load the Boros markets" error={context.error} onRetry={() => context.refetch()} />}
+      {context.isError && <QueryError title={t('pairTicket.boros.loadFailed')} error={context.error} onRetry={() => context.refetch()} />}
 
       {/* Pair or one leg. A spread is the usual trade here, so Pair leads;
           Single is for locking one venue's rate on its own — the same control
           the perp rail carries, so the two tickets read alike. */}
       {!guided && (
         <SegmentedToggle<'pair' | 'single'>
-          ariaLabel="Boros ticket mode"
+          ariaLabel={t('pairTicket.boros.modeAria')}
           value={mode}
           onChange={(next) => {
             // Single trades leg A alone, so a spread hands back its singles
@@ -974,8 +962,8 @@ export function BorosPairTicket({
           }}
           fill
           options={[
-            { value: 'pair', label: 'Pair' },
-            { value: 'single', label: 'Single' },
+            { value: 'pair', label: t('common.pair') },
+            { value: 'single', label: t('pairTicket.boros.single') },
           ]}
         />
       )}
@@ -990,8 +978,8 @@ export function BorosPairTicket({
           markets, so it has nothing to choose. */}
       {!guided && (
         <div className="flex flex-col gap-2">
-          <FieldLabel>Coin</FieldLabel>
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Coin">
+          <FieldLabel>{t('common.coin')}</FieldLabel>
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.coin')}>
             {coins.map((c) => (
               <PickChip key={c} active={coin !== null && sameCoin(c, coin)} onClick={() => pickCoin(c)}>
                 {c}
@@ -1004,7 +992,7 @@ export function BorosPairTicket({
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
             <div className="relative min-w-0">
-              <MarketCard label="Market" row={rowA} side={dirA} locked>
+              <MarketCard label={t('common.market')} row={rowA} side={dirA} locked>
                 {null}
               </MarketCard>
               {rowA?.closeOnly && (
@@ -1012,17 +1000,17 @@ export function BorosPairTicket({
                   tone="amber"
                   sm
                   className="absolute right-2 top-2"
-                  title="This market only accepts orders that reduce your position."
+                  title={t('pairTicket.boros.closeOnlyHint')}
                 >
-                  {rowA.paused ? 'paused' : 'close only'}
+                  {rowA.paused ? t('pairTicket.boros.paused') : t('pairTicket.boros.closeOnly')}
                 </Chip>
               )}
             </div>
             {!guided && (
               <button
                 type="button"
-                aria-label="Swap sides"
-                title="Swap long and short on the spread"
+                aria-label={t('pairTicket.boros.swapSides')}
+                title={t('pairTicket.boros.swapSidesHint')}
                 onClick={swapSpread}
                 className="mb-[2px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50"
               >
@@ -1034,11 +1022,11 @@ export function BorosPairTicket({
       ) : mode === 'pair' ? (
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
           <div className="relative min-w-0">
-            <MarketCard label="Market A" row={slotA} side={slotDirA} locked={guided}>
+            <MarketCard label={t(guided ? 'pairTicket.boros.borosMarketLetter' : 'pairTicket.boros.marketLetter', { letter: 'A' })} row={slotA} side={slotDirA} locked={guided}>
               <MarketSelect
                 id="boros-leg-a"
                 label=""
-                ariaLabel="Leg A"
+                ariaLabel={t('pairTicket.borosBits.legLetter', { letter: 'A' })}
                 value={slotA?.marketId ?? null}
                 markets={legOptions(slotA, slotB)}
                 reasonFor={() => null}
@@ -1051,9 +1039,9 @@ export function BorosPairTicket({
                 tone="amber"
                 sm
                 className="absolute right-2 top-2"
-                title="This market only accepts orders that reduce your position."
+                title={t('pairTicket.boros.closeOnlyHint')}
               >
-                {slotA?.paused ? 'paused' : 'close only'}
+                {slotA?.paused ? t('pairTicket.boros.paused') : t('pairTicket.boros.closeOnly')}
               </Chip>
             )}
           </div>
@@ -1065,8 +1053,8 @@ export function BorosPairTicket({
           ) : (
           <button
             type="button"
-            aria-label="Swap markets"
-            title="Swap the two markets between their slots"
+            aria-label={t('pairTicket.boros.swapMarkets')}
+            title={t('pairTicket.boros.swapMarketsHint')}
             disabled={slotA === null && slotB === null}
             onClick={() => {
               if (isSpread) return swapSpread();
@@ -1079,11 +1067,11 @@ export function BorosPairTicket({
           </button>
           )}
           <div className="relative min-w-0">
-            <MarketCard label="Market B" row={slotB} side={slotDirA === 'short' ? 'long' : 'short'} locked={guided}>
+            <MarketCard label={t(guided ? 'pairTicket.boros.borosMarketLetter' : 'pairTicket.boros.marketLetter', { letter: 'B' })} row={slotB} side={slotDirA === 'short' ? 'long' : 'short'} locked={guided}>
               <MarketSelect
                 id="boros-leg-b"
                 label=""
-                ariaLabel="Leg B"
+                ariaLabel={t('pairTicket.borosBits.legLetter', { letter: 'B' })}
                 value={slotB?.marketId ?? null}
                 markets={legOptions(slotB, slotA)}
                 reasonFor={() => null}
@@ -1096,9 +1084,9 @@ export function BorosPairTicket({
                 tone="amber"
                 sm
                 className="absolute right-2 top-2"
-                title="This market only accepts orders that reduce your position."
+                title={t('pairTicket.boros.closeOnlyHint')}
               >
-                {slotB?.paused ? 'paused' : 'close only'}
+                {slotB?.paused ? t('pairTicket.boros.paused') : t('pairTicket.boros.closeOnly')}
               </Chip>
             )}
           </div>
@@ -1108,20 +1096,20 @@ export function BorosPairTicket({
           <div className="flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">
               <Chip sm tone={dirA === 'long' ? 'green' : 'red'} className="font-semibold">
-                {dirA === 'long' ? 'LONG' : 'SHORT'}
+                {t(dirA === 'long' ? 'common.longUpper' : 'common.shortUpper')}
               </Chip>
               {/* The rates reading of the side, stated beside it: long pays
                   the fixed rate, short receives it. */}
               <span className="text-[12px] font-normal text-ink-300">
-                Market · {dirA === 'long' ? 'pay fixed' : 'receive fixed'}
+                {t(dirA === 'long' ? 'pairTicket.boros.marketPayFixed' : 'pairTicket.boros.marketReceiveFixed')}
               </span>
             </span>
-            <DirectionToggle value={dirA} onChange={setDirA} idPrefix="Leg A" compact />
+            <DirectionToggle value={dirA} onChange={setDirA} idPrefix={t('pairTicket.borosBits.legLetter', { letter: 'A' })} compact />
           </div>
           <MarketSelect
             id="boros-leg-a"
             label=""
-            ariaLabel="Market"
+            ariaLabel={t('common.market')}
             value={marketA}
             // Single mode trades leg A alone: collateral matching exists to
             // keep a PAIR compatible.
@@ -1136,16 +1124,16 @@ export function BorosPairTicket({
           markets that share none are not a pair, and the form says so. */}
       {!guided && (!isSpread || behind) && chipLegs.length > 0 && (
         <div className="flex flex-col gap-2">
-          <FieldLabel>Maturity</FieldLabel>
+          <FieldLabel>{t('common.maturity')}</FieldLabel>
           {noSharedMaturity && rowA && rowB ? (
             <p className="text-[11.5px] text-amber-300" role="status">
-              {marketLabel(rowA)} and {marketLabel(rowB)} share no maturity, so they can't be paired.
+              {t('pairTicket.boros.noSharedMaturity', { a: marketLabel(rowA), b: marketLabel(rowB) })}
             </p>
           ) : (
-            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Maturity">
+            <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.maturity')}>
               {maturities.map((m) => (
                 <PickChip key={m} active={m === maturity} onClick={() => pickMaturity(m)}>
-                  {fmtDateLocal(m)} · {daysToMaturity(m, Math.floor(now / 1000))}d
+                  {fmtDateLocal(m)} · {t('pairTicket.closeBoros.daysShort', { n: daysToMaturity(m, Math.floor(now / 1000)) })}
                 </PickChip>
               ))}
             </div>
@@ -1156,7 +1144,7 @@ export function BorosPairTicket({
           to when a spread covers it. Stated, not chosen. */}
       {isSpread && behind && rowA?.spreadVenues && (
         <div className="flex flex-col gap-2">
-          <FieldLabel>Trade on</FieldLabel>
+          <FieldLabel>{t('pairTicket.boros.tradeOn')}</FieldLabel>
           <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-ink-50">
             <SpreadIcon venues={rowA.spreadVenues} />
             <span className="truncate">{spreadName(rowA.base, rowA.spreadVenues)}</span>
@@ -1172,7 +1160,7 @@ export function BorosPairTicket({
         <div className="flex items-baseline justify-between gap-3">
           <label htmlFor="boros-size" className="text-[11.5px] text-ink-200">
             {/* "per leg" only means something when there are two. */}
-            {oneMarket ? 'Size' : 'Size per leg'}
+            {oneMarket ? t('common.size') : t('pairTicket.boros.sizePerMarket')}
           </label>
           {availableToTrade !== null && (
             <button
@@ -1180,14 +1168,16 @@ export function BorosPairTicket({
               className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
               title={
                 intent === 'close'
-                  ? 'The most reduce-only can take off: the smaller position held. Click to size to it.'
-                  : `The largest size your collateral can open${oneMarket ? '' : ' on both legs'}: initial margin plus the taker fee, at the current rate${
-                      freeCollateral !== null ? `, out of ${sigGrouped(freeCollateral)} ${rowA?.collateral ?? ''} free` : ''
-                    }. Click to size to it.`
+                  ? t('pairTicket.boros.maxReduceHint')
+                  : freeCollateral !== null
+                    ? t(oneMarket ? 'pairTicket.boros.maxOpenFreeHint' : 'pairTicket.boros.maxOpenBothFreeHint', {
+                        free: `${sigGrouped(freeCollateral)} ${rowA?.collateral ?? ''}`,
+                      })
+                    : t(oneMarket ? 'pairTicket.boros.maxOpenHint' : 'pairTicket.boros.maxOpenBothHint')
               }
               onClick={() => setSizeStr(fieldValue(availableToTrade))}
             >
-              max{' '}
+              {t('common.max')}{' '}
               <span className="text-link underline decoration-link/40 underline-offset-2">
                 {sigGrouped(availableToTrade)} {rowA?.collateral ?? ''}
               </span>
@@ -1201,12 +1191,18 @@ export function BorosPairTicket({
         <AffixedInput affix={rowA ? <span>{simulation?.collateral || rowA.collateral || ''}</span> : null}>
           <input
             id="boros-size"
-            aria-label={`${oneMarket ? 'Size' : 'Size per leg'}${
-              rowA ? ` (${simulation?.collateral || rowA.collateral || 'collateral'})` : ''
-            }`}
+            aria-label={
+              rowA
+                ? t(oneMarket ? 'pairTicket.boros.sizeAria' : 'pairTicket.boros.sizePerMarketAria', {
+                    unit: simulation?.collateral || rowA.collateral || t('pairTicket.boros.collateralWord'),
+                  })
+                : oneMarket
+                  ? t('common.size')
+                  : t('pairTicket.boros.sizePerMarket')
+            }
             className={`input num pr-16 ${sizeErr ? '!border-rose-500/60' : ''}`}
             inputMode="decimal"
-            placeholder={oneMarket ? 'size' : 'size per leg'}
+            placeholder={oneMarket ? t('common.size') : t('pairTicket.boros.sizePerMarket')}
             aria-invalid={sizeErr ? true : undefined}
             aria-describedby={sizeErr ? 'boros-size-error' : undefined}
             value={sizeStr}
@@ -1232,19 +1228,19 @@ export function BorosPairTicket({
           <input
             type="checkbox"
             className="chk"
-            aria-label="Reduce-only"
+            aria-label={t('pairTicket.boros.reduceOnly')}
             checked={intent === 'close'}
             onChange={(e) => setIntent(e.target.checked ? 'close' : 'open')}
           />
-          <span>Reduce-only</span>
+          <span>{t('pairTicket.boros.reduceOnly')}</span>
           {/* Boros has no reduce-only order type: the cap is applied HERE, by
               us, not guaranteed by the venue. Whose promise it is matters, so
               the qualification survives — on the caption that makes the claim. */}
           <span
             className="text-[11px] text-ink-400"
-            title="Enforced here by capping the size at your current position — Boros has no reduce-only order type, so check the resulting-position row. Resting orders on the traded markets are cancelled in the same batch."
+            title={t('pairTicket.boros.reduceOnlyHint')}
           >
-            caps the size at your open position · cancels resting orders
+            {t('pairTicket.boros.reduceOnlyNote')}
           </span>
         </label>
       )}
@@ -1253,7 +1249,7 @@ export function BorosPairTicket({
       </div>
 
       <div className={twoColumn ? 'flex flex-col gap-3' : 'contents'}>
-      {sim.isError && <QueryError title="Couldn’t price this pair" error={sim.error} onRetry={() => sim.refetch()} />}
+      {sim.isError && <QueryError title={t('pairTicket.boros.priceFailed')} error={sim.error} onRetry={() => sim.refetch()} />}
       {simulation && (
         <EstimateCard
           dataUpdatedAt={sim.dataUpdatedAt}
@@ -1281,23 +1277,23 @@ export function BorosPairTicket({
                 <div className="flex items-baseline justify-between gap-3">
                   <span
                     className="text-[12px] text-ink-200"
-                    title="How far this size walks the books away from mid: the mid spread less the spread you actually get, both legs together. The bound caps the RATE, not the fill — a leg that cannot fill inside it simply stops filling."
+                    title={t('pairTicket.boros.slippageHint')}
                   >
-                    Slippage
+                    {t('pairTicket.bits.slippage')}
                   </span>
                   <span className="num text-[12px] text-ink-400">
-                    Est.{' '}
+                    {t('pairTicket.bits.est')}{' '}
                     <span className="text-ink-50">
                       {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
                     </span>
-                    {' / '}Max:{' '}
+                    {' / '}{t('pairTicket.bits.max')}{' '}
                     <button
                       type="button"
                       className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
                       title={
                         loneLeg === null
-                          ? `Change the tolerance — set per leg (${slipStrShared}% each), so the pair's worst case is twice it`
-                          : 'Change the tolerance'
+                          ? t('pairTicket.boros.changeTolerancePair', { slip: slipStrShared })
+                          : t('pairTicket.bits.changeTolerance')
                       }
                       onClick={() => setSlipOpen((v) => !v)}
                     >
@@ -1318,8 +1314,7 @@ export function BorosPairTicket({
                 {slipOpen && (
                   <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
                     <span className="text-[10.5px] leading-relaxed text-ink-400">
-                      Max rate the order will accept. A wider tolerance may be needed for a large size or
-                      a thin book.
+                      {t('trade.close.bandHint')}
                     </span>
                     <div className="flex items-center gap-1.5">
                       {['0.2', '0.4', '1', '2'].map((q) => (
@@ -1335,7 +1330,7 @@ export function BorosPairTicket({
                       <input
                         className="input num h-7 flex-1 px-2 py-0.5 text-[12px]"
                         inputMode="decimal"
-                        aria-label="Max slippage, % APR"
+                        aria-label={t('pairTicket.boros.slipAria')}
                         value={slipStrShared}
                         onChange={(e) => setSharedSlip(e.target.value)}
                       />
@@ -1343,7 +1338,7 @@ export function BorosPairTicket({
                     </div>
                     {slipInvalid && (
                       <span className="text-[11px] text-rose-300">
-                        Must be greater than 0 and at most {MAX_SLIP_PCT}%.
+                        {t('pairTicket.boros.slipInvalid', { max: MAX_SLIP_PCT })}
                       </span>
                     )}
                     {/* Per-leg tolerances: a thin book on one venue can need more
@@ -1360,12 +1355,12 @@ export function BorosPairTicket({
                             setSlipB(slipStrShared);
                           }}
                         >
-                          {perLeg ? 'use one value for both legs' : 'set each leg separately'}
+                          {perLeg ? t('pairTicket.boros.oneValue') : t('pairTicket.boros.eachLeg')}
                         </button>
                         {perLeg && (
                           <div className="grid grid-cols-2 gap-2">
-                            <SlipInput id="boros-slip-a" label="Leg A %" value={slipStrA} onChange={setSlipA} />
-                            <SlipInput id="boros-slip-b" label="Leg B %" value={slipStrB} onChange={setSlipB} />
+                            <SlipInput id="boros-slip-a" label={t('pairTicket.boros.legPct', { letter: 'A' })} value={slipStrA} onChange={setSlipA} />
+                            <SlipInput id="boros-slip-b" label={t('pairTicket.boros.legPct', { letter: 'B' })} value={slipStrB} onChange={setSlipB} />
                           </div>
                         )}
                       </>
@@ -1383,7 +1378,7 @@ export function BorosPairTicket({
           {simulation.reasons.length ? (
             <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
               {simulation.reasons.map((r) => (
-                <li key={r}>· {r}</li>
+                <li key={r}>· {localizeServerText(r)}</li>
               ))}
             </ul>
           ) : null}
@@ -1395,7 +1390,7 @@ export function BorosPairTicket({
       )}
 
       {/* --- §7 warnings + blockers --------------------------------------- */}
-      {gate?.warnings.map((w) => (
+      {[...overlapWarnings, ...(gate?.warnings ?? []).map(localizeServerText)].map((w) => (
         <p
           key={w}
           className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200"
@@ -1403,15 +1398,17 @@ export function BorosPairTicket({
           {w}
         </p>
       ))}
+      {simulation && !oneMarket && onlyLeg === null && (
+        <UnevenFillWarning sim={simulation} onUse={(size) => setSizeStr(fieldValue(Math.floor(size * 1e8) / 1e8))} />
+      )}
       <BlockerList blockers={blockers} />
 
-      {execute.isError && <QueryError title="The pair was not sent" error={execute.error} />}
+      {execute.isError && <QueryError title={t('pairTicket.boros.notSent')} error={execute.error} />}
 
       {/* --- §5 report ----------------------------------------------------- */}
       {report && reportReplayed && (
         <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
-          This is the earlier submission&apos;s result, replayed — this confirm did not send a new
-          order.
+          {t('pairTicket.boros.replayed')}
         </p>
       )}
       {report && (
@@ -1500,25 +1497,27 @@ export function BorosPairTicket({
             onConfirm={onConfirm}
             title={
               mode === 'pair' && onlyLeg === null && !isSpread
-                ? 'One atomic batch — neither leg trades unless both are accepted, but each can still fill short.'
+                ? t('pairTicket.boros.atomicHint')
                 : undefined
             }
           >
             {execute.isPending
-              ? 'Sending…'
+              ? t('common.sending')
               : closeOnlyLeg !== null
                 ? [rowA, rowB][closeOnlyLeg]?.paused
-                  ? 'Market is paused.'
-                  : `Market${isSpread ? '' : ` ${legLetter(closeOnlyLeg)}`} takes closes only. Tick Reduce-only.`
+                  ? t('pairTicket.boros.marketPaused')
+                  : isSpread
+                    ? t('pairTicket.boros.closeOnlyMarket')
+                    : t('pairTicket.boros.closeOnlyLeg', { letter: legLetter(closeOnlyLeg) })
                 : (
                     <>
                       {onlyLeg !== null
-                        ? `Confirm · complete leg ${legLetter(onlyLeg)}`
+                        ? t('pairTicket.boros.confirmComplete', { letter: legLetter(onlyLeg) })
                         : isSpread
-                          ? 'Confirm · 1 Boros market order'
+                          ? t('pairTicket.boros.confirmOne')
                           : mode === 'single'
-                          ? 'Confirm · 1 Boros market order'
-                          : 'Confirm · 2 Boros market orders'}
+                          ? t('pairTicket.boros.confirmOne')
+                          : t('pairTicket.boros.confirmTwo')}
                       <ChevronRight size={14} aria-hidden />
                     </>
                   )}

@@ -137,7 +137,7 @@ describe('PUT /api/credentials', () => {
 
     const res = await put({ key: NEW_KEY, secret: NEW_SECRET });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toMatch(/deal is still working/);
+    expect(res.json().error.message).toMatch(/deal is still running/);
 
     // Once the deal settles, the swap goes through.
     store.updatePair('busy-deal-409', { mode: 'DONE' });

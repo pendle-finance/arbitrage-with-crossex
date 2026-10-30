@@ -95,7 +95,7 @@ describe('StrategyWizard → prefills', () => {
     });
     // Step 1 is the lit step; the perp ticket is not on screen yet.
     expect(screen.getByText('Lock the rate')).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Size per leg/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Size per market/)).not.toBeInTheDocument();
   });
 
   it('a resume (initialStep 2) arms the perp ticket and never mounts the Boros one', async () => {
@@ -241,7 +241,7 @@ describe('StrategyWizard — a fill that closes an existing position is not new 
     };
     server.use(...tradableHandlers(closingFill), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVenue: 'HYPERLIQUID' });
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
@@ -276,11 +276,11 @@ describe('StrategyWizard — the hedge is sized off the EXECUTED collateral', ()
       sizeBase: undefined, // no collateral price ⇒ the card could not convert
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
     // With no `sizeBase` the prefill leaves the size empty (it has no coin
     // quantity to put there) — the user types the ETH size themselves. That
     // is precisely the path that produced the mis-sized hedge.
-    fireEvent.change(screen.getByLabelText(/^Size per leg/), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText(/^Size per market/), { target: { value: '2' } });
 
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
@@ -313,9 +313,9 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
 
     // The wizard's own prefill arms both legs and the size; just wait for it.
     await waitFor(() =>
-      expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)),
+      expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)),
     );
-    expect(screen.getByLabelText('Leg B')).toHaveValue(String(HL_M));
+    expect(screen.getByLabelText('Market B')).toHaveValue(String(HL_M));
 
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
@@ -327,7 +327,7 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /Confirm · 2 Boros market orders/ })).not.toBeInTheDocument(),
     );
-    expect(screen.queryByLabelText(/^Size per leg/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^Size per market/)).not.toBeInTheDocument();
     // Exactly one way forward.
     expect(screen.getByRole('button', { name: /Rate locked\s*— hedge the perps/ })).toBeInTheDocument();
     // And no Dismiss — the receipt IS the step; hiding it would blank it.
@@ -439,7 +439,7 @@ const WIZ = { ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVen
 
 /** Arm, wait for the tradable state, hold-to-confirm the pair. */
 const confirmPair = async () => {
-  await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
+  await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
   const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
   await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
   fireEvent.pointerDown(confirm);
@@ -476,12 +476,12 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     await confirmPair();
 
     // Partial: the wizard names the unmatched size and the ticket stays live.
-    expect(await screen.findByText(/400 USDT is unmatched/, undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(/differ by 400 USDT/, undefined, { timeout: 4000 })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
 
     // Complete the deficient leg through the ticket's own report.
     fireEvent.click(screen.getByRole('button', { name: 'Complete now at market' }));
-    const complete = await screen.findByRole('button', { name: /^Confirm · complete leg/ }, { timeout: 4000 });
+    const complete = await screen.findByRole('button', { name: /^Confirm · complete market/ }, { timeout: 4000 });
     await waitFor(() => expect(complete).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(complete);
 
@@ -500,10 +500,10 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     server.use(...tradableHandlers([PARTIAL_600, COMPLETION_FAIL]), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...WIZ, notionalUsd: 1000 });
     await confirmPair();
-    await screen.findByText(/400 USDT is unmatched/, undefined, { timeout: 4000 });
+    await screen.findByText(/differ by 400 USDT/, undefined, { timeout: 4000 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Complete now at market' }));
-    const complete = await screen.findByRole('button', { name: /^Confirm · complete leg/ }, { timeout: 4000 });
+    const complete = await screen.findByRole('button', { name: /^Confirm · complete market/ }, { timeout: 4000 });
     await waitFor(() => expect(complete).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(complete);
 
@@ -515,7 +515,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     ).toBeInTheDocument();
     // …and the 400 stays flagged; nothing claims the rate is locked. (The old
     // merge zeroed the residual here and rendered the receipt.)
-    expect(screen.getByText(/400 USDT is unmatched/)).toBeInTheDocument();
+    expect(screen.getByText(/differ by 400 USDT/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
   }, 20_000);
 
@@ -528,7 +528,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     server.use(...tradableHandlers([UNEVEN_PARTIAL, RETRY_300]), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...WIZ, notionalUsd: 1000 });
     await confirmPair();
-    await screen.findByText(/200 USDT is unmatched/, undefined, { timeout: 4000 });
+    await screen.findByText(/differ by 200 USDT/, undefined, { timeout: 4000 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     const retry = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ }, { timeout: 4000 });
@@ -538,7 +538,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // The retry's own clean report shows inside the ticket (300 hedged)…
     await screen.findByText(/300 USDT hedged/, undefined, { timeout: 4000 });
     // …but the BOOK is 1000/800: still lopsided, still no "Rate locked ✓".
-    expect(screen.getByText(/200 USDT is unmatched/)).toBeInTheDocument();
+    expect(screen.getByText(/differ by 200 USDT/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Continue anyway/ }));
@@ -553,7 +553,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // clean pair lock and armed BOTH perp legs at the full intent size.
     server.use(...tradableHandlers(SINGLE_LOCK), ...symbolHandlers([ETH_GATE]));
     renderWizard(WIZ);
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
     // The wizard has no Pair/Single choice — it locks the pair the card
     // quoted. The mocked result is one-sided regardless, which is the state
     // under test: a half-filled lock must never read as a clean pair.
@@ -562,7 +562,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     fireEvent.pointerDown(confirm);
 
     expect(
-      await screen.findByText(/Only one side of the rate pair is on/, undefined, { timeout: 4000 }),
+      await screen.findByText(/Only one Boros position is open/, undefined, { timeout: 4000 }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Rate locked/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Continue anyway/ })).not.toBeInTheDocument();
@@ -570,7 +570,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // And leaving THIS is guarded: one leg on is exposure, whatever made it.
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(
-      await screen.findByText(/until the perp legs open you hold directional exposure/),
+      await screen.findByText(/perps not open: you carry price risk/),
     ).toBeInTheDocument();
   }, 15_000);
 
@@ -581,16 +581,16 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // Positions or the standalone Boros ticket, both of which can close.
     server.use(...tradableHandlers([SINGLE_LOCK]), ...symbolHandlers([ETH_GATE]));
     renderWizard(WIZ);
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
-    await screen.findByText(/Only one side of the rate pair is on/, undefined, { timeout: 4000 });
+    await screen.findByText(/Only one Boros position is open/, undefined, { timeout: 4000 });
 
     // Leaving with one side on must NOT be silent: the rate is locked and
     // unhedged, which is directional exposure the user has to be told about.
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(await screen.findByText(/not hedged/, undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText(/perps not open: you carry price risk/, undefined, { timeout: 4000 })).toBeInTheDocument();
   }, 20_000);
 });
 
@@ -605,7 +605,7 @@ describe('StrategyWizard — continue arms once per book state', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Rate locked/ }, { timeout: 4000 }));
     await waitFor(() => expect(prefillsSeen.filter((x) => x.kind === 'pair')).toHaveLength(1));
 
-    fireEvent.click(screen.getByRole('button', { name: /Back to the rate legs/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to Boros/ }));
     fireEvent.click(await screen.findByRole('button', { name: /Rate locked/ }));
     await screen.findByLabelText(/Size per leg/);
     // Same book ⇒ same arm: still exactly one pair prefill.
@@ -624,7 +624,7 @@ describe('StrategyWizard — leaving and closing are deliberate', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(
-      await screen.findByText(/until the perp legs open you hold directional exposure/),
+      await screen.findByText(/perps not open: you carry price risk/),
     ).toBeInTheDocument();
     fireEvent.keyDown(window, { key: 'Escape' });
     // Still open, still warning.
@@ -643,7 +643,7 @@ describe('StrategyWizard — leaving and closing are deliberate', () => {
       ...symbolHandlers([ETH_GATE]),
     );
     renderWizard(WIZ);
-    await waitFor(() => expect(screen.getByLabelText('Leg A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
     expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
 
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });

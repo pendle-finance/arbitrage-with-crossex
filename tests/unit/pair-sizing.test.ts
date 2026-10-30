@@ -48,7 +48,7 @@ describe('shared pair sizing', () => {
 
     expect(r.map((l) => l.qty)).toEqual(['2.529', '2.529']);
     expect(codes(r)).not.toContain('pair-qty-mismatch');
-    expect(warnings(r)).toContain('size set to 2.529 (was 2.5296) so both legs trade the same amount');
+    expect(warnings(r)).toContain('Size set to 2.529 (was 2.5296) so both legs trade the same amount');
   });
 
   it('coin-sized pair sizes with no reference price, and skips the min-notional check', async () => {
@@ -106,8 +106,8 @@ describe('shared pair sizing', () => {
 
     const first = r.map((l) => l.violations.find((v) => v.code === 'pair-qty-mismatch')?.message);
     expect(first).toEqual([
-      'pair legs are sized differently — one in coins, one in dollars; size both the same way',
-      'pair legs are sized differently — one in coins, one in dollars; size both the same way',
+      'Pair legs are sized differently: one in coins, one in dollars. Size both the same way.',
+      'Pair legs are sized differently: one in coins, one in dollars. Size both the same way.',
     ]);
     expect(messages(r).some((m) => m.startsWith('pair sizing:'))).toBe(false);
   });
