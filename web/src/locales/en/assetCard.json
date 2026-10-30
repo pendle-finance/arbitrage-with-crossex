@@ -286,7 +286,7 @@
     "closePerpWhole": "Close this perp leg, reduce-only.",
     "closePerpSlice": "Close the unpaired part of this perp leg, reduce-only. The pair keeps its share.",
     "yuMaturityTitle": "Maturity. No counterpart settles on this day.",
-    "lockedTitle": "The fixed rate this position locks, net of settlement fees. A minus means it pays.",
+    "lockedTitle": "The fixed rate this position locked, before settlement fees.",
     "closeYuAria": "Close {{venue}} {{side}} YU",
     "closeYuWhole": "Close this Boros position at market.",
     "closeYuSlice": "Close the unpaired part of this Boros position at market. The pair keeps its share."
@@ -344,8 +344,8 @@
   "openMore": "Open more",
   "bundleHead": {
     "notionalTitle": "Notional of the live perp, or of the Boros positions when there is no perp.",
-    "fixedAprTitle": "The fixed rate this venue is hedged at, blended across its live Boros positions, net of settlement fees.",
-    "fixedApr": "Fixed APR",
+    "fixedAprTitle": "The fixed rate this venue is hedged at, blended across its live Boros positions, after settlement fees. The pair's legs show it before fees.",
+    "fixedApr": "Net fixed APR",
     "fundingTitle": "Perp funding + Boros settlements, net of settlement fees.",
     "funding": "Funding settlement",
     "tradeTitle": "Boros realized rate PnL + perp realized price PnL + perp uPnL.",
@@ -395,8 +395,6 @@
     "active": "{{n}} active",
     "inactive": "{{n}} inactive",
     "onQty": " on {{qty}}",
-    "receive": "receive",
-    "pay": "pay",
     "tradingFees": "Trading fees",
     "offsets": "* Offsets across venues.",
     "entryMark": "Entry → Mark",

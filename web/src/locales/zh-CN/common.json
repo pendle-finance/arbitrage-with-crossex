@@ -55,5 +55,7 @@
   "all": "全部",
   "unknown": "未知",
   "error": "错误",
-  "viewOnly": "仅查看"
+  "viewOnly": "仅查看",
+  "payRate": "支付 {{rate}}",
+  "receiveRate": "收取 {{rate}}"
 }

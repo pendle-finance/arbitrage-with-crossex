@@ -65,6 +65,7 @@ import { uuid } from '../../lib/uuid';
 import { useNow } from '../../lib/useNow';
 import { pairSharePayload } from '../sharePayload';
 import type { SharePayloadV1 } from '../../lib/shareCodec';
+import { FixedRate } from '../../components/FixedRate';
 import { SignedNumber } from '../../components/SignedNumber';
 import {
   fmtDateLocal,
@@ -907,7 +908,7 @@ function PairCard({
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right`}>
                       {l.lockedApr !== null ? (
-                        <SignedNumber value={l.lockedApr} format={fmtPct} />
+                        <FixedRate apr={l.lockedApr} />
                       ) : (
                         <span className="text-ink-600">—</span>
                       )}
@@ -3315,7 +3316,7 @@ function PerpOnlyPairCard({
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(yu, yu.unit))}</td>
         <td className={`${cell} num whitespace-nowrap text-right`}>
           {yu.lockedApr !== null ? (
-            <SignedNumber value={yu.lockedApr} format={fmtPct} />
+            <FixedRate apr={yu.lockedApr} />
           ) : (
             <span className="text-ink-500">{t('assetCard.pending')}</span>
           )}
@@ -3730,7 +3731,7 @@ function BorosOnlyPairCard({
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right`}>
                       {y.lockedApr !== null ? (
-                        <SignedNumber value={y.lockedApr} format={fmtPct} />
+                        <FixedRate apr={y.lockedApr} />
                       ) : (
                         <span className="text-ink-500">{t('assetCard.pending')}</span>
                       )}
@@ -4014,7 +4015,7 @@ function UngroupedCard({
                     </td>
                     <td className="num text-right font-semibold" title={t('assetCard.ungrouped.lockedTitle')}>
                       {l.lockedApr !== null ? (
-                        <SignedNumber value={l.lockedApr} format={fmtPct} />
+                        <FixedRate apr={l.lockedApr} />
                       ) : (
                         <span className="font-normal text-ink-500">{t('assetCard.pending')}</span>
                       )}
@@ -5062,10 +5063,7 @@ function BundleCard({
             >
               <div className="num text-[14px] font-medium leading-none">
                 {b.fixedApr !== null ? (
-                  <span className={b.fixedApr >= 0 ? 'text-emerald-300' : 'text-rose-300'}>
-                    {`${b.fixedApr >= 0 ? t('assetCard.bundle.receive') : t('assetCard.bundle.pay')} `}
-                    {fmtPct(Math.abs(b.fixedApr))}
-                  </span>
+                  <FixedRate apr={b.fixedApr} />
                 ) : b.ratePending ? (
                   <span className="text-ink-500">{t('assetCard.pending')}</span>
                 ) : (
