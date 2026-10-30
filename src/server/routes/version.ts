@@ -55,7 +55,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: 'an update is already running. Wait for it to finish.',
+          message: 'An update is already running. Wait for it to finish.',
           retryable: true,
         });
       }
@@ -63,7 +63,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: 'a deal is still working — wait for it to finish, then update',
+          message: 'A deal is still running. Wait for it to finish, then update.',
           retryable: true,
         });
       }
@@ -71,7 +71,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: 'a rebalance is still running. Wait for it to finish, then update.',
+          message: 'A rebalance is still running. Wait for it to finish, then update.',
           retryable: true,
         });
       }
@@ -79,7 +79,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: `${LOCK_TEXT.moving} Wait for it to end, then update.`,
+          message: `${LOCK_TEXT.moving} Wait for it to finish, then update.`,
           retryable: true,
         });
       }
@@ -87,7 +87,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: 'a Boros order may still be settling — wait a few minutes, then update',
+          message: 'A Boros order may still be settling. Wait a few minutes, then update.',
           retryable: true,
         });
       }
@@ -95,7 +95,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: 'this is a source checkout, not an installed copy — update it with git',
+          message: 'This is a source checkout, not an installed copy. Update it with git.',
           retryable: false,
         });
       }
@@ -103,7 +103,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: 'in-app update is off (UPDATE_CHECK=0) — update by hand with the install command',
+          message: 'In-app update is off on this install (UPDATE_CHECK=0). Update with the install command.',
           retryable: false,
         });
       }
@@ -143,7 +143,7 @@ export function versionRoutes(deps: AppDeps) {
         return refuse(reply, {
           code: 409,
           category: 'validation',
-          message: `could not start the update: ${(err as Error).message}`,
+          message: `Could not start the update: ${(err as Error).message}`,
           retryable: true,
         });
       }

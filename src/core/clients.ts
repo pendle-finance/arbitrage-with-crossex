@@ -85,7 +85,7 @@ export function publicCrossEx(): CrossExApi {
 export function requireClients(clients: Clients | null): Clients {
   if (!clients) {
     throw new CoreError(
-      'Gate API credentials are not configured — enter them in the setup guide in the web app.',
+      'The Gate API key is not set. Add it in the setup guide.',
       'not-configured',
     );
   }

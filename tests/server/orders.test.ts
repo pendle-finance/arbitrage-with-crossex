@@ -103,7 +103,7 @@ describe('/api/orders', () => {
 
     const del = await app.inject({ method: 'DELETE', url: '/api/orders/900001', headers: HOST });
     expect(del.statusCode).toBe(400);
-    expect(del.json().error.message).toMatch(/managed by the engine/);
+    expect(del.json().error.message).toMatch(/belongs to a running deal/);
     // Nothing reached the venue: no DELETE interceptor was registered at all.
     expect(store.listOrders('deal-000009')[0].cancelRequested).toBe(0);
   });
@@ -159,7 +159,7 @@ describe('/api/orders', () => {
       headers: HOST,
     });
     expect(del.statusCode).toBe(400);
-    expect(del.json().error.message).toMatch(/managed by the engine/);
+    expect(del.json().error.message).toMatch(/belongs to a running deal/);
     // No DELETE interceptor is registered — a leak would fail the request loudly.
     expect(store.listOrders('deal-000009')[0].cancelRequested).toBe(0);
   });
@@ -178,7 +178,7 @@ describe('/api/orders', () => {
 
     const del = await app.inject({ method: 'DELETE', url: '/api/orders/900001', headers: HOST });
     expect(del.statusCode).toBe(400);
-    expect(del.json().error.message).toMatch(/managed by the engine/);
+    expect(del.json().error.message).toMatch(/belongs to a running deal/);
   });
 
   it('still cancels a genuinely hand-placed order during that same window', async () => {
@@ -204,7 +204,7 @@ describe('/api/orders', () => {
 
     const del = await app.inject({ method: 'DELETE', url: '/api/orders/900001', headers: HOST });
     expect(del.statusCode).toBe(400);
-    expect(del.json().error.message).toMatch(/could not confirm/);
+    expect(del.json().error.message).toMatch(/Can't cancel 900001 yet. A running deal may own it/);
   });
 
 
@@ -269,7 +269,7 @@ describe('/api/orders', () => {
 
     const del = await app.inject({ method: 'DELETE', url: '/api/orders/910002', headers: HOST });
     expect(del.statusCode).toBe(400);
-    expect(del.json().error.message).toMatch(/managed by the engine/);
+    expect(del.json().error.message).toMatch(/belongs to a running deal/);
     expect(store.getPair('deal-000009')!.mode).toBe('OPENING'); // untouched
   });
 

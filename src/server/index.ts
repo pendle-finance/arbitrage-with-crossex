@@ -112,7 +112,7 @@ let loopDeps: LoopDeps | undefined;
       }
       const inflight = [...status.entries()].filter(([, s]) => s === 'executing').map(([id]) => id);
       if (inflight.length) {
-        const msg = `legacy basket(s) were mid-flight at upgrade: ${inflight.join(', ')} — check Gate open orders/positions manually (the retired engine cannot reconcile them)`;
+        const msg = `Some old orders were open during the upgrade: ${inflight.join(', ')}. Check open orders and positions on Gate by hand.`;
         console.error(`⚠️  ${msg}`);
         store.alert('error', null, msg, Date.now(), { once: true });
       }

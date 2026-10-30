@@ -578,6 +578,9 @@ export interface OpportunityPair {
   borosImpactApr: number | null;
   /** Which leg rests as the maker order under `maker-hedge`; null otherwise. */
   makerLeg: 'short' | 'long' | null;
+  /** The notional per leg THIS pair was priced at. Under a capital target each
+   * pair solves its own, so every per-pair USD figure reads against this. */
+  notionalUsd: number;
   costs: OpportunityCostBreakdown;
   capital: OpportunityCapitalBreakdown;
   /** Σ of the four capital components; null when any one of them is. */
@@ -623,7 +626,9 @@ export interface OpportunitiesResult {
   groups: OpportunityGroup[];
   meta: {
     asOfSec: number;
-    notionalUsd: number;
+    /** Null under a capital target: every pair carries its own. */
+    notionalUsd: number | null;
+    capitalUsd?: number;
     borosEntry: BorosEntryMode;
     entryMode: EntryMode;
     exitMode: ExitMode;
@@ -730,6 +735,8 @@ export interface SymbolRule {
 /** GET /api/symbols/:symbol — the rule plus the max settable leverage. */
 export interface SymbolDetail extends SymbolRule {
   leverageMax: number;
+  /** The largest position CrossEx takes in this symbol, in USD; 0 = unknown. */
+  positionMaxUsd: number;
 }
 
 /** GET/PUT /api/leverage/:symbol. */
@@ -841,6 +848,7 @@ export interface Violation {
     | 'price-missing'
     | 'price-invalid'
     | 'leverage-exceeds-max'
+    | 'exceeds-max-position'
     | 'slippage-invalid'
     | 'ref-price-unavailable'
     | 'no-position'
@@ -1489,6 +1497,7 @@ export interface AssetPerpOpen {
    * younger), annualised on its current notional. Signed, + = received. Null
    * when unknown. Absent from older servers. */
   fundingApr7d?: number | null;
+  quoteTwin?: boolean;
 }
 
 /** Closed positions since the start date, aggregated per symbol. */
@@ -1617,6 +1626,12 @@ export interface AssetGroup {
   perpClosed: AssetPerpClosed[];
   borosOpen: AssetBorosOpen[];
   borosHistory: AssetBorosHistory[];
+}
+
+export interface AssetViewPrefs {
+  sinceByAsset: Record<string, number>;
+  exclusions: Record<string, number | { qty: number; at?: number } | 'all'>;
+  legSince: Record<string, number>;
 }
 
 export interface AssetViewResponse {

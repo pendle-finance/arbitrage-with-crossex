@@ -2,10 +2,10 @@ import type { Symbol as RuleSymbol } from 'gate-api';
 import type { FastifyInstance } from 'fastify';
 import { isSupportedCoin } from '../../core/coins';
 import { CoreError } from '../../core/errors';
-import { parseSymbol } from '../../core/numbers';
+import { isQuoteTwin, parseSymbol } from '../../core/numbers';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { leverageMaxFor } from './leverage';
+import { positionLimitFor } from './leverage';
 
 interface SymbolInfo {
   symbol: string;
@@ -50,23 +50,6 @@ function toInfo(rule: RuleSymbol): SymbolInfo {
   };
 }
 
-/**
- * USDC-margined twin contracts deliberately EXCLUDED from the terminal.
- * BINANCE / OKX / BYBIT list a USDC-quoted twin beside their primary USDT
- * contract — a separate book with its own independently-settled funding rate.
- * The Boros markets this terminal hedges reference the USDT contracts, and in
- * the tickets' venue pickers a twin reads as "the same venue, again" while
- * quietly being a different market. Dropped at the source list, so the
- * pickers, the venue chips, the multi-venue counts and the by-symbol detail
- * all agree. Hyperliquid is untouched: USDC is its ONLY quote, not a twin
- * (same for Deribit and Kraken's USD).
- */
-const EXCLUDED_QUOTE_TWINS: Record<string, string> = {
-  BINANCE: 'USDC',
-  OKX: 'USDC',
-  BYBIT: 'USDC',
-};
-
 /** Cached full rule list mapped to SymbolInfo, filtered to live FUTURE perps
  * (minus the excluded USDC twins). */
 async function livePerps(
@@ -82,7 +65,7 @@ async function livePerps(
   const list = value
     .filter((r) => r.businessType === 'FUTURE' && r.state === 'live' && Number(r.delistTime ?? '0') === 0)
     .map(toInfo)
-    .filter((s) => EXCLUDED_QUOTE_TWINS[s.exchange] !== s.quote)
+    .filter((s) => !isQuoteTwin(s.exchange, s.quote))
     .filter((s) => isSupportedCoin(s.base));
   return { list, stale };
 }
@@ -126,12 +109,12 @@ export function symbolsRoutes(deps: AppDeps) {
       const fresh = (req.query as { fresh?: string }).fresh === '1';
       const { list, stale } = await livePerps(deps, fresh);
       const info = list.find((s) => s.symbol === symbol);
-      if (!info) throw new CoreError(`symbol ${symbol} not found on CrossEx`, 'symbol-invalid');
-      const leverageMax = await leverageMaxFor(deps, symbol, fresh).catch((err: unknown) => {
-        if (err instanceof CoreError && err.category === 'leverage') return 0;
+      if (!info) throw new CoreError(`${symbol} is not on CrossEx`, 'symbol-invalid');
+      const limit = await positionLimitFor(deps, symbol, fresh).catch((err: unknown) => {
+        if (err instanceof CoreError && err.category === 'leverage') return null;
         throw err;
       });
-      return reply.ok({ ...info, leverageMax }, { stale });
+      return reply.ok({ ...info, leverageMax: limit?.leverage ?? 0, positionMaxUsd: limit?.maxUsd ?? 0 }, { stale });
     });
   };
 }

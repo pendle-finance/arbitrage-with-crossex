@@ -1,5 +1,6 @@
 import { Fragment, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export interface Column<T> {
   key: string;
@@ -34,6 +35,7 @@ export function DataTable<T>({
   emptyState,
   maxHeightClass = 'max-h-[65vh]',
 }: Props<T>) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   if (!rows.length && emptyState) return <>{emptyState}</>;
 
@@ -84,7 +86,7 @@ export function DataTable<T>({
                         {rowExpandable && (
                           <button
                             type="button"
-                            aria-label="toggle details"
+                            aria-label={t('app.toggleDetails')}
                             aria-expanded={isOpen}
                             onClick={() => toggle(k)}
                             className="rounded px-1 text-ink-400 transition-colors hover:text-ink-100"

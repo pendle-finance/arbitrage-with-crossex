@@ -4,6 +4,7 @@
  * tab without polling the whole asset view.
  */
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useAccount, useBorosMargin } from '../../api/queries';
 import { useTrackedAddress } from '../trackedAddress';
 import { buildAccountsView, type AccountsView } from './accountsModel';
@@ -16,6 +17,7 @@ export function openAccounts(): void {
 /** The view, plus whether the Boros side is still on its first load (its
  * feed is the slow one, so its rows arrive seconds after Gate's). */
 export function useAccountsView(): (AccountsView & { borosPending: boolean }) | null {
+  const { i18n } = useTranslation();
   const { address } = useTrackedAddress();
   const acc = useAccount().data;
   const boros = useBorosMargin(address);
@@ -25,5 +27,5 @@ export function useAccountsView(): (AccountsView & { borosPending: boolean }) | 
     if (!acc && !borosMargin) return null;
     const built = buildAccountsView({ acc, borosMargin: borosMargin ?? [] });
     return { ...built, borosPending };
-  }, [acc, borosMargin, borosPending]);
+  }, [acc, borosMargin, borosPending, i18n.language]);
 }

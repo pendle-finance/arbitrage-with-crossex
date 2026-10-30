@@ -180,7 +180,7 @@ describe('BorosPairTicket — close-only market', () => {
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(screen.getByText('close only')).toBeInTheDocument();
+    expect(screen.getByText('Close only')).toBeInTheDocument();
   });
 
   it('open refused: Confirm is disabled and names the market', async () => {

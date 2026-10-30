@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
 import { useCustomPlan, useRebalanceCommand, useStartRebalance, useTransfer, type CustomMove } from '../api/queries';
 import type { EvenPlan, GateAccount, Goal, GoalKind, Pool, RebalanceBucket, RebalanceJob } from '../api/types';
@@ -10,6 +11,7 @@ import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
+import { t } from '../i18n';
 import { amountError } from '../lib/amount';
 import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
@@ -17,37 +19,30 @@ import { useDebounced } from '../lib/useDebounced';
 import { useNow } from '../lib/useNow';
 import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList, VerdictAlert } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
-import { AFTER_LABEL, GATE_SPOT, GOAL_LABEL, HOLD_ANYWAY_LABEL, HOLD_LABEL, HOVER, MODAL_ABANDON, OPTIONAL_MOVE } from './rebalanceCopy';
-import { MODAL_FEE_LABEL, MODAL_FREES, MODAL_INTEREST, MODAL_REFRESH_ROUTE, MODAL_RESUME, MODAL_STEPS, PER_MONTH } from './rebalanceCopy';
+import { AFTER_LABEL, gateSpot, GOAL_LABEL, HOLD_ANYWAY_LABEL, HOLD_LABEL, HOVER, modalAbandon, OPTIONAL_MOVE } from './rebalanceCopy';
+import { modalFeeLabel, modalFrees, modalInterest, modalRefreshRoute, modalResume, modalSteps, PER_MONTH } from './rebalanceCopy';
 import {
   CARD_LABEL,
-  MOVE,
-  MOVE_FROM,
-  MOVE_TO,
-  NOTHING_TO_MOVE,
+  moveFromText,
+  moveText,
+  moveToText,
+  nothingToMove,
   poolKey,
   PRESET_OFF,
-  SHORT_OF_CASH,
-  USE_PRESET,
-  VERDICT_BALANCED,
-  VERDICT_NO_CASH_TO_MOVE,
+  shortOfCash,
+  usePresetText,
+  verdictBalanced,
+  verdictNoCashToMove,
 } from './rebalanceCopy';
-import { RATE_UNKNOWN, WAITS_FOR_DEAL, WAITS_FOR_TRANSFER, WALLET_LABEL } from './rebalanceCopy';
+import { rateUnknown, waitsForDeal, waitsForTransfer, WALLET_LABEL } from './rebalanceCopy';
 import { barRowsOf, Facts, hasUnknownRate, isCashLimitedEven, keyOf, MONTH_DAYS, movesKey, movesOf, pickedRoute, stopsPerDayOf, worthLine } from './RebalanceHovers';
 import { defaultGoal, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
 import { ROUTE_LABEL, roundCountOf, roundOf, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import type { Fact } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
 import { ChevronDown, ChevronRight } from 'lucide-react';
+import { localizeServerText } from '../i18n/serverMessages';
 
-const TITLE = 'Rebalance';
-const FOR_LABEL = 'For';
-const AMOUNT_LABEL = 'Amount';
-const FROM_LABEL = 'From';
-const TO_LABEL = 'To';
-const PRESET_LABEL = 'Preset';
-const TYPE_AN_AMOUNT = 'Type an amount to move.';
-const PRICING = 'Pricing the move.';
 const POOLS: readonly Pool[] = ['CROSSEX', 'HYPERLIQUID', 'LIGHTER'];
 const CUSTOM_DEBOUNCE_MS = 300;
 
@@ -72,14 +67,14 @@ function initialGoal(view: RebalanceView): GoalKind {
  * wallet is short of cash; with positions the cash is their margin — the
  * card's wording, so the dialog never names a different cause. */
 const cashLimitedText = (plan: EvenPlan): string =>
-  plan.noLegs ? `${fmtUsd(plan.shortOfEven)} ${SHORT_OF_CASH}` : VERDICT_NO_CASH_TO_MOVE;
+  plan.noLegs ? `${fmtUsd(plan.shortOfEven)} ${shortOfCash()}` : verdictNoCashToMove();
 
 /** Why a preset is off, for its hover. */
 function presetOffText(preset: Preset, plan: EvenPlan): string | undefined {
   if (!plan.balanced) return undefined;
   if (preset === 'even' && plan.noLegs) return PRESET_OFF.even;
   if (isCashLimitedEven(plan)) return cashLimitedText(plan);
-  return preset === 'even' ? VERDICT_BALANCED : PRESET_OFF.repay;
+  return preset === 'even' ? verdictBalanced() : PRESET_OFF.repay;
 }
 
 const parsedAmount = (text: string): number | null => {
@@ -87,19 +82,7 @@ const parsedAmount = (text: string): number | null => {
   if (trimmed === '' || amountError(trimmed) !== null) return null;
   return floorCents(Number(trimmed));
 };
-const HIDE_STEPS = 'Hide steps';
-const NOW_CAPTION = 'Now';
-const WHERE_CAPTION = 'Where your money is';
-const ON_THE_WAY = 'On the way';
-const WAITS_LINE = 'New deals and transfers wait until it ends.';
-const KEEPS_GOING = 'You can close this. The run keeps going.';
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
-const FINISHED_LEAD = 'Done. This is what each wallet holds now.';
-const NOT_MARGIN_UNTIL_LANDS = 'It is not margin until it lands.';
-const NO_SPOT_READ = 'This key cannot read Gate spot.';
-const PASSED = 'passed';
-/** Not "Done": that is the finished chip's word, and the button is the way out. */
-const CLOSE = 'Close';
 
 /** The shape of the quote the trader accepted: its goal, recommendation,
  * route and moves. The fee is held beside it, not in it. */
@@ -171,13 +154,13 @@ function landedOf(job: RebalanceJob): number {
 function abandonNote(job: RebalanceJob, transfer: TransferView | undefined): string {
   const transit = job.inTransit;
   if (!transit) return HOVER.abandon;
-  if (transit.at !== 'SPOT') return `${MODAL_ABANDON} leaves ${num(transit.qty)} ${transit.coin} in transit. ${NOT_MARGIN_UNTIL_LANDS}`;
-  const inSpot = `${MODAL_ABANDON} leaves the ${num(transit.qty)} ${transit.coin} in ${GATE_SPOT}.`;
-  return transfer?.spot === null ? `${inSpot} ${NO_SPOT_READ}` : inSpot;
+  const values = { qty: num(transit.qty), coin: transit.coin };
+  if (transit.at !== 'SPOT') return t('accounts.rebalanceModal.abandonTransit', values);
+  return t(transfer?.spot === null ? 'accounts.rebalanceModal.abandonSpotNoRead' : 'accounts.rebalanceModal.abandonSpot', values);
 }
 
 function interestValue(route: RoutePlan, buckets: RebalanceBucket[]): string {
-  if (hasUnknownRate(buckets)) return RATE_UNKNOWN;
+  if (hasUnknownRate(buckets)) return rateUnknown();
   const perDay = buckets.reduce((sum, b) => sum + b.interestPerDayUsd, 0);
   const after = Math.max(0, perDay - stopsPerDayOf(route, buckets));
   return PER_MONTH(fmtUsd(perDay * MONTH_DAYS), fmtUsd(after * MONTH_DAYS));
@@ -194,23 +177,24 @@ function quoteFactsOf(route: RoutePlan, view: RebalanceView): Fact[] {
   return [
     {
       key: 'interest',
-      label: <Term label={MODAL_INTEREST} text={HOVER.interestMonth} />,
+      label: <Term label={modalInterest()} text={HOVER.interestMonth} />,
       value: interestValue(route, view.buckets),
     },
-    { key: 'fee', label: MODAL_FEE_LABEL, value: fmtUsd(route.costUsd) },
+    { key: 'fee', label: modalFeeLabel(), value: fmtUsd(route.costUsd) },
     {
       key: 'frees',
-      label: <Term label={MODAL_FREES} text={HOVER.frees} />,
+      label: <Term label={modalFrees()} text={HOVER.frees} />,
       value: fmtUsd(route.marginFreedUsd),
     },
   ];
 }
 
 function StepsFold({ open, onToggle, hover, rows }: { open: boolean; onToggle: () => void; hover: string | null; rows: StepRow[] }) {
+  const { t } = useTranslation();
   const toggle = (
     <button type="button" className="btn-link inline-flex items-center gap-1" aria-expanded={open} onClick={onToggle}>
       {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
-      {open ? HIDE_STEPS : MODAL_STEPS}
+      {open ? t('accounts.rebalanceModal.hideSteps') : modalSteps()}
     </button>
   );
   return (
@@ -232,6 +216,7 @@ export function RebalanceModal({
   holdMs?: number;
   onTransfer?: (coin: TransferCoin, wallet: GateAccount) => void;
 }) {
+  const { t } = useTranslation();
   const transfer = useTransfer().data;
   const start = useStartRebalance();
   const resume = useRebalanceCommand('resume');
@@ -352,8 +337,8 @@ export function RebalanceModal({
   const pricing = goal === 'custom' && !customPending && (acceptNext || !quotes(plan, typedMove));
   const stale = !pricing && isStale(accepted, plan, chosen);
   let lock: string | null = null;
-  if (transfer?.lock === 'deal') lock = WAITS_FOR_DEAL;
-  if (transfer?.transfer?.status === 'moving') lock = WAITS_FOR_TRANSFER;
+  if (transfer?.lock === 'deal') lock = waitsForDeal();
+  if (transfer?.transfer?.status === 'moving') lock = waitsForTransfer();
   const nowRows = barRowsOf(buckets, keys, target);
   const afterRows = barRowsOf(route.after, keys, target);
   // A custom move gets the verdict too, when it is one that clears a borrow:
@@ -393,34 +378,36 @@ export function RebalanceModal({
   if (running || halted) {
     const moving = running || job.inTransit?.at === 'MOVING';
     const rows = job.inTransit
-      ? [...nowRows, spotRow(moving ? ON_THE_WAY : GATE_SPOT, moving ? HOVER.onTheWay : HOVER.gateSpot, job.inTransit.qty)]
+      ? [...nowRows, spotRow(moving ? t('accounts.rebalanceModal.onTheWay') : gateSpot(), moving ? HOVER.onTheWay : HOVER.gateSpot, job.inTransit.qty)]
       : nowRows;
     const rounds = roundCountOf(job);
     const round = roundOf(job);
     const total = jobSeconds(job);
     const elapsed = Math.max(0, (running ? now : job.updatedAt) - job.createdAt);
     if (running) {
-      chip = <Chip tone="info">Running</Chip>;
+      chip = <Chip tone="info">{t('common.running')}</Chip>;
       const left = Math.max(0, total - elapsed / 1000);
       body = (
         <>
-          <p className="text-xs text-ink-400">{`Started ${fmtAge(elapsed)} ago. ${KEEPS_GOING}`}</p>
+          <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.started', { age: fmtAge(elapsed) })}</p>
           <Facts
             items={[
-              { key: 'goal', label: FOR_LABEL, value: CARD_LABEL[job.goal] },
-              { key: 'route', label: 'Route', value: ROUTE_LABEL[job.route] },
-              ...(round === null ? [] : [{ key: 'round', label: 'Round', value: `${num(round, 0)} of ${num(rounds, 0)}` }]),
+              { key: 'goal', label: t('accounts.rebalanceModal.for'), value: CARD_LABEL[job.goal] },
+              { key: 'route', label: t('accounts.rebalanceModal.route'), value: ROUTE_LABEL[job.route] },
+              ...(round === null
+                ? []
+                : [{ key: 'round', label: t('accounts.rebalanceModal.round'), value: t('accounts.rebalanceModal.roundOf', { round: num(round, 0), rounds: num(rounds, 0) }) }]),
               {
                 key: 'time',
-                label: total > 0 ? 'Time left' : 'Time',
+                label: total > 0 ? t('accounts.rebalanceModal.timeLeft') : t('accounts.rebalanceModal.time'),
                 value: total > 0 ? fmtAbout(left) : fmtAge(elapsed),
-                sub: total > 0 ? [`${fmtAge(elapsed)} ${PASSED}`] : [],
+                sub: total > 0 ? [t('accounts.rebalanceModal.passed', { age: fmtAge(elapsed) })] : [],
               },
             ]}
           />
           <ProgressBar ratio={total > 0 ? elapsed / 1000 / total : 0} tone="running" />
-          <BalanceBars caption={<Term label={NOW_CAPTION} text={HOVER.now} />} rows={rows} scale={scaleOf(rows)} />
-          <p className="text-xs text-ink-400">{WAITS_LINE}</p>
+          <BalanceBars caption={<Term label={t('accounts.rebalanceModal.now')} text={HOVER.now} />} rows={rows} scale={scaleOf(rows)} />
+          <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.waitsLine')}</p>
           <StepsFold
             open={stepsOpen}
             onToggle={() => setStepsOpen(!stepsOpen)}
@@ -430,17 +417,19 @@ export function RebalanceModal({
         </>
       );
     } else {
-      chip = <Chip tone="red">Stopped</Chip>;
+      chip = <Chip tone="red">{t('common.stopped')}</Chip>;
       const busy = resume.isPending || abandon.isPending;
       body = (
         <>
           <div role="alert" className="alert-red">
             <p className="num text-xs font-semibold text-guava">
-              {round === null ? 'Stopped at Convert.' : `Stopped in round ${num(round, 0)} of ${num(rounds, 0)}.`}
+              {round === null
+                ? t('accounts.rebalanceModal.stoppedAtConvert')
+                : t('accounts.rebalanceModal.stoppedInRound', { round: num(round, 0), rounds: num(rounds, 0) })}
             </p>
-            {job.haltReason && <p className="text-xs text-ink-300">{job.haltReason}</p>}
+            {job.haltReason && <p className="text-xs text-ink-300">{localizeServerText(job.haltReason)}</p>}
           </div>
-          <BalanceBars caption={WHERE_CAPTION} rows={rows} scale={scaleOf(rows)} />
+          <BalanceBars caption={t('accounts.rebalanceModal.whereCaption')} rows={rows} scale={scaleOf(rows)} />
           {transfer?.spot === null && <NoSpotReadLine />}
           <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
           <div className="flex flex-wrap items-center gap-3 border-t border-ink-800 pt-3">
@@ -450,10 +439,10 @@ export function RebalanceModal({
               disabled={busy}
               onClick={() => resume.mutate(job.id, { onError })}
             >
-              {resume.isPending ? 'Resuming' : MODAL_RESUME}
+              {resume.isPending ? t('accounts.rebalanceModal.resuming') : modalResume()}
             </button>
             <button type="button" className="btn" disabled={busy} onClick={() => abandon.mutate(job.id, { onError })}>
-              {MODAL_ABANDON}
+              {modalAbandon()}
             </button>
             <span className="num text-xs text-ink-400">{abandonNote(job, transfer)}</span>
           </div>
@@ -465,21 +454,21 @@ export function RebalanceModal({
     const short = landed < job.amount - (job.costUsd ?? 0) - Math.max(SHORT_FLOOR_USD, SHORT_SHARE * job.amount);
     // "Balanced" is the even goal's promise; a repaid borrow or a custom move
     // is simply done.
-    chip = short || job.goal !== 'even' ? <Chip>Done</Chip> : <Chip tone="green">Balanced</Chip>;
+    chip = short || job.goal !== 'even' ? <Chip>{t('common.done')}</Chip> : <Chip tone="green">{t('accounts.rebalanceModal.balanced')}</Chip>;
     const took = (job.steps.at(-1)?.doneAt ?? job.updatedAt) - job.createdAt;
     body = (
       <>
-        <p className="text-xs text-ink-400">{FINISHED_LEAD}</p>
+        <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.finishedLead')}</p>
         <Facts
           items={[
-            { key: 'goal', label: FOR_LABEL, value: CARD_LABEL[job.goal] },
-            { key: 'route', label: 'Route', value: ROUTE_LABEL[job.route] },
-            { key: 'moved', label: 'Moved', value: fmtUsd(landed) },
-            { key: 'took', label: 'Took', value: fmtAge(took) },
-            ...(job.costUsd === null ? [] : [{ key: 'cost', label: 'Cost', value: fmtUsd(job.costUsd) }]),
+            { key: 'goal', label: t('accounts.rebalanceModal.for'), value: CARD_LABEL[job.goal] },
+            { key: 'route', label: t('accounts.rebalanceModal.route'), value: ROUTE_LABEL[job.route] },
+            { key: 'moved', label: t('accounts.rebalanceModal.moved'), value: fmtUsd(landed) },
+            { key: 'took', label: t('accounts.rebalanceModal.took'), value: fmtAge(took) },
+            ...(job.costUsd === null ? [] : [{ key: 'cost', label: t('accounts.rebalanceModal.cost'), value: fmtUsd(job.costUsd) }]),
           ]}
         />
-        <BalanceBars caption={<Term label={NOW_CAPTION} text={HOVER.now} />} rows={nowRows} scale={scale} />
+        <BalanceBars caption={<Term label={t('accounts.rebalanceModal.now')} text={HOVER.now} />} rows={nowRows} scale={scale} />
         <StepsFold
           open={stepsOpen}
           onToggle={() => setStepsOpen(!stepsOpen)}
@@ -489,7 +478,7 @@ export function RebalanceModal({
         {/* The run finished under the dialog; one button puts it away (his ask 2026-09-19). */}
         <div className="border-t border-ink-800 pt-3">
           <button type="button" className="btn btn-primary" onClick={onClose}>
-            {CLOSE}
+            {t('common.close')}
           </button>
         </div>
       </>
@@ -510,7 +499,7 @@ export function RebalanceModal({
             wrapsControl
             label={
               <SegmentedToggle<PresetPick>
-                ariaLabel={PRESET_LABEL}
+                ariaLabel={t('accounts.rebalanceModal.preset')}
                 value={goal === 'custom' ? 'none' : goal}
                 options={presetOptions}
                 onChange={pickPreset}
@@ -519,25 +508,25 @@ export function RebalanceModal({
             text={HOVER.presets}
           />
           <button type="button" className="btn-link" onClick={goal === 'custom' ? leaveCustom : enterCustom}>
-            {goal === 'custom' ? USE_PRESET : GOAL_LABEL.custom}
+            {goal === 'custom' ? usePresetText() : GOAL_LABEL.custom}
           </button>
         </div>
         {goal === 'custom' && (
           <div className="num flex flex-wrap items-center gap-2 text-sm text-ink-300">
-            <span className="text-ink-400">{MOVE}</span>
+            <span className="text-ink-400">{moveText()}</span>
             <input
-              aria-label={AMOUNT_LABEL}
+              aria-label={t('accounts.rebalanceModal.amount')}
               className="input num h-[30px] w-28 !py-0 text-xs"
               inputMode="decimal"
               value={customText}
               onChange={(e) => editCustom(() => setCustomText(e.target.value))}
             />
-            <span className="text-ink-400">{MOVE_FROM}</span>
-            <select aria-label={FROM_LABEL} className="input num h-[30px] !w-44 !py-0 text-xs" value={customFrom} onChange={(e) => editCustom(() => setCustomFrom(e.target.value as Pool))}>
+            <span className="text-ink-400">{moveFromText()}</span>
+            <select aria-label={t('accounts.rebalanceModal.from')} className="input num h-[30px] !w-44 !py-0 text-xs" value={customFrom} onChange={(e) => editCustom(() => setCustomFrom(e.target.value as Pool))}>
               {poolOptions}
             </select>
-            <span className="text-ink-400">{MOVE_TO}</span>
-            <select aria-label={TO_LABEL} className="input num h-[30px] !w-44 !py-0 text-xs" value={customTo} onChange={(e) => editCustom(() => setCustomTo(e.target.value as Pool))}>
+            <span className="text-ink-400">{moveToText()}</span>
+            <select aria-label={t('accounts.rebalanceModal.to')} className="input num h-[30px] !w-44 !py-0 text-xs" value={customTo} onChange={(e) => editCustom(() => setCustomTo(e.target.value as Pool))}>
               {poolOptions}
             </select>
           </div>
@@ -545,7 +534,12 @@ export function RebalanceModal({
       </div>
     );
     if (customPending) {
-      const hint = customMove === null ? TYPE_AN_AMOUNT : customQuery.isError ? customQuery.error.message : PRICING;
+      const hint =
+        customMove === null
+          ? t('accounts.rebalanceModal.typeAmount')
+          : customQuery.isError
+            ? customQuery.error.message
+            : t('accounts.rebalanceModal.pricing');
       body = (
         <>
           {header}
@@ -556,7 +550,7 @@ export function RebalanceModal({
       body = (
         <>
           {header}
-          <p className="text-xs text-ink-400">{isCashLimitedEven(plan) ? cashLimitedText(plan) : NOTHING_TO_MOVE}</p>
+          <p className="text-xs text-ink-400">{isCashLimitedEven(plan) ? cashLimitedText(plan) : nothingToMove()}</p>
         </>
       );
     } else body = (
@@ -570,11 +564,11 @@ export function RebalanceModal({
         {worth && <VerdictAlert tone={worth.tone} text={worth.text} sub={worthSub} />}
         <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
           <div className={microLabelClass}>
-            <Term label="Route" text={HOVER.route} />
+            <Term label={t('accounts.rebalanceModal.route')} text={HOVER.route} />
           </div>
           {/* Every route, always, recommended first (his call 2026-09-19):
               the time and fee side by side are the choice. */}
-          <div role="radiogroup" aria-label="Route" className="flex flex-col gap-1.5">
+          <div role="radiogroup" aria-label={t('accounts.rebalanceModal.route')} className="flex flex-col gap-1.5">
             {routeOrder(plan).map((name) => (
               <RouteRow key={name} route={name} plan={plan} checked={chosen === name} onPick={() => choose(name)} />
             ))}
@@ -604,7 +598,7 @@ export function RebalanceModal({
                 plus a dead control (his call 2026-09-18). */}
             {stale ? (
               <button type="button" className="btn btn-primary num" onClick={() => setAccepted(acceptedOf(plan, chosen))}>
-                {MODAL_REFRESH_ROUTE}
+                {modalRefreshRoute()}
               </button>
             ) : (
               <HoldToConfirmButton
@@ -625,7 +619,7 @@ export function RebalanceModal({
               </HoldToConfirmButton>
             )}
             {lock !== null && <span className="text-xs text-ink-500">{lock}</span>}
-            {lock === null && pricing && <span className="text-xs text-ink-500">{PRICING}</span>}
+            {lock === null && pricing && <span className="text-xs text-ink-500">{t('accounts.rebalanceModal.pricing')}</span>}
           </div>
         </div>
         <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
@@ -639,7 +633,7 @@ export function RebalanceModal({
       onClose={onClose}
       title={
         <span className="flex items-center gap-2">
-          {TITLE}
+          {t('accounts.rebalanceModal.title')}
           {chip}
         </span>
       }

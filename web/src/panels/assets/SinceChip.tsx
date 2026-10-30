@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { HoverCard } from '../../components/HoverCard';
 import { fmtDateLocal, fmtDateShort, parseDateLocal } from '../../lib/fmt';
 import { Calendar, ChevronDown } from 'lucide-react';
@@ -22,12 +23,13 @@ export function SinceChip({
   defaultSec: number | null;
   onChange: (sec: number | undefined) => void;
 }) {
+  const { t } = useTranslation();
   const input = useRef<HTMLInputElement>(null);
   const differsFromDefault = storedSec !== undefined && storedSec !== defaultSec;
   const effectiveSec = storedSec ?? defaultSec;
   const shownSec = effectiveSec === null || effectiveSec === ALL_TIME_SEC ? null : effectiveSec;
   const isAllTime = shownSec === null;
-  const sinceLabel = shownSec === null ? 'All time' : `Since ${fmtDateShort(shownSec, { year: 'numeric' })}`;
+  const sinceLabel = shownSec === null ? t('assets.since.allTime') : t('assets.since.since', { date: fmtDateShort(shownSec, { year: 'numeric' }) });
   const defaultLabel = defaultSec !== null ? fmtDateShort(defaultSec, { year: 'numeric' }) : null;
   const today = fmtDateLocal(Math.floor(Date.now() / 1000));
   const offersAllTime = !isAllTime;
@@ -60,7 +62,7 @@ export function SinceChip({
         <input
           ref={input}
           type="date"
-          aria-label={`Count ${base} PnL from`}
+          aria-label={t('assets.since.inputLabel', { base })}
           tabIndex={-1}
           className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
           value={shownSec === null ? '' : fmtDateLocal(shownSec)}
@@ -85,7 +87,7 @@ export function SinceChip({
           label={
             <button
               type="button"
-              aria-label="Date options"
+              aria-label={t('assets.since.options')}
               aria-haspopup="dialog"
               className={`btn !h-[30px] !rounded-l-none !border-l-0 !px-1.5 ${tone}`}
             >
@@ -96,12 +98,12 @@ export function SinceChip({
           <div className="flex flex-col items-start gap-2 text-xs">
             {offersAllTime && (
               <button type="button" data-close-card className="btn-link whitespace-nowrap" onClick={() => onChange(ALL_TIME_SEC)}>
-                All time
+                {t('assets.since.allTime')}
               </button>
             )}
             {offersDefault && (
               <button type="button" data-close-card className="btn-link whitespace-nowrap" onClick={() => onChange(undefined)}>
-                {`Use default (first position, ${defaultLabel})`}
+                {t('assets.since.useDefault', { date: defaultLabel ?? '' })}
               </button>
             )}
           </div>

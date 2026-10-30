@@ -508,7 +508,7 @@ describe('ExecuteControl', () => {
 
       const btn = await screen.findByRole('button', { name: 'Close now' });
       await waitFor(() => expect(btn).toBeEnabled());
-      expect(screen.queryByText(/exceeds available/)).toBeNull();
+      expect(screen.queryByText(/is free/)).toBeNull();
       fireEvent.pointerDown(btn);
       await waitFor(() => expect(calls).toHaveLength(1));
       expect(calls[0]).toMatchObject({ a: { reduceOnly: true }, execution: 'taker' });
@@ -540,7 +540,7 @@ describe('ExecuteControl', () => {
       server.use(...underwater(BOOK));
       renderWithClient(<ExecuteControl scope="mo" actions={UNWIND} label="Execute pair" holdMs={50} />);
       await waitFor(() => expect(screen.getByRole('button', { name: 'Execute pair' })).toBeEnabled());
-      expect(screen.queryByText(/exceeds available/)).toBeNull();
+      expect(screen.queryByText(/is free/)).toBeNull();
     });
 
     it('does not block while positions are still loading', async () => {
@@ -549,7 +549,7 @@ describe('ExecuteControl', () => {
       server.use(...underwater(null));
       renderWithClient(<ExecuteControl scope="ml" actions={UNWIND} label="Execute pair" holdMs={50} />);
       await waitFor(() => expect(screen.getByRole('button', { name: 'Execute pair' })).toBeEnabled());
-      expect(screen.queryByText(/exceeds available/)).toBeNull();
+      expect(screen.queryByText(/is free/)).toBeNull();
     });
 
     it('does NOT net in dual-side (hedge) mode — the same unwind stays blocked', async () => {
@@ -557,7 +557,7 @@ describe('ExecuteControl', () => {
       server.use(...underwater(BOOK, 'DUAL_SIDE'));
       renderWithClient(<ExecuteControl scope="mh" actions={UNWIND} label="Execute pair" holdMs={50} />);
       await waitFor(() => expect(screen.getByRole('button', { name: 'Execute pair' })).toBeDisabled());
-      expect(await screen.findByRole('alert')).toHaveTextContent(/exceeds available/);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/is free/);
     });
 
     it('still blocks an ALIGNED open that adds to an existing position', async () => {
@@ -565,7 +565,7 @@ describe('ExecuteControl', () => {
       server.use(...underwater(BOOK));
       renderWithClient(<ExecuteControl scope="mp" actions={add} label="Add" holdMs={50} />);
       await waitFor(() => expect(screen.getByRole('button', { name: 'Add' })).toBeDisabled());
-      expect(await screen.findByRole('alert')).toHaveTextContent(/exceeds available/);
+      expect(await screen.findByRole('alert')).toHaveTextContent(/is free/);
     });
 
     it('does not block a low-confidence estimate (no known leverage) — display only', async () => {
@@ -618,7 +618,7 @@ describe('a single resting limit order is a plain order', () => {
 
     // ...and the answer is a confirmation, not a deal modal.
     expect(await screen.findByText(/Limit order placed/)).toBeInTheDocument();
-    expect(screen.getByText(/BUY 0.05 ETH @ 2400/)).toBeInTheDocument(); // a receipt, not just "ok"
+    expect(screen.getByText(/Buy 0.05 ETH @ 2400/)).toBeInTheDocument(); // a receipt, not just "ok"
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 

@@ -265,7 +265,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     blockers.push({ code: 'maturity-not-later', message: 'The new maturity must be later than the one being left.' });
   }
   if (new Set([...exit.legs, ...entry.legs].map((l) => l.market.tokenId)).size !== 1) {
-    blockers.push({ code: 'collateral-mismatch', message: 'Every leg must post the same collateral.' });
+    blockers.push({ code: 'collateral-mismatch', message: 'Every position must post the same collateral.' });
   }
 
   const oldLegs = exit.simulation.legs.map((sim, i) => ({ sim, market: exit.legs[i].market }));
@@ -285,7 +285,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
         blockers.push({
           code: 'sides-mismatch',
           leg: index,
-          message: `${nextMarket.name}: the new leg must be ${held}, the side ${oldMarket.name} holds.`,
+          message: `${nextMarket.name}: the new position must be ${held}, the side ${oldMarket.name} holds.`,
         });
       }
       if (!same(Math.abs(old.sizing.deltaSize), Math.abs(next.sizing.deltaSize))) {
@@ -560,7 +560,7 @@ export async function submitBorosRoll(
       shortfallSize: size,
       execApr: null,
       feeSize: null,
-      failure: { code: 'unknown', message: `${message} — the roll may or may not have gone through. Check the position on Boros before re-issuing.` },
+      failure: { code: 'unknown', message: `${message} — the roll may or may not have gone through. Check the position on Boros before you send again.` },
     });
     fills = [...plan.closes, ...plan.opens].map((o) => lost(o.marketId, o.direction, o.size));
   }
@@ -590,7 +590,7 @@ export function readRollFills(fills: BorosLegFill[], keys: RollLegKey[]): BorosR
     return {
       status: 'unknown',
       legs,
-      reason: { code: 'unknown', message: 'The venue reported a fill FOK legs cannot produce. Check the position on Boros before re-issuing.', leg: null },
+      reason: { code: 'unknown', message: 'Boros reported a fill that should not happen. Check the position on Boros before you send again.', leg: null },
       rolledSize: 0,
     };
   }

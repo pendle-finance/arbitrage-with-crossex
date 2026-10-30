@@ -1,5 +1,6 @@
 import { X } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { claimEscape, useFocusTrap } from '../lib/focusTrap';
 
 interface Props {
@@ -26,6 +27,7 @@ export function Drawer({
   children,
   widthClass = 'w-[420px]',
 }: Props) {
+  const { t } = useTranslation();
   const panel = useRef<HTMLDivElement>(null);
   useFocusTrap(panel, open);
   // The page behind an open overlay must not scroll: a wheel over the
@@ -65,7 +67,7 @@ export function Drawer({
             <button
               type="button"
               onClick={onClose}
-              aria-label="close"
+              aria-label={t('app.closeAria')}
               className="rounded-md px-2 py-0.5 text-ink-400 transition-colors hover:bg-ink-800 hover:text-ink-100"
             >
               <X size={14} aria-hidden />

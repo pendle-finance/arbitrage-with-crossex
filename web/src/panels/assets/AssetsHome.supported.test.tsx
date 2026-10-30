@@ -80,6 +80,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
       ...baseHandlers(),
       http.get('/api/credentials', () => HttpResponse.json(env({ configured: true, keyMasked: 'gk_****abcd' }))),
       http.get('/api/fees', () => HttpResponse.json(env<VenueFees[]>([]))),
+      http.get('/api/asset-prefs/:book', () => HttpResponse.json(env({ sinceByAsset: {}, exclusions: {}, legSince: {} }))),
       http.get('/api/asset-view/:address', ({ request }) => {
         requested.push(new URL(request.url));
         return HttpResponse.json(env(assetView));
@@ -90,7 +91,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
   it('adds the SOL leg PnL to the totals strip, held coin counts in totals', async () => {
     renderWithClient(<AssetsHome />);
     await screen.findByText('SOL');
-    const strip = screen.getAllByText('Total Account PnL')[0].nextElementSibling!;
+    const strip = screen.getAllByText('Total account PnL')[0].nextElementSibling!;
     expect(strip).toHaveTextContent('$17.20');
   });
 
@@ -99,7 +100,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
     server.use(http.get('/api/asset-view/:address', () => HttpResponse.json(env({ ...assetView, assets: [whale] }))));
     renderWithClient(<AssetsHome />);
     await screen.findByText('SOL');
-    const strip = screen.getAllByText('Total Account PnL')[0].nextElementSibling!;
+    const strip = screen.getAllByText('Total account PnL')[0].nextElementSibling!;
     expect(strip).toHaveTextContent('$6,000,000.37');
   });
 
@@ -113,7 +114,7 @@ describe('AssetsHome with a held coin the terminal does not support', () => {
   it('shows every coin as a card with no dust line, no dust fold', async () => {
     renderWithClient(<AssetsHome />);
     await screen.findByText('ETH');
-    await userEvent.click(screen.getByRole('checkbox', { name: /Hide inactive pairs/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Hide assets with no position/ }));
     await screen.findByText('BTC');
     expect(screen.queryByText(/dust asset/)).toBeNull();
   });

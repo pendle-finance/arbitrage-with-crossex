@@ -11,6 +11,7 @@
  * Nothing in this module signs an order, and nothing stores a key. It connects,
  * checks the chain, and hands back a viem WalletClient.
  */
+import { t } from '../i18n';
 import { createWalletClient, custom, type Address, type WalletClient } from 'viem';
 import { arbitrum } from 'viem/chains';
 
@@ -106,7 +107,7 @@ export async function requestWalletAccount(): Promise<Address> {
   if (!provider) {
     throw new WalletError(
       'no-wallet',
-      'No browser wallet found. Install MetaMask (or another injected wallet) and reload.',
+      t('app.walletError.noWallet'),
     );
   }
 
@@ -115,12 +116,12 @@ export async function requestWalletAccount(): Promise<Address> {
     accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[];
   } catch (err) {
     if (isUserRejection(err)) {
-      throw new WalletError('rejected', 'Wallet connection was rejected.');
+      throw new WalletError('rejected', t('app.walletError.rejected'));
     }
-    throw new WalletError('failed', (err as Error)?.message ?? 'Could not connect the wallet.');
+    throw new WalletError('failed', (err as Error)?.message ?? t('app.walletError.connectFailed'));
   }
   const address = accounts?.[0] as Address | undefined;
-  if (!address) throw new WalletError('failed', 'The wallet returned no account.');
+  if (!address) throw new WalletError('failed', t('app.walletError.noAccount'));
   return address;
 }
 
@@ -150,11 +151,11 @@ async function switchToBorosChain(provider: Eip1193Provider): Promise<void> {
   } catch (err) {
     const code = (err as { code?: number }).code;
     if (isUserRejection(err)) {
-      throw new WalletError('wrong-chain', `Boros is on ${BOROS_CHAIN.name} — the network switch was rejected.`);
+      throw new WalletError('wrong-chain', t('app.walletError.switchRejected', { chain: BOROS_CHAIN.name }));
     }
     // 4902: the wallet does not know this chain yet.
     if (code !== 4902) {
-      throw new WalletError('wrong-chain', `Switch your wallet to ${BOROS_CHAIN.name} and try again.`);
+      throw new WalletError('wrong-chain', t('app.walletError.switchManually', { chain: BOROS_CHAIN.name }));
     }
   }
 
@@ -173,15 +174,15 @@ async function switchToBorosChain(provider: Eip1193Provider): Promise<void> {
     });
   } catch (err) {
     if (isUserRejection(err)) {
-      throw new WalletError('wrong-chain', `Adding ${BOROS_CHAIN.name} was rejected.`);
+      throw new WalletError('wrong-chain', t('app.walletError.addRejected', { chain: BOROS_CHAIN.name }));
     }
-    throw new WalletError('wrong-chain', `Could not switch to ${BOROS_CHAIN.name}.`);
+    throw new WalletError('wrong-chain', t('app.walletError.switchFailed', { chain: BOROS_CHAIN.name }));
   }
 }
 
 /** Turn any wallet/SDK throw into a sentence worth showing. */
 export function describeWalletError(err: unknown): string {
   if (err instanceof WalletError) return err.message;
-  if (isUserRejection(err)) return 'You rejected the request in your wallet.';
-  return (err as Error)?.message ?? 'The wallet request failed.';
+  if (isUserRejection(err)) return t('app.walletError.userRejected');
+  return (err as Error)?.message ?? t('app.walletError.requestFailed');
 }

@@ -38,7 +38,7 @@ describe('API token gate', () => {
     const res = await app.inject({ method: 'GET', url: '/api/credentials', headers: bareHost });
     expect(res.statusCode).toBe(401);
     expect(res.json().error).toMatchObject({ category: 'auth', retryable: false });
-    expect(res.json().error.message).toMatch(/API token/);
+    expect(res.json().error.message).toMatch(/page is out of date/);
   });
 
   it('refuses a wrong token — including one of a different length', async () => {

@@ -13,6 +13,7 @@
  */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { fetchJson } from '../api/client';
 import { qk, useSymbolsByBase } from '../api/queries';
 import type { SymbolRule } from '../api/types';
@@ -115,9 +116,10 @@ function CoinChips({
   /** Clear the pick and show the search box. Omitted = nothing picked yet. */
   onOther?: () => void;
 }) {
+  const { t } = useTranslation();
   const coins = active && !QUICK_PICK_COINS.includes(active) ? [...QUICK_PICK_COINS, active] : QUICK_PICK_COINS;
   return (
-    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Quick pick coin">
+    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('trade.symbol.quickPick')}>
       {coins.map((coin) => (
         <PickChip key={coin} active={active === coin} onClick={() => onPick(coin)}>
           {coin}
@@ -129,7 +131,7 @@ function CoinChips({
           onClick={onOther}
           className="ml-0.5 text-[10.5px] text-ink-400 underline decoration-ink-600 underline-offset-2 transition-colors hover:text-ink-100"
         >
-          other coin
+          {t('trade.symbol.otherCoin')}
         </button>
       )}
     </div>
@@ -171,12 +173,13 @@ function SearchResults({
   groups: Array<[string, SymbolRule[]]>;
   renderGroup: (base: string, rules: SymbolRule[]) => JSX.Element;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="max-h-56 overflow-y-auto rounded-lg border border-ink-800 bg-ink-950/70">
       {isPending ? (
-        <div className="px-3 py-2 text-xs text-ink-500">searching…</div>
+        <div className="px-3 py-2 text-xs text-ink-500">{t('trade.symbol.searching')}</div>
       ) : groups.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-ink-500">no live perps match “{q}”</div>
+        <div className="px-3 py-2 text-xs text-ink-500">{t('trade.symbol.noMatch', { q })}</div>
       ) : (
         groups.map(([base, rules]) => renderGroup(base, rules))
       )}
@@ -211,6 +214,7 @@ interface MarketPickerProps {
 }
 
 export function MarketPicker({ base, symbol, onBase, onSymbol, onClear }: MarketPickerProps) {
+  const { t } = useTranslation();
   const [text, setText] = useState('');
   const q = useDebounced(text.trim(), 250);
   const results = useSymbolSearch(q);
@@ -235,22 +239,22 @@ export function MarketPicker({ base, symbol, onBase, onSymbol, onClear }: Market
 
   return (
     <div className="flex flex-col gap-2">
-      <FieldLabel>Market</FieldLabel>
+      <FieldLabel>{t('common.market')}</FieldLabel>
       {/* Venue first, as the mock reads it — but a venue is only meaningful
           for a coin, so the row states what it is waiting for until then. */}
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Venue chips">
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('trade.symbol.venueChips')}>
         {base ? (
           <>
             {rules.map((r) => (
               <VenuePickChip key={r.symbol} rule={r} active={symbol === r.symbol} onPick={() => choose(r.symbol)} />
             ))}
-            {venues.isPending && <span className="text-[10.5px] text-ink-500">loading venues…</span>}
+            {venues.isPending && <span className="text-[10.5px] text-ink-500">{t('trade.symbol.loadingVenues')}</span>}
             {!venues.isPending && rules.length === 0 && (
-              <span className="text-[10.5px] text-ink-500">no live perps for {base}</span>
+              <span className="text-[10.5px] text-ink-500">{t('trade.symbol.noPerpsFor', { base })}</span>
             )}
           </>
         ) : (
-          <span className="text-[10.5px] text-ink-500">pick a coin to see its venues</span>
+          <span className="text-[10.5px] text-ink-500">{t('trade.symbol.pickCoin')}</span>
         )}
       </div>
       <CoinChips
@@ -264,8 +268,8 @@ export function MarketPicker({ base, symbol, onBase, onSymbol, onClear }: Market
         <>
           <input
             className="input"
-            placeholder="Search coin (BTC…) or paste a full symbol"
-            aria-label="Symbol search"
+            placeholder={t('trade.symbol.searchSymbol')}
+            aria-label={t('trade.symbol.symbolSearch')}
             autoComplete="off"
             spellCheck={false}
             value={text}
@@ -308,6 +312,7 @@ interface CoinComboboxProps {
 }
 
 export function CoinCombobox({ value, onSelect, onClear, aside }: CoinComboboxProps) {
+  const { t } = useTranslation();
   const [text, setText] = useState('');
   const q = useDebounced(text.trim(), 250);
   const results = useSymbolSearch(q);
@@ -321,7 +326,7 @@ export function CoinCombobox({ value, onSelect, onClear, aside }: CoinComboboxPr
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
-        <FieldLabel>Coin</FieldLabel>
+        <FieldLabel>{t('common.coin')}</FieldLabel>
         {aside}
       </div>
       <CoinChips
@@ -335,8 +340,8 @@ export function CoinCombobox({ value, onSelect, onClear, aside }: CoinComboboxPr
         <>
           <input
             className="input"
-            placeholder="Search coin (BTC…)"
-            aria-label="Coin search"
+            placeholder={t('trade.symbol.searchCoin')}
+            aria-label={t('trade.symbol.coinSearch')}
             autoComplete="off"
             spellCheck={false}
             value={text}

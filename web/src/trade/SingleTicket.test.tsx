@@ -31,7 +31,7 @@ async function pickHyperliquidBtc() {
   // The chip's accessible name includes the non-USDT quote note ("USDC").
   await userEvent.click(await screen.findByRole('button', { name: /HYPERLIQUID/ }));
   await userEvent.click(screen.getByRole('radio', { name: 'USDT' }));
-  await screen.findByRole('button', { name: /^max / });
+  await screen.findByRole('button', { name: /^Max / });
 }
 
 describe('SingleTicket', () => {
@@ -86,7 +86,7 @@ describe('SingleTicket', () => {
 
     // The preview can settle, but with the venue max unknown the promise "venue
     // max" can't be honored — execute stays disabled and the row says loading.
-    await screen.findByText('loading…');
+    await screen.findByText('Loading…');
     await new Promise((r) => setTimeout(r, 250));
     expect(screen.getByRole('button', { name: 'Execute now' })).toBeDisabled();
   });
@@ -133,12 +133,12 @@ describe('SingleTicket', () => {
     await pickBinanceBtc();
     await userEvent.type(screen.getByLabelText('Size'), '100');
 
-    expect(await screen.findByText(/Tentative avg fill/)).toBeInTheDocument();
+    expect(await screen.findByText(/Est\. avg fill/)).toBeInTheDocument();
     expect(screen.getByText('65010.5')).toBeInTheDocument();
-    expect(screen.getByText(/Partial depth/)).toBeInTheDocument();
+    expect(screen.getByText(/Thin book/)).toBeInTheDocument();
     // Taker fee with bps, and actions enabled (no violations).
     expect(screen.getByText('0.0488 USDT')).toBeInTheDocument();
-    expect(screen.getByText('taker · 5.0 bps')).toBeInTheDocument();
+    expect(screen.getByText('Taker · 5.0 bps')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Execute now' })).toBeEnabled();
   });
 
@@ -202,10 +202,10 @@ describe('SingleTicket', () => {
 
     // The engine rests every limit post-only — the ticket declares tif POC
     // up front, so the estimate is maker-only and no range is ever shown.
-    expect(await screen.findByText(/maker-only/)).toBeInTheDocument();
-    expect(screen.queryByText(/maker–taker/)).not.toBeInTheDocument();
+    expect(await screen.findByText(/^Post-only · (?!fills)/)).toBeInTheDocument();
+    expect(screen.queryByText(/maker–taker/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /post-only/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/limits rest post-only/)).toBeInTheDocument();
+    expect(screen.getByText(/Limit orders are post-only/)).toBeInTheDocument();
   });
 
   it('blur-snaps a resting BUY price DOWN, never up onto the ask (Hyperliquid)', async () => {
@@ -225,7 +225,7 @@ describe('SingleTicket', () => {
     await userEvent.tab();
 
     expect(price).toHaveValue('61717');
-    expect(screen.getByText('adjusted to venue tick/precision rules')).toBeInTheDocument();
+    expect(screen.getByText("Rounded to the venue's price step")).toBeInTheDocument();
   });
 
   it('blur-snaps a resting SELL price UP, never down onto the bid (Hyperliquid)', async () => {
@@ -273,7 +273,7 @@ describe('no Review card on a single order', () => {
     await pickBinanceBtc();
     // BTC is coin-margined on Boros, so the box defaults to the coin — the
     // same rule the pair ticket follows, so one strategy is sized in one unit.
-    await userEvent.type(screen.getByPlaceholderText(/qty \(BTC\)/), '0.01');
+    await userEvent.type(screen.getByPlaceholderText(/Size \(BTC\)/), '0.01');
 
     const execute = await screen.findByRole('button', { name: /Execute now/ });
     await userEvent.hover(execute);
@@ -282,7 +282,7 @@ describe('no Review card on a single order', () => {
     await waitFor(() => expect(screen.queryByText('Review')).toBeNull());
     expect(screen.queryByRole('tooltip')).toBeNull();
     // The inline preview is still there — nothing was lost by removing it.
-    expect(await screen.findByText('Est fee')).toBeInTheDocument();
+    expect(await screen.findByText('Est. fee')).toBeInTheDocument();
   });
 });
 
@@ -298,9 +298,27 @@ describe('SingleTicket — the size unit follows the coin', () => {
     renderWithClient(<SingleTicket />);
     await pickBinanceBtc();
 
-    expect(await screen.findByPlaceholderText(/qty \(BTC\)/)).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText(/Size \(BTC\)/)).toBeInTheDocument();
     // An explicit choice still overrides the default.
     await userEvent.click(screen.getByRole('radio', { name: 'USDT' }));
-    expect(screen.getByPlaceholderText(/notional/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Notional/)).toBeInTheDocument();
+  });
+});
+
+describe('SingleTicket — the max size', () => {
+  it('stops at the largest position CrossEx takes, even when margin allows more', async () => {
+    // $4,200 available at 50x carries $190,909; CrossEx takes $100,000.
+    server.use(
+      http.get('/api/symbols/:symbol', () =>
+        HttpResponse.json(env({ ...BTC_HYPERLIQUID, leverageMax: 50, positionMaxUsd: 100_000 })),
+      ),
+      ...baseHandlers(),
+      ...btcSymbolHandlers(),
+      echoPreviewHandler(),
+    );
+    renderWithClient(<SingleTicket />);
+    await pickHyperliquidBtc();
+
+    expect(screen.getByRole('button', { name: /^Max / })).toHaveTextContent('Max $100,000');
   });
 });

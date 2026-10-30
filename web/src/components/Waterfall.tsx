@@ -15,6 +15,7 @@
  */
 import type { ReactNode } from 'react';
 
+import { t } from '../i18n';
 import { fmtUsd } from '../lib/fmt';
 
 export interface WaterfallStep {
@@ -172,7 +173,7 @@ export function WaterfallPlot({
           <div
             data-segment="mtm"
             data-sign={mtmUsd < 0 ? 'neg' : 'pos'}
-            title={`Current PnL ${fmtUsd(mtmUsd)} — funding + Boros settlements & rate MtM − fees − entry slippage`}
+            title={t('app.waterfall.nowTitle', { pnl: fmtUsd(mtmUsd) })}
             className="absolute inset-x-0 border-t border-dashed border-cyan-400/70"
             style={{ top: `${mtmTop}%` }}
           >
@@ -183,7 +184,7 @@ export function WaterfallPlot({
             >
               {/* Cents below $10, same rule as the bar labels — a live PnL
                   of $0.07 must not read as "now $0". */}
-              now {fmtUsd(mtmUsd, Math.abs(mtmUsd) < 10 ? 2 : 0)}
+              {t('app.waterfall.now', { value: fmtUsd(mtmUsd, Math.abs(mtmUsd) < 10 ? 2 : 0) })}
             </span>
           </div>
         )}

@@ -1,45 +1,46 @@
 import { useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useRebalance, useTransfer } from '../api/queries';
 import type { RebalanceJob } from '../api/types';
 import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
+import { t } from '../i18n';
 import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
 import { jobSeconds, VerdictAlert } from './RebalanceBits';
-import { CARD_LABEL, NO_LEGS, SHORT_OF_CASH, VERDICT_BALANCED, VERDICT_NO_BORROW, VERDICT_NO_CASH_TO_MOVE } from './rebalanceCopy';
-import { WAITS_FOR_DEAL, WAITS_FOR_TRANSFER } from './rebalanceCopy';
+import { CARD_LABEL, noLegs, shortOfCash, verdictBalanced, verdictNoBorrow, verdictNoCashToMove } from './rebalanceCopy';
+import { waitsForDeal, waitsForTransfer } from './rebalanceCopy';
 import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
 import { RebalanceModal } from './RebalanceModal';
 import type { GateAccount, TransferCoin } from '../api/types';
 
-const LOAD_FAILED = 'Could not load Rebalance.';
-const RETRY = 'Retry';
-const READ_AGAIN = 'Read again';
-const STOPPED_OPEN = 'Stopped · open';
-
-const plural = (n: string, word: string): string => `${n} ${word}${n === '1' ? '' : 's'}`;
-
 const timeLeft = (seconds: number): string =>
   fmtAbout(seconds)
-    .replace(/(\d+) h\b/, (_all, n: string) => plural(n, 'hour'))
-    .replace(/(\d+(?:\.\d+)?) (?:min|m)\b/, (_all, n: string) => plural(n, 'minute'));
+    .replace(/(\d+) h\b/, (_all, n: string) => t('accounts.rebalanceSection.hours', { count: Number(n), n }))
+    .replace(/(\d+(?:\.\d+)?) (?:min|m)\b/, (_all, n: string) => t('accounts.rebalanceSection.minutes', { count: Number(n), n }));
 
 function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
   const what = CARD_LABEL[job.goal];
-  if (job.status === 'halted') return `${what} stopped ${round === null ? 'at Convert' : `in round ${num(round, 0)}`}.`;
+  if (job.status === 'halted') {
+    return round === null
+      ? t('accounts.rebalanceSection.haltedAtConvert', { what })
+      : t('accounts.rebalanceSection.haltedInRound', { what, round: num(round, 0) });
+  }
   const total = jobSeconds(job);
   const left = Math.max(0, total - Math.max(0, now - job.createdAt) / 1000);
-  return total > 0 ? `${what} running, ${timeLeft(left)} left.` : `${what} running.`;
+  return total > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.running', { what });
 }
 
 function jobButton(job: RebalanceJob): string {
-  if (job.status === 'halted') return STOPPED_OPEN;
+  if (job.status === 'halted') return t('accounts.rebalanceSection.stoppedOpen');
   const round = roundOf(job);
-  return round === null ? 'Running · Convert' : `Running · round ${num(round, 0)} of ${num(roundCountOf(job), 0)}`;
+  return round === null
+    ? t('accounts.rebalanceSection.runningConvert')
+    : t('accounts.rebalanceSection.runningRound', { round: num(round, 0), rounds: num(roundCountOf(job), 0) });
 }
 
 /** The Rebalance part of the Assets card: borrow facts, then the Rebalance
@@ -53,6 +54,7 @@ export function RebalanceSection({
   onTransfer?: (coin: TransferCoin, wallet: GateAccount) => void;
   actions?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const query = useRebalance();
   const transfer = useTransfer().data;
   const now = useNow();
@@ -82,12 +84,12 @@ export function RebalanceSection({
       header = title;
       line = (
         <p role="alert" className="text-xs text-rose-300">
-          {`${LOAD_FAILED} ${loadError.message}`}
+          {t('accounts.rebalanceSection.loadFailed', { message: loadError.message })}
         </p>
       );
       main = (
         <button type="button" className="btn-ghost-xs leading-4" onClick={() => void query.refetch()}>
-          {RETRY}
+          {t('common.retry')}
         </button>
       );
     }
@@ -109,8 +111,8 @@ export function RebalanceSection({
     const dealWorking = transfer?.lock === 'deal';
 
     let chip: ReactNode = null;
-    if (job?.status === 'running') chip = <Chip tone="info">Running</Chip>;
-    if (job?.status === 'halted') chip = <Chip tone="red">Stopped</Chip>;
+    if (job?.status === 'running') chip = <Chip tone="info">{t('common.running')}</Chip>;
+    if (job?.status === 'halted') chip = <Chip tone="red">{t('common.stopped')}</Chip>;
     // "Balanced" only when the wallets really match their position share. The
     // planner also reports a plan with nothing to move when what it WOULD move
     // is stuck as position margin (`shortOfEven`); that case gets no chip —
@@ -118,7 +120,7 @@ export function RebalanceSection({
     // 2026-09-23: a green "Balanced" over a $354k gap lied, an amber chip
     // read as a to-do, and a figure read as a to-do too).
     if (!job && goal === 'even' && plan.balanced && !plan.noLegs && !isCashLimitedEven(plan)) {
-      chip = <Chip tone="green">Balanced</Chip>;
+      chip = <Chip tone="green">{t('accounts.rebalanceModal.balanced')}</Chip>;
     }
 
     let verdict: ReactNode = null;
@@ -127,18 +129,18 @@ export function RebalanceSection({
     if (job) verdict = jobVerdict(job, now);
     // What caps a move is cash when there are no positions, and position
     // margin when there are — the goal on screen does not decide it.
-    else if (isCashLimitedEven(plan) && plan.noLegs) verdict = `${fmtUsd(plan.shortOfEven)} ${SHORT_OF_CASH}`;
+    else if (isCashLimitedEven(plan) && plan.noLegs) verdict = `${fmtUsd(plan.shortOfEven)} ${shortOfCash()}`;
     else if (isCashLimitedEven(plan)) {
-      verdict = VERDICT_NO_CASH_TO_MOVE;
+      verdict = verdictNoCashToMove();
       tone = 'warn';
     }
-    else if (goal === 'repay' && plan.balanced) verdict = VERDICT_NO_BORROW;
-    else if (plan.noLegs && goal === 'even') verdict = NO_LEGS;
-    else if (plan.balanced) verdict = VERDICT_BALANCED;
+    else if (goal === 'repay' && plan.balanced) verdict = verdictNoBorrow();
+    else if (plan.noLegs && goal === 'even') verdict = noLegs();
+    else if (plan.balanced) verdict = verdictBalanced();
     // No trailing "It moves $X." here: the line now says no rebalancing is
     // necessary, and naming the amount in the same breath argued the opposite.
     // The figure is still on the button and inside the modal.
-    else if (!hasBorrow) verdict = VERDICT_NO_BORROW;
+    else if (!hasBorrow) verdict = verdictNoBorrow();
     else if (worth) {
       verdict = worth.text;
       verdictSub = worth.sub ?? null;
@@ -147,8 +149,8 @@ export function RebalanceSection({
 
     let label: ReactNode = cta;
     if (job) label = jobButton(job);
-    else if (moving) label = WAITS_FOR_TRANSFER;
-    else if (dealWorking) label = WAITS_FOR_DEAL;
+    else if (moving) label = waitsForTransfer();
+    else if (dealWorking) label = waitsForDeal();
     // No fee on the card (his ruling 2026-09-19): it is the fee of ONE preset,
     // and the dialog prices every route beside it anyway.
     const disabled = !job && (moving || dealWorking);
@@ -166,7 +168,7 @@ export function RebalanceSection({
               dense
               dataUpdatedAt={query.dataUpdatedAt}
               staleError={loadError !== null}
-              title={READ_AGAIN}
+              title={t('accounts.rebalanceSection.readAgain')}
               onRefetch={() => void query.refetch()}
             />
           )}
@@ -197,7 +199,7 @@ export function RebalanceSection({
   }
 
   return (
-    <section aria-label="Rebalance" className="flex flex-col gap-3 border-t border-ink-800 pt-4">
+    <section aria-label={t('accounts.rebalanceModal.title')} className="flex flex-col gap-3 border-t border-ink-800 pt-4">
       {header}
       {facts}
       {line}

@@ -2,6 +2,8 @@
  * src/core/numbers.ts (and `direction` of src/core/orders.ts) — keep behavior
  * identical; the fmt tests pin them to the core test expectations. */
 
+import { dateLocale, t } from '../i18n';
+
 /** Format a number to a fixed number of decimals with thousands separators. */
 export function num(value: number | string, dp = 2): string {
   const n = typeof value === 'number' ? value : Number(value);
@@ -197,9 +199,7 @@ export function toDate(epoch: number | string | undefined | null): Date | null {
 export function fmtAge(ms: number): string {
   if (!Number.isFinite(ms)) return '—';
   const { value, unit, rest } = ageBucket(ms);
-  if (unit === 'm') return `${value}m ${rest}s`;
-  if (unit === 'h') return `${value}h ${rest}m`;
-  return `${value}${unit}`;
+  return t(`app.age.${unit}`, { n: value, rest });
 }
 
 function ageBucket(ms: number): { value: number; unit: 's' | 'm' | 'h' | 'd'; rest: number } {
@@ -213,12 +213,14 @@ function ageBucket(ms: number): { value: number; unit: 's' | 'm' | 'h' | 'd'; re
 }
 
 export function fmtAbout(seconds: number): string {
-  if (seconds < 60) return `about ${Math.round(seconds)}s`;
-  if (seconds < 600) return `about ${Math.round(seconds / 30) / 2} min`;
+  if (seconds < 60) return t('app.about.seconds', { n: Math.round(seconds) });
+  if (seconds < 600) return t('app.about.minutes', { n: Math.round(seconds / 30) / 2 });
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `about ${minutes} min`;
+  if (minutes < 60) return t('app.about.minutes', { n: minutes });
   const rest = minutes % 60;
-  return rest === 0 ? `about ${minutes / 60} h` : `about ${Math.floor(minutes / 60)} h ${rest} m`;
+  return rest === 0
+    ? t('app.about.hours', { n: minutes / 60 })
+    : t('app.about.hoursMinutes', { h: Math.floor(minutes / 60), m: rest });
 }
 
 /** Unix seconds → UTC "YYYY-MM-DD" (maturities are quoted in UTC). */
@@ -243,7 +245,7 @@ export function fmtDateShort(
   unixSec: number,
   options: { year?: 'numeric'; timeZone?: 'UTC' } = {},
 ): string {
-  return new Date(unixSec * 1000).toLocaleDateString('en-GB', {
+  return new Date(unixSec * 1000).toLocaleDateString(dateLocale(), {
     day: 'numeric',
     month: 'short',
     year: options.year,
@@ -269,9 +271,14 @@ export function fmtClock(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
-const SYNC_AGE_UNIT = { s: 's', m: 'min', h: 'h', d: 'd' } as const;
+const SYNC_AGE_KEY = {
+  s: 'app.syncAge.s',
+  m: 'app.syncAge.m',
+  h: 'app.syncAge.h',
+  d: 'app.syncAge.d',
+} as const;
 
 export function fmtSyncAge(ms: number): string {
   const { value, unit } = ageBucket(ms);
-  return `${value} ${SYNC_AGE_UNIT[unit]} ago`;
+  return t(SYNC_AGE_KEY[unit], { n: value });
 }

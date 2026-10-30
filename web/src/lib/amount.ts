@@ -1,3 +1,5 @@
+import { t } from '../i18n';
+
 /**
  * Why a typed amount is not a usable number — or null when it is fine.
  *
@@ -18,14 +20,14 @@ export function amountError(raw: string, opts?: { min?: number; max?: number }):
     const stripped = s.replace(/,/g, '');
     const n = Number(stripped);
     return Number.isFinite(n) && n > 0
-      ? `Remove the commas — type ${stripped}`
-      : 'Remove the commas';
+      ? t('app.amount.removeCommasType', { value: stripped })
+      : t('app.amount.removeCommas');
   }
 
   const n = Number(s);
-  if (!Number.isFinite(n)) return 'Not a number';
-  if (n <= 0) return 'Must be more than 0';
-  if (opts?.min !== undefined && n < opts.min) return `Minimum is ${opts.min.toLocaleString('en-US')}`;
-  if (opts?.max !== undefined && n > opts.max) return `Maximum is ${opts.max.toLocaleString('en-US')}`;
+  if (!Number.isFinite(n)) return t('app.amount.notNumber');
+  if (n <= 0) return t('app.amount.notPositive');
+  if (opts?.min !== undefined && n < opts.min) return t('app.amount.min', { value: opts.min.toLocaleString('en-US') });
+  if (opts?.max !== undefined && n > opts.max) return t('app.amount.max', { value: opts.max.toLocaleString('en-US') });
   return null;
 }

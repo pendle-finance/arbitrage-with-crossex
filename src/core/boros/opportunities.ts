@@ -38,6 +38,7 @@ import { walkBook } from '../estimate/fill';
 import { resolveFeeRates, resolveVenueFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
 import { prettyVenue } from '../../../web/src/lib/fmt';
+import { LIMIT_NOTE, type PositionLimit } from '../positionLimit';
 import { isSpreadMarket, type SpreadSide } from './spread';
 import { normalizeVenue, SECONDS_IN_YEAR } from './venue';
 
@@ -157,6 +158,10 @@ export interface OpportunityPair {
   borosImpactApr: number | null;
   /** Which leg rests as the maker order under `maker-hedge`; null otherwise. */
   makerLeg: 'short' | 'long' | null;
+  /** The notional per leg THIS pair was priced at. Equal to the request's on a
+   * notional request; under a capital target each pair solves its own, so
+   * every per-pair USD figure must be read against this one. */
+  notionalUsd: number;
   costs: OpportunityCostBreakdown;
   capital: OpportunityCapitalBreakdown;
   /** Σ of the four capital components; null when any one of them is. */
@@ -193,7 +198,11 @@ export interface OpportunitiesResult {
   groups: OpportunityGroup[];
   meta: {
     asOfSec: number;
-    notionalUsd: number;
+    /** The shared notional per leg; null under a capital target, where every
+     * pair carries its own (`OpportunityPair.notionalUsd`). */
+    notionalUsd: number | null;
+    /** Echoes the capital target when one was requested. */
+    capitalUsd?: number;
     borosEntry: BorosEntryMode;
     entryMode: EntryMode;
     exitMode: ExitMode;
@@ -225,16 +234,20 @@ export interface BuildOpportunitiesInput {
   /** `VENUE:BASE` → live CrossEx symbol. */
   symbolsByVenueBase: Map<string, string>;
   crossexVenues: ReadonlySet<string>;
-  /** CrossEx symbol → venue max leverage; absent = the risk-limit read failed
-   * or wasn't attempted, which nulls that pair's capital. */
-  leverageMaxBySymbol: Map<string, number>;
+  /** CrossEx symbol → venue max leverage and largest position; absent = the
+   * risk-limit read failed or wasn't attempted, which nulls that pair's capital. */
+  positionLimitBySymbol: Map<string, PositionLimit>;
   /** /crossex/fee rows; null = the schedule is unavailable. */
   feeRows: VenueFeeRow[] | null;
   nowSec: number;
 }
 
 export interface BuildOpportunitiesOptions {
+  /** Every pair's notional per leg. Ignored when `capitalUsd` is set. */
   notionalUsd: number;
+  /** When set, every pair is priced at ITS OWN notional: the one whose
+   * modelled capital equals this (`notionalForCapital`). */
+  capitalUsd?: number;
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
   exitMode: ExitMode;
@@ -244,6 +257,73 @@ export interface BuildOpportunitiesOptions {
 }
 
 const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
+
+/**
+ * The notional at which a pair's modelled capital equals `targetCapital`.
+ *
+ * Capital only grows with notional — perp margin is N / leverage, and Boros
+ * margin is N × max(|locked rate|, floor) × days × kIM / 365, where a deeper
+ * book walk only adds to N × rate — so there is exactly one answer, and
+ * halving a bracket around it converges on it. `capitalAt` is the pair's own
+ * pricing, so the capital the solve lands on IS the capital the pair reports.
+ * `maxNotional`, the smaller perp leg's position limit, is the
+ * answer when the target needs more.
+ * Null when the pair's capital can't be modelled (a missing leverage cap or
+ * margin coefficient — nothing that depends on size).
+ */
+export function notionalForCapital(
+  capitalAt: (notionalUsd: number) => number | null,
+  targetCapital: number,
+  maxNotional = Infinity,
+): number | null {
+  let hi = Math.min(targetCapital, maxNotional);
+  if (capitalAt(hi) === null) return null;
+  const below = (n: number): boolean => (capitalAt(n) ?? Infinity) < targetCapital;
+  let lo = 0;
+  for (let i = 0; i < 60 && below(hi) && hi < maxNotional; i += 1) {
+    lo = hi;
+    hi = Math.min(hi * 2, maxNotional);
+  }
+  if (below(hi)) return hi;
+  for (let i = 0; i < 60 && hi - lo > hi * 1e-9; i += 1) {
+    const mid = (lo + hi) / 2;
+    if (below(mid)) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
+/** Price one pair at the requested size: at `notionalUsd`, or — under a
+ * capital target — at the notional whose capital equals it. A pair whose
+ * capital can't be modelled has no such notional: it is priced at notional =
+ * capital and says so; its null APR on capital keeps it off the list. */
+export function priceAtSize<P extends { capitalUsd: number | null; reasons: string[] }>(
+  at: (notionalUsd: number) => P,
+  size: { notionalUsd: number; capitalUsd?: number },
+  maxNotional = Infinity,
+): P {
+  if (size.capitalUsd === undefined) return at(size.notionalUsd);
+  const notional = notionalForCapital((n) => at(n).capitalUsd, size.capitalUsd, maxNotional);
+  if (notional !== null) {
+    const pair = at(notional);
+    if (pair.capitalUsd === null || pair.capitalUsd >= size.capitalUsd * (1 - 1e-6)) return pair;
+    return {
+      ...pair,
+      reasons: [
+        ...pair.reasons,
+        `This pair takes at most ${usd(pair.capitalUsd)} of capital, not ${usd(size.capitalUsd)}. One of its perps stops at ${usd(notional)}, ${LIMIT_NOTE}.`,
+      ],
+    };
+  }
+  const pair = at(size.capitalUsd);
+  return {
+    ...pair,
+    reasons: [
+      ...pair.reasons,
+      `This pair's capital can't be modelled, so it can't be sized to ${usd(size.capitalUsd)} of capital.`,
+    ],
+  };
+}
 
 /**
  * VWAP over the FILLED portion of one Boros book side, walking levels in order
@@ -477,11 +557,15 @@ interface MarketRowBuild {
   long: SideExec | null;
 }
 
+/** One market's row and its two exec sides, walked at `sizeUsd`. Null size —
+ * a capital target, where each pair walks at its own notional — leaves the
+ * row's exec rates empty rather than quoting a size no pair trades at. */
 function buildMarketRow(
   market: BorosMarket,
   input: BuildOpportunitiesInput,
   options: BuildOpportunitiesOptions,
   collateralPriceUsd: number | null,
+  sizeUsd: number | null,
 ): MarketRowBuild {
   const venue = normalizeVenue(market.venue);
   const crossexVenue = input.crossexVenues.has(venue) ? venue : null;
@@ -493,7 +577,9 @@ function buildMarketRow(
   let short: SideExec | null = null;
   let long: SideExec | null = null;
   let bookStatus: BookStatus;
-  if (options.borosEntry === 'mark') {
+  if (sizeUsd === null) {
+    bookStatus = 'not-fetched';
+  } else if (options.borosEntry === 'mark') {
     short = { apr: market.markApr, filledUsd: null, insufficient: false };
     long = { apr: market.markApr, filledUsd: null, insufficient: false };
     bookStatus = 'not-fetched';
@@ -501,8 +587,8 @@ function buildMarketRow(
     const book = input.borosBooks.get(market.marketId) ?? null;
     const px = collateralPriceUsd;
     if (book && px !== null) {
-      const bidWalk = walkBorosBook(book.bids, options.notionalUsd, px);
-      const askWalk = walkBorosBook(book.asks, options.notionalUsd, px);
+      const bidWalk = walkBorosBook(book.bids, sizeUsd, px);
+      const askWalk = walkBorosBook(book.asks, sizeUsd, px);
       short = bidWalk && { apr: bidWalk.execApr, filledUsd: bidWalk.filledUsd, insufficient: bidWalk.insufficient };
       long = askWalk && { apr: askWalk.execApr, filledUsd: askWalk.filledUsd, insufficient: askWalk.insufficient };
     }
@@ -549,7 +635,7 @@ interface PerpLegCost {
 }
 
 /** Signed-against-the-taker crossing cost of `qty` on one side, in USD. */
-function crossCostUsd(
+export function crossCostUsd(
   book: NormalizedBook,
   side: 'BUY' | 'SELL',
   qty: number,
@@ -559,6 +645,26 @@ function crossCostUsd(
   if (!walk) return null;
   const perUnit = side === 'BUY' ? walk.avgPrice - mid : mid - walk.avgPrice;
   return { costUsd: perUnit * qty, exhausted: walk.exhausted };
+}
+
+/** The largest single perp order the slippage model walks a book for. A bigger
+ * leg is assumed TWAP'd in clips of this size, each crossing a refilled book —
+ * so it pays the clip's crossing RATE on the full notional. A book walk's
+ * average cost per unit never falls with size, so this can only lower the
+ * estimate, never raise it. Mirrored in web/src/api/queries.ts. */
+export const PERP_SLIPPAGE_CLIP_USD = 1_000_000;
+
+/** `crossCostUsd` for a USD notional, walked at most one clip deep and scaled
+ * to the whole notional (see PERP_SLIPPAGE_CLIP_USD). */
+export function clippedCrossCostUsd(
+  book: NormalizedBook,
+  side: 'BUY' | 'SELL',
+  notionalUsd: number,
+  mid: number,
+): { costUsd: number; exhausted: boolean } | null {
+  const clipUsd = Math.min(notionalUsd, PERP_SLIPPAGE_CLIP_USD);
+  const clip = crossCostUsd(book, side, clipUsd / mid, mid);
+  return clip && { ...clip, costUsd: clip.costUsd * (notionalUsd / clipUsd) };
 }
 
 /** venueBooks key for a leg. A leg without a live CrossEx symbol falls back to
@@ -606,14 +712,13 @@ function perpLegCost(
     );
     return cost;
   }
-  const qty = notionalUsd / touch.mid;
-  const entry = crossCostUsd(book, side === 'SHORT' ? 'SELL' : 'BUY', qty, touch.mid);
-  const exit = crossCostUsd(book, side === 'SHORT' ? 'BUY' : 'SELL', qty, touch.mid);
+  const entry = clippedCrossCostUsd(book, side === 'SHORT' ? 'SELL' : 'BUY', notionalUsd, touch.mid);
+  const exit = clippedCrossCostUsd(book, side === 'SHORT' ? 'BUY' : 'SELL', notionalUsd, touch.mid);
   cost.entrySlipUsd = entry ? entry.costUsd : null;
   cost.exitSlipUsd = exit ? exit.costUsd : null;
   if (entry?.exhausted || exit?.exhausted) {
     reasons.push(
-      `The ${leg.crossexVenue} ${label} book runs out of depth before ${usd(notionalUsd)} — its slippage estimate extrapolates the last level.`,
+      `The ${leg.crossexVenue} ${label} book runs out of depth before ${usd(Math.min(notionalUsd, PERP_SLIPPAGE_CLIP_USD))} — its slippage estimate extrapolates the last level.`,
     );
   }
   if (!entry || !exit) {
@@ -734,7 +839,7 @@ function depthReason(
   if (!exec) {
     return `No Boros order book for ${build.row.name} (market #${build.row.marketId}) — its ${sideLabel} rate at ${usd(notionalUsd)} is unknown.`;
   }
-  return `The Boros book on ${build.row.name} (market #${build.row.marketId}) only has ${usd(exec.filledUsd ?? 0)} of ${sideLabel} depth — ${usd(notionalUsd)} is needed to lock this leg.`;
+  return `The Boros book on ${build.row.name} (market #${build.row.marketId}) only has ${usd(exec.filledUsd ?? 0)} of ${sideLabel} depth — ${usd(notionalUsd)} is needed to lock this rate.`;
 }
 
 function buildPair(
@@ -826,14 +931,20 @@ function buildPair(
       );
       return null;
     }
-    const lev = input.leverageMaxBySymbol.get(leg.crossexSymbol);
-    if (lev === undefined || !Number.isFinite(lev) || lev <= 0) {
+    const limit = input.positionLimitBySymbol.get(leg.crossexSymbol);
+    if (!limit) {
       reasons.push(
         `No max leverage for ${leg.crossexVenue} ${leg.crossexSymbol} — that perp leg's initial margin can't be modelled, so the capital and the APR on capital are unknown.`,
       );
       return null;
     }
-    return lev;
+    if (notionalUsd > limit.maxUsd) {
+      reasons.push(
+        `${usd(notionalUsd)} is above the ${usd(limit.maxUsd)} limit for ${leg.crossexVenue} ${leg.crossexSymbol}, ${LIMIT_NOTE}.`,
+      );
+      return null;
+    }
+    return limit.leverage;
   };
 
   const shortLeverageMax = leverageMaxOf(shortLeg);
@@ -874,6 +985,7 @@ function buildPair(
     execSpreadApr,
     borosImpactApr,
     makerLeg: entry.makerLeg,
+    notionalUsd,
     costs: {
       borosTakerFeeUsd,
       borosSettleFeeUsd,
@@ -943,10 +1055,13 @@ export function buildOpportunities(
       );
     }
 
-    const builds = plan.markets.map((m) => buildMarketRow(m, input, options, collateralPriceUsd));
+    // Walked once at the shared notional; under a capital target each pair
+    // walks its own books at its own notional (`price` below).
+    const rowSize = options.capitalUsd !== undefined ? null : options.notionalUsd;
+    const builds = plan.markets.map((m) => buildMarketRow(m, input, options, collateralPriceUsd, rowSize));
     const spreadBuilds = plan.spreads
       .filter((m) => m.state === 'Normal')
-      .map((m) => buildMarketRow(m, input, options, collateralPriceUsd));
+      .map((m) => buildMarketRow(m, input, options, collateralPriceUsd, rowSize));
     for (const build of builds) {
       if (!build.row.crossexVenue) {
         groupWarnings.push(
@@ -958,6 +1073,25 @@ export function buildOpportunities(
         );
       }
     }
+
+    // Every Boros book is walked at the notional the pair is PRICED at: the
+    // rate a leg locks moves with size.
+    const price = (shortLeg: OpportunityLeg, longLeg: OpportunityLeg, boros: BorosLegBuild[]): OpportunityPair => {
+      const at = (notionalUsd: number) => {
+        const o = { ...options, notionalUsd };
+        const sized = boros.map((l) => ({
+          ...l,
+          build: buildMarketRow(l.build.market, input, o, collateralPriceUsd, notionalUsd),
+        }));
+        return buildPair(ctx, shortLeg, longLeg, sized, input, o);
+      };
+      const maxNotional = Math.min(
+        ...[shortLeg, longLeg].map(
+          (leg) => (leg.crossexSymbol && input.positionLimitBySymbol.get(leg.crossexSymbol)?.maxUsd) || Infinity,
+        ),
+      );
+      return priceAtSize(at, options, maxNotional);
+    };
 
     const pairs: OpportunityPair[] = [];
     // A mapped venue pairs even without a live CrossEx symbol (Gate down or
@@ -979,7 +1113,7 @@ export function buildOpportunities(
           { build: a, side: 'SHORT' },
           { build: b, side: 'LONG' },
         ];
-        pairs.push(buildPair(ctx, toLeg(a), toLeg(b), boros, input, options));
+        pairs.push(price(toLeg(a), toLeg(b), boros));
       }
     }
     for (const build of spreadBuilds) {
@@ -999,7 +1133,7 @@ export function buildOpportunities(
           );
         }
       }
-      pairs.push(buildPair(ctx, shortLeg, longLeg, [{ build, side }], input, options));
+      pairs.push(price(shortLeg, longLeg, [{ build, side }]));
     }
     pairs.sort(
       (x, y) =>
@@ -1043,7 +1177,8 @@ export function buildOpportunities(
     groups,
     meta: {
       asOfSec: input.nowSec,
-      notionalUsd: options.notionalUsd,
+      notionalUsd: options.capitalUsd !== undefined ? null : options.notionalUsd,
+      capitalUsd: options.capitalUsd,
       borosEntry: options.borosEntry,
       entryMode: options.entryMode,
       exitMode: options.exitMode,

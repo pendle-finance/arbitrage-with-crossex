@@ -293,7 +293,7 @@ describe('RebalanceModal plan state', () => {
     show(rebalanceViews.oneRouteOnly);
     expect(screen.queryByRole('button', { name: 'Show all routes' })).toBeNull();
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeChecked();
-    expect(pickedRow()).toHaveTextContent('instant');
+    expect(pickedRow()).toHaveTextContent('Instant');
     expect(pickedRow()).toHaveTextContent('Fee $0.02');
     await user.click(pickedRow());
     expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(1);
@@ -490,7 +490,7 @@ describe('RebalanceModal run states', () => {
   it('says the running job keeps going after the modal closes', async () => {
     const { onClose } = show(rebalanceViews.accountARunning);
     expect(
-      within(dialog()).getByText('Started 4m 58s ago. You can close this. The run keeps going.'),
+      within(dialog()).getByText('Started 4m 58s ago. You can close this. The rebalance keeps going.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
@@ -510,7 +510,7 @@ describe('RebalanceModal run states', () => {
 
   it('says the key cannot read Spot and shows no zero for an unknown balance', async () => {
     show(rebalanceViews.accountAHalted, { transfer: transferViews.noSpot });
-    expect(await screen.findByText('Add Spot read permission to see spot balances.')).toBeInTheDocument();
+    expect(await screen.findByText('Set Spot Trading to Read Only to see Gate spot balances.')).toBeInTheDocument();
     const note = within(dialog()).getByText('Abandon leaves the 36.58 USDC in Gate spot. This key cannot read Gate spot.');
     expect(note).toBeInTheDocument();
     expect(dialog().textContent).not.toMatch(/\$0\.00/);
@@ -730,7 +730,7 @@ describe('RebalanceModal is it worth it', () => {
     // against that very $0.00 — a judgement divided by zero interest.
     expect(worth()).toEqual([
       {
-        text: 'No interest payment yet. No transfer or rebalancing necessary.',
+        text: 'No interest yet. Nothing to move.',
         tone: 'info',
         sub: `Rebalancing is optional and costs ${facts().Fee}.`,
       },
@@ -743,7 +743,7 @@ describe('RebalanceModal is it worth it', () => {
     // contradiction: the verdict now leads, and the move is plainly a choice.
     expect(worth()).toEqual([
       {
-        text: 'No borrow. No transfer or rebalancing necessary.',
+        text: 'No borrow. Nothing to move.',
         tone: 'info',
         sub: `Rebalancing is optional and costs ${facts().Fee}.`,
       },
@@ -762,7 +762,7 @@ describe('RebalanceModal is it worth it', () => {
   it('an unknown borrow rate shows rate unknown and names the failed read', () => {
     const view = rebalanceViews.twoBorrows;
     show(withFee({ ...view, buckets: rebased(view.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } }) }, 20));
-    expect(facts().Interest).toBe('rate unknown');
+    expect(facts().Interest).toBe('Rate unknown');
     // The dialog prices a fee, so it must not stay silent about why there is
     // no verdict to weigh it against.
     expect(worth()).toEqual([{ text: 'Could not read the borrow interest rate. Check the fee before you move anything.', tone: 'warn' }]);
@@ -1067,7 +1067,7 @@ describe('RebalanceModal where the money is', () => {
       'USDC · Hyperliquid-92.71',
       'USDC · Gate57.52',
     ]);
-    expect(within(dialog()).getByText('Stop the run. Funds stay where they are.')).toBeInTheDocument();
+    expect(within(dialog()).getByText('End the rebalance for good. Funds stay where they are.')).toBeInTheDocument();
   });
 
   it('running toward USDT shows on the way', async () => {
@@ -1096,7 +1096,7 @@ describe('RebalanceModal where the money is', () => {
   it('after abandon line', async () => {
     const user = userEvent.setup();
     const { onTransfer } = show(rebalanceViews.accountAAbandoned, { transfer: transferViews.noSpot });
-    await waitFor(() => expect(line('Last run left 36.58 USDC in Gate spot.')).toBeInTheDocument());
+    await waitFor(() => expect(line('The last rebalance left 36.58 USDC in Gate spot.')).toBeInTheDocument());
     await user.click(within(dialog()).getByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_HYPERLIQUID');
   });
@@ -1109,7 +1109,7 @@ describe('RebalanceModal where the money is', () => {
       { ...running, job: { ...running.job, status: 'abandoned', inTransit: moving } },
       { transfer: transferViews.noSpot },
     );
-    await waitFor(() => expect(line('Last run left 745.44 USDC in Gate spot.')).toBeInTheDocument());
+    await waitFor(() => expect(line('The last rebalance left 745.44 USDC in Gate spot.')).toBeInTheDocument());
     await user.click(within(dialog()).getByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_GATE');
     cleanup();
@@ -1127,13 +1127,13 @@ describe('RebalanceModal where the money is', () => {
     );
     await screen.findByText('reads loaded');
     expect(intoCrossex.job.steps[intoCrossex.job.stepIndex].name).toBe('To Gate');
-    expect(screen.queryByText(/Last run left/)).toBeNull();
+    expect(screen.queryByText(/The last rebalance left/)).toBeNull();
   });
 
   it('money a stopped move to Lighter left in Gate spot goes to the Lighter wallet', async () => {
     const user = userEvent.setup();
     const { onTransfer } = show(rebalanceViews.lighterAcrossAbandoned, { transfer: transferViews.noSpot });
-    await waitFor(() => expect(line('Last run left 499.00 USDC in Gate spot.')).toBeInTheDocument());
+    await waitFor(() => expect(line('The last rebalance left 499.00 USDC in Gate spot.')).toBeInTheDocument());
     await user.click(within(dialog()).getByRole('button', { name: 'Transfer' }));
     expect(onTransfer).toHaveBeenCalledWith('USDC', 'CROSSEX_LIGHTER');
   });
@@ -1225,7 +1225,7 @@ describe('RebalanceModal route and step content', () => {
     expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
     await user.click(within(rowOf('Spot loop, then Convert')).getByText('Recommended'));
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
-    await user.click(within(rowOf('Convert')).getByText('instant'));
+    await user.click(within(rowOf('Convert')).getByText('Instant'));
     expect(screen.getByRole('radio', { name: 'Convert' })).toBeChecked();
     await user.click(within(rowOf('Spot loop, then Convert')).getByText('about 13 min'));
     expect(screen.getByRole('radio', { name: 'Spot loop, then Convert' })).toBeChecked();
@@ -1314,7 +1314,7 @@ describe('RebalanceModal route and step content', () => {
     let rows = await openSteps(user);
     expect(rows).toHaveLength(7);
     expect(within(rows[6]).getByText('Convert')).toBeInTheDocument();
-    expect(within(rows[6]).getByText('instant')).toBeInTheDocument();
+    expect(within(rows[6]).getByText('Instant')).toBeInTheDocument();
     expect(facts().Round).toBe('6 of 6');
     cleanup();
 
@@ -1340,7 +1340,7 @@ describe('RebalanceModal route and step content', () => {
     await openSteps(user);
     expect(stepTexts()).toEqual([
       ['Round 1', 'Buy 249.83 USDC, move it to the CrossEx Hyperliquid wallet', '249.78 arrives', 'about 2 min'],
-      ['Convert', 'Convert 250.29 USDT to USDC in the CrossEx Lighter wallet', '249.78 arrives', 'instant'],
+      ['Convert', 'Convert 250.29 USDT to USDC in the CrossEx Lighter wallet', '249.78 arrives', 'Instant'],
     ]);
     await user.click(screen.getByRole('radio', { name: 'Spot loop' }));
     expect(stepTexts()).toEqual([
@@ -1404,7 +1404,7 @@ describe('RebalanceModal hovers and facts', () => {
     show(rebalanceViews.accountA, { transfer: transferViews.accountB });
     await within(dialog()).findByRole('button', { name: 'Transfer' });
     await check([
-      ['Route', 'How the money moves. The fee includes Gate fees and the spot spread. Spot loop runs until the move is done, however many rounds that takes.'],
+      ['Route', 'How the money moves. Fee includes Gate fees and the spot spread.'],
       ['Recommended', 'Cheapest route that takes 15 min or less.'],
       ['USDT · CrossEx', 'CrossEx wallet. Margin for Gate, Binance, OKX and Bybit legs.'],
       ['USDC · Hyperliquid', 'CrossEx wallet. Margin for Hyperliquid legs.'],
@@ -1566,7 +1566,7 @@ describe('RebalanceModal presets and custom amount', () => {
     expect(screen.getByRole('button', { name: 'Hold to clear debt' })).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'After clearing debt' })).toBeInTheDocument();
     expect(within(dialog()).getByText('Clear debt recommended.')).toBeInTheDocument();
-    expect(within(dialog()).getByText('Debt prevents you from withdrawing your cash.')).toBeInTheDocument();
+    expect(within(dialog()).getByText('You cannot withdraw cash while a wallet borrows.')).toBeInTheDocument();
     expect(within(dialog()).queryByText('Position share')).toBeNull();
   });
 

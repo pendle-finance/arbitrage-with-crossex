@@ -1,3 +1,4 @@
+import { Trans, useTranslation } from 'react-i18next';
 import { useFees } from '../api/queries';
 import type { SpecialFee, VenueFees } from '../api/types';
 import { Chip } from '../components/Chip';
@@ -6,6 +7,7 @@ import { EmptyState } from '../components/EmptyState';
 import { QueryError } from '../components/QueryError';
 import { TableSkeleton } from '../components/Skeleton';
 import { VENUE_QUOTE_NOTE, VenueChip } from '../components/VenueChip';
+import { t as i18nT } from '../i18n';
 import { bps, feePct } from '../lib/fmt';
 
 /** "0.0200% (2.0 bps)" — rebates (negative) render green. */
@@ -20,15 +22,15 @@ function FeeCell({ rate }: { rate: string }) {
 }
 
 const SPECIAL_COLUMNS: Column<SpecialFee>[] = [
-  { key: 'symbol', header: 'Symbol', render: (s) => <span className="num text-[12px] text-ink-50">{s.symbol}</span> },
-  { key: 'maker', header: 'Maker', align: 'right', render: (s) => <FeeCell rate={s.makerFeeRate} /> },
-  { key: 'taker', header: 'Taker', align: 'right', render: (s) => <FeeCell rate={s.takerFeeRate} /> },
+  { key: 'symbol', header: <Trans i18nKey="opportunities.trades.symbol" />, render: (s) => <span className="num text-[12px] text-ink-50">{s.symbol}</span> },
+  { key: 'maker', header: <Trans i18nKey="opportunities.fees.maker" />, align: 'right', render: (s) => <FeeCell rate={s.makerFeeRate} /> },
+  { key: 'taker', header: <Trans i18nKey="opportunities.fees.taker" />, align: 'right', render: (s) => <FeeCell rate={s.takerFeeRate} /> },
 ];
 
 const COLUMNS: Column<VenueFees>[] = [
   {
     key: 'venue',
-    header: 'Venue',
+    header: <Trans i18nKey="common.venue" />,
     render: (v) => (
       <span className="inline-flex items-center gap-2">
         {/* VenueChip already carries the venue's mark — a second one here read
@@ -40,17 +42,17 @@ const COLUMNS: Column<VenueFees>[] = [
       </span>
     ),
   },
-  { key: 'pm', header: 'Perp maker', align: 'right', render: (v) => <FeeCell rate={v.futureMakerFee} /> },
-  { key: 'pt', header: 'Perp taker', align: 'right', render: (v) => <FeeCell rate={v.futureTakerFee} /> },
-  { key: 'sm', header: 'Spot maker', align: 'right', render: (v) => <FeeCell rate={v.spotMakerFee} /> },
-  { key: 'st', header: 'Spot taker', align: 'right', render: (v) => <FeeCell rate={v.spotTakerFee} /> },
+  { key: 'pm', header: <Trans i18nKey="opportunities.fees.perpMaker" />, align: 'right', render: (v) => <FeeCell rate={v.futureMakerFee} /> },
+  { key: 'pt', header: <Trans i18nKey="opportunities.fees.perpTaker" />, align: 'right', render: (v) => <FeeCell rate={v.futureTakerFee} /> },
+  { key: 'sm', header: <Trans i18nKey="opportunities.fees.spotMaker" />, align: 'right', render: (v) => <FeeCell rate={v.spotMakerFee} /> },
+  { key: 'st', header: <Trans i18nKey="opportunities.fees.spotTaker" />, align: 'right', render: (v) => <FeeCell rate={v.spotTakerFee} /> },
   {
     key: 'specials',
-    header: 'Specials',
+    header: <Trans i18nKey="opportunities.fees.specials" />,
     align: 'right',
     render: (v) =>
       v.specialFeeList?.length ? (
-        <Chip sm tone="amber" className="num" title="Per-symbol overrides — expand the row">
+        <Chip sm tone="amber" className="num" title={i18nT('opportunities.fees.specialsTitle')}>
           {v.specialFeeList.length}
         </Chip>
       ) : (
@@ -61,31 +63,31 @@ const COLUMNS: Column<VenueFees>[] = [
 
 /** Fees tab. Gate exposes no tier NAME — these are the account's effective rates. */
 export function FeesPanel() {
+  const { t } = useTranslation();
   const { data, isPending, isError, error } = useFees();
 
   if (isPending) return <TableSkeleton rows={7} cols={6} />;
   if (isError && !data) {
-    return <QueryError title="Couldn't load fees" error={error} />;
+    return <QueryError title={t('opportunities.fees.loadError')} error={error} />;
   }
 
   const venues = (data ?? []).slice().sort((a, b) => a.exchangeType.localeCompare(b.exchangeType));
 
   return (
-    <section aria-label="Fee rates">
+    <section aria-label={t('opportunities.fees.aria')}>
       <h2 className="mb-2 text-[14px] font-semibold text-ink-50">
-        Your CrossEx fee rates{' '}
-        <span className="normal-case text-ink-500">— per venue · negative maker = rebate</span>
+        <Trans i18nKey="opportunities.fees.heading" components={{ muted: <span className="normal-case text-ink-500" /> }} />
       </h2>
       <DataTable
         columns={COLUMNS}
         rows={venues}
         rowKey={(v) => v.exchangeType}
-        emptyState={<EmptyState icon="％" title="No fee data" />}
+        emptyState={<EmptyState icon="％" title={t('opportunities.fees.empty')} />}
         renderExpanded={(v) =>
           v.specialFeeList?.length ? (
             <div>
               <div className="mb-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
-                Per-symbol overrides ({v.specialFeeList.length})
+                {t('opportunities.fees.overrides', { count: v.specialFeeList.length })}
               </div>
               <DataTable
                 columns={SPECIAL_COLUMNS}
@@ -95,7 +97,7 @@ export function FeesPanel() {
               />
             </div>
           ) : (
-            <span className="text-xs text-ink-500">No per-symbol overrides on {v.exchangeType}.</span>
+            <span className="text-xs text-ink-500">{t('opportunities.fees.noOverrides', { venue: v.exchangeType })}</span>
           )
         }
       />

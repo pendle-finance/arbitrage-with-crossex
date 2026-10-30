@@ -76,20 +76,19 @@ export function toRows(
   groups: OpportunityGroup[],
   /** Keys shown on the previous render — see `HYSTERESIS_APR`. */
   shownKeys?: ReadonlySet<string>,
-  /** The perps the reader holds, and the notional the response was priced
-   * at (the re-pricing needs N × T). Absent: every row is a new position. */
-  holdings?: { held: HeldPerps; notionalUsd: number },
-  /** The account's active settlement-fee rebate and the notional the response
-   * was priced at, passed only while the reader keeps the "Include rebate in
-   * APR" toggle on. Absent: rank and gate on the fee the account pays today —
-   * so a non-rebated reader is byte-identical, and a rebated one who turned the
-   * toggle off sees the undiscounted list they asked for. */
-  rebate?: { config: Rebate; notionalUsd: number } | null,
+  /** The perps the reader holds. Absent: every row is a new position. */
+  held?: HeldPerps,
+  /** The account's active settlement-fee rebate, passed only while the reader
+   * keeps the "Include rebate in APR" toggle on. Absent: rank and gate on the
+   * fee the account pays today — so a non-rebated reader is byte-identical, and
+   * a rebated one who turned the toggle off sees the undiscounted list they
+   * asked for. */
+  rebate?: Rebate | null,
 ): OpportunityRow[] {
   const rows: OpportunityRow[] = [];
   for (const group of groups) {
     for (const served of group.pairs) {
-      const held = holdings ? heldTagFor(holdings.held, group.underlying, served, group.maturity) : null;
+      const tag = held ? heldTagFor(held, group.underlying, served, group.maturity) : null;
       // RANKED on the re-priced figure, and tested for viability on it: a pair
       // the full entry cost sinks below zero can still be worth farming for
       // someone already in it — or worth it once an active rebate is credited,
@@ -98,8 +97,8 @@ export function toRows(
       // The row carries the pair AS SERVED, though — the card re-prices it under
       // its own toggles (same repriceHeld → applyRebate order used here).
       const pair = served;
-      const heldPriced = held && holdings ? repriceHeld(served, holdings.notionalUsd) : served;
-      const priced = rebate ? applyRebate(heldPriced, rebate.config, rebate.notionalUsd) : heldPriced;
+      const heldPriced = tag ? repriceHeld(served, served.notionalUsd) : served;
+      const priced = rebate ? applyRebate(heldPriced, rebate, served.notionalUsd) : heldPriced;
       const apr = priced.netFixedAprOnCapital;
       if (apr === null || !Number.isFinite(apr)) continue;
       const key = `${group.tokenId}:${group.maturity}:${pair.borosLegs.map((leg) => leg.marketId).join(':')}`;
@@ -118,7 +117,7 @@ export function toRows(
         asset: group.underlying,
         venueKeys: [...new Set([venueKey(pair.shortLeg.venue), venueKey(pair.longLeg.venue)])],
         days: maturityDays(group.secondsToMaturity),
-        held,
+        held: tag,
       });
     }
   }

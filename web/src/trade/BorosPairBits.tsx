@@ -10,6 +10,8 @@
  *    is negative.
  */
 import type { ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import { t } from '../i18n';
 import type {
   BorosLegDirection,
   BorosLegFill,
@@ -25,6 +27,7 @@ import { fmtDateShort, fmtDateUtc, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt
 import { spreadName, type SpreadVenues } from '../lib/spread';
 import { SpreadName } from '../components/SpreadName';
 import { ChevronDown } from 'lucide-react';
+import { localizeServerText } from '../i18n/serverMessages';
 
 /** Was this leg actually sent to the venue? A not-submitted sentinel is
  * all-zero with no failure (orders.ts `notSubmitted`); a REJECTED leg has
@@ -76,10 +79,7 @@ export const size = (n: number | null | undefined): string => {
  * and a user reading a card, then this ticket, had to translate between them.
  * The rates reading is kept in the tooltip on the control.
  */
-const DIRECTION_LABEL: Record<BorosLegDirection, string> = {
-  short: 'Short',
-  long: 'Long',
-};
+const directionLabel = (d: BorosLegDirection): string => t(d === 'long' ? 'common.long' : 'common.short');
 
 export function DirectionToggle({
   value,
@@ -94,13 +94,14 @@ export function DirectionToggle({
    * beside the caption rather than on a row of its own. */
   compact?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     // Full width by default: the two options are the whole choice, so they
     // take the whole row rather than huddling left with dead space beside them.
     <div
       className={compact ? 'seg seg-xs inline-flex' : 'seg flex w-full'}
       role="radiogroup"
-      aria-label={`${idPrefix} direction`}
+      aria-label={t('pairTicket.borosBits.directionAria', { prefix: idPrefix })}
     >
       {(['long', 'short'] as const).map((d) => {
         const active = value === d;
@@ -125,12 +126,12 @@ export function DirectionToggle({
             }`}
             title={
               long
-                ? 'Long the rate — pay fixed, receive floating'
-                : 'Short the rate — receive fixed, pay floating'
+                ? t('pairTicket.borosBits.longRateHint')
+                : t('pairTicket.borosBits.shortRateHint')
             }
             onClick={() => onChange(d)}
           >
-            {DIRECTION_LABEL[d]}
+            {directionLabel(d)}
           </button>
         );
       })}
@@ -165,6 +166,7 @@ export function MarketCard({
    * way to change them is to go back and pick another strategy. */
   locked?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       {/* The side sits WITH its label, not across the card: "LONG · Market
@@ -174,7 +176,7 @@ export function MarketCard({
       <div className="flex items-center gap-2">
         {side && (
           <Chip sm tone={side === 'long' ? 'green' : 'red'} className="font-semibold">
-            {side === 'long' ? 'LONG' : 'SHORT'}
+            {t(side === 'long' ? 'common.longUpper' : 'common.shortUpper')}
           </Chip>
         )}
         <span className="text-[12px] font-normal text-ink-300">{label}</span>
@@ -249,6 +251,7 @@ export function MarketSelect({
   ariaLabel?: string;
 }) {
   const eligible = markets.filter((m) => reasonFor(m) === null);
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1">
       {label ? (
@@ -265,7 +268,7 @@ export function MarketSelect({
           disabled={disabled}
           onChange={(e) => onPick(e.target.value === '' ? null : Number(e.target.value))}
         >
-          <option value="">select a market…</option>
+          <option value="">{t('pairTicket.borosBits.selectMarket')}</option>
           {eligible.map((m) => (
             <option key={m.marketId} value={m.marketId}>
               {marketLabel(m)}
@@ -354,6 +357,7 @@ export function SpreadReadout({
    * to the caller (a roll's review keeps them behind "Details"). */
   compact?: boolean;
 }) {
+  const { t } = useTranslation();
   const solo = soloOf(sim, singleLeg);
   const lone = loneOf(sim, singleLeg);
   const headline = solo ? solo.execApr : sim.estSpreadApr;
@@ -363,7 +367,7 @@ export function SpreadReadout({
     // The venue alone names a leg: both share the coin and maturity, and
     // the side chip beside it says which way it faces.
     : sim.legs.map((leg) => [leg.venue, leg]);
-  const liqTitle = LIQ_TITLE;
+  const liqTitle = t('pairTicket.borosBits.liqTitle');
   return (
     <div className="flex flex-col gap-1.5">
       {/* One leg has no spread to report: the headline becomes the rate that
@@ -378,13 +382,13 @@ export function SpreadReadout({
           className={legs.length > 0 ? 'cursor-help text-[12.5px] text-ink-50' : 'text-[12.5px] text-ink-50'}
           title={
             legs.length > 0
-              ? `Net of settlement fees. Execution rates at this size:\n${legs
-                  .map(([label, leg]) => `${label} ${pct(leg.execApr)}`)
-                  .join('\n')}`
+              ? t('pairTicket.borosBits.spreadHint', {
+                  rates: legs.map(([label, leg]) => `${label} ${pct(leg.execApr)}`).join('\n'),
+                })
               : undefined
           }
         >
-          {solo ? 'Estimated rate' : 'Estimated spread'}
+          {solo ? t('pairTicket.borosBits.estimatedRate') : t('pairTicket.borosBits.estimatedSpread')}
           {legs.length > 0 && <span className="ml-1 text-ink-400">ⓘ</span>}
         </span>
         <span className={`num text-lg font-semibold ${negative ? 'text-rose-300' : 'text-emerald-400'}`}>
@@ -393,7 +397,7 @@ export function SpreadReadout({
       </div>
       {lone && (solo || !compact) && (
         <Row
-          label="Liquidation APR"
+          label={t('pairTicket.borosBits.liquidationApr')}
           title={liqTitle}
           value={<LiqValue leg={lone} />}
         />
@@ -408,18 +412,14 @@ export function SpreadReadout({
   );
 }
 
-const LIQ_TITLE =
-  'The mark rate at which this leg is liquidated if only its required margin backs it — extra collateral in the bucket moves it further out.';
-
-/** The Boros app's hover for a liquidation rate it shows as "N/A". */
-const LIQ_NA_TITLE = 'Position risk is low, so there is no liquidation rate for the time being.';
 
 /** A leg's liquidation rate. "N/A", as the Boros app shows it, when the leg
  * still holds a position but no rate is in range; "—" when it ends flat or
  * has no rate. */
 function LiqValue({ leg, className = '', tone = '' }: { leg: BorosSimulatedLeg; className?: string; tone?: string }) {
+  const { t } = useTranslation();
   if (leg.liquidationApr == null && leg.execApr !== null && leg.sizing.resultingSize !== 0) {
-    return <span className={`${className} text-ink-500`} title={LIQ_NA_TITLE}>N/A</span>;
+    return <span className={`${className} text-ink-500`} title={t('pairTicket.borosBits.liqNaHint')}>{t('pairTicket.borosBits.na')}</span>;
   }
   return (
     <span className={`${className} ${leg.liquidationApr == null ? 'text-ink-500' : tone}`}>
@@ -432,12 +432,13 @@ function LiqValue({ leg, className = '', tone = '' }: { leg: BorosSimulatedLeg; 
  * as one fact about the pair, when they are two independent points — Boros
  * liquidates per market (his call 2026-09-18). */
 export function LiquidationRows({ sim }: { sim: BorosPairSimulation }) {
+  const { t } = useTranslation();
   return (
     <div className="mt-1 flex flex-col gap-1 border-t border-ink-800/80 pt-2">
       {sim.legs.map((leg) => [leg.venue, leg] as const).map(([label, leg], i) => (
         <div key={`${label}-${i}`} className="flex items-baseline justify-between gap-3">
-          <span className="min-w-0 truncate text-[12px] text-ink-200" title={LIQ_TITLE}>
-            {label} liquidation APR
+          <span className="min-w-0 truncate text-[12px] text-ink-200" title={t('pairTicket.borosBits.liqTitle')}>
+            {t('pairTicket.borosBits.venueLiquidationApr', { venue: label })}
           </span>
           <LiqValue leg={leg} className="num shrink-0 text-[12.5px]" tone="text-ink-50" />
         </div>
@@ -471,6 +472,7 @@ export function PositionArithmetic({
   // Named by venue, not by slot: "Binance · short" is the row a trader scans
   // for, where "Leg A" makes them remember which leg Binance was. A one-leg
   // trade lists that one leg — this block is the only position readout.
+  const { t } = useTranslation();
   const solo = soloOf(sim, singleLeg);
   const legs: BorosSimulatedLeg[] = solo ? [solo] : sim.legs;
   const spread = spreadVenues && legs.length === 1 ? spreadVenues : null;
@@ -484,7 +486,7 @@ export function PositionArithmetic({
     leg.sizing.resultingSize > 0 ? 'long' : leg.sizing.resultingSize < 0 ? 'short' : leg.direction;
   return (
     <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-      <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">Position after</span>
+      <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">{t('pairTicket.borosBits.positionAfter')}</span>
       {legs.map((leg) => {
         const side = sideOf(leg);
         const flat = leg.sizing.resultingSize === 0;
@@ -497,7 +499,7 @@ export function PositionArithmetic({
             </span>
             <span
               className="num shrink-0 text-[12px] text-ink-400"
-              title="Boros nets to one position per market, so this is your WHOLE exposure there — not just the part this ticket opens."
+              title={t('pairTicket.borosBits.positionAfterHint')}
             >
               {mag(leg.sizing.currentSize)}
               <span className="mx-1 text-ink-600">→</span>
@@ -535,6 +537,7 @@ export function PairCosts({
   compact?: boolean;
 }) {
   const oneLeg = loneOf(sim, singleLeg) !== null;
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
       {/* The total LEADS and the legs hang off it as a breakdown: what the
@@ -543,13 +546,13 @@ export function PairCosts({
           and a short on different markets do not offset each other's
           margin. */}
       <Row
-        label={freeing ? 'Margin freed' : soloOf(sim, singleLeg) ? 'Margin required' : oneLeg ? 'Margin' : 'Total margin'}
+        label={freeing ? t('pairTicket.borosBits.marginFreed') : soloOf(sim, singleLeg) ? t('pairTicket.bits.marginRequired') : oneLeg ? t('common.margin') : t('pairTicket.borosBits.totalMargin')}
         title={
           freeing
-            ? 'Initial margin these legs stop posting once they are closed — it returns to the bucket each one sits in.'
+            ? t('pairTicket.borosBits.marginFreedHint')
             : oneLeg
-              ? 'Initial margin this leg consumes'
-              : 'The two legs summed, not netted: each bucket must carry its own margin.'
+              ? t('pairTicket.borosBits.marginLegHint')
+              : t('pairTicket.borosBits.totalMarginHint')
         }
         value={<CollateralAmount n={freeing ? (sim.marginReleasedTotal ?? null) : sim.marginRequiredTotal} sim={sim} />}
       />
@@ -558,7 +561,7 @@ export function PairCosts({
           <Row
             key={`${leg.marketId}-${i}`}
             label={leg.venue}
-            title="Initial margin this leg's bucket must carry"
+            title={t('pairTicket.borosBits.bucketMarginHint')}
             value={<CollateralAmount n={leg.marginRequired} sim={sim} bare />}
             dim
           />
@@ -566,11 +569,11 @@ export function PairCosts({
       <Row
         // "Cost to cross" named the ACTION (crossing the spread) rather than
         // the charge, which reads as jargon to anyone who has not met it.
-        label={oneLeg ? 'Trade fee' : `Trade fee · ${sim.legs.length} legs`}
+        label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
         title={
           oneLeg
-            ? 'Boros taker fee at this size — charged once, when the order fills'
-            : 'Boros taker fee on both legs at this size — charged once, when the orders fill'
+            ? t('pairTicket.borosBits.tradeFeeHint')
+            : t('pairTicket.borosBits.tradeFeeLegsHint')
         }
         value={`${size(sim.costToCrossSize)} ${sim.collateral}`}
       />
@@ -588,27 +591,53 @@ export function BlockerList({ blockers }: { blockers: BorosPairBlocker[] }) {
           // pre-line: a roll's refusal carries one line per rejected leg.
           className="whitespace-pre-line rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
         >
-          {b.message}
+          {localizeServerText(b.message)}
           {b.code === 'isolated-must-switch' && b.marketId !== undefined && (
             // A link, not a button: this app cannot close an isolated
             // position (the close route refuses one), so the button that
             // used to sit here could only ever fail.
             <>
-              {' '}Cancel its orders and close the position{' '}
-              <a
-                href={`https://boros.pendle.finance/markets/${b.marketId}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-rose-100"
-              >
-                on Boros
-              </a>{' '}
-              first.
+              {' '}
+              <Trans
+                i18nKey="pairTicket.borosBits.isolatedSwitch"
+                components={{
+                  a: (
+                    <a
+                      href={`https://boros.pendle.finance/markets/${b.marketId}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline hover:text-rose-100"
+                    />
+                  ),
+                }}
+              />
             </>
           )}
         </li>
       ))}
     </ul>
+  );
+}
+
+export function UnevenFillWarning({ sim, onUse }: { sim: BorosPairSimulation; onUse?: (size: number) => void }) {
+  const { t } = useTranslation();
+  if (sim.legs.length !== 2 || !(sim.hedgedSize > 0) || !(sim.unhedgedSize > 0)) return null;
+  const unit = sim.collateral;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
+      <span>
+        {t('pairTicket.borosBits.uneven', { hedged: sigGrouped(sim.hedgedSize), unhedged: sigGrouped(sim.unhedgedSize), unit })}
+      </span>
+      {onUse && (
+        <button
+          type="button"
+          className="rounded border border-amber-400/40 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
+          onClick={() => onUse(sim.hedgedSize)}
+        >
+          {t('pairTicket.borosBits.useSize', { size: sigGrouped(sim.hedgedSize), unit })}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -638,6 +667,7 @@ export function PairResultReport({
   onDismiss?: () => void;
   busy?: boolean;
 }) {
+  const { t } = useTranslation();
   const tone = result.partial ? 'amber' : 'green';
   /**
    * Was this a deliberate ONE-LEG order?
@@ -681,25 +711,25 @@ export function PairResultReport({
     >
       <div className="flex flex-wrap items-center gap-2">
         <Chip sm tone={nothing ? 'red' : tone}>
-          {nothing ? 'nothing filled' : shortfall ? 'partially filled' : 'filled'}
+          {nothing ? t('pairTicket.borosBits.nothingFilled') : shortfall ? t('pairTicket.borosBits.partiallyFilled') : t('pairTicket.borosBits.filled')}
         </Chip>
         {oneLeg && only ? (
           // Direction and size, which is the whole of what was asked for.
           <span className="text-[12px] text-ink-200">
-            {onlyName ? `${onlyName} · ${DIRECTION_LABEL[only.direction].toLowerCase()}` : DIRECTION_LABEL[only.direction]}{' '}
+            {onlyName ? `${onlyName} · ${directionLabel(only.direction).toLowerCase()}` : directionLabel(only.direction)}{' '}
             <span className="num">{size(only.filledSize)}</span>{' '}
             {collateral}
             {only.execApr !== null && (
-              <span className="num text-ink-100"> at {pct(only.execApr)}</span>
+              <span className="num text-ink-100"> {t('pairTicket.borosBits.atRate', { rate: pct(only.execApr) })}</span>
             )}
           </span>
         ) : (
           <>
             <span className="text-[12px] text-ink-200">
-              {size(result.hedgedSize)} {collateral} hedged
+              {t('pairTicket.borosBits.hedged', { size: size(result.hedgedSize), unit: collateral })}
             </span>
             {result.realisedSpreadApr !== null && (
-              <span className="num text-[12px] text-ink-100">at {pct(result.realisedSpreadApr)}</span>
+              <span className="num text-[12px] text-ink-100">{t('pairTicket.borosBits.atRate', { rate: pct(result.realisedSpreadApr) })}</span>
             )}
           </>
         )}
@@ -712,20 +742,20 @@ export function PairResultReport({
       {!oneLeg && (
         <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
           {result.legs.map((fill, i) => (
-            <LegFillLine key={i} label={legName?.(fill.marketId) ?? `Leg ${legLetter(i)}`} fill={fill} collateral={collateral} />
+            <LegFillLine key={i} label={legName?.(fill.marketId) ?? t('pairTicket.borosBits.legLetter', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
           ))}
         </div>
       )}
       {fee !== undefined && fee !== null && !result.partial && (
         <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px]">
-          <span className="text-ink-400">Fee</span>
+          <span className="text-ink-400">{t('common.fee')}</span>
           <span className="num text-ink-200">
             {size(fee)} {collateral}
           </span>
         </div>
       )}
       {oneLeg && only?.failure && (
-        <div className="mt-1.5 text-[11px] text-amber-400">{FAILURE_LABEL[only.failure.code]}</div>
+        <div className="mt-1.5 text-[11px] text-amber-400">{t(FAILURE_LABEL[only.failure.code])}</div>
       )}
 
       {/* On a ONE-LEG order every unit is unhedged by construction — that was
@@ -736,8 +766,7 @@ export function PairResultReport({
       {!oneLeg && result.unhedgedSize > 0 && (
         // The one thing a delta-neutral terminal must never bury.
         <p className="mt-1.5 rounded border border-amber-500/30 bg-amber-500/[0.06] px-2 py-1.5 text-[11px] leading-relaxed text-amber-200">
-          {size(result.unhedgedSize)} {collateral} on leg {result.unhedgedLeg === null ? '' : legLetter(result.unhedgedLeg)} is unhedged — that
-          size is directional until you complete or close it.
+          {t('pairTicket.borosBits.unhedged', { size: size(result.unhedgedSize), unit: collateral, letter: result.unhedgedLeg === null ? '' : legLetter(result.unhedgedLeg) })}
         </p>
       )}
 
@@ -753,14 +782,14 @@ export function PairResultReport({
             onClick={onRetry}
             className="btn-ghost-xs"
           >
-            Retry the rest
+            {t('pairTicket.borosBits.retryRest')}
           </button>
           <button
             type="button"
             onClick={onDismiss}
             className="btn-ghost-xs"
           >
-            Dismiss
+            {t('common.dismiss')}
           </button>
         </div>
       ) : result.partial ? (
@@ -778,7 +807,7 @@ export function PairResultReport({
               onClick={onComplete}
               className="btn-ghost-xs !border-info/50 !text-pastel-blue hover:!bg-info/15"
             >
-              Complete now at market
+              {t('pairTicket.borosBits.completeAtMarket')}
             </button>
           )}
           <button
@@ -787,14 +816,14 @@ export function PairResultReport({
             onClick={onRetry}
             className="btn-ghost-xs"
           >
-            Retry
+            {t('common.retry')}
           </button>
           <button
             type="button"
             onClick={onDismiss}
             className="btn-ghost-xs"
           >
-            Leave it
+            {t('pairTicket.borosBits.leaveIt')}
           </button>
         </div>
       ) : onDismiss ? (
@@ -803,7 +832,7 @@ export function PairResultReport({
           onClick={onDismiss}
           className="btn-ghost-xs mt-2"
         >
-          Dismiss
+          {t('common.dismiss')}
         </button>
       ) : null}
     </div>
@@ -811,16 +840,16 @@ export function PairResultReport({
 }
 
 /** Failure copy per code — each points at a genuinely different fix (§7). */
-const FAILURE_LABEL: Record<NonNullable<BorosLegFill['failure']>['code'], string> = {
-  'insufficient-depth': 'not enough depth',
-  'rate-deviation': 'rate-deviation guard',
-  'insufficient-margin': 'not enough margin',
-  'no-gas': 'no prepaid gas',
-  'min-cash': 'below the venue minimum',
-  'market-limit': 'too many markets',
-  rejected: 'rejected',
-  unknown: 'no confirmation',
-};
+const FAILURE_LABEL = {
+  'insufficient-depth': 'pairTicket.failure.label.insufficientDepth',
+  'rate-deviation': 'pairTicket.failure.label.rateDeviation',
+  'insufficient-margin': 'pairTicket.failure.label.insufficientMargin',
+  'no-gas': 'pairTicket.failure.label.noGas',
+  'min-cash': 'pairTicket.failure.label.minCash',
+  'market-limit': 'pairTicket.failure.label.marketLimit',
+  rejected: 'pairTicket.failure.label.rejected',
+  unknown: 'pairTicket.failure.label.unknown',
+} as const satisfies Record<NonNullable<BorosLegFill['failure']>['code'], string>;
 
 export function LegFillLine({
   label,
@@ -831,17 +860,18 @@ export function LegFillLine({
   fill: BorosLegFill;
   collateral: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-0.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-ink-400">
-          {label} · {DIRECTION_LABEL[fill.direction].toLowerCase()}
+          {label} · {directionLabel(fill.direction).toLowerCase()}
         </span>
         <span className="num text-ink-200">
           {size(fill.filledSize)} {collateral}
           {fill.execApr !== null && ` @ ${pct(fill.execApr)}`}
           {fill.failure && (
-            <span className="ml-1.5 text-amber-400">{FAILURE_LABEL[fill.failure.code]}</span>
+            <span className="ml-1.5 text-amber-400">{t(FAILURE_LABEL[fill.failure.code])}</span>
           )}
         </span>
       </div>
@@ -852,39 +882,33 @@ export function LegFillLine({
 
 /** What to DO about each failure. Mirrors `legFailureHint` in
  * src/core/boros/orders.ts — each code points at a different fix. */
-const FAILURE_HINT: Record<NonNullable<BorosLegFill['failure']>['code'], string> = {
-  'insufficient-depth':
-    'The book ran out inside your rate bound. Trade a smaller size, or widen the tolerance and re-issue.',
-  'rate-deviation':
-    'The chain refused the rate as too far from mark. Widening your tolerance will not help — wait for the mark to move.',
-  'insufficient-margin': 'That account could not fund the leg. Top it up, then re-issue.',
-  'no-gas':
-    'Boros bills each action to a prepaid gas pot, which is separate from your trading collateral. Top up the gas balance, then re-issue.',
+const FAILURE_HINT = {
+  'insufficient-depth': 'pairTicket.failure.hint.insufficientDepth',
+  'rate-deviation': 'pairTicket.failure.hint.rateDeviation',
+  'insufficient-margin': 'pairTicket.failure.hint.insufficientMargin',
+  'no-gas': 'pairTicket.failure.hint.noGas',
   // Says "collateral, not gas" outright: the venue's own "top up" reads as gas,
   // and paying gas here spends margin on nothing and cannot be undone.
-  'min-cash':
-    'This is the first trade on this collateral on Boros, and the venue needs a minimum balance in that account before it will accept one. ' +
-    'This is collateral, not gas: topping up the gas balance will not clear it. Deposit into your Boros balance for this collateral, then re-issue.',
-  'market-limit':
-    'This collateral account is in as many Boros markets as it may hold, and each one still has a position or an order. ' +
-    'Close a position you no longer need, then re-issue.',
-  rejected: 'The venue rejected the order outright — its own message is below.',
+  'min-cash': 'pairTicket.failure.hint.minCash',
+  'market-limit': 'pairTicket.failure.hint.marketLimit',
+  rejected: 'pairTicket.failure.hint.rejected',
   // Deliberately terse: an 'unknown' failure always carries a specific message
   // below it, and two paragraphs saying the same thing read as two problems.
-  unknown: 'This leg needs checking on Boros:',
-};
+  unknown: 'pairTicket.failure.hint.unknown',
+} as const satisfies Record<NonNullable<BorosLegFill['failure']>['code'], string>;
 
 /** The venue's own words. 'rejected' is the catch-all — its message is the ONLY
  * thing that says what actually happened, so dropping it leaves the user with a
  * one-word label and nothing to act on. */
 function FailureDetail({ fill }: { fill: BorosLegFill }) {
+  const { t } = useTranslation();
   if (!fill.failure) return null;
   return (
     <p className="pl-2 text-[10.5px] leading-relaxed text-ink-500">
-      {FAILURE_HINT[fill.failure.code]}
+      {t(FAILURE_HINT[fill.failure.code])}
       {fill.failure.message && (
         <span className="mt-0.5 block break-words text-[10px] text-ink-600">
-          {fill.failure.message}
+          {localizeServerText(fill.failure.message)}
         </span>
       )}
     </p>
@@ -931,14 +955,14 @@ export function acknowledgementText(
   // fixed 2dp printed a 0.0123 BTC position as "0.01 BTC" in the one line
   // that binds the user to what happens to it.
   const held = size(Math.abs(sizing.currentSize));
-  const side = sizing.currentSize > 0 ? 'long' : 'short';
+  const side = t(sizing.currentSize > 0 ? 'common.long' : 'common.short');
   if (sizing.flips) {
     const opened = size(Math.abs(sizing.resultingSize));
-    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral}, realising its PnL, and opens ${opened} ${collateral} in the opposite direction.`;
+    return t('pairTicket.borosBits.ackFlip', { market: leg.marketName, side, held, unit: collateral, opened });
   }
   if (sizing.resultingSize === 0) {
-    return `I understand this closes my existing ${leg.marketName} ${side} position of ${held} ${collateral} in full, realising its PnL.`;
+    return t('pairTicket.borosBits.ackClose', { market: leg.marketName, side, held, unit: collateral });
   }
   const to = size(Math.abs(sizing.resultingSize));
-  return `I understand this reduces my existing ${leg.marketName} ${side} position of ${held} ${collateral} to ${to} ${collateral}, realising part of its PnL.`;
+  return t('pairTicket.borosBits.ackReduce', { market: leg.marketName, side, held, unit: collateral, to });
 }

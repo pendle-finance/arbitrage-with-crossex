@@ -507,7 +507,7 @@ describe('RollOverModal — spread target', () => {
     });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old positions)' }));
     const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
     await user.click(next);
@@ -525,7 +525,7 @@ describe('RollOverModal — spread target', () => {
     });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByText(/there is nothing to roll into yet/, undefined, { timeout: 4_000 })).toBeInTheDocument();
+    expect(await within(dialog).findByText(/No later maturity on both venues yet/, undefined, { timeout: 4_000 })).toBeInTheDocument();
     expect(entries).toEqual([]);
     expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
   });
@@ -676,7 +676,7 @@ describe('RollOverModal — the atomic roll', () => {
     install({ onRollExecute: (body) => HttpResponse.json(executeBody(body, rolledResult(body), true)) });
     const dialog = await armAndHold(user);
     expect(await within(dialog).findByText(/Rolled 100 ETH/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Answered from the earlier submission/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/This result is from the earlier send/)).toBeInTheDocument();
   });
 });
 
@@ -700,7 +700,7 @@ describe('RollOverModal — the review page', () => {
 
     // Two tolerances, one per batch: widening the EXIT re-quotes only the
     // close side of the roll; the re-entry keeps its seed.
-    const [exitMax, entryMax] = within(dialog).getAllByTitle(/Change the tolerance/);
+    const [exitMax, entryMax] = within(dialog).getAllByTitle(/Change max slippage/);
     await user.click(exitMax);
     const exitSlip = within(dialog).getByLabelText('Exit max slippage, % APR');
     await user.clear(exitSlip);
@@ -768,7 +768,7 @@ describe('RollOverModal — the review page', () => {
     await user.click(next);
 
     const box = await within(dialog).findByRole('checkbox');
-    expect(within(dialog).getByText(/I understand this closes my existing .* position of 0\.004 ETH, realising its PnL, and opens/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/I understand this closes my existing .* position of 0\.004 ETH, realizing its PnL, and opens/)).toBeInTheDocument();
     const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
     expect(confirm).toBeDisabled();
     expect(sims.at(-1)!.opposingAcknowledged).toBe(false);
@@ -828,7 +828,7 @@ describe('RollOverModal — the review page', () => {
     await user.click(next);
     expect(await within(dialog).findByText(/Not enough margin/)).toBeInTheDocument();
     expect(within(dialog).getByText(/0\.0525 ETH → 0\.084 ETH/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/once the old legs are closed/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/after the old positions close/)).toBeInTheDocument();
     expect(within(dialog).getByText(/About 0\.029 ETH short — the venue refuses the roll/)).toBeInTheDocument();
     expect(within(dialog).queryByText('Simulation failed')).not.toBeInTheDocument();
   });
@@ -935,7 +935,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     const dialog = await screen.findByRole('dialog');
 
     // Switch to open-only; the primary button renames accordingly.
-    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old positions)' }));
     const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
     await user.click(next);
@@ -943,7 +943,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     // The review has NO exit batch — just the new legs.
     expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Re-entry')).not.toBeInTheDocument();
-    expect(within(dialog).getByText(/Your perps hedge the new legs\. The .* legs stay open, with no perps/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Your perps hedge the new positions\. The .* positions stay open, with no perps/)).toBeInTheDocument();
 
     const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
@@ -974,10 +974,10 @@ describe('RollOverModal — open only (keep old legs)', () => {
     const costRow = async (label: string) => (await within(dialog).findByText(label)).parentElement as HTMLElement;
 
     // Close & reopen: the round trip, both fees and the exit PnL behind the ⓘ.
-    const roundTrip = await costRow('Rollover Cost');
+    const roundTrip = await costRow('Rollover cost');
     await waitFor(() => expect(roundTrip.querySelector('[title]')?.getAttribute('title')).toMatch(/Exit PnL/));
 
-    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old positions)' }));
     const opening = await costRow('Opening cost');
     // 0.02 ETH to cross the entry books at $2,500: the opening fee, nothing else.
     await waitFor(() => expect(opening).toHaveTextContent(/50\.00/));
@@ -1007,7 +1007,7 @@ describe('RollOverModal — open only (keep old legs)', () => {
     );
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old legs)' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Open only (keep old positions)' }));
     const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
     await user.click(next);
@@ -1155,7 +1155,7 @@ describe('RollOverModal — per-venue exposure', () => {
     expect(part).toMatch(/Your orders on the \S+ markets are cancelled, also for the part you keep\. Place them again after the roll\./);
     cleanup();
     const whole = await reviewAt(p);
-    expect(whole).toMatch(/Resting orders on the \S+ markets are cancelled in the same batch\./);
+    expect(whole).toMatch(/Open orders on the \S+ markets are cancelled with the roll\./);
     expect(whole).not.toMatch(/also for the part you keep/);
     cleanup();
     // No resting order on the old markets: no cancel line at all.
@@ -1164,7 +1164,7 @@ describe('RollOverModal — per-venue exposure', () => {
   });
 
   for (const [label, single, spread] of [
-    ['$50', 0.01, 0.01],
+    ['$50 (#14)', 0.02, 0.02],
     ['$6M', 1261.25, 1071.75],
   ] as const) {
     // A mixed book is two pairs (mozzarella 2026-10-14); each rolls on its own.

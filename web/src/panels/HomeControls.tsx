@@ -3,6 +3,7 @@
  * freshness badge — the header bits the Positions asset view still uses.
  * Everything here is presentational; the asset view owns its own state.
  */
+import { useTranslation } from 'react-i18next';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { readJson } from '../lib/storage';
 
@@ -48,12 +49,13 @@ export function StrategyFreshness({
   staleError: boolean;
   onRefetch: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <FreshnessButton
       dense
       dataUpdatedAt={dataUpdatedAt}
       staleError={staleError}
-      title="Refetch strategy data"
+      title={t('app.freshness.refetchStrategy')}
       onRefetch={onRefetch}
     />
   );

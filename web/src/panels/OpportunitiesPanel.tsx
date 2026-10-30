@@ -8,28 +8,29 @@
  *               stats, Details + Execute.
  *   Expanded  — the four legs the trade opens, the spread it locks, and the
  *               profit + capital waterfalls.
- * Owns the persisted assumptions — notional, Boros entry, perp entry, exit and
+ * Owns the persisted assumptions — capital, Boros entry, perp entry, exit and
  * the simulated VIP tier, each an independent knob — and the single query they
  * drive. Executing only PREFILLS the pair ticket — submission stays behind its
  * hold-to-confirm control.
  */
-import { ArrowRight, ArrowUpRight } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Info } from 'lucide-react';
 import {
   memo,
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
   type MouseEvent,
   type ReactNode,
 } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
+import { t } from '../i18n';
 import { amountError } from '../lib/amount';
 import {
-  isValidOpportunityNotional,
-  OPPORTUNITY_NOTIONAL_MAX,
-  OPPORTUNITY_NOTIONAL_MIN,
+  isValidOpportunitySize,
+  opportunitySizeBounds,
+  PERP_SLIPPAGE_CLIP_USD,
   useBorosPairContext,
   useOpportunities,
   usePositions,
@@ -85,6 +86,7 @@ import {
   toRows,
   type OpportunityFilters,
 } from './opportunityFilters';
+import { localizeServerText } from '../i18n/serverMessages';
 
 export const OPPORTUNITIES_STORAGE_KEY = 'crossex.opportunities.v2';
 
@@ -92,48 +94,43 @@ export const OPPORTUNITIES_STORAGE_KEY = 'crossex.opportunities.v2';
  * them into two independent knobs, so v1 blobs are migrated once and dropped. */
 const LEGACY_STORAGE_KEY = 'crossex.opportunities.v1';
 
-/** The notional every card is priced at: three presets or a typed size. */
-type NotionalChoice = '10k' | '100k' | '500k' | 'custom';
+/** Shortcuts that fill the size box. The box is the size; a preset is lit only
+ * while the box holds exactly its amount. */
+type SizePreset = '10k' | '100k' | '500k' | '1m';
 
-const NOTIONAL_PRESETS: Record<Exclude<NotionalChoice, 'custom'>, number> = {
-  '10k': 10_000,
-  '100k': 100_000,
-  '500k': 500_000,
-};
-
-const NOTIONAL_OPTIONS: { value: NotionalChoice; label: string }[] = [
-  { value: '10k', label: '$10k' },
-  { value: '100k', label: '$100k' },
-  { value: '500k', label: '$500k' },
-  { value: 'custom', label: 'Custom…' },
+const SIZE_PRESETS: { value: SizePreset; label: string; usd: number }[] = [
+  { value: '10k', label: '$10k', usd: 10_000 },
+  { value: '100k', label: '$100k', usd: 100_000 },
+  { value: '500k', label: '$500k', usd: 500_000 },
+  { value: '1m', label: '$1M', usd: 1_000_000 },
 ];
 
-const ENTRY_MODE_LABEL: Record<EntryMode, string> = {
-  'both-market': '2 market orders',
-  'maker-hedge': 'Limit + hedge',
-};
+const ENTRY_MODE_LABEL = {
+  'both-market': 'opportunities.panel.entryBothMarket',
+  'maker-hedge': 'opportunities.panel.entryMakerHedge',
+} as const satisfies Record<EntryMode, string>;
 
-const EXIT_MODE_LABEL: Record<ExitMode, string> = {
-  close: 'Close positions',
-  roll: 'Roll over',
-};
+const EXIT_MODE_LABEL = {
+  close: 'opportunities.panel.exitClose',
+  roll: 'opportunities.panel.exitRoll',
+} as const satisfies Record<ExitMode, string>;
 
 /** Long-form forms of the same knobs — the buttons are terse, the summary line
  * and the empty state read as sentences. */
-const ENTRY_MODE_PROSE: Record<EntryMode, string> = {
-  'both-market': 'both legs market',
-  'maker-hedge': 'limit + hedge',
-};
+const ENTRY_MODE_PROSE = {
+  'both-market': 'opportunities.panel.entryProseBothMarket',
+  'maker-hedge': 'opportunities.panel.entryProseMakerHedge',
+} as const satisfies Record<EntryMode, string>;
 
-const EXIT_MODE_PROSE: Record<ExitMode, string> = {
-  close: 'close at maturity',
-  roll: 'roll over',
-};
+const EXIT_MODE_PROSE = {
+  close: 'opportunities.panel.exitProseClose',
+  roll: 'opportunities.panel.exitProseRoll',
+} as const satisfies Record<ExitMode, string>;
 
 export interface StoredControls {
-  notionalChoice: NotionalChoice;
-  /** The size behind "Custom…" (USD). */
-  customNotionalUsd: number;
+  /** Every card is sized by capital: it is what the APR is on, and what a
+   * trader budgets. */
+  capitalUsd: number;
   borosEntry: BorosEntryMode;
   entryMode: EntryMode;
   exitMode: ExitMode;
@@ -144,8 +141,7 @@ export interface StoredControls {
 }
 
 const DEFAULTS: StoredControls = {
-  notionalChoice: '10k',
-  customNotionalUsd: 10_000,
+  capitalUsd: 200_000,
   borosEntry: 'market',
   entryMode: 'both-market',
   // 'roll' by default: an assumed exit cost is a decision the user has not
@@ -160,37 +156,32 @@ const validEntryMode = (v: unknown): EntryMode =>
 const validExitMode = (v: unknown): ExitMode =>
   v === 'close' || v === 'roll' ? v : DEFAULTS.exitMode;
 
-const validSize = (v: unknown): number =>
-  typeof v === 'number' && isValidOpportunityNotional(v) ? v : DEFAULTS.customNotionalUsd;
+/** The saved capital. Saves from 1.7.7 hold a preset name beside a separate
+ * custom size, and the preset name wins, as it did on screen. A saved notional
+ * size is dropped: the same figure means a ~7× smaller trade as capital. */
+const storedCapital = (
+  usd: unknown,
+  legacyChoice: unknown,
+  legacyCustom: unknown,
+  fallback: number,
+): number => {
+  if (typeof usd === 'number' && isValidOpportunitySize('capital', usd)) return usd;
+  const preset = SIZE_PRESETS.find((o) => o.value === legacyChoice);
+  if (preset) return preset.usd;
+  if (legacyChoice === 'custom' && typeof legacyCustom === 'number' && isValidOpportunitySize('capital', legacyCustom))
+    return legacyCustom;
+  return fallback;
+};
 
-/** A preset-sized custom size reads back as that preset, so a v1 user lands on
- * the same button they left. */
-const snapToPreset = (usd: number): NotionalChoice =>
-  (Object.entries(NOTIONAL_PRESETS).find(([, n]) => n === usd)?.[0] as NotionalChoice | undefined) ??
-  'custom';
-
-/** v1 → v2: split the coupled `choice` into {notionalChoice, borosEntry}. */
+/** v1 → v2: keep the entry and exit modes. v1's size was a notional, so the
+ * capital starts at its default, and v1's 'mark' choice has no home any more —
+ * every card is priced market-at-size. */
 function migrateLegacy(): StoredControls | null {
   const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
   if (raw === null) return null;
-  const p = JSON.parse(raw) as
-    | { choice?: unknown; customSize?: unknown; entryMode?: unknown; exitMode?: unknown }
-    | null;
-  const size = validSize(p?.customSize);
-  const choice = p?.choice;
+  const p = JSON.parse(raw) as { entryMode?: unknown; exitMode?: unknown } | null;
   return {
-    notionalChoice:
-      choice === 'market-10k'
-        ? '10k'
-        : choice === 'market-100k'
-          ? '100k'
-          : choice === 'market-500k'
-            ? '500k'
-            : // 'mark' and 'market-custom' both carried their size in customSize.
-              snapToPreset(size),
-    customNotionalUsd: size,
-    // v1's 'mark' choice has no home any more — every card is priced
-    // market-at-size — so the size migrates and the entry lands on market.
+    ...DEFAULTS,
     borosEntry: 'market',
     entryMode: validEntryMode(p?.entryMode),
     exitMode: validExitMode(p?.exitMode),
@@ -215,8 +206,9 @@ export function loadControls(base: StoredControls = DEFAULTS): StoredControls {
   return readJson<StoredControls>(OPPORTUNITIES_STORAGE_KEY, base, (parsed) => {
     const p = parsed as
       | {
-          notionalChoice?: unknown;
-          customNotionalUsd?: unknown;
+          capitalUsd?: unknown;
+          capitalChoice?: unknown;
+          customCapitalUsd?: unknown;
           borosEntry?: unknown;
           entryMode?: unknown;
           exitMode?: unknown;
@@ -224,13 +216,7 @@ export function loadControls(base: StoredControls = DEFAULTS): StoredControls {
         }
       | null;
     return {
-      notionalChoice: NOTIONAL_OPTIONS.some((o) => o.value === p?.notionalChoice)
-        ? (p?.notionalChoice as NotionalChoice)
-        : base.notionalChoice,
-      customNotionalUsd:
-        typeof p?.customNotionalUsd === 'number' && isValidOpportunityNotional(p.customNotionalUsd)
-          ? p.customNotionalUsd
-          : base.customNotionalUsd,
+      capitalUsd: storedCapital(p?.capitalUsd, p?.capitalChoice, p?.customCapitalUsd, base.capitalUsd),
       borosEntry:
         p?.borosEntry === 'mark' || p?.borosEntry === 'market' ? p.borosEntry : base.borosEntry,
       entryMode:
@@ -284,7 +270,7 @@ interface CardChip {
 }
 
 /** The one sentence a thin Boros book puts on every number it nulls. */
-const THIN_BOOK_WHY = "The Boros books can't lock this size.";
+const THIN_BOOK_WHY = 'opportunities.card.thinBookWhy';
 
 /**
  * Warning chips for one card, derived only from the pair's own field status.
@@ -294,13 +280,13 @@ const THIN_BOOK_WHY = "The Boros books can't lock this size.";
 function cardChips(pair: OpportunityPair): CardChip[] {
   const chips: CardChip[] = [];
   if (pair.execSpreadApr === null) {
-    chips.push({ key: 'thin', label: 'thin book', title: THIN_BOOK_WHY });
+    chips.push({ key: 'thin', label: t('opportunities.card.chipThin'), title: t(THIN_BOOK_WHY) });
   }
   if (pair.costs.totalUsd === null) {
     chips.push({
       key: 'costs',
-      label: 'costs incomplete',
-      title: 'Some perp cost components are unknown — the profit waterfall can’t close',
+      label: t('opportunities.card.chipCosts'),
+      title: t('opportunities.card.chipCostsTitle'),
     });
   }
   for (const [side, leg] of [
@@ -310,8 +296,8 @@ function cardChips(pair: OpportunityPair): CardChip[] {
     if (!leg.crossexSymbol) {
       chips.push({
         key: `sym:${side}`,
-        label: `no CX symbol · ${prettyVenue(leg.venue)}`,
-        title: `${prettyVenue(leg.venue)} lists no CrossEx perp for ${leg.base} — that leg won't prefill`,
+        label: t('opportunities.card.chipNoSymbol', { venue: prettyVenue(leg.venue) }),
+        title: t('opportunities.card.chipNoSymbolTitle', { venue: prettyVenue(leg.venue), base: leg.base }),
       });
     }
   }
@@ -319,13 +305,11 @@ function cardChips(pair: OpportunityPair): CardChip[] {
 }
 
 /** The one sentence every null capital number carries. */
-const CAPITAL_WHY =
-  "The capital can't be modelled. A rate, margin input or max leverage is missing.";
+const CAPITAL_WHY = 'opportunities.card.capitalWhy';
 
 /** The hero's title: same wording as the Positions card, plus what "capital"
  * means for a trade that isn't open yet. */
-const CAPITAL_APR_TITLE =
-  'Locked fixed spread annualized on the minimum capital this trade posts.';
+const CAPITAL_APR_TITLE = 'opportunities.card.capitalAprTitle';
 
 /** One "$10k · Short ETH · BYBIT · <note>" row of the 4-leg explainer. The four
  * cells are a fragment so the parent grid keeps both rows aligned. */
@@ -348,6 +332,7 @@ function LegRow({
   /** Link the label out (the Boros legs → the market page, side prefilled). */
   href?: string;
 }) {
+  const { t } = useTranslation();
   // The mock's leg box: a dark inset per leg — number, what it is, and WHERE it
   // trades as a rounded tag at the right (CrossEx grey, Boros the brand blue) —
   // with the leg's one note on a line underneath, indented under the label.
@@ -377,11 +362,11 @@ function LegRow({
             href={href}
             target="_blank"
             rel="noreferrer"
-            title={`Open this market on Boros with the ${side} side prefilled`}
+            title={t(side === 'short' ? 'opportunities.card.openOnBorosShort' : 'opportunities.card.openOnBorosLong')}
             /* The visible label is the mock's bare "Short BTC" + a Boros tag; the
                tag disambiguates it on screen, but a link's accessible name has to
                stand alone, so it says which book and which rate it is. */
-            aria-label={`${label} funding on Boros`}
+            aria-label={t('opportunities.card.fundingOnBoros', { label })}
             className="flex min-w-0 flex-1 items-center gap-2.5 text-[14px] font-semibold leading-[16.94px] text-ink-50 transition-opacity hover:opacity-80"
           >
             <span className="num min-w-0">{label}</span>
@@ -420,6 +405,7 @@ function VenueBox({
   wide?: boolean;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   return (
     <div className={`min-w-0 rounded border border-wash/10 p-5${wide ? ' xl:col-span-2' : ''}`}>
       <div className="mb-4 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
@@ -432,8 +418,7 @@ function VenueBox({
               positive ? 'bg-grass/10 text-grass' : 'bg-guava/10 text-guava'
             }`}
           >
-            {positive ? '' : '−'}
-            {fmtPct(Math.abs(fixedApr), 1)} Fixed
+            {t('opportunities.card.fixedApr', { apr: `${positive ? '' : '−'}${fmtPct(Math.abs(fixedApr), 1)}` })}
           </span>
         )}
       </div>
@@ -448,7 +433,6 @@ function VenueBox({
 const OpportunityCard = memo(function OpportunityCard({
   group,
   pair: served,
-  notionalUsd,
   rebate = null,
   includeRebate = false,
   onOpenStrategy,
@@ -462,8 +446,6 @@ const OpportunityCard = memo(function OpportunityCard({
   /** THE trade this card is about. One group serves several: every viable venue
    * combination in it is its own card. */
   pair: OpportunityPair;
-  /** The notional the RESPONSE priced — the waterfall converts APRs with it. */
-  notionalUsd: number;
   /** The account's settlement-fee rebate config — drives the "fee rebate" chip
    * (shown when it reaches either leg) and, with `includeRebate`, the reprice.
    * Null = no rebate, chip hidden. */
@@ -480,6 +462,7 @@ const OpportunityCard = memo(function OpportunityCard({
     | ((pair: OpportunityPair, maturitySec: number, sizeBase?: number) => void)
     | null;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   /**
    * "I have existing perp position": prices THIS row with no perp entry cost
@@ -490,6 +473,8 @@ const OpportunityCard = memo(function OpportunityCard({
    * turns the default on (his call 2026-09-20).
    */
   const [hasPerpsChoice, setHasPerpsChoice] = useState<boolean | null>(null);
+  // THIS pair's own notional: under a capital target each pair solves its own.
+  const notionalUsd = served.notionalUsd;
   const hasPerps = hasPerpsChoice ?? held === 'rollover';
   // repriceHeld first (drops perp entry cost), then applyRebate (credits the
   // settlement-fee rebate) — both pure OpportunityPair → OpportunityPair, so
@@ -512,7 +497,7 @@ const OpportunityCard = memo(function OpportunityCard({
   // group's warnings are about the other markets in the cohort ("… has no
   // CrossEx perp venue"), and those rows stopped being displayed with the
   // markets table.
-  const reasons = [...new Set(pair.reasons)];
+  const reasons = [...new Set(pair.reasons)].map(localizeServerText);
   const base = pair.base || group.underlying;
   const capitalApr = pair.netFixedAprOnCapital;
   const capitalUsd = finite(pair.capitalUsd);
@@ -525,7 +510,10 @@ const OpportunityCard = memo(function OpportunityCard({
   const netNegative = capitalApr !== null && capitalApr < 0;
   const netTone = netNegative ? 'text-rose-400' : 'text-emerald-400';
   const days = maturityDays(group.secondsToMaturity);
-  const maturityTitle = `Matures ${fmtDateLocal(group.maturity)} · ${fmtAge(group.secondsToMaturity * 1000)} left`;
+  const maturityTitle = t('opportunities.card.maturityTitle', {
+    date: fmtDateLocal(group.maturity),
+    left: fmtAge(group.secondsToMaturity * 1000),
+  });
   // Token-margined groups also size in the collateral token — bracket the
   // notional with that amount (USDT groups stay pure-dollar).
   // ⚠ USDC counts as dollars too — testing `!== 'USDT'` alone handed a
@@ -544,14 +532,18 @@ const OpportunityCard = memo(function OpportunityCard({
   const noSymbols = !pair.shortLeg.crossexSymbol && !pair.longLeg.crossexSymbol;
   const executeDisabled = noSymbols || basesDiffer || onOpenStrategy === null;
   const executeTitle = basesDiffer
-    ? `The legs trade different assets (${pair.shortLeg.base} vs ${pair.longLeg.base}) — the pair ticket takes one base`
+    ? t('opportunities.card.basesDiffer', { short: pair.shortLeg.base, long: pair.longLeg.base })
     : noSymbols
-      ? `Neither ${prettyVenue(pair.shortLeg.venue)} nor ${prettyVenue(pair.longLeg.venue)} lists a CrossEx perp for ${pair.base}`
-      : 'Opens this strategy step by step — lock the Boros rate first, then hedge with the perps. You confirm each order yourself.';
+      ? t('opportunities.card.noSymbols', {
+          short: prettyVenue(pair.shortLeg.venue),
+          long: prettyVenue(pair.longLeg.venue),
+          base: pair.base,
+        })
+      : t('opportunities.card.executeTitle');
   const detailsDisabled =
     !canChartProfit(pair) && !canChartCapital(pair) && pair.execSpreadApr === null;
   const detailsTitle = detailsDisabled
-    ? 'This pair prices neither a spread nor a capital stack — there is nothing to break down'
+    ? t('opportunities.card.detailsDisabled')
     : undefined;
   const chartable = canChartProfit(pair) || canChartCapital(pair);
 
@@ -580,7 +572,7 @@ const OpportunityCard = memo(function OpportunityCard({
       <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-5 pt-[18px]">
         <span
           className="num inline-flex items-center gap-2 text-[16px] font-bold leading-[19.36px] text-ink-50"
-          title={`${base} funding rate`}
+          title={t('opportunities.card.baseFunding', { base })}
         >
           <TokenIcon symbol={base} size={20} />
           {base}
@@ -595,12 +587,12 @@ const OpportunityCard = memo(function OpportunityCard({
           className="ml-1 flex cursor-pointer items-center gap-1.5 whitespace-nowrap text-[11px] text-ink-300"
           title={
             held
-              ? 'You hold this pair at a sooner maturity. Prices the row with no perp entry cost.'
-              : 'Prices this row with no perp entry cost.'
+              ? t('opportunities.card.heldSoonerTitle')
+              : t('opportunities.card.hasPerpsTitle')
           }
         >
           <input type="checkbox" className="chk" checked={hasPerps} onChange={(e) => setHasPerpsChoice(e.target.checked)} />
-          I have existing perp position
+          {t('opportunities.card.hasPerps')}
         </label>
         {rebateChip && (
           <Chip
@@ -608,8 +600,10 @@ const OpportunityCard = memo(function OpportunityCard({
             tone="green"
             title={
               rebateLegs
-                ? `Settlement-fee rebate:\n${rebateLegs}`
-                : `Boros settlement-fee rebate on this account${rebateChip.startTimestamp ? ` since ${fmtDateLocal(rebateChip.startTimestamp)}` : ''}`
+                ? t('opportunities.card.rebateLegsTitle', { legs: rebateLegs })
+                : rebateChip.startTimestamp
+                  ? t('opportunities.card.rebateSinceTitle', { date: fmtDateLocal(rebateChip.startTimestamp) })
+                  : t('opportunities.card.rebateTitle')
             }
           >
             {rebateChipLabel(rebateChip, rebatedMarketIds)}
@@ -624,7 +618,7 @@ const OpportunityCard = memo(function OpportunityCard({
             asset and the legs it belongs to (his call 2026-09-21 — the APR
             reads better close to what it is the rate OF). */}
         <span className="num ml-auto whitespace-nowrap text-[12px] text-ink-400" title={maturityTitle}>
-          matures {fmtDateLocal(group.maturity)}
+          {t('opportunities.card.matures', { date: fmtDateLocal(group.maturity) })}
         </span>
       </div>
 
@@ -648,7 +642,7 @@ const OpportunityCard = memo(function OpportunityCard({
             {capitalApr === null || !Number.isFinite(capitalApr) ? (
               <span
                 className="num text-[28px] font-bold leading-none text-ink-400"
-                title={reasons.length > 0 ? reasons.join('\n') : CAPITAL_WHY}
+                title={reasons.length > 0 ? reasons.join('\n') : t(CAPITAL_WHY)}
               >
                 —%
               </span>
@@ -659,8 +653,8 @@ const OpportunityCard = memo(function OpportunityCard({
                 }`}
                 title={
                   reasons.length > 0
-                    ? `${CAPITAL_APR_TITLE}\n\n${reasons.join('\n')}`
-                    : CAPITAL_APR_TITLE
+                    ? `${t(CAPITAL_APR_TITLE)}\n\n${reasons.join('\n')}`
+                    : t(CAPITAL_APR_TITLE)
                 }
               >
                 {(capitalApr * 100).toFixed(1)}%
@@ -668,9 +662,9 @@ const OpportunityCard = memo(function OpportunityCard({
             )}
             {/* "APR" is its own muted label in the mock, not part of the
                 number — the figure stays the loudest thing on the card. */}
-            <span className="text-sm font-medium text-ink-200">APR</span>
+            <span className="text-sm font-medium text-ink-200">{t('common.apr')}</span>
             <span className="text-[12.5px] text-ink-400" title={maturityTitle}>
-              ({days}d)
+              {t('opportunities.card.days', { days })}
             </span>
               </span>
             {/* Details as a dotted-underline text link rather than a button:
@@ -682,38 +676,52 @@ const OpportunityCard = memo(function OpportunityCard({
             type="button"
               className="text-[12px] text-ink-300 underline decoration-ink-400 decoration-dotted underline-offset-[3px] transition-colors hover:text-ink-50 hover:decoration-ink-200 disabled:cursor-not-allowed disabled:no-underline disabled:opacity-50 disabled:hover:text-ink-300"
               aria-expanded={open}
-              aria-label={`${open ? 'Hide' : 'Show'} details for ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
+              aria-label={t(open ? 'opportunities.card.hideDetailsFor' : 'opportunities.card.showDetailsFor', {
+                base,
+                short: prettyVenue(pair.shortLeg.venue),
+                long: prettyVenue(pair.longLeg.venue),
+                collateral: group.collateral,
+                date: fmtDateLocal(group.maturity),
+              })}
               disabled={detailsDisabled}
               title={detailsTitle}
               onClick={() => setOpen((v) => !v)}
             >
-              {open ? 'Hide details' : 'More details'}
+              {open ? t('opportunities.card.hideDetails') : t('opportunities.card.moreDetails')}
             </button>
             </span>
-            <Stat label="Capital" tip>
+            <Stat label={t('common.capital')} tip>
               {capitalUsd === null ? (
-                <Dash why={CAPITAL_WHY} />
+                <Dash why={t(CAPITAL_WHY)} />
               ) : (
-                <span title={`The minimum capital this trade posts across the ${spreadLeg ? 'three' : 'four'} legs.`}>
+                <span title={t(spreadLeg ? 'opportunities.card.capitalTitleThree' : 'opportunities.card.capitalTitleFour')}>
                   ~{fmtUsd(capitalUsd, 0)}
                 </span>
               )}
             </Stat>
-            <Stat label="Return" tip>
+            <Stat label={t('opportunities.card.return')} tip>
               {estProfitUsd === null ? (
-                <Dash why="No net APR — nothing to project" />
+                <Dash why={t('opportunities.card.noNetApr')} />
               ) : (
                 <span
                   className={estProfitUsd < 0 ? 'text-rose-400' : undefined}
-                  title={`Estimated profit by maturity on ${fmtUsd(notionalUsd, 0)} per leg`}
+                  title={t('opportunities.card.returnTitle', { notional: fmtUsd(notionalUsd, 0) })}
                 >
                   {fmtUsd(estProfitUsd, 0)}
                 </span>
               )}
             </Stat>
-            <Stat label="Notional">
+            <Stat label={t('common.notional')}>
               <span
-                title={`${fmtUsd(notionalUsd, 0)} per leg${collateralQty ? ` ≈ ${sig(collateralQty.qty)} ${collateralQty.symbol}` : ''}`}
+                title={
+                  collateralQty
+                    ? t('opportunities.card.notionalTitleQty', {
+                        notional: fmtUsd(notionalUsd, 0),
+                        qty: sig(collateralQty.qty),
+                        symbol: collateralQty.symbol,
+                      })
+                    : t('opportunities.card.notionalTitle', { notional: fmtUsd(notionalUsd, 0) })
+                }
               >
                 {fmtNotionalShort(notionalUsd)}
                 {collateralQty && (
@@ -728,14 +736,14 @@ const OpportunityCard = memo(function OpportunityCard({
                 (Gate down) the raw Boros spread is still the headline worth
                 showing — it is what the trade captures. */}
             {pair.netFixedApr === null && Number.isFinite(pair.grossSpreadApr) && (
-              <Stat label="Gross spread">
+              <Stat label={t('opportunities.card.grossSpread')}>
                 <span
                   className="text-amber-400"
-                  title="Short mid rate − long mid rate, before execution and costs."
+                  title={t('opportunities.card.grossSpreadTitle')}
                 >
                   {fmtPct(pair.grossSpreadApr, 1)}
                 </span>{' '}
-                <span className="text-[10px] text-amber-400/80">only</span>
+                <span className="text-[10px] text-amber-400/80">{t('opportunities.card.grossOnly')}</span>
               </Stat>
             )}
           </div>
@@ -758,7 +766,13 @@ const OpportunityCard = memo(function OpportunityCard({
             <button
               type="button"
               className="btn btn-primary px-4 font-semibold"
-              aria-label={`Open this strategy — ${base} short ${prettyVenue(pair.shortLeg.venue)} / long ${prettyVenue(pair.longLeg.venue)}, ${group.collateral}-margined ${fmtDateLocal(group.maturity)}`}
+              aria-label={t('opportunities.card.openStrategyFor', {
+                base,
+                short: prettyVenue(pair.shortLeg.venue),
+                long: prettyVenue(pair.longLeg.venue),
+                collateral: group.collateral,
+                date: fmtDateLocal(group.maturity),
+              })}
               disabled={executeDisabled}
               title={executeTitle}
               onClick={() =>
@@ -775,7 +789,7 @@ const OpportunityCard = memo(function OpportunityCard({
                 )
               }
             >
-              Open this strategy <ArrowRight size={14} aria-hidden className="inline" />
+              {t('opportunities.card.openStrategy')} <ArrowRight size={14} aria-hidden className="inline" />
             </button>
           </div>
         </div>
@@ -790,18 +804,19 @@ const OpportunityCard = memo(function OpportunityCard({
           >
             <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2.5">
               <span className="whitespace-nowrap text-[11.5px] text-ink-200">
-                {spreadLeg ? 'three' : 'four'} legs ·{' '}
-                <span className="text-link">
-                  {fmtNotionalShort(notionalUsd)}
-                  {collateralQty
-                    ? ` (${fmtTokenQty(collateralQty.qty, collateralQty.symbol)})`
-                    : ''}{' '}
-                  notional each
-                </span>
+                <Trans
+                  i18nKey={spreadLeg ? 'opportunities.card.legsEachThree' : 'opportunities.card.legsEachFour'}
+                  values={{
+                    notional: `${fmtNotionalShort(notionalUsd)}${
+                      collateralQty ? ` (${fmtTokenQty(collateralQty.qty, collateralQty.symbol)})` : ''
+                    }`,
+                  }}
+                  components={{ hl: <span className="text-link" /> }}
+                />
               </span>
               <span aria-hidden="true" className="min-w-[24px] flex-1 border-t border-dashed border-ink-300/25" />
               <span className="whitespace-nowrap rounded-full border border-wash/[0.15] bg-ink-950/60 px-4 py-[5px] text-[12px] text-ink-300">
-                nets to 0 · no price exposure
+                {t('opportunities.card.netsToZero')}
               </span>
             </div>
             {/* Two columns only from xl: the content column is the viewport less
@@ -810,41 +825,45 @@ const OpportunityCard = memo(function OpportunityCard({
             <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
               <VenueBox
                 venue={prettyVenue(pair.shortLeg.venue)}
-                why="funding is rich here"
+                why={t('opportunities.card.fundingRich')}
                 fixedApr={spreadLeg || !shortBoros ? null : (shortBoros.execApr ?? shortBoros.midApr)}
                 positive
               >
                 <LegRow
                   n={1}
                   side="short"
-                  label={`Short ${base}`}
+                  label={t('opportunities.card.shortBase', { base })}
                   kind="CrossEx"
                   note={
                     pair.capital.shortLeverageMax === null
                       ? ''
-                      : `up to ${pair.capital.shortLeverageMax}× leverage`
+                      : t('opportunities.card.upToLeverage', { max: pair.capital.shortLeverageMax })
                   }
                 />
-                {!spreadLeg && shortBoros && <BorosLegRow n={2} leg={shortBoros} label={`Short ${base}`} />}
+                {!spreadLeg && shortBoros && (
+                  <BorosLegRow n={2} leg={shortBoros} label={t('opportunities.card.shortBase', { base })} />
+                )}
               </VenueBox>
               <VenueBox
                 venue={prettyVenue(pair.longLeg.venue)}
-                why="funding is cheap here"
+                why={t('opportunities.card.fundingCheap')}
                 fixedApr={spreadLeg || !longBoros ? null : (longBoros.execApr ?? longBoros.midApr)}
                 positive={false}
               >
                 <LegRow
                   n={spreadLeg ? 2 : 3}
                   side="long"
-                  label={`Long ${base}`}
+                  label={t('opportunities.card.longBase', { base })}
                   kind="CrossEx"
                   note={
                     pair.capital.longLeverageMax === null
                       ? ''
-                      : `up to ${pair.capital.longLeverageMax}× leverage`
+                      : t('opportunities.card.upToLeverage', { max: pair.capital.longLeverageMax })
                   }
                 />
-                {!spreadLeg && longBoros && <BorosLegRow n={4} leg={longBoros} label={`Long ${base}`} />}
+                {!spreadLeg && longBoros && (
+                  <BorosLegRow n={4} leg={longBoros} label={t('opportunities.card.longBase', { base })} />
+                )}
               </VenueBox>
               {spreadLeg?.spreadVenues && (
                 <VenueBox
@@ -857,7 +876,9 @@ const OpportunityCard = memo(function OpportunityCard({
                   <BorosLegRow
                     n={3}
                     leg={spreadLeg}
-                    label={`${spreadLeg.side === 'SHORT' ? 'Short' : 'Long'} ${spreadName(base, spreadLeg.spreadVenues)}`}
+                    label={t(spreadLeg.side === 'SHORT' ? 'opportunities.card.shortBase' : 'opportunities.card.longBase', {
+                      base: spreadName(base, spreadLeg.spreadVenues),
+                    })}
                   />
                 </VenueBox>
               )}
@@ -865,8 +886,7 @@ const OpportunityCard = memo(function OpportunityCard({
             {/* Kept from the app: the mock never says this, but it is the one
                 line that explains why four legs are not four risks. */}
             <div className="text-[11px] leading-relaxed text-ink-400">
-              The terminal opens both perp legs delta-neutral in one cross-margin account — minimal
-              liquidation risk.
+              {t('opportunities.card.deltaNeutralNote')}
             </div>
 
             {/* No shared heading: each plot now carries its own titled pane,
@@ -879,31 +899,35 @@ const OpportunityCard = memo(function OpportunityCard({
                 // the summary rather than grading it, and the sign already
                 // lives on the APR inside it.
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded bg-info/10 px-4 py-3 text-[12px] leading-[1.5] text-ink-100">
-                  <span className={'mr-1.5 font-semibold text-ink-50'}>Net effect</span>
+                  <span className={'mr-1.5 font-semibold text-ink-50'}>{t('opportunities.card.netEffect')}</span>
                   <span className="whitespace-nowrap">
-                    Locks a{' '}
-                    <span className="num font-semibold text-ink-50">
-                      {fmtPct(pair.execSpreadApr, 1)}
-                    </span>{' '}
-                    funding spread at
+                    <Trans
+                      i18nKey="opportunities.card.netLocks"
+                      values={{ spread: fmtPct(pair.execSpreadApr, 1) }}
+                      components={{ b: <span className="num font-semibold text-ink-50" /> }}
+                    />
                   </span>
                   {pair.effectiveLeverage !== null && Number.isFinite(pair.effectiveLeverage) && (
                     <span className="whitespace-nowrap">
-                      <span className="num font-semibold text-ink-50">
-                        {pair.effectiveLeverage.toFixed(1)}x
-                      </span>{' '}
-                      effective leverage →
+                      <Trans
+                        i18nKey="opportunities.card.netLeverage"
+                        values={{ lev: `${pair.effectiveLeverage.toFixed(1)}x` }}
+                        components={{ b: <span className="num font-semibold text-ink-50" /> }}
+                      />
                     </span>
                   )}
                   <span className="whitespace-nowrap">
-                    <span className={`num font-semibold ${netTone}`}>
-                      {(pair.netFixedAprOnCapital * 100).toFixed(1)}% APR
-                    </span>{' '}
-                    on{' '}
-                    <span className="num font-semibold text-ink-50">
-                      {fmtNotionalShort(pair.capitalUsd)}
-                    </span>{' '}
-                    capital
+                    <Trans
+                      i18nKey="opportunities.card.netApr"
+                      values={{
+                        apr: `${(pair.netFixedAprOnCapital * 100).toFixed(1)}%`,
+                        capital: fmtNotionalShort(pair.capitalUsd),
+                      }}
+                      components={{
+                        apr: <span className={`num font-semibold ${netTone}`} />,
+                        b: <span className="num font-semibold text-ink-50" />,
+                      }}
+                    />
                   </span>
                 </div>
               )}
@@ -935,21 +959,19 @@ function RateNote({ midApr, execApr }: { midApr: number; execApr: number | null 
   // sit here showed a number the trade never gets; the mid is still one hover
   // away, where it belongs as provenance rather than as a second headline.
   return (
-    <span title={`Mid ${fmtPct(midApr, 1)} before book impact`}>
-      at{' '}
-      {execApr === null ? (
-        <Dash why={THIN_BOOK_WHY} />
-      ) : (
-        <span className="num text-ink-50">{fmtPct(execApr, 1)}</span>
-      )}{' '}
-      after impact
+    <span title={t('opportunities.card.midTitle', { mid: fmtPct(midApr, 1) })}>
+      <Trans
+        i18nKey="opportunities.card.afterImpact"
+        values={{ apr: execApr === null ? '' : fmtPct(execApr, 1) }}
+        components={{ v: execApr === null ? <Dash why={t(THIN_BOOK_WHY)} /> : <span className="num text-ink-50" /> }}
+      />
     </span>
   );
 }
 
 export function OpportunitiesPanel() {
+  const { t } = useTranslation();
   const [stored] = useState<StoredControls>(() => loadControls());
-  const [notionalChoice, setNotionalChoice] = useState<NotionalChoice>(stored.notionalChoice);
   // Always market-at-size. The "at mark rate" alternative priced cards at a
   // number no order could get, so the knob only made a card disagree with the
   // book under it. The stored value is still read for compatibility.
@@ -957,9 +979,10 @@ export function OpportunitiesPanel() {
   const [entryMode, setEntryMode] = useState<EntryMode>(stored.entryMode);
   const [exitMode, setExitMode] = useState<ExitMode>(stored.exitMode);
   const [includeRebate, setIncludeRebate] = useState<boolean>(stored.includeRebate);
-  const [sizeStr, setSizeStr] = useState(String(stored.customNotionalUsd));
-  // The last VALID size: a half-typed entry must never blank the list.
-  const [size, setSize] = useState(stored.customNotionalUsd);
+  const [sizeStr, setSizeStr] = useState(String(stored.capitalUsd));
+  const [sizeFocused, setSizeFocused] = useState(false);
+  // The last VALID capital: a half-typed entry must never blank the list.
+  const [capitalUsd, setCapitalUsd] = useState(stored.capitalUsd);
   const debouncedSize = useDebounced(sizeStr, 400);
   // Persisted, like the assumptions. A filter is the louder of the two — it
   // changes what is MISSING rather than how it is priced — so restoring one
@@ -973,15 +996,10 @@ export function OpportunitiesPanel() {
   }, []);
   const shownKeysRef = useRef<ReadonlySet<string>>(new Set());
   const flow = useTradeFlowOptional();
-  const sizeId = useId();
-  // Set by a double-click on the preset amount, so the custom input that
-  // replaces it takes focus with its digits selected.
-  const focusSizeRef = useRef(false);
 
   const persist = (next: Partial<StoredControls>) =>
     writeJson(OPPORTUNITIES_STORAGE_KEY, {
-      notionalChoice,
-      customNotionalUsd: size,
+      capitalUsd,
       borosEntry,
       entryMode,
       exitMode,
@@ -989,26 +1007,28 @@ export function OpportunitiesPanel() {
       ...next,
     } satisfies StoredControls);
 
+  const setSize = (usd: number) => {
+    setCapitalUsd(usd);
+    persist({ capitalUsd: usd });
+  };
+
   useEffect(() => {
     const n = Number(debouncedSize);
-    if (!isValidOpportunityNotional(n)) return;
+    if (!isValidOpportunitySize('capital', n)) return;
     setSize(n);
-    persist({ customNotionalUsd: n });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSize]);
 
-  const notionalUsd = notionalChoice === 'custom' ? size : NOTIONAL_PRESETS[notionalChoice];
-  const sizeErr =
-    notionalChoice === 'custom'
-      ? amountError(sizeStr, {
-          min: OPPORTUNITY_NOTIONAL_MIN,
-          max: OPPORTUNITY_NOTIONAL_MAX,
-        })
-      : null;
-  const sizeBad = notionalChoice === 'custom' && !isValidOpportunityNotional(Number(sizeStr));
+  const sizeUsd = capitalUsd;
+  const sizeErr = amountError(sizeStr, opportunitySizeBounds('capital'));
+  const sizeBad = !isValidOpportunitySize('capital', Number(sizeStr));
+  // Grouped digits while the box is at rest; raw digits while typing, since
+  // amountError refuses commas.
+  const sizeShown = sizeFocused || sizeBad ? sizeStr : Number(sizeStr).toLocaleString('en-US');
 
   const query = useOpportunities({
-    notionalUsd,
+    sizeBy: 'capital',
+    sizeUsd,
     borosEntry,
     entryMode,
     exitMode,
@@ -1048,21 +1068,18 @@ export function OpportunitiesPanel() {
     }));
     return heldPerpsOf(books);
   }, [exposure, borosMarkets, spreadMarkets]);
-  const pricedAtUsd = data?.meta.notionalUsd;
   const rows = useMemo(
     () =>
       toRows(
         data?.groups ?? [],
         shownKeysRef.current,
-        held && pricedAtUsd !== undefined ? { held, notionalUsd: pricedAtUsd } : undefined,
+        held,
         // Fold the rebate into ranking AND the viability cutoff exactly when the
         // cards credit it, so a pair only profitable after the rebate is neither
         // hidden nor mis-ranked against the discounted APR it displays.
-        hasRebate && includeRebate && rebate && pricedAtUsd !== undefined
-          ? { config: rebate, notionalUsd: pricedAtUsd }
-          : null,
+        hasRebate && includeRebate ? rebate : null,
       ),
-    [data?.groups, held, pricedAtUsd, hasRebate, includeRebate, rebate],
+    [data?.groups, held, hasRebate, includeRebate, rebate],
   );
   const visible = useMemo(() => applyFilters(rows, filters), [rows, filters]);
 
@@ -1072,11 +1089,8 @@ export function OpportunitiesPanel() {
     shownKeysRef.current = new Set(rows.map((r) => r.key));
   }, [rows]);
 
-  // The notional the RESPONSE priced, never the live control: during a size
-  // change `keepPreviousData` shows cards costed at the OLD notional, and
-  // arming the ticket at the new one would stage a trade none of the numbers
-  // on screen describe. The cards read from this too.
-  const pricedNotionalUsd = data?.meta.notionalUsd ?? notionalUsd;
+  // Any card past one perp clip has its slippage priced at the clip's rate.
+  const slippageClipped = visible.some((r) => r.pair.notionalUsd > PERP_SLIPPAGE_CLIP_USD);
 
   // Stable identity, or every card re-renders on each keystroke and the memo
   // above buys nothing.
@@ -1099,162 +1113,146 @@ export function OpportunitiesPanel() {
         maturity: maturitySec,
         crossexLongVenue: pair.longLeg.crossexVenue,
         crossexShortVenue: pair.shortLeg.crossexVenue,
-        notionalUsd: pricedNotionalUsd,
+        // The pair's own priced notional, never the live control: during a
+        // size change `keepPreviousData` shows cards costed at the OLD size,
+        // and arming the ticket at the new one would stage a trade none of the
+        // numbers on screen describe.
+        notionalUsd: Math.round(pair.notionalUsd),
         // Present only for token-margined cohorts, where the collateral IS the
         // base coin and every leg can be sized in the same unit.
         ...(sizeBase !== undefined && sizeBase > 0 ? { sizeBase } : {}),
         perpMode: entryMode === 'maker-hedge' ? 'maker' : 'market',
       });
     },
-    [flow, pricedNotionalUsd, entryMode],
+    [flow, entryMode],
   );
 
+  // One row of fields, each a label over one 35px control, that wraps when
+  // the card is too narrow. The perp knobs sit in their own wrapping group so
+  // a wrap moves them together; a flat wrap split them across rows.
+  const field = 'flex flex-col items-start gap-1.5';
+  const row = 'flex flex-wrap items-end gap-x-8 gap-y-4';
   const controls = (
-    <div className="mb-5 flex flex-wrap items-end gap-x-8 gap-y-5 rounded border border-wash/[0.14] bg-wash/[0.07] p-5">
-      {/* One row, nothing folded away: the size every card is priced at, the
-          two execution assumptions, the clock. With the account connected
-          there is no fee tier to simulate, and two knobs do not earn a panel
-          of their own. */}
-      <div className="flex flex-col items-start gap-1.5">
-        <div className={microLabelClass}>Notional per leg</div>
-        <div className="flex flex-wrap items-center gap-2">
-        <span
-          className={`flex h-9 items-center gap-1 rounded border border-ink-800/50 bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
-            sizeBad ? 'border-guava/60' : 'border-ink-600'
-          }`}
-        >
-          <span className="text-[11.5px] text-ink-400">$</span>
-          {notionalChoice === 'custom' ? (
-            <input
-              id={sizeId}
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              aria-label="Custom notional (USD)"
-              value={sizeStr}
-              onChange={(e) => setSizeStr(e.target.value)}
-              ref={(el) => {
-                if (!el || !focusSizeRef.current) return;
-                focusSizeRef.current = false;
-                el.focus();
-                el.select();
-              }}
-              title="The notional each leg is priced at."
-              className="num w-24 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
-            />
-          ) : (
+    <div className="mb-5 flex flex-col gap-4 rounded border border-wash/[0.14] bg-wash/[0.07] p-5">
+      <div className={row}>
+        <div className={field}>
+          <div className={microLabelClass}>{t('common.capital')}</div>
+          <div className="flex flex-wrap items-center gap-2">
             <span
-              className="num cursor-text select-none text-sm font-semibold text-ink-50"
-              title="Double-click to edit"
-              onDoubleClick={() => {
-                // Edit from the amount on screen, not the last custom size.
-                focusSizeRef.current = true;
-                setSizeStr(String(notionalUsd));
-                setSize(notionalUsd);
-                setNotionalChoice('custom');
-                persist({ notionalChoice: 'custom', customNotionalUsd: notionalUsd });
-              }}
+              className={`flex h-[35px] w-[7.5rem] items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
+                sizeBad ? 'border-guava/60' : 'border-ink-700'
+              }`}
             >
-              {notionalUsd.toLocaleString('en-US')}
+              <span className="text-[11.5px] text-ink-400">$</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                aria-label={t('opportunities.panel.capitalAria')}
+                value={sizeShown}
+                onChange={(e) => setSizeStr(e.target.value)}
+                onFocus={() => setSizeFocused(true)}
+                onBlur={() => setSizeFocused(false)}
+                title={t('opportunities.panel.capitalTitle')}
+                className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
+              />
             </span>
-          )}
-        </span>
-        {/* The one and only notional control. It used to be repeated inside
-            the advanced panel as a second segmented toggle. */}
-        <span role="radiogroup" aria-label="Notional" className="inline-flex items-center">
-          {NOTIONAL_OPTIONS.map((o) => {
-            const on = notionalChoice === o.value;
-            return (
-              <button
-                key={o.value}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                onClick={() => {
-                  setNotionalChoice(o.value);
-                  persist({ notionalChoice: o.value });
-                }}
-                className={`num -mr-px inline-flex h-[35px] items-center whitespace-nowrap border px-5 text-[12px] transition-colors first:rounded-l last:mr-0 last:rounded-r ${
-                  on
-                    ? 'relative z-[1] border-ink-700 bg-wash/[0.15] font-medium text-ink-300'
-                    : 'border-ink-700 text-ink-500 hover:bg-wash/[0.05]'
-                }`}
-              >
-                {o.label}
-              </button>
-            );
-          })}
-        </span>
-        </div>
-        {sizeErr && (
-          <span role="alert" className="text-[10.5px] text-guava">
-            {sizeErr}
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col items-start gap-1.5">
-        <div className={microLabelClass}>Perp entry</div>
-        <SegmentedToggle<EntryMode>
-          className="seg-info seg-lg"
-          ariaLabel="Perp entry mode"
-          value={entryMode}
-          onChange={(next) => {
-            setEntryMode(next);
-            persist({ entryMode: next });
-          }}
-          options={[
-            { value: 'both-market', label: ENTRY_MODE_LABEL['both-market'] },
-            { value: 'maker-hedge', label: ENTRY_MODE_LABEL['maker-hedge'] },
-          ]}
-        />
-      </div>
-
-      <div className="flex flex-col items-start gap-1.5">
-        <div className={microLabelClass}>Perp exit cost</div>
-        <SegmentedToggle<ExitMode>
-          className="seg-info seg-lg"
-          ariaLabel="Perp legs at maturity"
-          value={exitMode}
-          onChange={(next) => {
-            setExitMode(next);
-            persist({ exitMode: next });
-          }}
-          options={[
-            { value: 'close', label: EXIT_MODE_LABEL.close },
-            { value: 'roll', label: EXIT_MODE_LABEL.roll },
-          ]}
-        />
-      </div>
-
-      {hasRebate && (
-        <div className="flex flex-col items-start gap-1.5">
-          <div className={microLabelClass}>Settlement rebate</div>
-          <label
-            className="flex h-9 cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] text-ink-200"
-            title={`Credit this account's Boros settlement-fee rebate (${rebateAccountLabel(rebate as Rebate)}) into every APR, Return and profit.`}
-          >
-            <input
-              type="checkbox"
-              className="chk"
-              checked={includeRebate}
-              onChange={(e) => {
-                setIncludeRebate(e.target.checked);
-                persist({ includeRebate: e.target.checked });
+            <SegmentedToggle<SizePreset | ''>
+              className="seg-info seg-lg max-sm:[&_.seg-btn]:px-3"
+              ariaLabel={t('opportunities.panel.capitalPresets')}
+              value={SIZE_PRESETS.find((o) => o.usd === sizeUsd)?.value ?? ''}
+              onChange={(v) => {
+                const usd = SIZE_PRESETS.find((o) => o.value === v)?.usd;
+                if (usd === undefined) return;
+                setSizeStr(String(usd));
+                setSize(usd);
               }}
+              options={SIZE_PRESETS}
             />
-            Include rebate in APR
-          </label>
+          </div>
         </div>
-      )}
 
-        <span className="ml-auto flex items-center gap-2">
-          {query.isPlaceholderData && <span className="text-xs text-ink-400">recomputing…</span>}
+        <div className={row}>
+          <div className={field}>
+            <div className={microLabelClass}>{t('opportunities.panel.perpEntry')}</div>
+            <SegmentedToggle<EntryMode>
+              className="seg-info seg-lg"
+              ariaLabel={t('opportunities.panel.perpEntryAria')}
+              value={entryMode}
+              onChange={(next) => {
+                setEntryMode(next);
+                persist({ entryMode: next });
+              }}
+              options={[
+                { value: 'both-market', label: t(ENTRY_MODE_LABEL['both-market']) },
+                { value: 'maker-hedge', label: t(ENTRY_MODE_LABEL['maker-hedge']) },
+              ]}
+            />
+          </div>
+
+          <div className={field}>
+            <div className={microLabelClass}>{t('opportunities.panel.perpExit')}</div>
+            <SegmentedToggle<ExitMode>
+              className="seg-info seg-lg"
+              ariaLabel={t('opportunities.panel.perpExitAria')}
+              value={exitMode}
+              onChange={(next) => {
+                setExitMode(next);
+                persist({ exitMode: next });
+              }}
+              options={[
+                { value: 'close', label: t(EXIT_MODE_LABEL.close) },
+                { value: 'roll', label: t(EXIT_MODE_LABEL.roll) },
+              ]}
+            />
+          </div>
+
+          {hasRebate && (
+            <div className={field}>
+              <div className={microLabelClass}>{t('opportunities.panel.settlementRebate')}</div>
+              <label
+                className="flex h-[35px] cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] text-ink-200"
+                title={t('opportunities.panel.includeRebateTitle', { account: rebateAccountLabel(rebate as Rebate) })}
+              >
+                <input
+                  type="checkbox"
+                  className="chk"
+                  checked={includeRebate}
+                  onChange={(e) => {
+                    setIncludeRebate(e.target.checked);
+                    persist({ includeRebate: e.target.checked });
+                  }}
+                />
+                {t('opportunities.panel.includeRebate')}
+              </label>
+            </div>
+          )}
+        </div>
+
+        <span className="ml-auto flex h-[35px] items-center gap-2">
+          {query.isPlaceholderData && <span className="text-xs text-ink-400">{t('opportunities.panel.recomputing')}</span>}
           <StrategyFreshness
             dataUpdatedAt={query.dataUpdatedAt || 0}
             staleError={query.isError && data !== undefined}
             onRefetch={() => void query.refetch()}
           />
         </span>
+      </div>
+
+      {sizeErr && (
+        <span role="alert" className="text-[11px] text-guava">
+          {sizeErr}
+        </span>
+      )}
+      {/* Above one clip the cards price perp slippage as a TWAP in $1M
+          orders (src/core/boros/opportunities.ts). The open ticket still
+          walks the full book. */}
+      {slippageClipped && (
+        <span className="flex items-start gap-1.5 text-[11px] text-ink-400">
+          <Info size={12} aria-hidden className="mt-px flex-none text-amber-400" />
+          {t('opportunities.panel.slippageClipped')}
+        </span>
+      )}
     </div>
   );
 
@@ -1283,7 +1281,7 @@ export function OpportunitiesPanel() {
     return (
       <div>
         {controls}
-        <QueryError title="Couldn't load opportunities" error={query.error} onRetry={() => void query.refetch()} />
+        <QueryError title={t('opportunities.panel.loadError')} error={query.error} onRetry={() => void query.refetch()} />
       </div>
     );
   }
@@ -1291,7 +1289,7 @@ export function OpportunitiesPanel() {
   return (
     <div>
       {controls}
-      {data && <Notes items={data.warnings} className="mb-2" />}
+      {data && <Notes items={data.warnings.map(localizeServerText)} className="mb-2" />}
       {/* The bar only exists to narrow a list — with nothing to narrow it would
           be a row of dead chips above an empty state. */}
       {rows.length > 0 && (
@@ -1305,8 +1303,12 @@ export function OpportunitiesPanel() {
       {rows.length === 0 ? (
         <EmptyState
           icon="◎"
-          title="No fixed-return opportunities"
-          hint={`No Boros arb pair prices out at ${fmtUsd(notionalUsd, 0)} notional at market size, ${ENTRY_MODE_PROSE[entryMode]} perp entry and ${EXIT_MODE_PROSE[exitMode]}. Try another notional or another assumption.`}
+          title={t('opportunities.panel.emptyTitle')}
+          hint={t('opportunities.panel.emptyHint', {
+            capital: fmtUsd(sizeUsd, 0),
+            entry: t(ENTRY_MODE_PROSE[entryMode]),
+            exit: t(EXIT_MODE_PROSE[exitMode]),
+          })}
         />
       ) : visible.length === 0 ? (
         // Distinct from the one above: the assumptions DO price opportunities,
@@ -1314,12 +1316,12 @@ export function OpportunitiesPanel() {
         // the assumptions strip.
         <EmptyState
           icon="◎"
-          title="No opportunity matches these filters"
-          hint={`All ${rows.length} priced ${rows.length === 1 ? 'opportunity is' : 'opportunities are'} filtered out. Drop a filter to bring them back.`}
+          title={t('opportunities.panel.noMatchTitle')}
+          hint={t('opportunities.panel.noMatchHint', { count: rows.length })}
           action={
             hasActiveFilter(filters) ? (
               <button type="button" className="btn" onClick={() => updateFilters(NO_FILTERS)}>
-                Clear filters
+                {t('opportunities.panel.clearFilters')}
               </button>
             ) : undefined
           }
@@ -1336,7 +1338,6 @@ export function OpportunitiesPanel() {
               group={row.group}
               pair={row.pair}
               held={row.held}
-              notionalUsd={pricedNotionalUsd}
               rebate={hasRebate ? rebate : null}
               includeRebate={includeRebate}
               onOpenStrategy={flow ? openStrategy : null}

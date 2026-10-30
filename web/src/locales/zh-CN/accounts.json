@@ -1,0 +1,384 @@
+{
+  "rebalance": {
+    "rounds_other": "{{n}} 轮",
+    "venueWallet": "CrossEx {{name}} 钱包",
+    "leg": {
+      "buyUsdc": "在 CrossEx 买入 USDC",
+      "toSpot": "CrossEx Gate 钱包划转至 Gate 现货",
+      "toHyperliquid": "Gate 现货划转至 CrossEx Hyperliquid 钱包",
+      "toLighter": "Gate 现货划转至 CrossEx Lighter 钱包",
+      "fromHyperliquid": "CrossEx Hyperliquid 钱包划转至 Gate 现货",
+      "fromLighter": "CrossEx Lighter 钱包划转至 Gate 现货",
+      "toGate": "Gate 现货划转至 CrossEx Gate 钱包",
+      "sellUsdc": "卖出 USDC 换成 USDT"
+    },
+    "noLegs": "暂无持仓，无需再平衡。",
+    "goal": {
+      "even": "按仓位平衡",
+      "repay": "清偿债务",
+      "custom": "自定义金额"
+    },
+    "card": {
+      "even": "再平衡",
+      "repay": "清偿债务",
+      "custom": "自定义金额"
+    },
+    "presetOff": {
+      "even": "暂无持仓",
+      "repay": "无借款"
+    },
+    "usePreset": "使用预设",
+    "move": "划转",
+    "moveFrom": "从",
+    "moveTo": "至",
+    "nothingToMove": "无需划转。",
+    "shortOfCash": "超出钱包余额。",
+    "hold": {
+      "even": "长按再平衡",
+      "repay": "长按清偿债务",
+      "custom": "长按划转"
+    },
+    "holdAnyway": {
+      "even": "仍要再平衡（长按）",
+      "repay": "仍要清偿债务（长按）",
+      "custom": "仍要划转（长按）"
+    },
+    "optional": {
+      "even": "再平衡为可选操作。",
+      "repay": "清偿债务为可选操作。",
+      "custom": "此次划转为可选操作。"
+    },
+    "optionalFee": {
+      "even": "再平衡为可选操作，费用 {{fee}}。",
+      "repay": "清偿债务为可选操作，费用 {{fee}}。",
+      "custom": "此次划转为可选操作，费用 {{fee}}。"
+    },
+    "after": {
+      "even": "再平衡后",
+      "repay": "清偿债务后",
+      "custom": "划转后"
+    },
+    "moveText": {
+      "stepOut": "从 {{from}}转出 {{move}} USDC，将 {{arrives}} 卖出换成 USDT",
+      "step": "从 {{from}}划转 {{move}} USDC 至 {{to}}",
+      "convertIn": "在 {{to}}将 {{move}} USDT 兑换为 USDC",
+      "convertOut": "从 {{from}}将 {{move}} USDC 兑换为 USDT",
+      "convertAcross": "将 {{move}} USDC 从 {{from}}兑换至 {{to}}",
+      "and": "{{a}}和 {{b}}",
+      "loopInto": "在 CrossEx 买入 USDC，经 Gate 现货转入 {{wallets}}。",
+      "loopOut": "将 USDC 从 {{wallets}}经 Gate 现货转出，再卖出换成 USDT，存入 CrossEx USDT 钱包。",
+      "loopAcross": "将 USDC 从 {{from}}经 Gate 现货转入 {{to}}。"
+    },
+    "hover": {
+      "title": {
+        "equity": "再平衡按标记价格下的仓位规模分配 CrossEx 权益。例如：Gate 上 $500 仓位、Hyperliquid 上 $250、Lighter 上 $250，分别分得 50%、25% 和 25%。",
+        "walletHead": {
+          "wallet": "钱包",
+          "legs": "腿",
+          "interest": "借款利息"
+        },
+        "interest": {
+          "usdt": "全额计息，无免息额度",
+          "hyperliquid": "10,000 USDC 以内免息，超出部分年化约 5%",
+          "lighter": "全额计息，年化约 11%"
+        },
+        "borrow": "钱包为负即为借款。Gate 会为每笔借款占用初始保证金。",
+        "rounds": "现货循环按轮划转。每轮上限为可用保证金。时间和费用均按每轮计。",
+        "routeHead": {
+          "route": "路线",
+          "path": "路径",
+          "time": "时间",
+          "cost": "费用"
+        },
+        "spotLoop": "现货循环",
+        "convert": "兑换",
+        "path": {
+          "usdtToHyperliquid": "USDT · CrossEx → USDC · Hyperliquid",
+          "hyperliquidToUsdt": "USDC · Hyperliquid → USDT · CrossEx",
+          "usdtToLighter": "USDT · CrossEx → USDC · Lighter",
+          "lighterToUsdt": "USDC · Lighter → USDT · CrossEx",
+          "hyperliquidToLighter": "USDC · Hyperliquid → USDC · Lighter",
+          "lighterToHyperliquid": "USDC · Lighter → USDC · Hyperliquid"
+        },
+        "time": {
+          "min2": "约 2 分钟",
+          "min6_5": "约 6.5 分钟",
+          "min4": "约 4 分钟",
+          "min3": "约 3 分钟",
+          "min10": "约 10 分钟",
+          "min5": "约 5 分钟",
+          "instant": "即时"
+        },
+        "costFrom": "{{usd}} 起",
+        "twoSwaps": "0.4%，兑换两次",
+        "recommended": "推荐：15 分钟内完成的最便宜路线。"
+      },
+      "presets": "按仓位平衡：按仓位规模分配权益。清偿债务：从权益最多的钱包偿还所有借款。自定义金额：按您输入的金额划转。",
+      "custom": "从一个 CrossEx 钱包向另一个划转此金额。费用从到账金额中扣除。",
+      "walletUsdt": "CrossEx 钱包。Gate、Binance、OKX 和 Bybit 腿的保证金。",
+      "walletUsdc": "CrossEx 钱包。Hyperliquid 腿的保证金。",
+      "walletLighter": "CrossEx 钱包。Lighter 腿的保证金。",
+      "walletGate": "CrossEx 钱包。现货买入剩余的 USDC，仍计为保证金。再平衡会将其清空。",
+      "now": "权益 = 现金 + 未实现盈亏。",
+      "interestNow": {
+        "lead": "CrossEx 钱包有借款时，Gate 每小时收取利息。",
+        "head": {
+          "wallet": "钱包",
+          "interest": "利息",
+          "rate": "当前利率"
+        },
+        "usdt": "全额计息，无免息额度",
+        "hyperliquid": "10,000 USDC 以内免息，超出部分计息",
+        "lighter": "全额计息，无免息额度"
+      },
+      "borrowing": "钱包为负即为借款。上方账户卡片中的“初始保证金占用”显示其占用的保证金。",
+      "route": "资金的划转方式。费用包含 Gate 手续费和现货价差。",
+      "mix": "现货循环最多 {{rounds}}，其余部分兑换。",
+      "recommended": "15 分钟内完成的最便宜路线。",
+      "noDirectTransfer": "Gate 不支持 CrossEx 钱包之间直接划转。",
+      "repeats": "按轮重复。",
+      "convert": "在您的 CrossEx USDT 与 USDC 钱包之间即时兑换。手续费 0.2%。",
+      "convertAcross": "Hyperliquid 与 Lighter 之间的 USDC 经 USDT 兑换两次。",
+      "round": "一轮即经 Gate 现货转一次，上限为您的可用保证金。",
+      "whyMoreThanOne": "划转金额超过可用保证金时，需要多轮。",
+      "whyMoreThanOneBorrow": "Gate 为您的借款占用 {{amount}} 初始保证金。每轮会偿还部分借款，因此下一轮更大。",
+      "frees": "已偿还借款不再占用的初始保证金。",
+      "interestMonth": "按今日利率计算的 30 天借款利息，当前及本次再平衡后。",
+      "onTheWay": "正经 Gate 现货在途，不计为保证金。",
+      "gateSpot": "不计为保证金。",
+      "gateSpotAssets": "不计为保证金，无权益或盈亏。",
+      "abandon": "彻底结束再平衡。资金保留在当前位置。",
+      "fee": "本次划转的 Gate 手续费。",
+      "time": "常规耗时。转入或转出 CrossEx Hyperliquid 和 Lighter 钱包可能更久。",
+      "minimum": "转入或转出 CrossEx Hyperliquid 和 Lighter 钱包的 Gate 最低金额，含手续费。",
+      "upToOut": "可用保证金，上限为该钱包现金。",
+      "upToInto": "您的 Gate 现货余额。"
+    },
+    "verdict": {
+      "noBorrow": "无借款，无需划转。",
+      "balanced": "各钱包已与仓位占比一致，无需划转。",
+      "noCashToMove": "权益不平衡，但没有可划转的现金。",
+      "noInterest": "暂未产生利息，无需划转。",
+      "rateUnknown": "无法读取借款利率。划转前请先确认费用。",
+      "notWorthIt": "暂不划算：费用超过可节省的 30 天利息。",
+      "worthIt": "建议再平衡。",
+      "repayWorthIt": "建议清偿债务。",
+      "repayNoLegsSub": "钱包有借款时无法提取现金。",
+      "paysBack": "费用相当于可节省的 {{days}} 利息。"
+    },
+    "fact": {
+      "borrowing": "借款",
+      "interestNow": "当前利息",
+      "interestPaid": "已付利息"
+    },
+    "gateSpot": "Gate 现货",
+    "bar": {
+      "cash": "现金",
+      "upnl": "未实现盈亏",
+      "target": "平衡目标"
+    },
+    "modal": {
+      "feeUsd": "费用 {{usd}}",
+      "frees": "释放",
+      "interest": "利息",
+      "fee": "费用",
+      "perMonth": "每月 {{now}} → {{after}}",
+      "steps": "显示步骤",
+      "refreshRoute": "刷新路线",
+      "resume": "恢复",
+      "abandon": "放弃"
+    },
+    "waits": {
+      "transfer": "划转进行中",
+      "deal": "交易任务进行中",
+      "rebalance": "再平衡进行中",
+      "stoppedRebalance": "再平衡已停止"
+    },
+    "transferCta": "手动划转",
+    "rateUnknown": "利率未知",
+    "interestPerHour": "每小时 {{usd}}",
+    "ratePerYear": "年化 {{pct}}%"
+  },
+  "rebalanceModal": {
+    "title": "再平衡",
+    "for": "目标",
+    "amount": "金额",
+    "from": "转出",
+    "to": "转入",
+    "preset": "预设",
+    "typeAmount": "请输入划转金额。",
+    "pricing": "正在计算报价。",
+    "hideSteps": "隐藏步骤",
+    "now": "当前",
+    "whereCaption": "资金所在位置",
+    "onTheWay": "在途",
+    "waitsLine": "新交易任务和划转将等待其完成。",
+    "started": "{{age}} 前开始。可关闭此窗口，再平衡会继续。",
+    "finishedLead": "已完成。以下为各钱包当前余额。",
+    "abandonTransit": "放弃后，{{qty}} {{coin}} 将留在途中，到账前不计为保证金。",
+    "abandonSpot": "放弃后，这 {{qty}} {{coin}} 将留在 Gate 现货。",
+    "abandonSpotNoRead": "放弃后，这 {{qty}} {{coin}} 将留在 Gate 现货。此密钥无法读取 Gate 现货。",
+    "passed": "已过 {{age}}",
+    "route": "路线",
+    "round": "轮次",
+    "roundOf": "第 {{round}} / {{rounds}} 轮",
+    "timeLeft": "剩余时间",
+    "time": "时间",
+    "stoppedAtConvert": "在兑换步骤停止。",
+    "stoppedInRound": "在第 {{round}} / {{rounds}} 轮停止。",
+    "resuming": "正在恢复",
+    "balanced": "已平衡",
+    "moved": "已划转",
+    "took": "耗时",
+    "cost": "费用"
+  },
+  "rebalanceHovers": {
+    "routeMix": "现货循环，然后兑换",
+    "under": "低于 {{usd}}",
+    "none": "无",
+    "lessThanDay": "不到 1 天",
+    "days_other": "{{n}} 天",
+    "spotHas": "<term></term>中有 <b>{{amount}}</b>，转入后才能使用。",
+    "lastRunLeft": "上次再平衡在 Gate 现货中留下 <b>{{amount}}</b>。",
+    "transfer": "划转"
+  },
+  "rebalanceBits": {
+    "arrives": "到账 {{arrives}}",
+    "arrivesBorrowPaid": "到账 {{arrives}} · 借款已还清",
+    "arrivesBorrowLeft": "到账 {{arrives}} · 剩余借款 {{left}}",
+    "moveTo": "划转 {{move}} USDC 至 {{wallet}}",
+    "buyMoveIt": "买入 {{buy}} USDC，划转至 {{wallet}}",
+    "buyMove": "买入 {{buy}} USDC，划转 {{move}} USDC 至 {{wallet}}",
+    "round": "第 {{n}} 轮",
+    "stopped": "已停止",
+    "elapsedOf": "{{elapsed}} / {{expected}}"
+  },
+  "rebalanceSection": {
+    "loadFailed": "无法加载再平衡。{{message}}",
+    "readAgain": "刷新",
+    "stoppedOpen": "已停止 · 打开",
+    "hours_other": "{{n}} 小时",
+    "minutes_other": "{{n}} 分钟",
+    "haltedAtConvert": "{{what}}在兑换步骤停止。",
+    "haltedInRound": "{{what}}在第 {{round}} 轮停止。",
+    "runningLeft": "{{what}}进行中，剩余 {{left}}。",
+    "running": "{{what}}进行中。",
+    "runningConvert": "运行中 · 兑换",
+    "runningRound": "运行中 · 第 {{round}} / {{rounds}} 轮"
+  },
+  "transfer": {
+    "fromWallet": "转出 · CrossEx 钱包",
+    "toWallet": "转入 · CrossEx 钱包",
+    "balanceHidden": "余额不可见",
+    "free": "免费",
+    "minimum": "最低金额",
+    "youGet": "到账",
+    "apiManagement": "API 管理",
+    "addSpotRead": "将现货交易设为只读，即可查看 Gate 现货余额。",
+    "how": "如何添加",
+    "lock": {
+      "rebalance": "划转将等待再平衡结束。",
+      "halted": "划转将等待您恢复或放弃再平衡。",
+      "deal": "划转将等待交易任务结束。"
+    },
+    "removeCommas": "请删除逗号。",
+    "maxOut": "最多 {{max}} {{coin}}。其余为持仓保证金。",
+    "maxInto": "最多 {{max}} {{coin}}。即您的 Gate 现货余额。",
+    "minimumLine": "最低 {{min}} {{coin}}。",
+    "stepAsked": "已请求 Gate 划转",
+    "stepWaiting": "等待 {{wallet}}显示到账",
+    "stepReading": "重新读取余额",
+    "moving": "划转中",
+    "startedUsually": "{{age}} 前开始，通常需 {{usual}}。可关闭此窗口。",
+    "started": "{{age}} 前开始。可关闭此窗口。",
+    "rebalanceWaits": "再平衡将等待此划转结束。",
+    "gateAllows": "Gate 允许",
+    "notKnown": "未知",
+    "cannotReadSpot": "此密钥无法读取 Gate 现货",
+    "spotBalance": "Gate 现货余额",
+    "freeMarginNow": "当前可用保证金",
+    "youAsked": "申请划转",
+    "nothing": "无",
+    "failed": "划转失败。",
+    "tryAgain": "重试",
+    "tryAgainWith": "以 {{amount}} 重试",
+    "sending": "发送中",
+    "failedChip": "失败",
+    "gateCannot": "Gate 网站无法完成此操作。",
+    "direction": "方向",
+    "into": "转入 CrossEx",
+    "out": "转出 CrossEx",
+    "upTo": "最多 {{max}}",
+    "holdSend": "长按发送 {{amount}} {{coin}} 至 {{to}}",
+    "sent": "已发送 {{amount}} {{coin}} 至 {{to}}。",
+    "sentArrived": "已发送 {{amount}} {{coin}} 至 {{to}}。已到账 {{received}}。",
+    "loadFailed": "无法加载划转。{{message}}",
+    "sendingAmount": "正在发送 {{amount}} {{coin}}",
+    "failedOpen": "划转失败 · 打开"
+  },
+  "balances": {
+    "spotHeld": "可用 {{free}}。{{held}} 被 Gate 现货挂单占用。",
+    "equity": "权益",
+    "balance": "余额",
+    "upnl": "未实现盈亏",
+    "loadFailed": "无法加载账户",
+    "title": "CrossEx 资产",
+    "nonZeroOnly": "· 仅显示非零",
+    "emptyTitle": "暂无余额",
+    "emptyHint": "向 CrossEx 存入抵押品即可开始。"
+  },
+  "closePair": {
+    "pairSlice": "组合份额",
+    "wholePosition": "整个仓位",
+    "ofHeld": "交易所持有 {{held}}",
+    "sizeLabel": "平仓数量 · 两条腿",
+    "maxTitle": "平掉整个组合",
+    "max": "最大",
+    "sizeAria": "平仓数量，同时用于两条腿",
+    "sizeInvalid": "数量须大于 0 且不超过 {{max}} {{base}}",
+    "sizeHint": "各交易所按自身最小单位向下取整，见上方各行",
+    "pnlToRealise": "将实现盈亏",
+    "pnlSub": "两条腿 · 未扣手续费",
+    "head": {
+      "leg": "腿",
+      "limitPx": "限价",
+      "slip": "滑点",
+      "pnl": "盈亏",
+      "estFee": "预估手续费"
+    },
+    "marketTitle": "以市价单发送，成交价不超出交易所的价格限制区间。",
+    "marketIoc": "市价",
+    "slipInvalid": "滑点须大于 0% 且不超过 10%。",
+    "slipAria": "滑点 %",
+    "slipTitle": "第一条腿的限价：中间价 ± 此值。",
+    "slipHint": "规模大或盘口薄时可调高。",
+    "closeBoth": "两腿平仓",
+    "pairNote": "第一条腿：中间价 ± 滑点的限价单。第二条腿：市价单，处于交易所限价范围内。",
+    "mechanics": "<b>只减仓</b>。两条腿都不会增加仓位，也不会挂在盘口。"
+  },
+  "tracked": {
+    "renewLogin": "为 {{address}} 续期登录",
+    "logInToTrade": "登录 {{address}} 以交易"
+  },
+  "model": {
+    "cross": "{{collateral}} 全仓",
+    "isolated": "{{market}} 逐仓",
+    "allHealthy": "所有账户健康",
+    "nearLiquidation_other": "{{count}} 个账户接近清算",
+    "needAttention_other": "{{count}} 个账户需要关注"
+  },
+  "ui": {
+    "na": "无数据",
+    "title": "账户",
+    "availableBalance": "可用 / 余额",
+    "imTitle": "初始保证金 ÷ 余额：您的仓位占用了账户的多少。",
+    "imUsed": "初始保证金占用",
+    "mmTitle": "维持保证金 ÷ 余额。达到 100% 时账户将被清算；{{watch}} 起显示黄色，{{risk}} 起显示红色。",
+    "mmUsed": "维持保证金占用",
+    "stripTitle": "各平台的可用 / 余额（Boros：所有账户合计）。打开账户页查看每个账户。",
+    "worstStrip": "{{venue}} {{name}} 维持保证金占用 {{pct}}",
+    "healthy": "健康",
+    "worstAlert": "· {{venue}} {{name}} 维持保证金占用 {{pct}}",
+    "viewAccounts": "查看账户"
+  }
+}

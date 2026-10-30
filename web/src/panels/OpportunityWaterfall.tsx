@@ -14,7 +14,9 @@
  * `notionalYears`: gross x NT − impact x NT − Σcosts = estProfitUsd. Capital:
  * the four margins sum to capitalUsd. A dev-only warning fires on any drift.
  */
+import { useTranslation } from 'react-i18next';
 import type { OpportunityPair } from '../api/types';
+import { t } from '../i18n';
 import {
   applyValueLabels,
   computeWaterfallScale,
@@ -52,15 +54,17 @@ function costRows(pair: OpportunityPair): Array<[string, number | null, string, 
       'opp-boros-taker',
       c.borosTakerFeeUsd,
       'bg-amber-500/75',
-      'Boros taker fee',
-      `Boros taker fee${pair.borosLegs.length > 1 ? 's, both legs' : ''} ${costText(c.borosTakerFeeUsd)}`,
+      t('opportunities.waterfall.borosTaker'),
+      t(pair.borosLegs.length > 1 ? 'opportunities.waterfall.borosTakerTitleBoth' : 'opportunities.waterfall.borosTakerTitle', {
+        cost: costText(c.borosTakerFeeUsd),
+      }),
     ],
     [
       'opp-boros-settle',
       c.borosSettleFeeUsd,
       dashedAmber,
-      'Boros settlement',
-      `Boros settlement fees accrued to maturity ${costText(c.borosSettleFeeUsd, true)}`,
+      t('opportunities.waterfall.borosSettle'),
+      t('opportunities.waterfall.borosSettleTitle', { cost: costText(c.borosSettleFeeUsd, true) }),
     ],
     // A favorable (negative) cost right after the settlement fee it rebates —
     // present only when `applyRebate` credited it (toggle on). A dashedAmber
@@ -71,8 +75,10 @@ function costRows(pair: OpportunityPair): Array<[string, number | null, string, 
             'opp-boros-settle-rebate',
             -(c.borosSettleRebateUsd as number),
             dashedAmber,
-            'Settlement rebate',
-            `Boros settlement-fee rebate credited to maturity ${costText(-(c.borosSettleRebateUsd as number), true)}`,
+            t('opportunities.waterfall.settleRebate'),
+            t('opportunities.waterfall.settleRebateTitle', {
+              cost: costText(-(c.borosSettleRebateUsd as number), true),
+            }),
           ] as [string, number | null, string, string, string],
         ])
       : []),
@@ -80,35 +86,35 @@ function costRows(pair: OpportunityPair): Array<[string, number | null, string, 
       'opp-perp-entry-fees',
       c.perpEntryFeesUsd,
       'bg-amber-500/55',
-      'Perp entry fees',
-      `Perp entry fees, both legs ${costText(c.perpEntryFeesUsd ?? 0)}`,
+      t('opportunities.waterfall.perpEntryFees'),
+      t('opportunities.waterfall.perpEntryFeesTitle', { cost: costText(c.perpEntryFeesUsd ?? 0) }),
     ],
     [
       'opp-entry-slip',
       c.perpEntrySlippageUsd,
       'bg-amber-500/40',
-      'Entry slip',
-      `Perp entry slippage ${costText(c.perpEntrySlippageUsd ?? 0)}`,
+      t('opportunities.waterfall.entrySlip'),
+      t('opportunities.waterfall.entrySlipTitle', { cost: costText(c.perpEntrySlippageUsd ?? 0) }),
     ],
     [
       'opp-exit-fees',
       c.perpExitFeesUsd,
       dashedAmber,
-      'Perp exit fees',
+      t('opportunities.waterfall.perpExitFees'),
       (c.perpExitFeesUsd ?? 0) === 0
-        ? 'No perp exit fee — this card assumes the perp legs roll over rather than close at maturity'
-        : `Perp exit fees at maturity ${costText(c.perpExitFeesUsd ?? 0, true)}`,
+        ? t('opportunities.waterfall.noExitFee')
+        : t('opportunities.waterfall.perpExitFeesTitle', { cost: costText(c.perpExitFeesUsd ?? 0, true) }),
     ],
     [
       'opp-exit-slip',
       c.perpExitSlippageUsd,
       dashedAmber,
-      'Exit slip',
+      t('opportunities.waterfall.exitSlip'),
       // NOT "assumed = entry" — that is the strategy view's estimate. Here the
       // server crosses back out of today's books to price it.
       (c.perpExitSlippageUsd ?? 0) === 0
-        ? 'No perp exit slippage — this card assumes the perp legs roll over rather than close at maturity'
-        : `Perp exit slippage, crossing back out of both books at maturity ${costText(c.perpExitSlippageUsd ?? 0, true)}`,
+        ? t('opportunities.waterfall.noExitSlip')
+        : t('opportunities.waterfall.exitSlipTitle', { cost: costText(c.perpExitSlippageUsd ?? 0, true) }),
     ],
   ];
 }
@@ -137,8 +143,12 @@ function buildProfitSteps(pair: OpportunityPair, notionalUsd: number): Waterfall
       from: 0,
       to: grossUsd,
       className: grossUsd >= 0 ? 'bg-emerald-500' : 'bg-rose-500',
-      title: `Spread return ${fmtUsd(grossUsd)} — the ${fmtPct(pair.execSpreadApr as number)} the pair locks after Boros price impact, on the notional to maturity (mid spread ${fmtPct(pair.grossSpreadApr)})`,
-      axisLabel: 'Locked spread',
+      title: t('opportunities.waterfall.spreadTitle', {
+        usd: fmtUsd(grossUsd),
+        apr: fmtPct(pair.execSpreadApr as number),
+        mid: fmtPct(pair.grossSpreadApr),
+      }),
+      axisLabel: t('opportunities.waterfall.lockedSpread'),
     },
   ];
 
@@ -170,8 +180,8 @@ function buildProfitSteps(pair: OpportunityPair, notionalUsd: number): Waterfall
     from: 0,
     to: profitUsd,
     className: profitUsd >= 0 ? 'bg-emerald-500' : 'bg-rose-500',
-    title: `Estimated profit by maturity ${fmtUsd(profitUsd)} — the locked spread minus every cost`,
-    axisLabel: 'Est. profit',
+    title: t('opportunities.waterfall.profitTitle', { usd: fmtUsd(profitUsd) }),
+    axisLabel: t('opportunities.waterfall.estProfit'),
   });
   if (import.meta.env.DEV && Math.abs(level - profitUsd) > 0.01) {
     // eslint-disable-next-line no-console
@@ -198,15 +208,21 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
           `cap-boros-${leg.marketId}`,
           imUsd,
           'bg-info/45',
-          'Boros spread IM',
-          `Boros initial margin · ${spreadName(pair.base, leg.spreadVenues)} (${side}) ${margin}`,
+          t('opportunities.waterfall.borosSpreadIm'),
+          t(side === 'short' ? 'opportunities.waterfall.borosImTitleShort' : 'opportunities.waterfall.borosImTitleLong', {
+            name: spreadName(pair.base, leg.spreadVenues),
+            margin,
+          }),
         ]
       : [
           `cap-boros-${side}`,
           imUsd,
           'bg-info/45',
-          `Boros ${side} IM`,
-          `Boros initial margin · ${prettyVenue(leg.venue)} (${side}) ${margin}`,
+          t(side === 'short' ? 'opportunities.waterfall.borosShortIm' : 'opportunities.waterfall.borosLongIm'),
+          t(side === 'short' ? 'opportunities.waterfall.borosImTitleShort' : 'opportunities.waterfall.borosImTitleLong', {
+            name: prettyVenue(leg.venue),
+            margin,
+          }),
         ];
   });
   const rows: Array<[string, number | null, string, string, string]> = [
@@ -215,15 +231,23 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
       'cap-perp-short',
       cap.perpShortImUsd,
       'bg-ink-300/30',
-      `Perp short IM${lev(cap.shortLeverageMax)}`,
-      `Perp initial margin · ${prettyVenue(pair.shortLeg.venue)} (short) — notional over the venue's max leverage${lev(cap.shortLeverageMax)} +${fmtUsd(cap.perpShortImUsd ?? 0)}`,
+      t('opportunities.waterfall.perpShortIm', { lev: lev(cap.shortLeverageMax) }),
+      t('opportunities.waterfall.perpImTitleShort', {
+        venue: prettyVenue(pair.shortLeg.venue),
+        lev: lev(cap.shortLeverageMax),
+        usd: fmtUsd(cap.perpShortImUsd ?? 0),
+      }),
     ],
     [
       'cap-perp-long',
       cap.perpLongImUsd,
       'bg-ink-300/30',
-      `Perp long IM${lev(cap.longLeverageMax)}`,
-      `Perp initial margin · ${prettyVenue(pair.longLeg.venue)} (long) — notional over the venue's max leverage${lev(cap.longLeverageMax)} +${fmtUsd(cap.perpLongImUsd ?? 0)}`,
+      t('opportunities.waterfall.perpLongIm', { lev: lev(cap.longLeverageMax) }),
+      t('opportunities.waterfall.perpImTitleLong', {
+        venue: prettyVenue(pair.longLeg.venue),
+        lev: lev(cap.longLeverageMax),
+        usd: fmtUsd(cap.perpLongImUsd ?? 0),
+      }),
     ],
   ];
 
@@ -242,8 +266,10 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
     from: 0,
     to: total,
     className: 'bg-info',
-    title: `Modelled minimum capital ${fmtUsd(total)} across the ${pair.borosLegs.length === 1 ? 'three' : 'four'} legs`,
-    axisLabel: 'Total capital',
+    title: t(pair.borosLegs.length === 1 ? 'opportunities.waterfall.capitalTitleThree' : 'opportunities.waterfall.capitalTitleFour', {
+      usd: fmtUsd(total),
+    }),
+    axisLabel: t('opportunities.waterfall.totalCapital'),
   });
   if (import.meta.env.DEV && Math.abs(level - total) > 0.01) {
     // eslint-disable-next-line no-console
@@ -254,28 +280,32 @@ function buildCapitalSteps(pair: OpportunityPair): WaterfallStep[] {
 
 /** Spells out the profit chart's amber convention: solid = cost already locked
  * in, dashed = cost still to be incurred (pattern, not colour alone). */
-const profitLegend = (
-  <>
-    <span aria-hidden className="flex items-center gap-1.5 text-[9.5px] text-ink-400">
-      <span className="h-2 w-2.5 shrink-0 rounded-sm bg-amber-500/85" />
-      locked in
-    </span>
-    <span aria-hidden className="flex items-center gap-1.5 text-[9.5px] text-ink-400">
-      <span className="box-border h-2 w-2.5 shrink-0 rounded-sm border border-dashed border-amber-500/70 bg-amber-500/10" />
-      future
-    </span>
-  </>
-);
+function ProfitLegend() {
+  const { t } = useTranslation();
+  return (
+    <>
+      <span aria-hidden className="flex items-center gap-1.5 text-[9.5px] text-ink-400">
+        <span className="h-2 w-2.5 shrink-0 rounded-sm bg-amber-500/85" />
+        {t('opportunities.waterfall.lockedIn')}
+      </span>
+      <span aria-hidden className="flex items-center gap-1.5 text-[9.5px] text-ink-400">
+        <span className="box-border h-2 w-2.5 shrink-0 rounded-sm border border-dashed border-amber-500/70 bg-amber-500/10" />
+        {t('opportunities.waterfall.future')}
+      </span>
+    </>
+  );
+}
 
 export function OpportunityWaterfall({
   pair,
   notionalUsd,
 }: {
   pair: OpportunityPair;
-  /** The notional the RESPONSE priced — meta.notionalUsd, not the live control,
-   * so the USD conversion matches the costs it is charted against. */
+  /** The notional the pair was priced at — pair.notionalUsd, not the live
+   * control, so the USD conversion matches the costs it is charted against. */
   notionalUsd: number;
 }) {
+  const { t } = useTranslation();
   // The roll is read off the DATA, not the live exitMode control (which moves
   // before the refetch lands): a zero exit cost IS the rolled-over case, and
   // the two exit segments' own titles say so where the reader meets them.
@@ -292,10 +322,13 @@ export function OpportunityWaterfall({
 
   const label = [
     showProfit
-      ? `locked spread return ${fmtUsd(profitSteps![0].to, 0)} minus costs to an estimated profit of ${fmtUsd(pair.estProfitUsd ?? 0, 0)}`
+      ? t('opportunities.waterfall.ariaProfit', {
+          spread: fmtUsd(profitSteps![0].to, 0),
+          profit: fmtUsd(pair.estProfitUsd ?? 0, 0),
+        })
       : null,
     showCapital
-      ? `modelled minimum capital ${fmtUsd(pair.capitalUsd ?? 0, 0)} built from the Boros and perp initial margins`
+      ? t('opportunities.waterfall.ariaCapital', { capital: fmtUsd(pair.capitalUsd ?? 0, 0) })
       : null,
   ]
     .filter(Boolean)
@@ -303,7 +336,7 @@ export function OpportunityWaterfall({
 
   return (
     <div>
-      <div data-waterfall role="img" aria-label={`Waterfalls: ${label}`} className="relative pt-3">
+      <div data-waterfall role="img" aria-label={t('opportunities.waterfall.aria', { label })} className="relative pt-3">
         {/* Side by side the two plots split a phone's width into ~20px columns,
             narrower than the value labels themselves, so adjacent labels
             overlapped into a smear and spilled out of the card. */}
@@ -315,18 +348,18 @@ export function OpportunityWaterfall({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[repeat(auto-fit,minmax(280px,1fr))]">
           {showProfit && (
             <div className="flex min-w-0 flex-col gap-3 rounded border border-wash/10 px-4 py-3.5">
-              <span className="text-[14px] font-semibold text-ink-50">Profit by maturity</span>
+              <span className="text-[14px] font-semibold text-ink-50">{t('opportunities.waterfall.profitByMaturity')}</span>
               <WaterfallPlot
                 steps={profitSteps!}
                 y={left.y}
                 span={left.span}
                 domainMin={left.domainMin}
-                caption="profit by maturity"
+                caption={t('opportunities.waterfall.profitCaption')}
                 showCaption={false}
-                legend={profitLegend}
+                legend={<ProfitLegend />}
               />
               <span className="flex items-baseline justify-between gap-3 border-t border-ink-700 pt-[9px]">
-                <span className="text-[11.5px] text-ink-200">Est. profit</span>
+                <span className="text-[11.5px] text-ink-200">{t('opportunities.waterfall.estProfit')}</span>
                 <span
                   className={`num whitespace-nowrap text-sm font-semibold ${
                     (pair.estProfitUsd ?? 0) < 0 ? 'text-guava' : 'text-grass'
@@ -339,17 +372,17 @@ export function OpportunityWaterfall({
           )}
           {showCapital && (
             <div className="flex min-w-0 flex-col gap-3 rounded border border-wash/10 px-4 py-3.5">
-              <span className="text-[14px] font-semibold text-ink-50">Capital (modelled min)</span>
+              <span className="text-[14px] font-semibold text-ink-50">{t('opportunities.waterfall.capitalModelled')}</span>
               <WaterfallPlot
                 steps={capitalSteps!}
                 y={right.y}
                 span={right.span}
                 domainMin={right.domainMin}
-                caption="capital (modelled min)"
+                caption={t('opportunities.waterfall.capitalCaption')}
                 showCaption={false}
               />
               <span className="flex items-baseline justify-between gap-3 border-t border-ink-700 pt-[9px]">
-                <span className="text-[11.5px] text-ink-200">Total capital</span>
+                <span className="text-[11.5px] text-ink-200">{t('opportunities.waterfall.totalCapital')}</span>
                 <span className="num whitespace-nowrap text-sm font-semibold text-ink-50">
                   {fmtUsd(pair.capitalUsd ?? 0, 0)}
                 </span>
