@@ -15,12 +15,12 @@
     "noLegs": "暂无持仓，无需再平衡。",
     "goal": {
       "even": "按仓位平衡",
-      "repay": "清偿债务",
+      "repay": "还清借款",
       "custom": "自定义金额"
     },
     "card": {
       "even": "再平衡",
-      "repay": "清偿债务",
+      "repay": "还清借款",
       "custom": "自定义金额"
     },
     "presetOff": {
@@ -35,27 +35,27 @@
     "shortOfCash": "超出钱包余额。",
     "hold": {
       "even": "长按再平衡",
-      "repay": "长按清偿债务",
+      "repay": "长按还清借款",
       "custom": "长按划转"
     },
     "holdAnyway": {
       "even": "仍要再平衡（长按）",
-      "repay": "仍要清偿债务（长按）",
+      "repay": "仍要还清借款（长按）",
       "custom": "仍要划转（长按）"
     },
     "optional": {
       "even": "再平衡为可选操作。",
-      "repay": "清偿债务为可选操作。",
+      "repay": "还清借款为可选操作。",
       "custom": "此次划转为可选操作。"
     },
     "optionalFee": {
       "even": "再平衡为可选操作，费用 {{fee}}。",
-      "repay": "清偿债务为可选操作，费用 {{fee}}。",
+      "repay": "还清借款为可选操作，费用 {{fee}}。",
       "custom": "此次划转为可选操作，费用 {{fee}}。"
     },
     "after": {
       "even": "再平衡后",
-      "repay": "清偿债务后",
+      "repay": "还清借款后",
       "custom": "划转后"
     },
     "moveText": {
@@ -113,7 +113,7 @@
         "twoSwaps": "0.4%，兑换两次",
         "recommended": "推荐：15 分钟内完成的最便宜路线。"
       },
-      "presets": "按仓位平衡：按仓位规模分配权益。清偿债务：从权益最多的钱包偿还所有借款。自定义金额：按您输入的金额划转。",
+      "presets": "按仓位平衡：按仓位规模分配权益。还清借款：从权益最多的钱包偿还所有借款。自定义金额：按您输入的金额划转。",
       "custom": "从一个 CrossEx 钱包向另一个划转此金额。费用从到账金额中扣除。",
       "walletUsdt": "CrossEx 钱包。Gate、Binance、OKX 和 Bybit 腿的保证金。",
       "walletUsdc": "CrossEx 钱包。Hyperliquid 腿的保证金。",
@@ -143,7 +143,7 @@
       "whyMoreThanOne": "划转金额超过可用保证金时，需要多轮。",
       "whyMoreThanOneBorrow": "Gate 为您的借款占用 {{amount}} 初始保证金。每轮会偿还部分借款，因此下一轮更大。",
       "frees": "已偿还借款不再占用的初始保证金。",
-      "interestMonth": "按今日利率计算的 30 天借款利息，当前及本次再平衡后。",
+      "interestMonth": "按今日利率估算的 30 天借款利息：当前与本次再平衡后对比。",
       "onTheWay": "正经 Gate 现货在途，不计为保证金。",
       "gateSpot": "不计为保证金。",
       "gateSpotAssets": "不计为保证金，无权益或盈亏。",
@@ -162,8 +162,8 @@
       "rateUnknown": "无法读取借款利率。划转前请先确认费用。",
       "notWorthIt": "暂不划算：费用超过可节省的 30 天利息。",
       "worthIt": "建议再平衡。",
-      "repayWorthIt": "建议清偿债务。",
-      "repayNoLegsSub": "钱包有借款时无法提取现金。",
+      "repayWorthIt": "建议还清借款。",
+      "repayNoLegsSub": "钱包有借款时无法提款。",
       "paysBack": "费用相当于可节省的 {{days}} 利息。"
     },
     "fact": {
@@ -309,11 +309,11 @@
     "into": "转入 CrossEx",
     "out": "转出 CrossEx",
     "upTo": "最多 {{max}}",
-    "holdSend": "长按发送 {{amount}} {{coin}} 至 {{to}}",
-    "sent": "已发送 {{amount}} {{coin}} 至 {{to}}。",
-    "sentArrived": "已发送 {{amount}} {{coin}} 至 {{to}}。已到账 {{received}}。",
+    "holdSend": "长按划转 {{amount}} {{coin}} 至 {{to}}",
+    "sent": "已划转 {{amount}} {{coin}} 至 {{to}}。",
+    "sentArrived": "已划转 {{amount}} {{coin}} 至 {{to}}。已到账 {{received}}。",
     "loadFailed": "无法加载划转。{{message}}",
-    "sendingAmount": "正在发送 {{amount}} {{coin}}",
+    "sendingAmount": "正在划转 {{amount}} {{coin}}",
     "failedOpen": "划转失败 · 打开"
   },
   "balances": {
@@ -331,13 +331,13 @@
     "pairSlice": "组合份额",
     "wholePosition": "整个仓位",
     "ofHeld": "交易所持有 {{held}}",
-    "sizeLabel": "平仓数量 · 两条腿",
+    "sizeLabel": "平仓规模 · 两条腿",
     "maxTitle": "平掉整个组合",
     "max": "最大",
-    "sizeAria": "平仓数量，同时用于两条腿",
-    "sizeInvalid": "数量须大于 0 且不超过 {{max}} {{base}}",
-    "sizeHint": "各交易所按自身最小单位向下取整，见上方各行",
-    "pnlToRealise": "将实现盈亏",
+    "sizeAria": "平仓规模，同时用于两条腿",
+    "sizeInvalid": "规模须大于 0 且不超过 {{max}} {{base}}",
+    "sizeHint": "各交易所按自身最小下单单位向下取整，见上方各行",
+    "pnlToRealise": "预计实现盈亏",
     "pnlSub": "两条腿 · 未扣手续费",
     "head": {
       "leg": "腿",
@@ -353,7 +353,7 @@
     "slipTitle": "第一条腿的限价：中间价 ± 此值。",
     "slipHint": "规模大或盘口薄时可调高。",
     "closeBoth": "两腿平仓",
-    "pairNote": "第一条腿：中间价 ± 滑点的限价单。第二条腿：市价单，处于交易所限价范围内。",
+    "pairNote": "第一条腿：以中间价 ± 滑点挂限价单。第二条腿：市价单，成交价不超出交易所的价格限制区间。",
     "mechanics": "<b>只减仓</b>。两条腿都不会增加仓位，也不会挂在盘口。"
   },
   "tracked": {
@@ -375,7 +375,7 @@
     "imUsed": "初始保证金占用",
     "mmTitle": "维持保证金 ÷ 余额。达到 100% 时账户将被清算；{{watch}} 起显示黄色，{{risk}} 起显示红色。",
     "mmUsed": "维持保证金占用",
-    "stripTitle": "各平台的可用 / 余额（Boros：所有账户合计）。打开账户页查看每个账户。",
+    "stripTitle": "各交易所的可用 / 余额（Boros：所有账户合计）。打开账户页查看每个账户。",
     "worstStrip": "{{venue}} {{name}} 维持保证金占用 {{pct}}",
     "healthy": "健康",
     "worstAlert": "· {{venue}} {{name}} 维持保证金占用 {{pct}}",

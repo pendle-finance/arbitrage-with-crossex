@@ -158,11 +158,11 @@ function handlers(opts: { onExecute?: (body: Record<string, unknown>) => void } 
 
 async function fillTicket(user: ReturnType<typeof userEvent.setup>) {
   await waitFor(() =>
-    expect((screen.getByLabelText('Leg A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
+    expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
   );
-  await user.selectOptions(screen.getByLabelText('Leg A'), String(HL));
-  await user.selectOptions(screen.getByLabelText('Leg B'), String(BN));
-  await user.type(screen.getByLabelText(/^Size per leg/), '100000');
+  await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
+  await user.selectOptions(screen.getByLabelText('Market B'), String(BN));
+  await user.type(screen.getByLabelText(/^Size per market/), '100000');
 }
 
 beforeEach(() => {

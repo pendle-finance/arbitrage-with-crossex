@@ -249,6 +249,7 @@
     "slippage": "Slippage",
     "favorable": "Favorable",
     "adverse": "Adverse",
-    "serverSide": "The deal runs server-side — closing this view never affects it"
+    "serverSide": "The deal runs server-side — closing this view never affects it",
+    "dustTitle": "Left over below the venue's lot size, so it can't be sent. It stays unhedged."
   }
 }

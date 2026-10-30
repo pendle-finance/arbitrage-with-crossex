@@ -39,7 +39,7 @@ describe('UnevenFillWarning', () => {
     const onUse = vi.fn();
     render(<UnevenFillWarning sim={pair(0.775, 0.225)} onUse={onUse} />);
     expect(
-      screen.getByText('Only 0.775 ETH fills on both legs. 0.225 ETH would be left unhedged.'),
+      screen.getByText('Only 0.775 ETH fills on both markets. 0.225 ETH would be left unhedged.'),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Use 0.775 ETH' }));
     expect(onUse).toHaveBeenCalledWith(0.775);

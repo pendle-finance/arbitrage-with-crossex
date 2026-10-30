@@ -6,7 +6,7 @@
     "tradeTitle": "Boros trade PnL (gross of trade fees) {{amount}}",
     "trade": "Boros trade",
     "tradeFeeTitle": "Boros trade fees {{amount}}",
-    "tradeFee": "Trade fees",
+    "tradeFee": "Boros trade fees",
     "perpFeesTitle": "Perp trading fees, open + closed positions {{amount}}",
     "perpFees": "Perp fees",
     "basisTitle": "Perp basis: open uPnL + closed price PnL (near 0 when hedged) {{amount}}",

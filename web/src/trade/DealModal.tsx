@@ -438,7 +438,7 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
                     </span>
                   )}
                   {Number(report.unhedged) > 0 && (
-                    <span className="text-amber-300">
+                    <span className="tip-label text-amber-300" title={t('trade.deal.dustTitle')}>
                       <Trans
                         i18nKey="trade.deal.dust"
                         values={{ size: sig(report.unhedged) }}

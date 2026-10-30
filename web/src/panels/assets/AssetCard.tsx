@@ -227,6 +227,17 @@ const MissingChip = ({ held, target, unit, base }: { held: number; target: numbe
   </Chip>
 );
 
+/** The amber head chip names what is missing. "Hedge" alone read as the perps
+ * on the open flow and as Boros here (Kevin's review, #13). */
+function missingChipText(gaps: HedgeGapRow[]): string {
+  const venuesOf = (leg: 'perp' | 'boros') => new Set(gaps.filter((g) => g.leg === leg).map((g) => g.venue)).size;
+  const perps = venuesOf('perp');
+  const boros = venuesOf('boros');
+  if (perps > 0 && boros > 0) return t('assetCard.head.missingHedge');
+  if (boros > 0) return t(boros > 1 ? 'assetCard.perpOnly.legsMissing' : 'assetCard.perpOnly.legMissing');
+  return t(perps > 1 ? 'assetCard.borosOnly.perpsMissing' : 'assetCard.borosOnly.perpMissing');
+}
+
 const AmberTag = ({ tag, children }: { tag: string; children: string }) => (
   <HoverCard underline={false} icon={false} widthPx={280} label={<Chip sm tone="amber">{tag}</Chip>}>
     {children}
@@ -5823,7 +5834,7 @@ export function AssetCard({
               className={HEAD_CHIP}
               title={[t('assetCard.head.toComplete'), ...gaps.map((g) => `${prettyVenue(g.venue)}\t${t('assetCard.head.openAsk', { ask: gapAsk(g, group.base) })}`)].join('\n')}
             >
-              {t('assetCard.head.missingHedge')}
+              {missingChipText(gaps)}
             </Chip>
           ) : (
             <Chip tone="amber" className={HEAD_CHIP} title={t('assetCard.head.noCancelTitle')}>
@@ -6332,7 +6343,7 @@ export function AssetCard({
         <Modal
           title={
             <>
-              {t('assetCard.closePair')}
+              {t('assetCard.actions.closePerps')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {group.base} · {prettyVenue(closePerps.longVenue)} ⇄ {prettyVenue(closePerps.shortVenue)}
                 {closePerps.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closePerps.soonestMaturitySec)}` : ''}
@@ -6343,6 +6354,7 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
+            <p className="text-[11px] leading-relaxed text-amber-200">{t('assetCard.closeModal.borosStaysOpen')}</p>
             {/* The form's own leg rows say which leg is a pair slice of a
                 larger venue position and how much of it. */}
             <ClosePairForm
@@ -6357,7 +6369,7 @@ export function AssetCard({
         <Modal
           title={
             <>
-              {t('assetCard.closePair')}
+              {t('assetCard.actions.closePerps')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {group.base} · {prettyVenue(closePerpOnly.longVenue)} ⇄ {prettyVenue(closePerpOnly.shortVenue)} · {t('assetCard.closeModal.noRateLegs')}
               </span>
@@ -6447,6 +6459,7 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
+            <p className="text-[11px] leading-relaxed text-amber-200">{t('assetCard.closeModal.perpsStayOpen')}</p>
             <CloseBorosForm
               legs={pairBorosCloseLegs(closeBoros, group).map((l) => ({
                 ...l,
@@ -6461,7 +6474,7 @@ export function AssetCard({
         <Modal
           title={
             <>
-              {t('assetCard.closePair')}
+              {closeBorosOnly.borosLegs.length === 1 ? t('assetCard.borosOnly.closeLeg') : t('assetCard.borosOnly.closeLegs')}
               <span className="ml-2 text-[12px] font-normal text-ink-400">
                 {group.base} · {prettyVenue(closeBorosOnly.longVenue)} ⇄ {prettyVenue(closeBorosOnly.shortVenue)} ·{' '}
                 {fmtDateLocal(closeBorosOnly.maturity)} · {t('assetCard.closeModal.noPerps')}

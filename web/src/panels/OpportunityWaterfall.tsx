@@ -284,11 +284,11 @@ function ProfitLegend() {
   const { t } = useTranslation();
   return (
     <>
-      <span aria-hidden className="flex items-center gap-1.5 text-[9.5px] text-ink-400">
+      <span aria-hidden className="flex cursor-help items-center gap-1.5 text-[9.5px] text-ink-400" title={t('opportunities.waterfall.lockedInTitle')}>
         <span className="h-2 w-2.5 shrink-0 rounded-sm bg-amber-500/85" />
         {t('opportunities.waterfall.lockedIn')}
       </span>
-      <span aria-hidden className="flex items-center gap-1.5 text-[9.5px] text-ink-400">
+      <span aria-hidden className="flex cursor-help items-center gap-1.5 text-[9.5px] text-ink-400" title={t('opportunities.waterfall.futureTitle')}>
         <span className="box-border h-2 w-2.5 shrink-0 rounded-sm border border-dashed border-amber-500/70 bg-amber-500/10" />
         {t('opportunities.waterfall.future')}
       </span>
@@ -372,7 +372,9 @@ export function OpportunityWaterfall({
           )}
           {showCapital && (
             <div className="flex min-w-0 flex-col gap-3 rounded border border-wash/10 px-4 py-3.5">
-              <span className="text-[14px] font-semibold text-ink-50">{t('opportunities.waterfall.capitalModelled')}</span>
+              <span className="tip-label self-start text-[14px] font-semibold text-ink-50" title={t('opportunities.waterfall.capitalModelledTitle')}>
+                {t('opportunities.waterfall.capitalModelled')}
+              </span>
               <WaterfallPlot
                 steps={capitalSteps!}
                 y={right.y}

@@ -92,10 +92,13 @@ beforeEach(() => {
   );
 });
 
+/** The pair cards' own chips — the coin's head chip names the same gap. */
+const pairChips = (text: string) => screen.getAllByText(text).filter((el) => el.closest('div.overflow-x-auto'));
+
 describe('BorosOnlyPairCard', () => {
   it('both perps missing: two gap rows and "Open both perps"', () => {
     renderCard(book([]));
-    expect(screen.getByText('Perp legs missing')).toBeInTheDocument();
+    expect(pairChips('Perp legs missing')).toHaveLength(1);
     const table = legTable();
     expect(within(table).getAllByText('Missing 100 ETH')).toHaveLength(2);
     expect(screen.getByRole('button', { name: 'Open both perps' })).toBeInTheDocument();
@@ -180,7 +183,7 @@ describe('BorosOnlyPairCard', () => {
     ],
     borosHistory: [],
   });
-  const missingCard = () => screen.getByText('Perp legs missing').closest('div.overflow-x-auto') as HTMLElement;
+  const missingCard = () => pairChips('Perp legs missing')[0].closest('div.overflow-x-auto') as HTMLElement;
 
   it('a roll that keeps the old legs: the new date holds the perps, the old legs show what they lack (mozzarella 2026-10-17)', () => {
     renderCard(rolledBook(100));
@@ -225,6 +228,6 @@ describe('BorosOnlyPairCard', () => {
     // 100 hedged at OLD; 500 opened at NEW. The perps go to NEW; 400 at NEW and all 100 at OLD lack perps.
     renderCard(rolledBook(500));
     expect(screen.queryByText(/^Rolled · covered from/)).toBeNull();
-    expect(screen.getAllByText('Perp legs missing')).toHaveLength(2);
+    expect(pairChips('Perp legs missing')).toHaveLength(2);
   });
 });

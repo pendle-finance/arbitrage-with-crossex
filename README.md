@@ -97,8 +97,8 @@ before running anything.
 
 ### First run: connect your Gate.io account
 
-The app starts unconfigured and shows the live opportunities next to a setup guide asking
-for a Gate.io API key:
+The app starts unconfigured and shows a setup guide asking for a Gate.io API key. The
+Opportunities scan and the rest of the terminal open once setup is done:
 
 1. Enable the **CrossEx feature** on your account at
    [gate.com/crossex](https://www.gate.com/crossex) — the API-key permission below and

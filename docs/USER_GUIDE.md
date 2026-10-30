@@ -97,7 +97,7 @@ The top of each card shows:
 - **Total PnL**, with its ROI and the all-time cost. Click the pie icon next to it for the PnL breakdown.
 - **Current APR**: the fixed APR your pairs lock, and about how much that earns per day. When part of the book is not locked, it shows the fixed and the floating part.
 - **Current capital**: the initial margin your counted positions need, on Gate and on Boros.
-- **PnL waterfall** shows the PnL as bars: fixed funding, Boros trade, trade fees, perp fees, perp basis and settlement rebate, then the net.
+- **PnL waterfall** shows the PnL as bars: fixed funding, Boros trade, Boros trade fees, perp fees, perp basis and settlement rebate, then the net.
 
 Below them are two tabs:
 - **Fixed Rate Pairs** (the default) lists each pair: a Boros position matched with its perps, with its **Notional**, **Capital**, **Est. fixed APR** and **Profit at maturity**.

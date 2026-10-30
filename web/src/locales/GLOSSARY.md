@@ -45,9 +45,10 @@ reads the same word in both apps.
 |---|---|
 | funding rate | 资金费率 |
 | perp, perpetual | 永续合约 (tight space: 永续) |
-| Long / Short (side, tag) | 多头 / 空头 |
+| Long / Short (side, tag, button) | 做多 / 做空 (as Boros) |
+| long / short inside a sentence | 多头 / 空头 |
 | go long / go short (action) | 做多 / 做空 |
-| leg (a perp; or one of two single Boros markets on the pair ticket, Leg A / Leg B) | 腿 |
+| leg (a perp only; the Boros ticket says Market A / Market B) | 腿 |
 | Boros position (the Boros side anywhere else, single or spread) | Boros 仓位 |
 | spread position (one position on a Boros spread market; never a leg) | 利差仓位 |
 | pair (a hedged Boros + perp pair) | 组合 |
@@ -56,7 +57,7 @@ reads the same word in both apps.
 | implied APR | 隐含 APR |
 | underlying APR | 标的 APR |
 | spread (Boros spread market) | 利差 |
-| maturity, matures | 到期 |
+| maturity, matures | 到期 (a column or field naming the date: 到期日) |
 | matured | 已到期 |
 | roll over | 展期 |
 | hedge, hedged | 对冲, 已对冲 |
@@ -66,7 +67,7 @@ reads the same word in both apps.
 | position | 仓位 (list of them: 持仓) |
 | open a position | 开仓 |
 | close a position | 平仓 |
-| size | 规模 (an amount of coin: 数量) |
+| size | 规模 (everywhere, as Boros; 数量 only for a count or a plain "how much") |
 | notional | 名义规模 |
 | capital | 本金 (never 资金: it reads as 资金费, funding) |
 | carry (locked spread earned, before fees) | 息差收益 |
@@ -78,7 +79,7 @@ reads the same word in both apps.
 | collateral | 抵押品 |
 | equity | 权益 |
 | balance | 余额 |
-| liquidation, liquidation price | 清算, 清算价格 |
+| liquidation, liquidation price, liquidation APR | 清算, 清算价格, 清算 APR |
 | unrealized PnL / realized PnL | 未实现盈亏 / 已实现盈亏 |
 | PnL | 盈亏 |
 | fee / trading fee | 手续费 / 交易手续费 |
@@ -108,6 +109,11 @@ reads the same word in both apps.
 | Close (dismiss a dialog) / Close (a position) | 关闭 / 平仓 |
 | exit (close old legs in a roll) | 平仓 |
 | entry price / mark price | 开仓价 / 标记价 |
+| lot, lot size | 最小下单单位 |
+| tick, price step | 最小变动价位 |
+| minimum order value | 最小下单金额 |
+| market impact | 冲击成本 |
+| repay (clear a borrow) | 还清借款 |
 | ungrouped | 未分组 |
 
 ## Style

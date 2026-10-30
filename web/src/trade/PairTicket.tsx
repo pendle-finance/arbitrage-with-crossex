@@ -27,6 +27,7 @@ import {
   PairEstimate,
   PairVenues,
   type ExecMode,
+  storedExecMode,
   type TimeoutChoice,
 } from './PairTicketBits';
 import { PairBookImpact } from './PriceImpactGraph';
@@ -76,7 +77,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
   const [unitPinned, setUnitPinned] = useState(false);
   const [nonce, setNonce] = useState(0);
   const flow = useTradeFlowOptional();
-  const [mode, setMode] = useState<ExecMode>('maker');
+  const [mode, setMode] = useState<ExecMode>(storedExecMode);
   const [makerPriceStr, setMakerPriceStr] = useState('');
   /** True once the user typed a price — stop auto-tracking the touch. */
   const [pricePinned, setPricePinned] = useState(false);
