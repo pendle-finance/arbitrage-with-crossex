@@ -280,7 +280,12 @@ function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kin
       <span className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'}`}>
         {kind === 'yu' ? 'Boros' : 'CrossEx'}
       </span>
-      <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
+      <Chip
+        sm
+        tone={side === 'LONG' ? 'green' : 'red'}
+        // A Boros side is a rate side; the hover says what it pays.
+        title={kind === 'yu' ? t(side === 'LONG' ? 'pairTicket.borosBits.longRateHint' : 'pairTicket.borosBits.shortRateHint') : undefined}
+      >
         {sideUpper(side)}
       </Chip>
     </span>

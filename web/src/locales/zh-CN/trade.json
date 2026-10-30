@@ -196,7 +196,8 @@
     "viewPosition": "查看我的仓位",
     "close": "关闭",
     "lockRate": "锁定利率",
-    "hedgePerps": "对冲永续合约"
+    "hedgePerps": "对冲永续合约",
+    "onVenue": "在 {{venue}}"
   },
   "deal": {
     "modeOpening": "挂单中 — 等待成交",

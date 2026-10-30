@@ -1817,7 +1817,7 @@ describe('BorosPairTicket — spread ticket', () => {
     // The same layout as a hand-picked pair: the singles in the slots, and
     // "Trade on" naming the one spread market the order goes to.
     expect(await screen.findByText('ETH Spread HL-GATE')).toBeInTheDocument();
-    expect(screen.getByText('Market A')).toBeInTheDocument();
+    expect(screen.getByText('Boros market A')).toBeInTheDocument();
     expect(screen.getByLabelText('Market A')).toHaveValue('211');
     expect(screen.getByLabelText('Market B')).toHaveValue('209');
     expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue('0.121');

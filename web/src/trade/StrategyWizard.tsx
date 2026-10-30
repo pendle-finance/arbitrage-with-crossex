@@ -327,8 +327,8 @@ function WizardBody({
    * empty gap between separators.
    */
   const venuePair = [
-    w.borosShortVenue ? t('trade.wizard.venueShort', { venue: prettyVenue(w.borosShortVenue) }) : null,
     w.borosLongVenue ? t('trade.wizard.venueLong', { venue: prettyVenue(w.borosLongVenue) }) : null,
+    w.borosShortVenue ? t('trade.wizard.venueShort', { venue: prettyVenue(w.borosShortVenue) }) : null,
   ]
     .filter((p): p is string => p !== null)
     .join(' / ');
@@ -615,8 +615,11 @@ function StepStrip({ step, locked }: { step: Step; locked: boolean }) {
               {it.label}
             </span>
             {/* The venue is the part that tells you WHICH book each step
-                touches; it was buried in the same 11px run as the verb. */}
-            <span className="truncate text-[10.5px] text-ink-500">{it.venue}</span>
+                touches. The current step's reads as loud as its verb: two
+                traders took step 1's Gate and Hyperliquid markets for perps. */}
+            <span className={`truncate ${it.active ? 'text-[12px] font-semibold text-cyan-300' : 'text-[10.5px] text-ink-500'}`}>
+              {t('trade.wizard.onVenue', { venue: it.venue })}
+            </span>
           </span>
         </li>
         </Fragment>

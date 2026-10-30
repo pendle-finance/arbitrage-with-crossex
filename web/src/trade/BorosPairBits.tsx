@@ -175,7 +175,12 @@ export function MarketCard({
           follows from the pair being a spread. */}
       <div className="flex items-center gap-2">
         {side && (
-          <Chip sm tone={side === 'long' ? 'green' : 'red'} className="font-semibold">
+          <Chip
+            sm
+            tone={side === 'long' ? 'green' : 'red'}
+            className="font-semibold"
+            title={t(side === 'long' ? 'pairTicket.borosBits.longRateHint' : 'pairTicket.borosBits.shortRateHint')}
+          >
             {t(side === 'long' ? 'common.longUpper' : 'common.shortUpper')}
           </Chip>
         )}
