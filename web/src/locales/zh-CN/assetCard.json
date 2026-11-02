@@ -307,7 +307,7 @@
   "ticketUnavailable": "此处无法使用下单面板",
   "edit": {
     "title": "编辑仓位 — {{label}}",
-    "intro": "设定这个仓位中计入套利的部分。其余部分移到“已排除”区，不计入对冲、盈亏和本金。",
+    "intro": "设定这个仓位中要排除的部分。排除的部分移到“已排除”区，不计入对冲、盈亏和本金。",
     "includeAria": "计入",
     "includeAll": "全部计入",
     "excludePortion": "排除一部分",
