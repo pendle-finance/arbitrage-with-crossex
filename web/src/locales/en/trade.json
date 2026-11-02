@@ -246,7 +246,7 @@
     "noteLimit": "Limit — the filled resting leg",
     "noteMarket": "Market order",
     "noteHedge": "Market hedge",
-    "slipTitle": "Short-leg average − long-leg average. Positive = sold higher than it bought.",
+    "slipTitle": "Short-leg average − Long-leg average. Positive = sold higher than it bought.",
     "slippage": "Slippage",
     "favorable": "Favorable",
     "adverse": "Adverse",
