@@ -155,8 +155,7 @@ describe('PairTicket size unit', () => {
 });
 
 describe('PairTicket execution modes', () => {
-  it('starts on the perp entry saved on Opportunities: Limit + hedge when picked there', async () => {
-    localStorage.setItem(OPPORTUNITIES_STORAGE_KEY, JSON.stringify({ entryMode: 'maker-hedge' }));
+  it('defaults to "Limit + hedge", as Opportunities does', async () => {
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [] }));
     await setupTwoVenuePair();
 
@@ -164,7 +163,8 @@ describe('PairTicket execution modes', () => {
     expect(screen.getByRole('radio', { name: '2 market orders' })).toHaveAttribute('aria-checked', 'false');
   });
 
-  it('defaults to "2 market orders", as Opportunities does; it previews two plain open-market legs', async () => {
+  it('starts on "2 market orders" when picked on Opportunities; it previews two plain open-market legs', async () => {
+    localStorage.setItem(OPPORTUNITIES_STORAGE_KEY, JSON.stringify({ entryMode: 'both-market' }));
     const calls: ActionInput[][] = [];
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
     await setupTwoVenuePair();

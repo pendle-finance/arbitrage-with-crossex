@@ -48,10 +48,10 @@ The bar above the **Opportunities** scan sets the assumptions every card is pric
 - For **Perps at maturity**, **"Roll over"** (the default) assumes you keep the perp legs open at maturity and lock another Boros spread on them at a later maturity, so no closing fee is charged. **"Close positions"** charges the fees and slippage to close both perp legs at maturity.
 - The Boros positions are always priced as market orders at your size. Each Boros position shows its rate "after impact"; hover it to see the mid rate. Filling one of two single Boros positions with a limit order can do better (see section 4).
 - Perp fees follow your Gate VIP tier once your Gate API key is connected. Without a key, a note above the cards says the fees assume the VIP 0 schedule.
-- **Include rebate in APR** shows only when your logged-in Boros account has a settlement-fee rebate. It is on by default and adds the rebate to every card's APR and Return.
+- **Include rebate in APR** shows only when your logged-in Boros account has a settlement-fee rebate. It is on by default and adds the rebate to every card's APR and Est. profit.
 - Above $1M of notional per position, a note says the perp slippage is estimated at $1M. Above that size, split (TWAP) the perp side.
 
-Each card shows its **APR** on capital, the **Capital** it posts, the **Return** by maturity and the **Notional** per position. Tick **"I already hold the perps"** on a card when you already hold those perps, for example to roll over: the card then charges no perp entry fees or entry slippage. It is ticked for you when you already hold the same pair at a sooner maturity.
+Each card shows its **APR** on capital, the **Capital** it posts, the **Est. profit** by maturity and the **Notional** per position. Tick **"I already hold the perps"** on a card when you already hold those perps, for example to roll over: the card then charges no perp entry fees or entry slippage. It is ticked for you when you already hold the same pair at a sooner maturity.
 
 **More details** breaks a card down: the positions on each venue, the **Est. profit at maturity** and **Capital (modeled min)** waterfalls, and the **Net effect** line. Try changing the assumptions to see how each cost moves.
 ![More details on an opportunity: the Est. profit at maturity and Capital (modeled min) waterfalls, and the Net effect line](./OpportunitiesDetails.png)
@@ -100,7 +100,7 @@ The top of each card shows:
 - **PnL waterfall** shows the PnL as bars: fixed funding, Boros trade, Boros trade fees, perp fees, perp basis and settlement rebate, then the net.
 
 Below them are two tabs:
-- **Fixed Rate Pairs** (the default) lists each pair: a Boros position matched with its perps, with its **Notional**, **Capital**, **Est. fixed APR** and **Profit at maturity**.
+- **Fixed Rate Pairs** (the default) lists each pair: a Boros position matched with its perps, with its **Notional**, **Capital**, **Est. fixed APR** and **Est. profit at maturity**.
 - **Funding Bundles** lists the perp funding and the Boros settlements per venue, for live and finished positions.
 
 Click a pair to open it. It shows its positions and these buttons:
@@ -120,7 +120,7 @@ It shows the pair's **Fixed earning**, the **Boros trade fees** it paid, the **P
 - **Perp entry fees**: what opening the perps cost. It is ticked, unless the perps were opened more than 3 days before the Boros position. Then the perps most likely came from an earlier pair you rolled over, and they paid their fees there.
 - **Est. perp exit fees**: closing both perps at maturity at your venues' taker fees. It starts unticked, because perps are usually rolled over. Tick it if you mean to close them.
 
-The switches change only that pair's Est. fixed APR and Profit at maturity. They are not saved: a reload sets them back.
+The switches change only that pair's Est. fixed APR and Est. profit at maturity. They are not saved: a reload sets them back.
 
 #### When one position belongs to two pairs
 

@@ -661,7 +661,7 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     expect(params).toMatchObject({
       borosEntry: 'market',
       capitalUsd: '200000',
-      entryMode: 'both-market',
+      entryMode: 'maker-hedge',
       exitMode: 'roll',
     });
     expect(params).not.toHaveProperty('notionalUsd');
@@ -699,11 +699,11 @@ describe('OpportunitiesPanel — the assumptions strip', () => {
     // Names the two ways the perp legs get opened; "2 market orders" says how
     // many orders go out, which "Both market" left the reader to infer.
     const entry = screen.getByRole('radiogroup', { name: 'Perp entry mode' });
-    expect(within(entry).getByRole('radio', { name: '2 market orders' })).toHaveAttribute(
+    expect(within(entry).getByRole('radio', { name: 'Limit + hedge' })).toHaveAttribute(
       'aria-checked',
       'true',
     );
-    expect(within(entry).getByRole('radio', { name: 'Limit + hedge' })).toBeInTheDocument();
+    expect(within(entry).getByRole('radio', { name: '2 market orders' })).toBeInTheDocument();
     // Both old labels named the mechanism; the new ones name the orders sent.
     expect(within(entry).queryByRole('radio', { name: /Both market|Maker \+ hedge/ })).toBeNull();
   });
@@ -883,7 +883,7 @@ describe('OpportunitiesPanel — empty and error states', () => {
     expect(await screen.findByText('No fixed-return opportunities')).toBeInTheDocument();
     expect(
       screen.getByText(
-        /\$200,000 capital at market size, both legs market perp entry and roll over/,
+        /\$200,000 capital at market size, limit \+ hedge perp entry and roll over/,
       ),
     ).toBeInTheDocument();
   });
