@@ -13,6 +13,7 @@ import { useToast } from '../components/Toast';
 import { SideChip, SymbolCell } from '../components/VenueChip';
 import { t } from '../i18n';
 import { fmtAge, sig, toDate } from '../lib/fmt';
+import { Hourglass } from 'lucide-react';
 
 /** DEFENSIVE state → tone map. Gate's order-state enum is undocumented: match
  * known-ish forms case-insensitively; ANY unknown string renders verbatim in a
@@ -109,7 +110,7 @@ export function OpenOrdersPanel() {
       render: (o) => (
         <span className="inline-flex items-center gap-1.5">
           <Chip sm className="num">{typeLabel(o)}</Chip>
-          {o.reduceOnly && <span className="text-[9px] uppercase text-ink-500" title={t('opportunities.orders.reduceOnly')}>{t('opportunities.orders.reduceOnlyShort')}</span>}
+          {o.reduceOnly && <Chip sm title={t('opportunities.orders.reduceOnly')}>{t('opportunities.orders.reduceOnlyShort')}</Chip>}
         </span>
       ),
     },
@@ -194,20 +195,15 @@ export function OpenOrdersPanel() {
     },
   ];
 
-  // The tab is named "Limit orders"; this line says the list holds only the
-  // ones still open (filled and cancelled orders are under Trades).
   return (
     <div className="flex flex-col gap-3">
-      {orders.length > 0 && (
-        <span className="num text-xs text-ink-500">{t('app.openOrders', { count: orders.length })}</span>
-      )}
       <DataTable
         columns={columns}
         rows={orders}
         rowKey={(o) => o.orderId}
         rowClassName={(o) => (isCancelling(o) ? 'opacity-50' : '')}
         emptyState={
-          <EmptyState icon="⧖" title={t('opportunities.orders.emptyTitle')} hint={t('opportunities.orders.emptyHint')} />
+          <EmptyState icon={<Hourglass size={22} />} title={t('opportunities.orders.emptyTitle')} hint={t('opportunities.orders.emptyHint')} />
         }
       />
     </div>

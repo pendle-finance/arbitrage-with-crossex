@@ -9,6 +9,7 @@ import { TableSkeleton } from '../components/Skeleton';
 import { VENUE_QUOTE_NOTE, VenueChip } from '../components/VenueChip';
 import { t as i18nT } from '../i18n';
 import { bps, feePct } from '../lib/fmt';
+import { Percent } from 'lucide-react';
 
 /** "0.0200% (2.0 bps)" — rebates (negative) render green. */
 function FeeCell({ rate }: { rate: string }) {
@@ -82,7 +83,7 @@ export function FeesPanel() {
         columns={COLUMNS}
         rows={venues}
         rowKey={(v) => v.exchangeType}
-        emptyState={<EmptyState icon="％" title={t('opportunities.fees.empty')} />}
+        emptyState={<EmptyState icon={<Percent size={22} />} title={t('opportunities.fees.empty')} />}
         renderExpanded={(v) =>
           v.specialFeeList?.length ? (
             <div>

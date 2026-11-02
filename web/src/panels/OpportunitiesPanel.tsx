@@ -13,7 +13,7 @@
  * drive. Executing only PREFILLS the pair ticket — submission stays behind its
  * hold-to-confirm control.
  */
-import { ArrowRight, ArrowUpRight, Info } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Search } from 'lucide-react';
 import {
   memo,
   useCallback,
@@ -1144,7 +1144,7 @@ export function OpportunitiesPanel() {
           <div className="flex flex-wrap items-center gap-2">
             <span
               className={`flex h-[35px] w-[7.5rem] items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
-                sizeBad ? 'border-guava/60' : 'border-ink-700'
+                sizeBad && sizeStr.trim() !== '' ? 'border-guava/60' : 'border-ink-700'
               }`}
             >
               <span className="text-[11.5px] text-ink-400">$</span>
@@ -1252,10 +1252,7 @@ export function OpportunitiesPanel() {
           orders (src/core/boros/opportunities.ts). The open ticket still
           walks the full book. */}
       {slippageClipped && (
-        <span className="flex items-start gap-1.5 text-[11px] text-ink-400">
-          <Info size={12} aria-hidden className="mt-px flex-none text-amber-400" />
-          {t('opportunities.panel.slippageClipped')}
-        </span>
+        <span className="text-[11px] text-ink-400">{t('opportunities.panel.slippageClipped')}</span>
       )}
     </div>
   );
@@ -1307,7 +1304,7 @@ export function OpportunitiesPanel() {
       )}
       {rows.length === 0 ? (
         <EmptyState
-          icon="◎"
+          icon={<Search size={22} />}
           title={t('opportunities.panel.emptyTitle')}
           hint={t('opportunities.panel.emptyHint', {
             capital: fmtUsd(sizeUsd, 0),
@@ -1320,7 +1317,7 @@ export function OpportunitiesPanel() {
         // the filters are just hiding all of them — so the fix is here, not in
         // the assumptions strip.
         <EmptyState
-          icon="◎"
+          icon={<Search size={22} />}
           title={t('opportunities.panel.noMatchTitle')}
           hint={t('opportunities.panel.noMatchHint', { count: rows.length })}
           action={

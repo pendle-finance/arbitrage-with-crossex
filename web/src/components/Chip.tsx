@@ -13,11 +13,13 @@ export type ChipTone =
 
 /** Tone → utility overrides. Utilities land after the `.chip` component layer,
  * so they win over the neutral defaults. The mock's PpTag recipe: the tone at
- * full strength on the hairline and the text, at 20% for the fill. */
+ * full strength on the hairline and the text, at 20% for the fill. Amber takes
+ * the Boros side-tag recipe instead (40% hairline, 10% fill): at 20% the warm
+ * fill mixes to brown on navy. */
 const TONES: Record<ChipTone, string> = {
   green: 'border-grass bg-grass/20 text-grass',
   red: 'border-guava bg-guava/20 text-guava',
-  amber: 'border-warning bg-warning/20 text-warning',
+  amber: 'border-warning/40 bg-warning/10 text-warning',
   cyan: 'border-info bg-info/20 text-info',
   blue: 'border-info bg-info/20 text-info',
   /* Count badges — the mock's borderless `info @18%` fill. */

@@ -45,6 +45,7 @@ function InfoMark() {
 }
 
 export function HoverCard({
+  id,
   label,
   widthPx,
   icon = true,
@@ -53,6 +54,8 @@ export function HoverCard({
   openOn = 'hover',
   children,
 }: {
+  /** The card's id, for a wrapped control's aria-describedby. */
+  id?: string;
   /** The figure itself — it keeps its own styling. */
   label: ReactNode;
   widthPx?: number;
@@ -180,6 +183,7 @@ export function HoverCard({
     createPortal(
       <div
         ref={card}
+        id={id}
         role="tooltip"
         style={{ left: box.left, top: box.top, bottom: box.bottom, width: widthPx, maxWidth: maxWidthPx, maxHeight: box.maxHeight }}
         onKeyDown={(e) => {

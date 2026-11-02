@@ -5,7 +5,7 @@
  *
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { cloneElement, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
@@ -116,7 +116,6 @@ import {
   sizeIn,
 } from './assetModel';
 import { DUST_USD, sameSize } from './grouping';
-import { DropdownMenu } from '../../components/DropdownMenu';
 import { exclusionAfter, legVenueName } from './excludeLeg';
 import { daysToMaturity, knownRate } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
@@ -126,7 +125,7 @@ import { SinceChip } from './SinceChip';
 import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 import { localizeServerText } from '../../i18n/serverMessages';
-import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, RotateCw, Share } from 'lucide-react';
 
 interface Props {
   group: AssetGroup;
@@ -246,14 +245,15 @@ const AmberTag = ({ tag, children }: { tag: string; children: string }) => (
     {children}
   </HoverCard>
 );
-const BlockedOpen = ({ reason, children }: { reason?: string; children: React.ReactNode }) =>
-  reason ? (
-    <HoverCard wrapsControl underline={false} icon={false} widthPx={280} label={children}>
+function BlockedOpen({ reason, children }: { reason?: string; children: React.ReactElement<{ 'aria-describedby'?: string }> }) {
+  const id = useId();
+  if (!reason) return children;
+  return (
+    <HoverCard id={id} wrapsControl underline={false} icon={false} widthPx={280} label={cloneElement(children, { 'aria-describedby': id })}>
       {reason}
     </HoverCard>
-  ) : (
-    <>{children}</>
   );
+}
 const WRONG_SIDE_TINT = 'bg-guava/[0.04]';
 const blockingWrongSide = (legs: PendingLeg[], venue: string, side: 'LONG' | 'SHORT') =>
   legs.find((w) => w.wrongSide?.blocks && venueLegsOf(w, 1).some((l) => l.venue.toLowerCase() === venue.toLowerCase() && l.side !== side));
@@ -264,6 +264,20 @@ const sideWord = (side: string): string => t(side === 'LONG' ? 'common.long' : '
 const closeWrongSideText = (y: PendingLeg) =>
   t('assetCard.wrongSide.closeToOpen', { venue: legVenueName(y), side: sideWord(y.side), date: fmtDateShort(y.maturity) });
 const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !text-ink-500';
+
+const LegKind = ({ boros, dim, className = '' }: { boros: boolean; dim?: boolean; className?: string }) => (
+  <span
+    className={`pp-pill shrink-0 justify-center ${className} ${
+      dim
+        ? 'border border-dashed border-ink-300/50 bg-transparent text-ink-400'
+        : boros
+          ? 'bg-info/[0.16] text-pastel-blue'
+          : 'bg-crossex/[0.15] text-crossex'
+    }`}
+  >
+    {boros ? 'Boros' : t('common.perp')}
+  </span>
+);
 
 function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kind: 'perp' | 'yu'; side: 'LONG' | 'SHORT'; base: string; spreadVenues?: [string, string] | null }) {
   return (
@@ -279,9 +293,7 @@ function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kin
           <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
         </>
       )}
-      <span className={`rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${kind === 'yu' ? 'bg-info/[0.16] text-pastel-blue' : 'bg-wash/[0.10] text-ink-300'}`}>
-        {kind === 'yu' ? 'Boros' : 'CrossEx'}
-      </span>
+      <LegKind boros={kind === 'yu'} />
       <Chip
         sm
         tone={side === 'LONG' ? 'green' : 'red'}
@@ -3334,14 +3346,14 @@ function PerpOnlyPairCard({
         </MenuCell>
       </tr>
     ) : (
-      <tr key={`yu-${venue}`} className="bg-amber-500/[0.04]">
+      <tr key={`yu-${venue}`} className="bg-warning/[0.04]">
         <td className={`${cell} whitespace-nowrap`}>
           <span className="inline-flex items-center gap-[7px]">
             {legName(venue, 'yu', side)}
             <MissingChip held={heldHere} target={pair.size} unit={pair.unit} base={base} />
           </span>
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-amber-200/90' : 'text-ink-400'}`} title={t('assetCard.heldOfTargetTitle')}>
+        <td className={`${cell} num whitespace-nowrap text-right ${missing > 0 ? 'text-warning' : 'text-ink-400'}`} title={t('assetCard.heldOfTargetTitle')}>
           {ofTarget(heldHere)}
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -3366,7 +3378,7 @@ function PerpOnlyPairCard({
     );
   };
   return (
-    <div className="overflow-x-auto rounded-lg border border-amber-500/40 bg-ink-950/40">
+    <div className="overflow-x-auto rounded-lg border border-warning/40 bg-ink-950/40">
       <table className="w-full min-w-[880px] table-fixed border-collapse">
         <PairColGroup />
         <tbody>
@@ -3454,14 +3466,14 @@ function PerpOnlyPairCard({
                   </tr>
                 ))}
                 {spread ? (
-                  <tr className="bg-amber-500/[0.04]">
+                  <tr className="bg-warning/[0.04]">
                     <td className={`${cell} whitespace-nowrap`}>
                       <span className="inline-flex items-center gap-[7px]">
                         {legName(spread[0], 'yu', spread[0].toLowerCase() === pair.shortVenue.toLowerCase() ? 'SHORT' : 'LONG', spread)}
                         <MissingChip held={0} target={pair.size} unit={pair.unit} base={base} />
                       </span>
                     </td>
-                    <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={t('assetCard.heldOfTargetTitle')}>
+                    <td className={`${cell} num whitespace-nowrap text-right text-warning`} title={t('assetCard.heldOfTargetTitle')}>
                       {ofTarget(0)}
                     </td>
                     <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -3614,14 +3626,14 @@ function BorosOnlyPairCard({
       </tr>
     ),
     missing > 0 && (
-      <tr key={`pm-${venue}`} className="bg-amber-500/[0.04]">
+      <tr key={`pm-${venue}`} className="bg-warning/[0.04]">
         <td className={`${cell} whitespace-nowrap`}>
           <span className="inline-flex items-center gap-[7px]">
             {legName(venue, 'perp', side)}
             <MissingChip held={perp ? sizeIn(perp, perp.unit) : 0} target={pair.size} unit={pair.unit} base={base} />
           </span>
         </td>
-        <td className={`${cell} num whitespace-nowrap text-right text-amber-200/90`} title={t('assetCard.heldOfTargetTitle')}>
+        <td className={`${cell} num whitespace-nowrap text-right text-warning`} title={t('assetCard.heldOfTargetTitle')}>
           {ofTarget(perp ? sizeIn(perp, perp.unit) : 0)}
         </td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
@@ -3641,7 +3653,7 @@ function BorosOnlyPairCard({
     ),
   ];
   return (
-    <div className="overflow-x-auto rounded-lg border border-amber-500/40 bg-ink-950/40">
+    <div className="overflow-x-auto rounded-lg border border-warning/40 bg-ink-950/40">
       <table className="w-full min-w-[880px] table-fixed border-collapse">
         <PairColGroup />
         <tbody>
@@ -4087,8 +4099,8 @@ function DeficitChip({ gap, base }: { gap: HedgeGapRow; base: string }) {
 function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; base: string; onOpen?: () => void; asPair?: boolean; blocked?: string }) {
   const boros = gap.leg === 'boros';
   return (
-    <tr className="opacity-50">
-      <td className="whitespace-nowrap">
+    <tr>
+      <td className="whitespace-nowrap opacity-50">
         <LegIdentity
           venue={gap.venue}
           name={prettyVenue(gap.venue)}
@@ -4098,13 +4110,13 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
           chips={<Chip sm tone="amber" className="num">{t('assetCard.missingSize', { size: exactSize(gap.size, gap.unit, base) })}</Chip>}
         />
       </td>
-      <td className="num text-right text-ink-300">
+      <td className="num text-right text-ink-300 opacity-50">
         {exactSize(gap.want, gap.unit, base)}
         <span className="ml-1 text-ink-500">{t('assetCard.missingRow.needed')}</span>
       </td>
-      <td className="text-right text-ink-600">—</td>
-      <td className="text-right text-ink-600">—</td>
-      <td className="text-right text-ink-600">—</td>
+      <td className="text-right text-ink-600 opacity-50">—</td>
+      <td className="text-right text-ink-600 opacity-50">—</td>
+      <td className="text-right text-ink-600 opacity-50">—</td>
       <td className="whitespace-nowrap text-right">
         <BlockedOpen reason={blocked}>
           <button
@@ -4366,16 +4378,13 @@ function EditCell({
   );
 }
 
-function RowExcludeMenu(props: Omit<React.ComponentProps<typeof LegEditModal>, 'onClose'>) {
+function RowExcludeButton(props: Omit<React.ComponentProps<typeof LegEditModal>, 'onClose'>) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <DropdownMenu
-        label={t('assetCard.moreActions')}
-        trigger={<MoreHorizontal size={12} aria-hidden />}
-        triggerClassName="btn-ghost-xs !px-1.5"
-        items={[{ label: t('assetCard.edit.exclude'), onSelect: () => setOpen(true) }]}
-      />
+      <button type="button" className="btn-ghost-xs !py-[5px]" title={t('assetCard.edit.excludeTitle')} onClick={() => setOpen(true)}>
+        {t('assetCard.edit.exclude')}
+      </button>
       {open && <LegEditModal {...props} onClose={() => setOpen(false)} />}
     </>
   );
@@ -4443,17 +4452,7 @@ function LegIdentity({
           good/bad everywhere else. A leg that isn't there yet keeps the
           dashed outline instead of a fill, which is how the mock draws an
           absent thing — absence outranks venue, so `dim` drops the colour. */}
-      <span
-        className={`pp-pill w-[52px] shrink-0 justify-center ${
-          dim
-            ? 'border border-dashed border-ink-300/50 bg-transparent text-ink-400'
-            : boros
-              ? 'bg-info/[0.16] text-pastel-blue'
-              : 'bg-crossex/[0.15] text-crossex'
-        }`}
-      >
-        {boros ? 'Boros' : t('common.perp')}
-      </span>
+      <LegKind boros={boros} dim={dim} className="w-[52px]" />
       <span className="flex min-w-0 flex-col gap-1">
         <span className="flex flex-wrap items-center gap-x-[7px] gap-y-1">
           {named ? (
@@ -5710,7 +5709,7 @@ export function AssetCard({
     if (!leg || !(y.rowSizeToken > 0)) return null;
     const key = borosKey(leg.marketId);
     return (
-      <RowExcludeMenu
+      <RowExcludeButton
         exKey={key}
         label={borosLegLabel(leg)}
         unit={leg.collateral}
@@ -5858,7 +5857,7 @@ export function AssetCard({
         <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400">
           <span className="font-semibold">
             {t('assetCard.head.isBefore', { base: group.base })}{' '}
-            <HoverCard label={t('assetCard.head.notSupported')}>{t('assetCard.head.supports', { coins: listCoins(supportedCoins) })}</HoverCard>
+            <HoverCard icon={false} label={t('assetCard.head.notSupported')}>{t('assetCard.head.supports', { coins: listCoins(supportedCoins) })}</HoverCard>
           </span>
         </div>
       )}

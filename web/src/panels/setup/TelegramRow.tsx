@@ -50,7 +50,7 @@ const floorLine = (floor: InterestFloor): string => {
 const interestCaption = (floors: readonly InterestFloor[]) => (
   <>
     {t('app.telegram.interestLead')}{' '}
-    <HoverCard label={t('app.telegram.borrowing')} widthPx={300}>
+    <HoverCard icon={false} label={t('app.telegram.borrowing')} widthPx={300}>
       <div className="flex flex-col gap-1 text-xs">
         {floors.length === 0 && <div className="text-ink-200">{t('app.telegram.floorsLoading')}</div>}
         {floors.map((floor) => (
@@ -289,7 +289,7 @@ export function TelegramRow(p: SetupRowProps) {
         {info?.alertWallet && <span className="num">{t('app.telegram.alertsFor', { wallet: short(info.alertWallet) })}</span>}
         {lastSyncAt !== null ? (
           <span className="num">
-            <HoverCard label={t('app.telegram.synced', { age: fmtSyncAge(now - lastSyncAt) })} widthPx={300}>
+            <HoverCard icon={false} label={t('app.telegram.synced', { age: fmtSyncAge(now - lastSyncAt) })} widthPx={300}>
               <div className="text-xs text-ink-200">{t('app.telegram.caveat')}</div>
             </HoverCard>
           </span>

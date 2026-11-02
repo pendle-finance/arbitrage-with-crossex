@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SetupRowProps } from './setupState';
 import { InlineConfirm } from '../../components/InlineConfirm';
-import { ChevronDown } from 'lucide-react';
+import { Check, ChevronDown } from 'lucide-react';
 
 type DotTone = 'done' | 'current' | 'warn' | 'later';
 
@@ -111,7 +111,7 @@ export function SetupRowFrame({
           aria-hidden="true"
           className={`num flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${DOT_CLASS[dot]}`}
         >
-          {dot === 'done' ? '✓' : dot === 'warn' ? '!' : n}
+          {dot === 'done' ? <Check size={12} strokeWidth={3} /> : dot === 'warn' ? '!' : n}
         </span>
         <span className="shrink-0 text-sm font-medium text-ink-100">{title}</span>
         {stateNode && !showsNotSetUp ? (

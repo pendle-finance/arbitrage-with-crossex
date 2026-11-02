@@ -13,6 +13,7 @@ import { Spinner } from '../components/Spinner';
 import { SideChip, SymbolCell } from '../components/VenueChip';
 import { t as tr } from '../i18n';
 import { bps, fmtTime, num, sig, toDate } from '../lib/fmt';
+import { ArrowLeftRight } from 'lucide-react';
 
 type Mode = 'grouped' | 'flat';
 type Role = 'maker' | 'taker' | 'mixed';
@@ -206,7 +207,7 @@ export function TradesPanel() {
   }
 
   const empty = (
-    <EmptyState icon="≋" title={t('opportunities.trades.emptyTitle')} hint={t('opportunities.trades.emptyHint')} />
+    <EmptyState icon={<ArrowLeftRight size={22} />} title={t('opportunities.trades.emptyTitle')} hint={t('opportunities.trades.emptyHint')} />
   );
 
   return (

@@ -182,7 +182,7 @@
   },
   "orders": {
     "postOnly": "只做挂单",
-    "loadError": "无法加载当前委托",
+    "loadError": "无法加载限价单",
     "reduceOnly": "只减仓",
     "reduceOnlyShort": "只减",
     "filled": "已成交",
@@ -194,8 +194,8 @@
     "dealOwned": "该订单属于一个进行中的交易任务，该交易任务将停止。交易所确认后订单即会清除。",
     "cancelFailed": "撤单失败：{{error}}",
     "cancelling": "撤单中",
-    "emptyTitle": "暂无当前委托",
-    "emptyHint": "您挂出的限价单下单后会立即显示在这里。"
+    "emptyTitle": "暂无限价单",
+    "emptyHint": "您在 CrossEx 挂出的限价单会显示在这里。"
   },
   "fees": {
     "maker": "挂单",

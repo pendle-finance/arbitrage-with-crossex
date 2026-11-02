@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Inbox } from 'lucide-react';
 
 interface Props {
   icon?: ReactNode;
@@ -8,7 +9,7 @@ interface Props {
 }
 
 /** Designed empty state: quiet, centered, with an optional hint/action. */
-export function EmptyState({ icon = '◦', title, hint, action }: Props) {
+export function EmptyState({ icon = <Inbox size={22} />, title, hint, action }: Props) {
   return (
     <div className="card flex flex-col items-center justify-center gap-2 border-dashed px-6 py-14 text-center">
       <div className="text-2xl text-ink-500" aria-hidden>

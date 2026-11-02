@@ -55,8 +55,8 @@ describe('OpportunitiesPanel — spread market', () => {
     expect(screen.getAllByText(/ fixed$/)).toHaveLength(1);
 
     expect(screen.getByText('Boros spread margin')).toBeInTheDocument();
-    expect(screen.queryByText('Boros short margin')).not.toBeInTheDocument();
-    expect(screen.queryByText('Boros long margin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Boros Short margin')).not.toBeInTheDocument();
+    expect(screen.queryByText('Boros Long margin')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -87,8 +87,8 @@ describe('OpportunitiesPanel — spread market', () => {
     await userEvent.click(toggles()[0]);
 
     expect(screen.getByText(/2 perps \+ 2 Boros positions ·/)).toBeInTheDocument();
-    expect(screen.getByText('Boros short margin')).toBeInTheDocument();
-    expect(screen.getByText('Boros long margin')).toBeInTheDocument();
+    expect(screen.getByText('Boros Short margin')).toBeInTheDocument();
+    expect(screen.getByText('Boros Long margin')).toBeInTheDocument();
     expect(screen.queryByText('Boros spread margin')).not.toBeInTheDocument();
     expect(screen.getAllByText(/ fixed$/)).toHaveLength(2);
     expect(screen.getAllByTitle(/^Modeled minimum capital .+ across the 2 perps and the 2 Boros positions$/)).toHaveLength(2);

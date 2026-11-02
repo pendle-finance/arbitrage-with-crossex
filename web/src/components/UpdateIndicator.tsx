@@ -1,4 +1,4 @@
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Check, Circle, CircleDot, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { ApiError } from '../api/client';
@@ -86,7 +86,7 @@ function UpdateProgress({
     >
       <div className="flex items-baseline gap-2">
         {(failed || done) && (
-          <span className={failed ? 'text-rose-400' : 'text-emerald-400'}>{failed ? '✕' : '✓'}</span>
+          <span className={`self-center ${failed ? 'text-rose-400' : 'text-emerald-400'}`}>{failed ? <X size={13} aria-hidden /> : <Check size={13} aria-hidden />}</span>
         )}
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-100">{headline}</span>
         <span className="num shrink-0 text-[11px] text-ink-500">{clock(elapsed)}</span>
@@ -123,7 +123,7 @@ function UpdateProgress({
                       : ''
                 }
               >
-                {state === 'done' ? '✓' : state === 'now' ? '●' : '○'}
+                {state === 'done' ? <Check size={11} aria-hidden /> : state === 'now' ? <CircleDot size={11} aria-hidden /> : <Circle size={11} aria-hidden />}
               </span>
               {p.label}
             </li>
