@@ -296,7 +296,6 @@
   "deficitTitle": "该仓位比配对仓位（{{want}}）少 {{size}} — 开 {{ask}} 补足",
   "missingRow": {
     "notOpen": "尚未开仓",
-    "needed": "所需",
     "opensPair": "打开组合下单面板，为两个交易所补开 Boros 仓位。",
     "openBothBoros": "为两个交易所开 Boros 仓位",
     "openBothPerp": "开两条永续腿",

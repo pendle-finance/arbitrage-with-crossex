@@ -298,7 +298,6 @@
   "deficitTitle": "This position is {{size}} short of its partner ({{want}}) — open {{ask}} to cover it",
   "missingRow": {
     "notOpen": "Not open yet",
-    "needed": "needed",
     "opensPair": "Opens the pair ticket for both missing venues.",
     "openBothBoros": "Open Boros on both venues",
     "openBothPerp": "Open both perps",
