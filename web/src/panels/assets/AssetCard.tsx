@@ -268,12 +268,12 @@ const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !tex
 
 const LegKind = ({ boros, dim, className = '', perp = t('common.perp') }: { boros: boolean; dim?: boolean; className?: string; perp?: string }) => (
   <span
-    className={`pp-pill shrink-0 justify-center ${className} ${
+    className={`inline-flex shrink-0 justify-center rounded-full px-2 py-[3px] text-[10px] font-semibold tracking-[0.06em] ${className} ${
       dim
         ? 'border border-dashed border-ink-300/50 bg-transparent text-ink-400'
         : boros
           ? 'bg-info/[0.16] text-pastel-blue'
-          : 'bg-crossex/[0.15] text-crossex'
+          : 'bg-wash/[0.10] text-ink-300'
     }`}
   >
     {boros ? 'Boros' : perp}
@@ -4093,36 +4093,35 @@ function DeficitChip({ gap, base }: { gap: HedgeGapRow; base: string }) {
 }
 
 /**
- * A leg that does not exist yet, drawn where it would sit. Dimmed so it
- * reads as absent, with the one action that fixes it — the surplus side is
- * never flagged, only the side the trader needs to open.
+ * A leg that does not exist yet, drawn where it would sit, the same way a
+ * Fixed Rate Pairs card draws one: a warm row, the Missing chip and held /
+ * needed in the warning yellow. Only the side the trader needs to open is
+ * flagged, never the surplus side.
  */
 function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; base: string; onOpen?: () => void; asPair?: boolean; blocked?: string }) {
   const boros = gap.leg === 'boros';
   return (
-    <tr>
-      <td className="whitespace-nowrap opacity-50">
+    <tr className="bg-warning/[0.04]">
+      <td className="whitespace-nowrap">
         <LegIdentity
           venue={gap.venue}
           name={prettyVenue(gap.venue)}
           kind={gap.leg}
-          dim
           sub={t('assetCard.missingRow.notOpen')}
           chips={<Chip sm tone="amber" className="num">{t('assetCard.missingSize', { size: exactSize(gap.size, gap.unit, base) })}</Chip>}
         />
       </td>
-      <td className="num text-right text-ink-300 opacity-50">
-        {exactSize(gap.want, gap.unit, base)}
-        <span className="ml-1 text-ink-500">{t('assetCard.missingRow.needed')}</span>
+      <td className="num text-right text-warning" title={t('assetCard.heldOfTargetTitle')}>
+        {heldOfTarget(Math.max(0, gap.want - gap.size), gap.want, gap.unit, base)}
       </td>
-      <td className="text-right text-ink-600 opacity-50">—</td>
-      <td className="text-right text-ink-600 opacity-50">—</td>
-      <td className="text-right text-ink-600 opacity-50">—</td>
+      <td className="text-right text-ink-600">—</td>
+      <td className="text-right text-ink-600">—</td>
+      <td className="text-right text-ink-600">—</td>
       <td className="whitespace-nowrap text-right">
         <BlockedOpen reason={blocked}>
           <button
             type="button"
-            className={`btn-ghost-xs ${blocked ? BLOCKED_OPEN : '!text-gold hover:!border-gold/50'}`}
+            className={`btn-ghost-xs !py-[5px] ${blocked ? BLOCKED_OPEN : '!text-grass hover:!border-grass/60'}`}
             disabled={!onOpen && !blocked}
             aria-disabled={!!blocked}
             title={blocked ? undefined : onOpen ? (asPair ? t('assetCard.missingRow.opensPair') : t('assetCard.opensTicket', { ask: gapAsk(gap, base) })) : t('assetCard.ticketUnavailable')}
@@ -4131,7 +4130,6 @@ function MissingRow({ gap, base, onOpen, asPair, blocked }: { gap: HedgeGapRow; 
             {asPair
               ? t(boros ? 'assetCard.missingRow.openBothBoros' : 'assetCard.missingRow.openBothPerp')
               : t(boros ? 'assetCard.missingRow.openBoros' : 'assetCard.missingRow.openPerp')}
-            <ArrowRight size={12} aria-hidden />
           </button>
         </BlockedOpen>
       </td>
@@ -4445,17 +4443,12 @@ function LegIdentity({
     // ("ETH Spread HL-GATE") plus its chips wraps the chips to a second line
     // instead of running into the Size column.
     <span className="inline-flex max-w-full items-center gap-3 leading-none">
-      {/* The leg-kind marker carries the VENUE's colour, so a mixed list reads
-          as two kinds at a glance instead of one grey column. Boros takes the
-          `info` blue this file's other leg tables already give it (the
-          `bg-info/[0.16] text-pastel-blue` badge above); the perp takes the
-          `crossex` cyan, the one token that means "via CrossEx" — the same
-          one VenueChip's ·CX and Chip's `crossex` tone use.
-          It is still NOT a status: the tone names which venue, never how the
-          leg is doing, so it stays off the grass/guava axis that means
+      {/* The leg-kind marker tells Boros (the `info` blue) from a perp (a
+          neutral grey wash), so a mixed list reads as two kinds at a glance.
+          It is NOT a status, so it stays off the grass/guava axis that means
           good/bad everywhere else. A leg that isn't there yet keeps the
           dashed outline instead of a fill, which is how the mock draws an
-          absent thing — absence outranks venue, so `dim` drops the colour. */}
+          absent thing — absence outranks kind, so `dim` drops the colour. */}
       <LegKind boros={boros} dim={dim} className="w-[52px]" />
       <span className="flex min-w-0 flex-col gap-1">
         <span className="flex flex-wrap items-center gap-x-[7px] gap-y-1">
