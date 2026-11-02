@@ -5983,7 +5983,7 @@ export function AssetCard({
             call 2026-09-21). */}
         <button
           type="button"
-          className="btn !h-[30px] shrink-0 self-end !px-2.5"
+          className="btn !h-[30px] shrink-0 self-center !px-2.5"
           aria-expanded={wfOpen}
           onClick={() => setWfOpen((v) => !v)}
         >
