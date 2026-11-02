@@ -1251,6 +1251,21 @@ describe('market-blind grouping in the model', () => {
     expect(d.pendingLegs).toEqual([]);
   });
 
+  it('a held-other-way leg is left out of Current APR, on a card as in Ungrouped', () => {
+    const perps = [
+      gp('GATE', 'LONG', 1, { fundingApr7d: -0.05, imUsd: 500 }),
+      gp('HYPERLIQUID', 'SHORT', 1, { fundingApr7d: 0.1, imUsd: 500 }),
+    ];
+    const wrong = yu(5, 'HYPERLIQUID', 'LONG', 1, OCT, { entryApr: 0.08, imUsd: 7 });
+    const onCard = deriveAsset(book(perps, [wrong]), {}, 0, NOW);
+    expect(onCard.perpOnly[0].otherWay.map((l) => l.marketId)).toEqual([5]);
+    const alone = deriveAsset(book(perps, []), {}, 0, NOW);
+    const e = onCard.unlockedEstimate!;
+    expect(e.leftOutCapitalUsd).toBeCloseTo(7, 9);
+    expect(e.fixedCarryPerYearUsd).toBeCloseTo(0, 9);
+    expect(e.apr).toBeCloseTo(alone.unlockedEstimate!.apr, 12);
+  });
+
   it('a leg on another card does not cut the offer in the model', () => {
     const d = deriveAsset(
       book([gp('GATE', 'LONG', 10), gp('HYPERLIQUID', 'SHORT', 10)], [yu(1, 'GATE', 'LONG', 10, NOV), yu(2, 'LIGHTER', 'SHORT', 10, NOV)]),

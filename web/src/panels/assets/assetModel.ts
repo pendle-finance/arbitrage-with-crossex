@@ -1525,7 +1525,8 @@ export function deriveAsset(
   unpairedPerps.sort((a, b) => b.notionalUsd - a.notionalUsd || a.venue.localeCompare(b.venue));
 
   /**
-   * The estimate counts hedged units only: a rate leg with no perp behind it,
+   * The estimate counts hedged units only: a rate leg with no perp behind it
+   * (or held the wrong way to its perps, on a card or in Ungrouped alike),
    * and a perp with no other side, are left out with their margin. A rate leg
    * whose perps rolled to a later term keeps its fixed rate on little more
    * than its own margin, which shrinks toward maturity, so counting it puts
@@ -1536,7 +1537,7 @@ export function deriveAsset(
   const hedgedUnits = pairs.length > 0 || perpOnly.length > 0;
   const unlockedEstimate = hedgedUnits
     ? estimateOf(
-        [...borosOnly.flatMap((u) => u.borosLegs), ...pendingLegs],
+        [...borosOnly.flatMap((u) => u.borosLegs), ...perpOnly.flatMap((u) => u.otherWay), ...pendingLegs],
         [
           ...borosOnly.flatMap((u) => [u.longPerp, u.shortPerp].filter((p): p is UnpairedPerp => p !== null)),
           ...unpairedPerps.filter((p) => !p.quoteTwin),
