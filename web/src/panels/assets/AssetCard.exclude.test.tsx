@@ -97,12 +97,11 @@ async function openUngrouped(user: User) {
 }
 
 const closeRow = (name: string) => screen.getByRole('button', { name }).closest('tr') as HTMLElement;
-const menuButton = (within_: HTMLElement) => within(within_).getByRole('button', { name: 'More actions' });
+const menuButton = (within_: HTMLElement) => within(within_).getByRole('button', { name: 'Exclude' });
 const excludedBlock = () => screen.getByText('Excluded').parentElement?.parentElement as HTMLElement;
 
 async function openExclude(user: User, row: HTMLElement) {
   await user.click(menuButton(row));
-  await user.click(await screen.findByRole('menuitem', { name: 'Exclude' }));
   return screen.findByRole('dialog');
 }
 
@@ -139,15 +138,14 @@ afterEach(() => {
 });
 
 describe('Exclude from the card, by the DoD', () => {
-  it('Exclude in the row menu', async () => {
+  it('Exclude is a button on the row', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(B9));
     await showPairs(user);
     await openUngrouped(user);
     const row = closeRow('Close Hyperliquid Short YU');
-    const more = menuButton(row);
-    expect(more.querySelector('svg.lucide-ellipsis, svg.lucide-more-horizontal')).not.toBeNull();
-    expect(within(row).queryByRole('button', { name: /Exclude/ })).toBeNull();
+    expect(menuButton(row)).toHaveTextContent(/^Exclude$/);
+    expect(row.querySelector('svg.lucide-ellipsis, svg.lucide-more-horizontal')).toBeNull();
   });
 
   it('whole leg excludes all (#74)', async () => {
@@ -207,7 +205,7 @@ describe('Exclude from the card, by the DoD', () => {
     renderCard(groupOf(['G L 10', 'H S 10', 'LI S 1', 'G LONG 10 O', 'H SHORT 10 O', 'G LONG 1 N', 'LI SHORT 1 N']));
     await showPairs(user);
     const card = await pickBorosCard(/Perp legs? missing/);
-    expect(within(card).getAllByRole('button', { name: 'More actions' })).toHaveLength(2);
+    expect(within(card).getAllByRole('button', { name: 'Exclude' })).toHaveLength(2);
   });
 
   it('menu on Boros positions missing', async () => {
@@ -215,14 +213,14 @@ describe('Exclude from the card, by the DoD', () => {
     const single = renderCard(groupOf(B13));
     await showPairs(user);
     const held = await pickBorosCard(/Boros position missing/);
-    expect(within(held).getAllByRole('button', { name: 'More actions' })).toHaveLength(1);
+    expect(within(held).getAllByRole('button', { name: 'Exclude' })).toHaveLength(1);
     single.unmount();
 
     renderCard(groupOf(B21));
     await showPairs(user);
     const flipped = await pickBorosCard(/Boros positions? missing/);
     expect(textOf(flipped)).toContain('Wrong side');
-    expect(within(flipped).getAllByRole('button', { name: 'More actions' })).toHaveLength(1);
+    expect(within(flipped).getAllByRole('button', { name: 'Exclude' })).toHaveLength(1);
   });
 
   it('no Exclude on perps', async () => {
@@ -232,7 +230,7 @@ describe('Exclude from the card, by the DoD', () => {
     await openUngrouped(user);
     const card = await pickBorosCard(/Ungrouped positions/);
     expect(textOf(card)).toMatch(/1 perp/);
-    expect(within(card).queryAllByRole('button', { name: 'More actions' })).toHaveLength(0);
+    expect(within(card).queryAllByRole('button', { name: 'Exclude' })).toHaveLength(0);
   });
 
   it('a hedged card offers Exclude on its Boros row only, sized to the card', async () => {
@@ -246,8 +244,8 @@ describe('Exclude from the card, by the DoD', () => {
       return found;
     });
     await expand(user, card);
-    expect(within(card).getAllByRole('button', { name: 'More actions' })).toHaveLength(2);
-    const popup = await openExclude(user, within(card).getAllByRole('button', { name: 'More actions' })[0].closest('tr') as HTMLElement);
+    expect(within(card).getAllByRole('button', { name: 'Exclude' })).toHaveLength(2);
+    const popup = await openExclude(user, within(card).getAllByRole('button', { name: 'Exclude' })[0].closest('tr') as HTMLElement);
     expect(within(popup).getByLabelText('Size to exclude (ETH)')).toHaveValue('1');
     await user.click(within(popup).getByRole('button', { name: 'Save' }));
     expect(spy).toHaveBeenCalledTimes(1);
@@ -262,7 +260,7 @@ describe('Exclude from the card, by the DoD', () => {
     for (const row of within(table).getAllByRole('row').slice(1)) {
       const cells = row.querySelectorAll('td');
       expect(cells).toHaveLength(heads.length);
-      expect(cells[3].querySelector('[aria-label="More actions"]')).toBeNull();
+      expect(within(cells[3]).queryByRole('button', { name: 'Exclude' })).toBeNull();
     }
   };
 
@@ -287,7 +285,7 @@ describe('Exclude from the card, by the DoD', () => {
       expect(found).toHaveLength(1);
       return found;
     });
-    expect(within(table).queryByRole('button', { name: 'More actions' })).toBeNull();
+    expect(within(table).queryByRole('button', { name: 'Exclude' })).toBeNull();
     expectLegTable(table, false);
   });
 
@@ -363,17 +361,14 @@ describe('Exclude from the card, by the DoD', () => {
     expect(row.textContent).toMatch(/^GateBorosLONG0\.36 ETH/);
   });
 
-  it('menu holds one item', async () => {
+  it('Exclude is one button that opens the popup', async () => {
     const user = userEvent.setup();
     renderCard(groupOf(B9));
     await showPairs(user);
     await openUngrouped(user);
     await user.click(menuButton(closeRow('Close Hyperliquid Short YU')));
-    const menu = await screen.findByRole('menu');
-    expect(within(menu).getAllByRole('menuitem')).toHaveLength(1);
-    expect(within(menu).getByRole('menuitem')).toHaveTextContent(/^Exclude$/);
-    expect(within(menu).queryAllByRole('button')).toHaveLength(0);
-    expect(menu.textContent).toBe('Exclude');
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
   });
 
   it('Restore brings it back', async () => {
@@ -397,19 +392,6 @@ describe('Exclude from the card, by the DoD', () => {
     await user.click(screen.getByRole('button', { name: /1 excluded/ }));
     expect(scroll).toHaveBeenCalledTimes(1);
     expect(scroll.mock.contexts[0]).toBe(excludedBlock());
-  });
-
-  it('outside click closes the menu', async () => {
-    const spy = vi.fn();
-    const user = userEvent.setup();
-    renderCard(groupOf(B9), {}, spy);
-    await showPairs(user);
-    await openUngrouped(user);
-    await user.click(menuButton(closeRow('Close Hyperliquid Short YU')));
-    await screen.findByRole('menu');
-    await user.click(document.body);
-    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
-    expect(spy).not.toHaveBeenCalled();
   });
 
   it('adding to a part exclude', async () => {

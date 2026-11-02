@@ -336,8 +336,8 @@ describe('OpportunitiesPanel — capital basis', () => {
     expect(total.getAttribute('data-tone')).toBe('pos');
 
     // The leverage each perp margin was sized at rides on its axis label.
-    expect(screen.getByText('Perp short margin @ 10x')).toBeInTheDocument();
-    expect(screen.getByText('Perp long margin @ 20x')).toBeInTheDocument();
+    expect(screen.getByText('Perp Short margin @ 10x')).toBeInTheDocument();
+    expect(screen.getByText('Perp Long margin @ 20x')).toBeInTheDocument();
     // Component value labels are signed deltas; the total prints its level.
     expect(screen.getByText('+$8.00')).toBeInTheDocument();
     expect(screen.getByText('+$1,000')).toBeInTheDocument();

@@ -69,6 +69,6 @@ describe('SetupRowFrame', () => {
         content
       </SetupRowFrame>,
     );
-    expect(dot()).toHaveTextContent('✓');
+    expect(dot().querySelector('svg.lucide-check')).not.toBeNull();
   });
 });

@@ -120,6 +120,7 @@ export function DropdownMenu({
       hide(true);
       return;
     }
+    if (e.key === ' ') e.preventDefault();
     const list = menuItems();
     if (list.length === 0) return;
     const at = list.indexOf(document.activeElement as HTMLElement);

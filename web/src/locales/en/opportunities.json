@@ -112,12 +112,12 @@
     "profitTitle": "Estimated profit at maturity {{usd}}: the locked spread minus every cost",
     "estProfit": "Est. profit",
     "borosSpreadIm": "Boros spread margin",
-    "borosShortIm": "Boros short margin",
-    "borosLongIm": "Boros long margin",
+    "borosShortIm": "Boros Short margin",
+    "borosLongIm": "Boros Long margin",
     "borosImTitleShort": "Boros initial margin · {{name}} (short) {{margin}}",
     "borosImTitleLong": "Boros initial margin · {{name}} (long) {{margin}}",
-    "perpShortIm": "Perp short margin{{lev}}",
-    "perpLongIm": "Perp long margin{{lev}}",
+    "perpShortIm": "Perp Short margin{{lev}}",
+    "perpLongIm": "Perp Long margin{{lev}}",
     "perpImTitleShort": "Perp initial margin · {{venue}} (short) — notional over the venue's max leverage{{lev}} +{{usd}}",
     "perpImTitleLong": "Perp initial margin · {{venue}} (long) — notional over the venue's max leverage{{lev}} +{{usd}}",
     "capitalTitleThree": "Modeled minimum capital {{usd}} across the 2 perps and the spread position",
@@ -186,7 +186,7 @@
   },
   "orders": {
     "postOnly": "Post-only",
-    "loadError": "Couldn't load open orders",
+    "loadError": "Couldn't load limit orders",
     "reduceOnly": "reduce-only",
     "reduceOnlyShort": "RO",
     "filled": "Filled",
@@ -198,8 +198,8 @@
     "dealOwned": "That order belongs to a running deal, so the deal stops. The order clears once the venue confirms.",
     "cancelFailed": "Could not cancel the order: {{error}}",
     "cancelling": "Cancelling…",
-    "emptyTitle": "No open orders",
-    "emptyHint": "Your open limit orders show here as soon as they are placed."
+    "emptyTitle": "No limit orders",
+    "emptyHint": "Your CrossEx limit orders show here once placed."
   },
   "fees": {
     "maker": "Maker",

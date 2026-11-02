@@ -1,4 +1,4 @@
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, Wallet } from 'lucide-react';
 import { AccountsOverview } from './accounts/AccountsUi';
 import { useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -162,7 +162,7 @@ export function BalancesPanel() {
             rows={rows}
             rowKey={rowKeyOf}
             maxHeightClass="max-h-none"
-            emptyState={<EmptyState icon="○" title={t('accounts.balances.emptyTitle')} hint={t('accounts.balances.emptyHint')} />}
+            emptyState={<EmptyState icon={<Wallet size={22} />} title={t('accounts.balances.emptyTitle')} hint={t('accounts.balances.emptyHint')} />}
           />
           {assets.length === 0 && spot === null && <NoSpotReadRow />}
         </div>

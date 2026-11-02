@@ -135,7 +135,7 @@ describe('BorosOnlyPairCard', () => {
     g.borosOpen = [yu(1, 'GATE', 'LONG', 2_400, 0.04), yu(2, 'HYPERLIQUID', 'SHORT', 2_400, 0.08)];
     renderCard(g);
     const rows = within(legTable()).getAllByRole('row').slice(1);
-    const gate = rows.find((r) => /Gate/.test(r.textContent ?? '') && /CrossEx/.test(r.textContent ?? ''));
+    const gate = rows.find((r) => /Gate/.test(r.textContent ?? '') && /Perp/.test(r.textContent ?? ''));
     expect(gate?.textContent).not.toMatch(/2\.4k \/ 2\.4k/);
     expect(gate?.textContent).toMatch(/2,351 \/ 2,400 ETH/);
   });
@@ -203,8 +203,8 @@ describe('BorosOnlyPairCard', () => {
     const table = within(missingCard()).getByRole('columnheader', { name: 'Position' }).closest('table') as HTMLElement;
     const hl = within(table)
       .getAllByRole('row')
-      .filter((r) => /HyperliquidCrossEx/.test(r.textContent ?? ''));
-    expect(hl.map((r) => r.textContent)).toEqual([expect.stringMatching(/^HyperliquidCrossExSHORTMissing 90 ETH10 \/ 100 ETH/)]);
+      .filter((r) => /HyperliquidPerp/.test(r.textContent ?? ''));
+    expect(hl.map((r) => r.textContent)).toEqual([expect.stringMatching(/^HyperliquidPerpSHORTMissing 90 ETH10 \/ 100 ETH/)]);
   });
 
   it('a Boros leg shared with another card shows its percent, and the hover breaks it down', () => {

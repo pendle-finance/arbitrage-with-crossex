@@ -39,6 +39,7 @@ import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
 import { clearLegacyPrefs, dropLegacyKeys, legacyExclusionsFor, legSinceParam, readLegacyPrefs } from './assetPrefsStore';
 import { AssetCard } from './AssetCard';
 import { sizesForWholeExclusions } from './excludeLeg';
+import { Wallet } from 'lucide-react';
 
 const NO_PREFS: AssetViewPrefs = { sinceByAsset: {}, exclusions: {}, legSince: {} };
 
@@ -231,7 +232,7 @@ export function AssetsHome() {
       <section>
         {header}
         <EmptyState
-          icon="✦"
+          icon={<Wallet size={22} />}
           title={t('assets.home.connectTitle')}
           hint={t('assets.home.connectHint')}
           action={
@@ -376,7 +377,6 @@ export function AssetsHome() {
 
       {derived.length === 0 ? (
         <EmptyState
-          icon="◦"
           title={t('assets.home.emptyTitle')}
           hint={t('assets.home.emptyHint')}
         />
