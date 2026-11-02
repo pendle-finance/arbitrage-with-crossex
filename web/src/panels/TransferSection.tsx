@@ -1,25 +1,29 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useStartTransfer, useTransfer } from '../api/queries';
 import type { TransferJob, TransferLock } from '../api/types';
 import { useToast } from '../components/Toast';
+import { t } from '../i18n';
 import { num } from '../lib/fmt';
 import { useSettledError } from '../lib/useSettledError';
-import { TRANSFER_CTA, WAITS_FOR_DEAL, WAITS_FOR_REBALANCE, WAITS_FOR_STOPPED_REBALANCE } from './rebalanceCopy';
-import { destinationOf } from './TransferBits';
+import { transferCta, waitsForDeal, waitsForRebalance, waitsForStoppedRebalance } from './rebalanceCopy';
+import { walletName } from './TransferBits';
 import { TransferModal, type TransferPick } from './TransferModal';
 
-const LOCK_SHORT: Record<TransferLock, string> = {
-  rebalance: WAITS_FOR_REBALANCE,
-  halted: WAITS_FOR_STOPPED_REBALANCE,
-  deal: WAITS_FOR_DEAL,
+const LOCK_SHORT: Readonly<Record<TransferLock, string>> = {
+  get rebalance() { return waitsForRebalance(); },
+  get halted() { return waitsForStoppedRebalance(); },
+  get deal() { return waitsForDeal(); },
 };
 
 function doneText(transfer: TransferJob): string {
-  const sent = `Sent ${num(transfer.amount)} ${transfer.coin} ${destinationOf(transfer.to)}.`;
-  return transfer.received === null ? sent : `${sent} ${num(transfer.received)} arrived.`;
+  const values = { amount: num(transfer.amount), coin: transfer.coin, to: walletName(transfer.to) };
+  if (transfer.received === null) return t('accounts.transfer.sent', values);
+  return t('accounts.transfer.sentArrived', { ...values, received: num(transfer.received) });
 }
 
 export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: TransferPick | null }) {
+  const { t } = useTranslation();
   const query = useTransfer();
   const start = useStartTransfer();
   const [open, setOpen] = useState(false);
@@ -59,12 +63,12 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
   if (!view) {
     if (!loadError) return null;
     return (
-      <div role="group" aria-label="Transfer" className="flex items-center gap-2">
+      <div role="group" aria-label={t('accounts.rebalanceHovers.transfer')} className="flex items-center gap-2">
         <p role="alert" className="text-xs text-rose-300">
-          Could not load transfers. {loadError.message}
+          {t('accounts.transfer.loadFailed', { message: loadError.message })}
         </p>
         <button type="button" className="btn-ghost-xs leading-4" onClick={() => void query.refetch()}>
-          Retry
+          {t('common.retry')}
         </button>
       </div>
     );
@@ -88,26 +92,26 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
   if (moving) {
     button = (
       <button type="button" className="btn !border-info/40 !text-pastel-blue" onClick={openModal}>
-        <span className="num">{`Sending ${num(moving.amount)} ${moving.coin}`}</span>
+        <span className="num">{t('accounts.transfer.sendingAmount', { amount: num(moving.amount), coin: moving.coin })}</span>
       </button>
     );
   } else if (failed) {
     button = (
       <button type="button" className="btn !border-guava/60 !text-guava" onClick={openModal}>
-        {'Transfer failed · open'}
+        {t('accounts.transfer.failedOpen')}
       </button>
     );
   } else {
     if (view.lock) note = <span className="text-xs text-ink-500">{LOCK_SHORT[view.lock]}</span>;
     button = (
       <button type="button" className="btn" disabled={view.lock !== null} onClick={openModal}>
-        {TRANSFER_CTA}
+        {transferCta()}
       </button>
     );
   }
 
   return (
-    <div role="group" aria-label="Transfer" className="flex items-center gap-2">
+    <div role="group" aria-label={t('accounts.rebalanceHovers.transfer')} className="flex items-center gap-2">
       {note}
       {button}
       {open && <TransferModal view={view} onClose={closeModal} holdMs={holdMs} pick={modalPick} start={start} />}

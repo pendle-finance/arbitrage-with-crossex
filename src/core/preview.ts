@@ -48,7 +48,7 @@ export async function previewActions(deps: PreviewDeps, actions: ActionInput[]):
           if (close && slippage !== undefined && mid !== undefined && mid > 0) {
             preview.price = marketableClosePrice(mid, r.side, slippage, r.symbol, r.rule?.tickSize ?? DEFAULT_STEP);
           }
-        } else preview.warnings.push('no fill estimate available (no book, no reference price)');
+        } else preview.warnings.push('No fill estimate (no book, no reference price)');
       }
 
       // A POC leg doesn't cross — surface the venue's touch instead, so the
@@ -58,12 +58,12 @@ export async function previewActions(deps: PreviewDeps, actions: ActionInput[]):
         const book = await (deps.fetchBook ?? realFetchVenueBook)(exchange, base, quote).catch(() => null);
         const touch = touchOf(book);
         if (touch) preview.restEstimate = touch;
-        else preview.warnings.push('no venue book available — maker price cannot be refreshed from the touch');
+        else preview.warnings.push("No order book, so the maker price can't follow the market");
       }
 
       const rates = resolveFeeRates(deps.feeRows, r.symbol);
       if (!rates) {
-        preview.warnings.push(`no fee rates found for ${r.symbol} — fee estimate unavailable`);
+        preview.warnings.push(`No fee rates for ${r.symbol}, so the fee is not estimated`);
       } else if (r.qty) {
         const price =
           preview.fillEstimate?.avgPrice ??

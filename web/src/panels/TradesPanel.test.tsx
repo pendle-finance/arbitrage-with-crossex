@@ -59,7 +59,7 @@ describe('TradesPanel (grouped by order, default ON)', () => {
 
     // 0.0046 + 0.0047, formatted by sig() with the feeCoin appended.
     expect(await screen.findByText('0.0093 USDT')).toBeInTheDocument();
-    expect(screen.getByText('taker')).toBeInTheDocument();
+    expect(screen.getByText('Taker')).toBeInTheDocument();
     expect(screen.getByText('LMT IOC')).toBeInTheDocument();
     // 2 fills grouped into one order row.
     expect(screen.queryByText('txn-1')).not.toBeInTheDocument();
@@ -76,6 +76,6 @@ describe('TradesPanel (grouped by order, default ON)', () => {
     expect(screen.getByText('txn-2')).toBeInTheDocument();
     // Group row rate + two fill rows, all at 2.0 bps.
     expect(screen.getAllByText('2.0 bps')).toHaveLength(3);
-    expect(screen.getAllByText('taker')).toHaveLength(3);
+    expect(screen.getAllByText('Taker')).toHaveLength(3);
   });
 });

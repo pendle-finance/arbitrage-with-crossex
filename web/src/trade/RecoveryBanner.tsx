@@ -4,11 +4,14 @@
  *    are moving server-side).
  *  - standing engine ALERTS (hedge walls, quarantined orders, halted deals) —
  *    rendered until acked; the engine keeps retrying underneath. */
+import { useTranslation } from 'react-i18next';
 import { useAckAlert, useActiveDeals, useAlerts } from '../api/queries';
 import { Spinner } from '../components/Spinner';
 import { useTradeFlow } from './TradeFlow';
+import { localizeServerText } from '../i18n/serverMessages';
 
 export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') => void }) {
+  const { t } = useTranslation();
   const flow = useTradeFlow();
   const active = useActiveDeals();
   const alerts = useAlerts();
@@ -37,15 +40,17 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
           <span className="inline-flex items-center gap-2">
             <Spinner className="h-3 w-3" />
             {halted
-              ? `${halted} deal${halted === 1 ? ' is' : 's are'} HALTED — operator needed`
-              : `A deal is still working${deals.length > 1 ? ` (+${deals.length - 1} more)` : ''}`}
+              ? t('trade.recovery.halted', { count: halted })
+              : deals.length > 1
+                ? t('trade.recovery.workingMore', { count: deals.length - 1 })
+                : t('trade.recovery.working')}
           </span>
           <button
             type="button"
             className={`btn-ghost-xs ${halted ? 'border-rose-500/50 text-rose-300' : 'border-cyan-500/50 text-cyan-300'}`}
             onClick={() => flow.openDeal((deals.find((d) => d.pair.mode === 'HALTED') ?? newest).pair.id)}
           >
-            View
+            {t('trade.recovery.view')}
           </button>
         </div>
       </div>
@@ -59,8 +64,8 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
     <div role="alert" className="border-b border-amber-500/30 bg-amber-500/10">
       <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-5 py-2 text-xs text-amber-200">
         <span>
-          {alert.message}
-          {standing.length > 1 ? ` (+${standing.length - 1} more)` : ''}
+          {localizeServerText(alert.message)}
+          {standing.length > 1 ? t('trade.recovery.more', { count: standing.length - 1 }) : ''}
         </span>
         {isRebalance
           ? onOpenTab && (
@@ -69,7 +74,7 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
                 className="btn-ghost-xs border-amber-500/50 text-amber-300"
                 onClick={() => onOpenTab('balances')}
               >
-                View
+                {t('trade.recovery.view')}
               </button>
             )
           : alert.pairId && (
@@ -78,11 +83,11 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
                 className="btn-ghost-xs border-amber-500/50 text-amber-300"
                 onClick={() => flow.openDeal(alert.pairId!)}
               >
-                View
+                {t('trade.recovery.view')}
               </button>
             )}
         <button type="button" className="btn-ghost-xs" onClick={() => ack.mutate(alert.id)}>
-          Ack
+          {t('common.dismiss')}
         </button>
       </div>
     </div>

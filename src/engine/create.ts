@@ -90,9 +90,9 @@ export async function resolveDeal(
   const rules = new Map((ruleList ?? []).map((r) => [r.symbol, r]));
   const ruleFor = (symbol: string): RuleSymbol => {
     const rule = rules.get(symbol);
-    if (!rule) throw new CoreError(`${symbol} not found on CrossEx`);
-    if (rule.state !== 'live') throw new CoreError(`${symbol} is not tradable (state=${rule.state})`);
-    if (rule.businessType !== 'FUTURE') throw new CoreError(`${symbol} is ${rule.businessType}, not a FUTURE perp`);
+    if (!rule) throw new CoreError(`${symbol} is not on CrossEx`);
+    if (rule.state !== 'live') throw new CoreError(`${symbol} can't be traded right now`);
+    if (rule.businessType !== 'FUTURE') throw new CoreError(`${symbol} is not a perp`);
     return rule;
   };
   const aRule = ruleFor(symbols[0]);
@@ -100,10 +100,10 @@ export async function resolveDeal(
 
   if (bRule) {
     if (aRule.symbol === bRule.symbol) {
-      throw new CoreError('deal legs must be different contracts (a same-contract pair would net to nothing but fees)');
+      throw new CoreError('Deal legs must be different contracts (a same-contract pair would net to nothing but fees)');
     }
     if (parseSymbol(aRule.symbol).base !== parseSymbol(bRule.symbol).base) {
-      throw new CoreError(`deal legs are different coins (${aRule.symbol} vs ${bRule.symbol})`);
+      throw new CoreError(`Deal legs are different coins (${aRule.symbol} vs ${bRule.symbol})`);
     }
     // Delta sign is a function of SIDE alone — BUY adds exposure, SELL removes
     // it — whether the leg opens or closes. So a two-leg deal that can open any
@@ -119,7 +119,7 @@ export async function resolveDeal(
     // exposure can be created on either side whatever the sides are.
     const bothReduceOnly = req.a.reduceOnly === true && req.b!.reduceOnly === true;
     if (req.a.side === req.b!.side && !bothReduceOnly) {
-      throw new CoreError('a two-leg deal that opens exposure needs opposite sides (delta-neutral)');
+      throw new CoreError('A two-leg deal that opens exposure needs opposite sides (delta-neutral)');
     }
   }
 
@@ -129,16 +129,16 @@ export async function resolveDeal(
   if (qty <= 0n) throw new CoreError('qty must be a positive decimal string');
   const aLot = fx(safeDec(aRule.lotSize, '0.0001'));
   if (fxFloorToStep(qty, aLot) !== qty) {
-    throw new CoreError(`qty ${req.qty} is not a multiple of ${aRule.symbol}'s lot ${aRule.lotSize}`);
+    throw new CoreError(`Size ${req.qty} is not a multiple of ${aRule.symbol}'s lot ${aRule.lotSize}`);
   }
   if (bRule) {
     const bLot = fx(safeDec(bRule.lotSize, '0.0001'));
     if (fxFloorToStep(qty, bLot) !== qty) {
-      throw new CoreError(`qty ${req.qty} is not a multiple of ${bRule.symbol}'s lot ${bRule.lotSize}`);
+      throw new CoreError(`Size ${req.qty} is not a multiple of ${bRule.symbol}'s lot ${bRule.lotSize}`);
     }
   }
   if (qty < fx(safeDec(aRule.minSize, '0'))) {
-    throw new CoreError(`qty ${req.qty} is below ${aRule.symbol}'s min size ${aRule.minSize}`);
+    throw new CoreError(`Size ${req.qty} is below ${aRule.symbol}'s minimum size of ${aRule.minSize}`);
   }
   // Leg B's minimum matters just as much as leg A's, and skipping it fails
   // SILENTLY rather than loudly: sizeFor returns FX_ZERO for every hedge, so
@@ -148,7 +148,7 @@ export async function resolveDeal(
   // reports success while the user holds 100% naked directional exposure.
   if (bRule && qty < fx(safeDec(bRule.minSize, '0'))) {
     throw new CoreError(
-      `qty ${req.qty} is below ${bRule.symbol}'s min size ${bRule.minSize} — the hedge leg could never be submitted`,
+      `Size ${req.qty} is below ${bRule.symbol}'s minimum size of ${bRule.minSize}, so the hedge leg can't be sent`,
     );
   }
 
@@ -173,7 +173,7 @@ export async function resolveDeal(
     try {
       if ((qty * fx(refA)) / 10n ** 12n < minNotionalA) {
         throw new CoreError(
-          `qty ${req.qty} is below ${aRule.symbol}'s minimum notional (${safeDec(aRule.minNotional, '0')} at ~${refA}) — increase the size`,
+          `Size ${req.qty} is below ${aRule.symbol}'s minimum order value (${safeDec(aRule.minNotional, '0')} at ~${refA}). Increase the size.`,
         );
       }
     } catch (err) {
@@ -193,7 +193,7 @@ export async function resolveDeal(
     try {
       if ((qty * fx(refA)) / 10n ** 12n < minNotionalB) {
         throw new CoreError(
-          `qty ${req.qty} is below ${bRule.symbol}'s minimum notional (${safeDec(bRule.minNotional, '0')} at ~${refA}) — the hedge leg could never be submitted, increase the size`,
+          `Size ${req.qty} is below ${bRule.symbol}'s minimum order value (${safeDec(bRule.minNotional, '0')} at ~${refA}), so the hedge leg can't be sent. Increase the size.`,
         );
       }
     } catch (err) {
@@ -217,18 +217,18 @@ export async function resolveDeal(
     return Number.isFinite(n) && n > 0 ? n : 0; // 0/absent = uncapped
   };
   const qtyNum = Number(fxStr(qty));
-  const capChecks: Array<{ label: string; cap: number; why: string }> = [
-    { label: `${aRule.symbol} max MARKET order size`, cap: maxOf(aRule.maxMarketSize), why: 'the timeout/convert path submits market orders' },
+  const capChecks: Array<{ label: string; cap: number }> = [
+    { label: `${aRule.symbol}'s largest market order`, cap: maxOf(aRule.maxMarketSize) },
     ...(req.execution === 'maker'
-      ? [{ label: `${aRule.symbol} max LIMIT order size`, cap: maxOf(aRule.maxLimitSize), why: 'the maker leg rests as a limit order' }]
+      ? [{ label: `${aRule.symbol}'s largest limit order`, cap: maxOf(aRule.maxLimitSize) }]
       : []),
     ...(bRule
-      ? [{ label: `${bRule.symbol} max MARKET order size`, cap: maxOf(bRule.maxMarketSize), why: 'the hedge is submitted as a single market order and is never split' }]
+      ? [{ label: `${bRule.symbol}'s largest market order`, cap: maxOf(bRule.maxMarketSize) }]
       : []),
   ];
-  for (const { label, cap, why } of capChecks) {
+  for (const { label, cap } of capChecks) {
     if (cap > 0 && qtyNum > cap) {
-      throw new CoreError(`qty ${req.qty} exceeds ${label} (${cap}) — ${why}; reduce the size`);
+      throw new CoreError(`Size ${req.qty} is above ${label} (${cap}). Lower the size.`);
     }
   }
 

@@ -81,11 +81,11 @@ describe('cancel feedback', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
     // Still listed, but visibly in progress rather than looking untouched.
-    expect(await screen.findByText('cancelling…')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /cancelling/ })).toBeDisabled();
+    expect(await screen.findAllByText('Cancelling…')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: /Cancelling/ })).toBeDisabled();
 
     // …and it clears on its own once the order is really gone.
-    await waitFor(() => expect(screen.queryByText('cancelling…')).toBeNull(), { timeout: 4000 });
+    await waitFor(() => expect(screen.queryAllByText('Cancelling…')).toHaveLength(0), { timeout: 4000 });
   });
 
   it('explains when the order is owned by a deal', async () => {
@@ -100,7 +100,7 @@ describe('cancel feedback', () => {
 
     await userEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
 
-    expect(await screen.findByText(/belongs to deal deal-abc/)).toBeInTheDocument();
+    expect(await screen.findByText(/belongs to a running deal/)).toBeInTheDocument();
     expect(screen.getByText(/clears once the venue confirms/)).toBeInTheDocument();
   });
 });

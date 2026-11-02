@@ -24,10 +24,12 @@ import {
   WaterfallPlot as Plot,
   type WaterfallStep as Step,
 } from '../../components/Waterfall';
+import { useTranslation } from 'react-i18next';
 import { fmtUsd } from '../../lib/fmt';
 import type { AssetTotals } from './assetModel';
 
 export function AssetBars({ totals }: { totals: AssetTotals }) {
+  const { t } = useTranslation();
   const b = totals.breakdown;
   const tradeGross = b.borosTradePnlUsd + b.borosTradeFeeUsd;
 
@@ -43,7 +45,7 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
     key: string,
     usd: number,
     className: string,
-    title: string,
+    title: (amount: string) => string,
     axisLabel: string,
     negClassName = 'bg-rose-500/70',
   ) => {
@@ -57,7 +59,7 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
       from,
       to: level,
       className: usd >= 0 ? className : negClassName,
-      title: `${title} ${fmtUsd(usd)}`,
+      title: title(fmtUsd(usd)),
       axisLabel,
     });
   };
@@ -68,20 +70,39 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
     'fixed-funding',
     b.borosSettleUsd + totals.perpFundingAllUsd,
     'bg-emerald-500/85',
-    `Fixed funding — Boros settlements ${fmtUsd(b.borosSettleUsd)} (net of settle fees) + perp funding ${fmtUsd(totals.perpFundingAllUsd)}, open and completed legs`,
-    'Fixed funding',
+    (amount) =>
+      t('assets.bars.fixedFundingTitle', {
+        settle: fmtUsd(b.borosSettleUsd),
+        funding: fmtUsd(totals.perpFundingAllUsd),
+        amount,
+      }),
+    t('assets.bars.fixedFunding'),
   );
   // Small signed adjustments and the costs. Fees are always a cost, so they
   // keep one colour whichever way the arithmetic signs them.
-  bar('trade', tradeGross, 'bg-cyan-400/70', 'Boros trade PnL (gross of trade fees)', 'Boros trade');
-  bar('trade-fee', -b.borosTradeFeeUsd, 'bg-amber-500/80', 'Boros trade fees', 'Trade fees', 'bg-amber-500/80');
-  bar('perp-fees', -totals.perpFeesAllUsd, 'bg-amber-500', 'Perp trading fees, open + closed positions', 'Perp fees', 'bg-amber-500');
+  bar('trade', tradeGross, 'bg-cyan-400/70', (amount) => t('assets.bars.tradeTitle', { amount }), t('assets.bars.trade'));
+  bar(
+    'trade-fee',
+    -b.borosTradeFeeUsd,
+    'bg-amber-500/80',
+    (amount) => t('assets.bars.tradeFeeTitle', { amount }),
+    t('assets.bars.tradeFee'),
+    'bg-amber-500/80',
+  );
+  bar(
+    'perp-fees',
+    -totals.perpFeesAllUsd,
+    'bg-amber-500',
+    (amount) => t('assets.bars.perpFeesTitle', { amount }),
+    t('assets.bars.perpFees'),
+    'bg-amber-500',
+  );
   bar(
     'slippage',
     totals.priceResidualUsd,
     'bg-cyan-400/50',
-    'Perp price basis — open uPnL + closed realized price PnL (a delta-neutral book expects ≈ 0)',
-    'Perp basis',
+    (amount) => t('assets.bars.basisTitle', { amount }),
+    t('assets.bars.basis'),
   );
   // The settlement-fee rebate credited back — a favorable step just before the
   // total (pnlUsd already includes it, so the end bar still lands exactly).
@@ -90,8 +111,8 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
     'rebate',
     b.borosRebateUsd,
     'bg-emerald-400/70',
-    'Boros settlement-fee rebate credited back',
-    'Settlement rebate',
+    (amount) => t('assets.bars.rebateTitle', { amount }),
+    t('assets.bars.rebate'),
   );
   steps.push({
     key: 'pnl',
@@ -100,8 +121,8 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
     from: 0,
     to: totals.pnlUsd,
     className: totals.pnlUsd >= 0 ? 'bg-emerald-500' : 'bg-rose-500',
-    title: `Net PnL ${fmtUsd(totals.pnlUsd)}`,
-    axisLabel: 'PnL',
+    title: t('assets.bars.netTitle', { amount: fmtUsd(totals.pnlUsd) }),
+    axisLabel: t('common.pnl'),
   });
 
   if (steps.length < 2) return null;
@@ -116,7 +137,7 @@ export function AssetBars({ totals }: { totals: AssetTotals }) {
         y={y}
         span={span}
         domainMin={domainMin}
-        caption="Fixed funding (Boros settlements + perp funding) = the locked spread; then Boros trade PnL, trade fees, perp fees and the perp price residual"
+        caption={t('assets.bars.caption')}
         showCaption={false}
       />
     </div>

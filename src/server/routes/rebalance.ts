@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { classifyGateError, classifyPlain, CoreError } from '../../core/errors';
+import { classifyPlain, CoreError, describeError } from '../../core/errors';
 import { computeExposure } from '../../core/positions';
 import {
   bookLevels,
@@ -48,7 +48,7 @@ const RELOAD_TEXT = 'This page is out of date. Reload it and check the plan befo
 const PLAN_CHANGED_TEXT = 'The plan changed. Check the new route before you rebalance.';
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
 
-export const STALE_TEXT = 'Gate is rate-limiting the account read. Try again in a few seconds.';
+export const STALE_TEXT = 'Gate is limiting requests from this account. Try again in a few seconds.';
 
 export const conflict = (reply: FastifyReply, message: string, label?: string): FastifyReply =>
   reply.code(409).send({ ok: false, error: { category: 'validation', label, message, retryable: true } });
@@ -143,7 +143,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           const job = store.read();
           if (job?.status === 'done') ackAlerts(job);
         })
-        .catch((err: unknown) => console.error(`rebalance stopped: ${classifyGateError(err).message}`))
+        .catch((err: unknown) => console.error(`rebalance stopped: ${describeError(err)}`))
         .finally(() => {
           inflight = null;
         });
@@ -249,7 +249,7 @@ export function rebalanceRoutes(deps: AppDeps) {
     const lockText = (lock: MoneyLock | null): string | null => {
       if (lock === null) return null;
       if (lock.kind === 'moving') return LOCK_TEXT.rebalanceWaits;
-      if (lock.kind === 'deal') return `deal ${lock.id} is still working`;
+      if (lock.kind === 'deal') return 'A deal is still running. Wait for it to finish.';
       return `rebalance ${lock.id} is ${lock.kind === 'halted' ? 'halted' : 'running'}`;
     };
 
@@ -341,11 +341,11 @@ export function rebalanceRoutes(deps: AppDeps) {
       // The steps hold venue ids and amounts of the account they ran on. On
       // another account they would poll ids it does not know, or send from it.
       if (job.userId !== null && (await currentUserId()) !== job.userId) {
-        return conflict(reply, `rebalance ${job.id} was started on another Gate account. Abandon it.`);
+        return conflict(reply, 'This rebalance was started on another Gate account. Abandon it.');
       }
       const current = store.read();
       if (current?.id !== job.id || current.status !== 'halted') {
-        return conflict(reply, `rebalance ${job.id} is no longer halted`);
+        return conflict(reply, 'This rebalance is no longer halted');
       }
       const lockedNow = resumeLock();
       if (lockedNow) return conflict(reply, lockedNow);

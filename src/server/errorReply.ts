@@ -34,7 +34,7 @@ export function sendError(
     req.log?.error?.(err);
     return reply.code(500).send({
       ok: false,
-      error: { category: 'unknown', message: 'internal server error', retryable: false },
+      error: { category: 'unknown', message: 'Something went wrong in the terminal. Try again.', retryable: false },
     });
   }
   return reply.code(status).send({ ok: false, error: classified });

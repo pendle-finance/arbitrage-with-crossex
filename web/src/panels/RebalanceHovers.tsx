@@ -1,20 +1,22 @@
 import { ChevronRight } from 'lucide-react';
 import { Fragment, useId, type ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import type { EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { RadioRow } from '../components/RadioRow';
 import { microLabelClass, Th } from '../components/Th';
+import { t } from '../i18n';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
 import {
-  FACT_BORROWING,
-  FACT_INTEREST_NOW,
-  FACT_INTEREST_PAID,
-  GATE_SPOT,
+  factBorrowing,
+  factInterestNow,
+  factInterestPaid,
+  gateSpot,
   HOVER,
   MODAL_FEE,
   MOVE_TEXT,
@@ -22,29 +24,34 @@ import {
   poolKey,
   RATE_PER_YEAR,
   INTEREST_PER_HOUR,
-  RATE_UNKNOWN,
-  VERDICT_NO_BORROW,
-  VERDICT_NO_INTEREST,
-  VERDICT_NOT_WORTH_IT,
-  VERDICT_RATE_UNKNOWN,
-  VERDICT_REPAY_NO_LEGS_SUB,
-  VERDICT_REPAY_WORTH_IT,
-  VERDICT_WORTH_IT,
+  rateUnknown,
+  verdictNoBorrow,
+  verdictNoInterest,
+  verdictNotWorthIt,
+  verdictRateUnknown,
+  verdictRepayNoLegsSub,
+  verdictRepayWorthIt,
+  verdictWorthIt,
   WALLET_LABEL,
 } from './rebalanceCopy';
 import { findPath } from './TransferBits';
+import { localizeServerText } from '../i18n/serverMessages';
 
 const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
 export const DUST = 1;
 const TRANSIT_WALLET = 'USDC/GATE';
 
-export const ROUTE_LABEL: Record<RouteName, string> = { mix: 'Spot loop, then Convert', loop: 'Spot loop', convert: 'Convert' };
+export const ROUTE_LABEL: Readonly<Record<RouteName, string>> = {
+  get mix() { return t('accounts.rebalanceHovers.routeMix'); },
+  get loop() { return t('accounts.rebalance.hover.title.spotLoop'); },
+  get convert() { return t('accounts.rebalance.hover.title.convert'); },
+};
 
 const WALLET_HOVER: Readonly<Record<string, string>> = {
-  'USDT/CROSSEX': HOVER.walletUsdt,
-  'USDC/HYPERLIQUID': HOVER.walletUsdc,
-  'USDC/LIGHTER': HOVER.walletLighter,
-  'USDC/GATE': HOVER.walletGate,
+  get 'USDT/CROSSEX'() { return HOVER.walletUsdt; },
+  get 'USDC/HYPERLIQUID'() { return HOVER.walletUsdc; },
+  get 'USDC/LIGHTER'() { return HOVER.walletLighter; },
+  get 'USDC/GATE'() { return HOVER.walletGate; },
 };
 
 export interface FactRow {
@@ -123,11 +130,11 @@ function InterestInfo({ buckets }: { buckets: RebalanceBucket[] }) {
   const info = HOVER.interestNow;
   const rateOf = (key: string) => {
     const bucket = buckets.find((b) => keyOf(b) === key);
-    return bucket ? rateText(bucket) : RATE_UNKNOWN;
+    return bucket ? rateText(bucket) : rateUnknown();
   };
   const cell = 'whitespace-nowrap px-2 py-1';
   return (
-    <HoverCard icon={false} widthPx={520} label={FACT_INTEREST_NOW}>
+    <HoverCard icon={false} widthPx={520} label={factInterestNow()}>
       <div className="flex flex-col gap-2 text-xs leading-snug">
         <p>{info.lead}</p>
         <table className="w-full border border-ink-700">
@@ -193,18 +200,18 @@ export const chargedBorrow = (b: RebalanceBucket, borrow: number) => Math.max(0,
 export const isRateUnknown = (b: RebalanceBucket) => chargedBorrow(b, b.borrow) > 0 && b.interestPerDayUsd === 0;
 
 function rateText(b: RebalanceBucket): string {
-  if (isRateUnknown(b) || b.ratePerYear === null || b.ratePerYear <= 0) return RATE_UNKNOWN;
+  if (isRateUnknown(b) || b.ratePerYear === null || b.ratePerYear <= 0) return rateUnknown();
   return RATE_PER_YEAR(num(b.ratePerYear * 100, 2));
 }
 
 function perHourText(usd: number): string {
   if (usd <= 0) return fmtUsd(0);
-  if (usd < 0.0001) return `under ${fmtUsd(0.0001, 4)}`;
+  if (usd < 0.0001) return t('accounts.rebalanceHovers.under', { usd: fmtUsd(0.0001, 4) });
   return fmtUsd(usd, usd < 1 ? 4 : 2);
 }
 
 const walletPerHour = (b: RebalanceBucket) =>
-  isRateUnknown(b) ? RATE_UNKNOWN : INTEREST_PER_HOUR(perHourText(b.interestPerDayUsd / 24));
+  isRateUnknown(b) ? rateUnknown() : INTEREST_PER_HOUR(perHourText(b.interestPerDayUsd / 24));
 
 const walletRows = (wallets: RebalanceBucket[], valueOf: (b: RebalanceBucket) => string): FactRow[] =>
   wallets.map((b) => ({ name: WALLET_SHORT[keyOf(b)], value: valueOf(b) }));
@@ -258,8 +265,8 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: strin
   const borrowAmount = (value: number) => (coin ? num(value) : fmtUsd(value));
   return {
     key: 'borrowing',
-    label: FACT_BORROWING,
-    value: total > 0 ? fmtCoinOrUsd(total, coin) : 'none',
+    label: factBorrowing(),
+    value: total > 0 ? fmtCoinOrUsd(total, coin) : t('accounts.rebalanceHovers.none'),
     sub: borrowing.length === 1 ? [WALLET_LABEL[keyOf(borrowing[0])]] : [],
     rows: borrowing.length > 1 ? walletRows(borrowing, (b) => borrowAmount(floorCents(b.borrow))) : [],
     warn: total > 0,
@@ -297,7 +304,7 @@ export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
   const paidWallets = buckets.filter((b) => floorCents(b.interestPaidUsd) > 0).sort((a, b) => b.interestPaidUsd - a.interestPaidUsd);
   const borrowed = borrowingFact(buckets);
   return [
-    rowsOnHover({ ...borrowed, label: <Term label={FACT_BORROWING} text={borrowHover(borrowing)} /> }),
+    rowsOnHover({ ...borrowed, label: <Term label={factBorrowing()} text={borrowHover(borrowing)} /> }),
     rowsOnHover({
       key: 'interest',
       label: <InterestInfo buckets={buckets} />,
@@ -307,7 +314,7 @@ export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
     }),
     rowsOnHover({
       key: 'paid',
-      label: FACT_INTEREST_PAID,
+      label: factInterestPaid(),
       value: fmtUsd(paid),
       rows: walletRows(paidWallets, (b) => fmtUsd(b.interestPaidUsd)),
     }),
@@ -349,9 +356,9 @@ export const isNotWorthIt = (route: RoutePlan, buckets: RebalanceBucket[]): bool
   borrowingBuckets(buckets).length > 0 && !hasUnknownRate(buckets) && !isWorthIt(route, buckets);
 
 const daysText = (days: number): string => {
-  if (days < 1) return 'less than a day';
+  if (days < 1) return t('accounts.rebalanceHovers.lessThanDay');
   const whole = Math.ceil(days);
-  return whole === 1 ? '1 day' : `${num(whole, 0)} days`;
+  return t('accounts.rebalanceHovers.days', { count: whole, n: num(whole, 0) });
 };
 
 /** Severity of a verdict, which picks its alert ground and icon.
@@ -386,19 +393,19 @@ export interface Verdict {
  * preset. With legs the fee-versus-interest arithmetic applies to all three.
  */
 export function worthLine(route: RoutePlan, buckets: RebalanceBucket[], goal: GoalKind = 'even', noLegs = false): Verdict | null {
-  if (borrowingBuckets(buckets).length === 0) return { text: VERDICT_NO_BORROW, tone: 'info' };
-  if (noLegs) return { text: VERDICT_REPAY_WORTH_IT, tone: 'act', sub: VERDICT_REPAY_NO_LEGS_SUB };
+  if (borrowingBuckets(buckets).length === 0) return { text: verdictNoBorrow(), tone: 'info' };
+  if (noLegs) return { text: verdictRepayWorthIt(), tone: 'act', sub: verdictRepayNoLegsSub() };
   // Before any fee-vs-interest test: with no interest there is nothing to weigh,
   // and weighing against zero is what made this print "not worth it" beside a
   // "$0.00 an hour" reading.
-  if (isFreeBorrow(buckets)) return { text: VERDICT_NO_INTEREST, tone: 'info' };
+  if (isFreeBorrow(buckets)) return { text: verdictNoInterest(), tone: 'info' };
   // A rate we could not read is an ERROR, not a quiet "nothing to do": the
   // dialog still prices a fee, so a silent card contradicted it.
-  if (hasUnknownRate(buckets)) return { text: VERDICT_RATE_UNKNOWN, tone: 'warn' };
-  if (isNotWorthIt(route, buckets)) return { text: VERDICT_NOT_WORTH_IT, tone: 'warn' };
+  if (hasUnknownRate(buckets)) return { text: verdictRateUnknown(), tone: 'warn' };
+  if (isNotWorthIt(route, buckets)) return { text: verdictNotWorthIt(), tone: 'warn' };
   const days = paybackDays(route, buckets);
   if (cents(route.costUsd) <= 0 || days === null) return null;
-  return { text: goal === 'repay' ? VERDICT_REPAY_WORTH_IT : VERDICT_WORTH_IT, tone: 'act', sub: PAYS_BACK(daysText(days)) };
+  return { text: goal === 'repay' ? verdictRepayWorthIt() : verdictWorthIt(), tone: 'act', sub: PAYS_BACK(daysText(days)) };
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;
@@ -473,9 +480,10 @@ export function pickedRoute(plan: EvenPlan, pick: RouteName | null): { name: Rou
 }
 
 export const routeTime = (route: RouteName, plan: RoutePlan): string =>
-  route === 'convert' ? 'instant' : fmtAbout(plan.seconds);
+  route === 'convert' ? t('accounts.rebalance.hover.title.time.instant') : fmtAbout(plan.seconds);
 
 export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; plan: EvenPlan; checked: boolean; onPick: () => void }) {
+  const { t } = useTranslation();
   const id = useId();
   const routePlan = plan.routes[route];
   if (!routePlan) return null;
@@ -496,9 +504,9 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
         <Term label={<span className="font-semibold text-ink-100">{ROUTE_LABEL[route]}</span>} text={nameText} />
       </span>
       <span className="flex h-4 w-28 shrink-0 items-center">
-        {plan.recommended === route && <Term label={<Chip tone="green" sm>Recommended</Chip>} text={HOVER.recommended} />}
+        {plan.recommended === route && <Term label={<Chip tone="green" sm>{t('common.recommended')}</Chip>} text={HOVER.recommended} />}
       </span>
-      <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason : time}</span>
+      <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason && localizeServerText(routePlan.reason) : time}</span>
       {!blocked && <span className="num text-ink-100">{MODAL_FEE(fmtUsd(routePlan.costUsd))}</span>}
     </RadioRow>
   );
@@ -521,7 +529,8 @@ const VENUE_ACCOUNT: Record<Pool, GateAccount> = {
 };
 
 export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferView; job: RebalanceJob | null; onTransfer?: OnTransfer }) {
-  const amount = (text: string) => <span className="num font-semibold text-ink-100">{text}</span>;
+  const { t } = useTranslation();
+  const amount = <span className="num font-semibold text-ink-100" />;
   const minInto = (target: GateAccount) => findPath(transfer?.paths ?? [], { from: 'SPOT', to: target })?.min ?? 0;
   const usdcWallet = (qty: number, target: GateAccount): GateAccount => (qty < minInto(target) ? 'CROSSEX_GATE' : target);
   const lines = (transfer?.spot ?? [])
@@ -531,10 +540,11 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
         coin: spot.coin,
         wallet: spot.coin === 'USDT' ? 'CROSSEX' : usdcWallet(spot.available, 'CROSSEX_HYPERLIQUID'),
         text: (
-          <>
-            <Term label={GATE_SPOT} text={HOVER.gateSpot} /> has {amount(`${num(spot.available)} ${spot.coin}`)}. Move it in
-            to use it.
-          </>
+          <Trans
+            i18nKey="accounts.rebalanceHovers.spotHas"
+            values={{ amount: `${num(spot.available)} ${spot.coin}` }}
+            components={{ term: <Term label={gateSpot()} text={HOVER.gateSpot} />, b: amount }}
+          />
         ),
       }),
     );
@@ -543,7 +553,7 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
     (job?.inTransit?.at === 'MOVING' && LANDS_IN_SPOT.includes(job.steps[job.stepIndex]?.name ?? ''));
   if (transfer?.spot === null && job?.status === 'abandoned' && job.inTransit && leftInSpot) {
     const wallet = usdcWallet(job.inTransit.qty, VENUE_ACCOUNT[job.steps[job.stepIndex]?.to ?? 'CROSSEX']);
-    const text = <>Last run left {amount(`${num(job.inTransit.qty)} USDC`)} in Gate spot.</>;
+    const text = <Trans i18nKey="accounts.rebalanceHovers.lastRunLeft" values={{ amount: `${num(job.inTransit.qty)} USDC` }} components={{ b: amount }} />;
     lines.push({ coin: 'USDC', wallet, text });
   }
   return (
@@ -552,7 +562,7 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
         <div key={line.coin} className="flex flex-wrap items-center gap-3 rounded border border-dashed border-ink-700 px-3 py-2 text-xs text-ink-300">
           <p>{line.text}</p>
           <button type="button" className="btn-link" onClick={() => onTransfer?.(line.coin, line.wallet)}>
-            Transfer <ChevronRight size={12} aria-hidden className="inline" />
+            {t('accounts.rebalanceHovers.transfer')} <ChevronRight size={12} aria-hidden className="inline" />
           </button>
         </div>
       ))}
@@ -561,10 +571,11 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
 }
 
 export function RebalanceInfo() {
+  const { t } = useTranslation();
   const card = HOVER.rebalanceTitle;
   const cell = 'whitespace-nowrap px-2 py-1';
   return (
-    <HoverCard widthPx={600} underline={false} label="Rebalance">
+    <HoverCard widthPx={600} underline={false} label={t('accounts.rebalanceModal.title')}>
       <div className="flex flex-col gap-2 text-xs leading-snug">
         <p>{card.equity}</p>
         <table className="w-full border border-ink-700">

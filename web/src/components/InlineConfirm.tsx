@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
 type Tone = 'danger' | 'warn';
 
@@ -21,7 +22,7 @@ export function InlineConfirm({
   busyLabel,
   busy = false,
   confirmKind = tone === 'danger' ? 'danger' : 'primary',
-  cancelLabel = 'Cancel',
+  cancelLabel,
   onConfirm,
   onCancel,
 }: {
@@ -41,6 +42,7 @@ export function InlineConfirm({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   const confirmClass = confirmKind === 'danger' ? 'btn-danger' : confirmKind === 'neutral' ? 'btn' : 'btn-primary';
   return (
     <div role="alertdialog" aria-label={label} className={`flex flex-col gap-2 rounded-lg border px-3 py-2 ${BOX[tone]}`}>
@@ -51,7 +53,7 @@ export function InlineConfirm({
           {busy && busyLabel ? busyLabel : confirmLabel}
         </button>
         <button type="button" className="btn" onClick={onCancel}>
-          {cancelLabel}
+          {cancelLabel ?? t('common.cancel')}
         </button>
       </div>
     </div>

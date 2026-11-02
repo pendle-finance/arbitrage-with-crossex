@@ -92,19 +92,19 @@ beforeEach(() => {
 describe('the asset hero APR', () => {
   it('a fully locked book keeps "Current APR (Fixed)" and its fixed rate, with no split', () => {
     renderCard(book(100));
-    expect(screen.getByText('Current APR (Fixed)')).toBeInTheDocument();
+    expect(screen.getByText('Current APR (fixed)')).toBeInTheDocument();
     expect(screen.queryByText(/· Floating/)).not.toBeInTheDocument();
   });
 
   it('a part-locked book shows the estimate where the dash was, split fixed and floating', () => {
     renderCard(book(60));
-    expect(screen.queryByText('Current APR (Fixed)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Current APR (fixed)')).not.toBeInTheDocument();
     const label = screen.getByText('Current APR');
     // The hover names each venue's unlocked size and the funding it used —
     // as two-cell rows, so the value cell stays short enough not to overflow.
     const title = label.parentElement?.getAttribute('title') ?? '';
-    expect(title).toMatch(/^Gate\tLONG \$100(\.0)?k · 4\.00%$/m);
-    expect(title).toMatch(/^Hyperliquid\tSHORT \$100(\.0)?k · 10\.00%$/m);
+    expect(title).toMatch(/^Gate\tLong \$100(\.0)?k · 4\.00%$/m);
+    expect(title).toMatch(/^Hyperliquid\tShort \$100(\.0)?k · 10\.00%$/m);
     for (const row of title.split('\n').filter((l) => l.includes('\t'))) {
       expect(row.split('\t')).toHaveLength(2);
     }

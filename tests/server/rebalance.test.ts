@@ -339,7 +339,7 @@ describe('GET /api/account', () => {
     expect(res.statusCode).toBe(401);
     const { error } = res.json();
     expect(error.message).toBe('Gate API error (HTTP 401) [INVALID_KEY]: Invalid key');
-    expect(error.hint).toBe('Check the API key/secret in Settings.');
+    expect(error.hint).toBe('Check the Gate API key and secret in Settings.');
   });
 });
 

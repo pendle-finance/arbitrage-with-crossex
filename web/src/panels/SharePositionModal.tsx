@@ -4,6 +4,7 @@
  * poll can't mutate an open modal. */
 import { ArrowRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { postJson } from '../api/client';
 import { Modal } from '../components/Modal';
 import { Spinner } from '../components/Spinner';
@@ -26,6 +27,7 @@ const canCopyImage = () =>
 const SHORT_LINK_GRACE_MS = 1_500;
 
 export function SharePositionModal({ payload, onClose }: { payload: SharePayloadV1; onClose: () => void }) {
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   // The tracked address rides ALONGSIDE the payload when the code is minted —
   // never inside it. The wire format has no address field by construction and
@@ -117,18 +119,18 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
     return () => {
       cancelled = true;
     };
-  }, [payload]);
+  }, [payload, i18n.language]);
 
   const copyLink = () => {
     if (!shareUrl) return;
     if (!navigator.clipboard?.writeText) {
-      toast.push('error', 'Clipboard unavailable — select the link text instead');
+      toast.push('error', t('opportunities.share.clipboardUnavailable'));
       return;
     }
     navigator.clipboard
       .writeText(shareUrl)
-      .then(() => toast.push('success', 'Link copied'))
-      .catch(() => toast.push('error', 'Clipboard unavailable — select the link text instead'));
+      .then(() => toast.push('success', t('opportunities.share.linkCopied')))
+      .catch(() => toast.push('error', t('opportunities.share.clipboardUnavailable')));
   };
 
   const copyImage = () => {
@@ -139,35 +141,31 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
     });
     navigator.clipboard
       .write([new ClipboardItem({ 'image/png': blob })])
-      .then(() => toast.push('success', 'Image copied — paste it into the X composer'))
-      .catch(() => toast.push('error', 'Copying the image failed — use Download instead'));
+      .then(() => toast.push('success', t('opportunities.share.imageCopied')))
+      .catch(() => toast.push('error', t('opportunities.share.imageCopyFailed')));
   };
 
   return (
-    <Modal title="Share your position" onClose={onClose} widthClass="w-[680px]">
+    <Modal title={t('opportunities.share.title')} onClose={onClose} widthClass="w-[680px]">
       <div className="flex flex-col gap-3">
         {failed ? (
           <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
-            Image generation failed — the link below still works.
+            {t('opportunities.share.imageFailed')}
           </div>
         ) : dataUrl ? (
           <img
             src={dataUrl}
-            alt="Position share card"
+            alt={t('opportunities.share.imageAlt')}
             className="w-full rounded-lg border border-ink-700"
           />
         ) : (
           <div className="flex aspect-video w-full items-center justify-center rounded-lg border border-ink-700 bg-ink-950/60 text-xs text-ink-400">
-            <Spinner /> <span className="ml-2">Rendering the card…</span>
+            <Spinner /> <span className="ml-2">{t('opportunities.share.rendering')}</span>
           </div>
         )}
 
         <p className="text-xs leading-relaxed text-ink-500">
-          X can't attach an image from a link — the post opens pre-filled with your link; download
-          or copy the image and add it in the compose window. Your wallet address is not part of
-          the link or the image, and leg details are rounded to display precision. Pendle does store
-          your address with the short code, so a shared position can be checked for incentive
-          campaigns.
+          {t('opportunities.share.explainer')}
         </p>
 
         {shareUrl ? (
@@ -175,19 +173,19 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
             <input
               readOnly
               value={shareUrl}
-              aria-label="Position share link"
+              aria-label={t('opportunities.share.linkAria')}
               onFocus={(e) => e.currentTarget.select()}
               className="input flex-1 select-all text-[11px]"
             />
             <button type="button" className="btn shrink-0" onClick={copyLink}>
-              Copy link
+              {t('opportunities.share.copyLink')}
             </button>
           </div>
         ) : (
           // Held only for the grace window above — a placeholder the same
           // height as the field, so nothing jumps when the link lands.
           <div className="flex h-[34px] items-center rounded-lg border border-ink-800 bg-ink-950/60 px-2.5 text-[11px] text-ink-400">
-            <Spinner /> <span className="ml-2">Minting a short link…</span>
+            <Spinner /> <span className="ml-2">{t('opportunities.share.minting')}</span>
           </div>
         )}
 
@@ -199,18 +197,18 @@ export function SharePositionModal({ payload, onClose }: { payload: SharePayload
               rel="noopener noreferrer"
               className="btn-primary"
             >
-              Share on X
+              {t('opportunities.share.shareOnX')}
               <ArrowRight size={14} aria-hidden />
             </a>
           )}
           {dataUrl && (
             <a href={dataUrl} download={shareFileName(payload)} className="btn">
-              Download PNG
+              {t('opportunities.share.downloadPng')}
             </a>
           )}
           {dataUrl && canCopyImage() && (
             <button type="button" className="btn" onClick={copyImage}>
-              Copy image
+              {t('opportunities.share.copyImage')}
             </button>
           )}
         </div>

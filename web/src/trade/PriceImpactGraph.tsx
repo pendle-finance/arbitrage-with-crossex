@@ -16,6 +16,7 @@
  * idiom), but its scale is 0-anchored so this computes its own price domain.
  */
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useVenueBook } from '../api/queries';
 import type { ActionInput, BookTouch, PreviewResult } from '../api/types';
 import { VenueIcon } from '../components/AssetIcon';
@@ -227,6 +228,7 @@ function ImpactArrow({
  * an impact arrow from the touch to it) OR our resting limit (the maker leg,
  * with a trade-direction arrow). */
 function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: boolean }) {
+  const { t } = useTranslation();
   const legKey = leg.side === 'LONG' ? 'long' : 'short';
   const tone = TONE[toneOf(marks.impactPct)];
   const isLong = leg.side === 'LONG';
@@ -236,10 +238,14 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
     marks.ask && marks.bid
       ? { top: marks.ask.yPct, height: Math.max(marks.bid.yPct - marks.ask.yPct, 0.4) }
       : null;
-  const impactBps = marks.impactPct === null ? '' : `${marks.impactPct >= 0 ? '+' : ''}${Math.round(marks.impactPct * 100)} bps`;
-  const fillTitle = `market ${isLong ? 'buy' : 'sell'} avg fill ${marks.fill ? sig(marks.fill.price) : '—'}${
-    impactBps ? ` · impact ${impactBps}` : ''
-  }${marks.partialDepth ? ' · partial depth (extrapolated)' : ''}`;
+  const impactBps =
+    marks.impactPct === null
+      ? ''
+      : t('trade.impact.bps', { value: `${marks.impactPct >= 0 ? '+' : ''}${Math.round(marks.impactPct * 100)}` });
+  const fillPrice = marks.fill ? sig(marks.fill.price) : '—';
+  const fillTitle = `${isLong ? t('trade.impact.fillBuy', { price: fillPrice }) : t('trade.impact.fillSell', { price: fillPrice })}${
+    impactBps ? t('trade.impact.impactPart', { bps: impactBps }) : ''
+  }${marks.partialDepth ? t('trade.impact.partialPart') : ''}`;
   // Trade-direction glyph for the resting limit: BUY (long) is up, SELL down.
   const dirArrow = (
     <span className={isLong ? 'text-emerald-400' : 'text-rose-400'}>{isLong ? '↑' : '↓'}</span>
@@ -264,20 +270,24 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
           to={marks.fill}
           tone={tone}
           dim={dim}
-          title={`${fillTitle} (from ${isLong ? 'ask' : 'bid'} ${sig(crossTouch.price)})`}
+          title={
+            isLong
+              ? t('trade.impact.fromAsk', { title: fillTitle, price: sig(crossTouch.price) })
+              : t('trade.impact.fromBid', { title: fillTitle, price: sig(crossTouch.price) })
+          }
         />
       )}
 
       {/* the two-sided quote — tags on the right */}
       {marks.ask && (
-        <PriceLine mark={marks.ask} tag="ask" side="right" dataMark="ask" lineClass="border-ink-300" textClass="text-ink-300" />
+        <PriceLine mark={marks.ask} tag={t('trade.impact.ask')} side="right" dataMark="ask" lineClass="border-ink-300" textClass="text-ink-300" />
       )}
       {marks.bid && (
-        <PriceLine mark={marks.bid} tag="bid" side="right" dataMark="bid" lineClass="border-ink-300" textClass="text-ink-300" />
+        <PriceLine mark={marks.bid} tag={t('trade.impact.bid')} side="right" dataMark="bid" lineClass="border-ink-300" textClass="text-ink-300" />
       )}
       {/* the market avg fill (crossing legs) — its impact colors the line */}
       {marks.fill && (
-        <PriceLine mark={marks.fill} tag="mkt" side="left" dataMark="fill" lineClass={tone.line} textClass={tone.text} dim={dim} title={fillTitle} />
+        <PriceLine mark={marks.fill} tag={t('trade.impact.mkt')} side="left" dataMark="fill" lineClass={tone.line} textClass={tone.text} dim={dim} title={fillTitle} />
       )}
       {/* our resting limit (maker leg) — with a trade-direction arrow */}
       {marks.limit && (
@@ -285,8 +295,8 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
           mark={marks.limit}
           tag={
             leg.limitQty
-              ? `limit ${sig(marks.limit.price)} × ${sig(leg.limitQty)}`
-              : 'limit'
+              ? t('trade.impact.limitTag', { price: sig(marks.limit.price), qty: sig(leg.limitQty) })
+              : t('trade.impact.limit')
           }
           arrow={dirArrow}
           side="left"
@@ -295,7 +305,7 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
           textClass="text-cyan-300"
           title={
             leg.limitQty
-              ? `our resting limit — ${sig(leg.limitQty)} @ ${sig(marks.limit.price)}`
+              ? t('trade.impact.limitTitle', { qty: sig(leg.limitQty), price: sig(marks.limit.price) })
               : undefined
           }
         />
@@ -325,6 +335,7 @@ export function PriceImpactGraph({
    * its own — the estimate card around it carries those. */
   embedded?: boolean;
 }) {
+  const { t } = useTranslation();
   const scale = assembleImpactMarks(long, short);
 
   return (
@@ -338,12 +349,12 @@ export function PriceImpactGraph({
       {!embedded && (
         <div className="flex items-center justify-between">
           <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">
-            Book &amp; market impact
+            {t('trade.impact.heading')}
           </span>
           <FreshnessButton
             dataUpdatedAt={updatedAt}
             staleError={staleError}
-            title="Live venue books — refetch"
+            title={t('trade.impact.refetch')}
             onRefetch={onRefetch}
             dense
           />
@@ -351,19 +362,19 @@ export function PriceImpactGraph({
       )}
 
       {scale === null ? (
-        <div className="py-6 text-center text-[11px] text-ink-500">book &amp; impact unavailable</div>
+        <div className="py-6 text-center text-[11px] text-ink-500">{t('trade.impact.unavailable')}</div>
       ) : (
         <div className="flex gap-1" data-price-graph>
           {/* price axis gutter */}
           <div className="relative w-10 shrink-0">
             <div className="relative h-40">
-              {scale.ticks.map((t) => (
+              {scale.ticks.map((tick) => (
                 <div
-                  key={t.yPct}
+                  key={tick.yPct}
                   className="num absolute right-1 -translate-y-1/2 text-[9px] text-ink-400"
-                  style={{ top: `${t.yPct}%` }}
+                  style={{ top: `${tick.yPct}%` }}
                 >
-                  {sig(t.price)}
+                  {sig(tick.price)}
                 </div>
               ))}
             </div>
@@ -376,7 +387,7 @@ export function PriceImpactGraph({
               </div>
               <div
                 className="flex items-center justify-center gap-1 truncate pt-0.5 text-center text-[10px] font-medium text-emerald-300"
-                title={`${long.venue} (long)`}
+                title={t('trade.impact.venueLong', { venue: long.venue })}
               >
                 <VenueIcon venue={long.venue} size={12} />
                 <span className="truncate">{prettyVenue(long.venue)}</span>
@@ -391,7 +402,7 @@ export function PriceImpactGraph({
               </div>
               <div
                 className="flex items-center justify-center gap-1 truncate pt-0.5 text-center text-[10px] font-medium text-rose-300"
-                title={`${short.venue} (short)`}
+                title={t('trade.impact.venueShort', { venue: short.venue })}
               >
                 <VenueIcon venue={short.venue} size={12} />
                 <span className="truncate">{prettyVenue(short.venue)}</span>
@@ -523,6 +534,7 @@ export function DealBookImpact({
    * market order Leg B fires; sizes the hedge estimate. */
   hedgeQty: string | null;
 }) {
+  const { t } = useTranslation();
   const makerBook = useVenueBook(makerContract, true);
   const hedgeBook = useVenueBook(hedgeContract, hedgeContract !== null);
 
@@ -571,7 +583,7 @@ export function DealBookImpact({
     ...legFrom(makerContract, makerBook.data, makerIsLong ? 'LONG' : 'SHORT'),
     limitPx,
     limitQty: limitPx !== null ? limitQty : null,
-    subLabel: 'Leg A — limit order',
+    subLabel: t('trade.impact.legA'),
   };
   // The hedge mid falls back to the preview's reference price (as
   // PairBookImpact does): without it a book outage would draw the fill line
@@ -583,10 +595,10 @@ export function DealBookImpact({
     avgFill: hedgeFill?.avgPrice ?? null,
     worst: hedgeFill?.worstPrice ?? null,
     partialDepth: Boolean(hedgeFill?.partialDepth),
-    subLabel: 'Leg B — market hedge after every fill',
+    subLabel: t('trade.impact.legB'),
   };
 
-  const stamps = [makerBook.dataUpdatedAt, hedgeBook.dataUpdatedAt].filter((t) => t > 0);
+  const stamps = [makerBook.dataUpdatedAt, hedgeBook.dataUpdatedAt].filter((s) => s > 0);
   const updatedAt = stamps.length ? Math.min(...stamps) : 0;
   const staleError =
     (makerBook.isError && makerBook.data !== undefined) ||

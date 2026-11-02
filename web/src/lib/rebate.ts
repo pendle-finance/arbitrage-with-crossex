@@ -9,6 +9,7 @@
  * `marketIds` (null = all markets).
  */
 import type { Rebate } from '../api/types';
+import { t } from '../i18n';
 
 export function rebateForMarket(rebate: Rebate, marketId: number): Rebate {
   const o = rebate.marketFeeOverrides?.find((x) => x.marketId === marketId);
@@ -55,7 +56,7 @@ function ratePct(rebate: Rebate): string {
 
 function labelOf(mode: Rebate['mode'], pcts: string[]): string {
   const range = pcts.length > 1 ? `${pcts[0].replace(/%$/, '')}-${pcts[pcts.length - 1]}` : pcts[0];
-  return mode === 'absolute' ? `Fee capped at ${range}` : `${range} fee rebate`;
+  return mode === 'absolute' ? t('app.rebate.capped', { range }) : t('app.rebate.relative', { range });
 }
 
 /** The chip label for the opportunity card: relative → "20% fee rebate";
@@ -73,7 +74,15 @@ export function rebateLegsNote(
 ): string {
   const pcts = legs.map((leg) => ratePct(rebateForMarket(rebate, leg.marketId)));
   if (new Set(pcts).size < 2) return '';
-  return legs.map((leg, i) => `• ${leg.venue} ${leg.side.toLowerCase()}: ${pcts[i]}`).join('\n');
+  return legs
+    .map((leg, i) =>
+      t('app.rebate.legLine', {
+        venue: leg.venue,
+        side: t(leg.side === 'LONG' ? 'common.long' : 'common.short'),
+        pct: pcts[i],
+      }),
+    )
+    .join('\n');
 }
 
 export function rebateAccountLabel(rebate: Rebate): string {
@@ -83,6 +92,6 @@ export function rebateAccountLabel(rebate: Rebate): string {
     const pct = ratePct(rebateForMarket(rebate, o.marketId));
     if (pct !== base) byPct.set(pct, [...(byPct.get(pct) ?? []), o.marketId]);
   }
-  const extra = [...byPct].map(([pct, ids]) => `${pct} on market${ids.length > 1 ? 's' : ''} ${ids.join(', ')}`);
+  const extra = [...byPct].map(([pct, ids]) => t('app.rebate.onMarkets', { count: ids.length, pct, ids: ids.join(', ') }));
   return [labelOf(rebate.mode, [base]), ...extra].join(', ');
 }

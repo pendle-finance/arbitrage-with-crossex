@@ -5,6 +5,7 @@
  * used reaches 100%, so one scale and one verdict cover them all.
  */
 import type { AssetBorosMargin, CrossexAccount } from '../../api/types';
+import { t } from '../../i18n';
 import { marginParts } from '../../lib/margin';
 import { prettyVenue } from '../../lib/fmt';
 
@@ -87,8 +88,10 @@ export function buildAccountsView(input: {
       key: `boros:${m.tokenId}:${m.isCross ? 'cross' : (m.marketId ?? '')}`,
       venue: 'Boros',
       name: m.isCross
-        ? `${m.collateral} cross`
-        : `${m.marketVenue ? `${prettyVenue(m.marketVenue)} ${m.marketBase ?? ''}`.trim() : m.collateral} isolated`,
+        ? t('accounts.model.cross', { collateral: m.collateral })
+        : t('accounts.model.isolated', {
+            market: m.marketVenue ? `${prettyVenue(m.marketVenue)} ${m.marketBase ?? ''}`.trim() : m.collateral,
+          }),
       balanceUsd: balance,
       availableUsd: available,
       token: stable
@@ -124,7 +127,6 @@ export function buildAccountsView(input: {
 }
 
 export function verdictText(v: Pick<AccountsView, 'level' | 'flagged'>): string {
-  if (v.level === 'ok') return 'All accounts healthy';
-  const n = `${v.flagged} account${v.flagged === 1 ? '' : 's'}`;
-  return v.level === 'risk' ? `${n} near liquidation` : `${n} need${v.flagged === 1 ? 's' : ''} attention`;
+  if (v.level === 'ok') return t('accounts.model.allHealthy');
+  return t(v.level === 'risk' ? 'accounts.model.nearLiquidation' : 'accounts.model.needAttention', { count: v.flagged });
 }

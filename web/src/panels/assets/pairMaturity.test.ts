@@ -238,7 +238,7 @@ describe('pairs are 4-leg units at one maturity', () => {
     expect(d.pendingLegs).toHaveLength(0);
   });
 
-  it('a maturity present on only ONE side forms no unit; both legs go pending', () => {
+  it('a maturity present on only ONE side forms no unit; the later leg takes the perps, the earlier goes pending (#6, #25, #26)', () => {
     mid = 1;
     const g = group({
       perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
@@ -248,11 +248,12 @@ describe('pairs are 4-leg units at one maturity', () => {
       ],
     });
     const d = deriveAsset(g, {}, 0, NOW);
-    expect(d.pairs).toHaveLength(0); // no shared maturity ⇒ no 4-leg unit
-    expect(d.pendingLegs.map((l) => l.maturity).sort()).toEqual([SEP, OCT].sort());
+    expect(d.pairs).toHaveLength(0);
+    expect(d.perpOnly.map((c) => [c.size, c.longYu, c.shortYu?.venue, c.shortYu?.maturity])).toEqual([[100, null, 'HYPERLIQUID', OCT]]);
+    expect(d.pendingLegs.map((l) => [l.venue, l.maturity, l.sizeBase])).toEqual([['GATE', SEP, 100]]);
   });
 
-  it('an incomplete side pairs what it can and leaves the rest pending', () => {
+  it('an incomplete side pairs what it can; the rest is a Boros position missing card (#25)', () => {
     mid = 1;
     const g = group({
       perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
@@ -264,9 +265,10 @@ describe('pairs are 4-leg units at one maturity', () => {
     const d = deriveAsset(g, {}, 0, NOW);
     expect(d.pairs).toHaveLength(1);
     expect(d.pairs[0].size).toBeCloseTo(60, 6); // capped by the thinner side
-    // Gate's unpaired 40 is pending, HL has nothing left over.
-    expect(d.pendingLegs).toHaveLength(1);
-    expect(d.pendingLegs[0]).toMatchObject({ venue: 'GATE', sizeBase: 40 });
+    expect(d.pendingLegs).toHaveLength(0);
+    expect(d.perpOnly).toHaveLength(1);
+    expect(d.perpOnly[0]).toMatchObject({ longVenue: 'GATE', shortVenue: 'HYPERLIQUID', size: 40, shortYu: null });
+    expect(d.perpOnly[0].longYu).toMatchObject({ venue: 'GATE', sizeBase: 40 });
   });
 
   it('one laddered venue vs two single-maturity venues: each unit keeps its term', () => {
@@ -318,7 +320,7 @@ describe('a pair can roll over at any time before it matures', () => {
 });
 
 describe('ungrouped legs: what no 4-leg unit claimed', () => {
-  it('a perp at a venue with no YU is unpaired whole; the paired venues leave nothing', () => {
+  it('a perp at a venue with no YU makes a Boros positions missing card with the rest of the other side (#25)', () => {
     mid = 1;
     const g = group({
       perpOpen: [
@@ -333,14 +335,13 @@ describe('ungrouped legs: what no 4-leg unit claimed', () => {
     });
     const d = deriveAsset(g, {}, 0, NOW);
     expect(d.pairs).toHaveLength(1);
-    // OKX has no YU: its whole perp is ungrouped. Hyperliquid's short pairs
-    // 100 of its 140 against Gate; the other 40 has nothing to pair with.
-    const okx = d.unpairedPerps.find((l) => l.venue === 'OKX')!;
-    expect(okx).toMatchObject({ side: 'LONG', share: 1, sizeBase: 40, notionalUsd: 40 * 2500, imUsd: 40 * 250 });
-    const hl = d.unpairedPerps.find((l) => l.venue === 'HYPERLIQUID')!;
-    expect(hl.sizeBase).toBeCloseTo(40, 6);
-    expect(hl.share).toBeCloseTo(40 / 140, 9);
-    expect(d.unpairedPerps.find((l) => l.venue === 'GATE')).toBeUndefined();
+    expect(d.perpOnly).toHaveLength(1);
+    const card = d.perpOnly[0];
+    expect(card).toMatchObject({ longVenue: 'OKX', shortVenue: 'HYPERLIQUID', size: 40, longYu: null, shortYu: null });
+    expect(card.long).toMatchObject({ side: 'LONG', share: 1, sizeBase: 40, notionalUsd: 40 * 2500, imUsd: 40 * 250 });
+    expect(card.short.sizeBase).toBeCloseTo(40, 6);
+    expect(card.short.share).toBeCloseTo(40 / 140, 9);
+    expect(d.unpairedPerps).toHaveLength(0);
     expect(d.pendingLegs).toHaveLength(0);
   });
 
@@ -356,7 +357,7 @@ describe('ungrouped legs: what no 4-leg unit claimed', () => {
     expect(d.pendingLegs).toMatchObject([{ venue: 'GATE', maturity: SEP, sizeBase: 100, share: 1 }]);
   });
 
-  it('a pending YU slice carries its share of the leg, so a partial one cannot be closed whole', () => {
+  it('a YU slice on a Boros position missing card carries its share of the leg, so a partial one cannot be closed whole (#25)', () => {
     mid = 1;
     const g = group({
       perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 })],
@@ -366,10 +367,12 @@ describe('ungrouped legs: what no 4-leg unit claimed', () => {
       ],
     });
     const d = deriveAsset(g, {}, 0, NOW);
-    expect(d.pendingLegs[0]).toMatchObject({ venue: 'GATE', sizeBase: 40 });
-    expect(d.pendingLegs[0].share).toBeCloseTo(0.4, 9);
-    // Both perps are 60% paired; the other 40% of each is ungrouped.
-    expect(d.unpairedPerps.map((l) => l.share)).toEqual([0.4, 0.4].map((v) => expect.closeTo(v, 9)));
+    const card = d.perpOnly[0];
+    expect(card.longYu).toMatchObject({ venue: 'GATE', sizeBase: 40 });
+    expect(card.longYu!.share).toBeCloseTo(0.4, 9);
+    expect([card.long.share, card.short.share]).toEqual([0.4, 0.4].map((v) => expect.closeTo(v, 9)));
+    expect(d.pendingLegs).toHaveLength(0);
+    expect(d.unpairedPerps).toHaveLength(0);
   });
 });
 
@@ -410,7 +413,7 @@ describe('a Boros leg with no entry rate yet', () => {
  * Two units on one book. Each perp used to be spread over every counterparty
  * in proportion, so part of OKX's long faced Hyperliquid's short — whose rate
  * legs share no maturity with OKX's — and every leg left a remainder that
- * surfaced as "Boros leg missing" beside ungrouped rate legs (a user's
+ * surfaced as "Boros position missing" beside ungrouped rate legs (a user's
  * report, 2026-10-04). Units now form where their rate legs pair.
  */
 describe('several units on one book pair where their rate legs pair', () => {

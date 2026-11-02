@@ -51,7 +51,7 @@ describe('hand-cancel cannot abandon a live deal', () => {
     for (const id of [row.venueOrderId!, row.clientId]) {
       const del = await app.inject({ method: 'DELETE', url: `/api/orders/${id}`, headers: HOST });
       expect(del.statusCode, `cancel by ${id}`).toBe(400);
-      expect(del.json().error.message).toMatch(/managed by the engine/);
+      expect(del.json().error.message).toMatch(/belongs to a running deal/);
     }
     expect(leaked).toBe(0); // nothing reached the venue
 

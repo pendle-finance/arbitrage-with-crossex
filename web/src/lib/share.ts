@@ -5,6 +5,7 @@
  * link is the data. */
 import { encodeSharePayload, type SharePayloadV1 } from './shareCodec';
 import { fmtDateLocal, fmtPct, fmtUsd } from './fmt';
+import { t } from '../i18n';
 
 // The DE FACTO public link. The site is HOSTED at
 // arbitrage.pendle.finance/crossex, but boros.pendle.finance is the
@@ -27,7 +28,7 @@ export function shareTermDays(p: Pick<SharePayloadV1, 'm' | 'cs' | 't'>): number
 /** "37-day term" / "1-day term" — labeled, so it can't be misread as days
  * LEFT next to the maturity date (the OG description says the same). */
 export function shareDaysText(p: SharePayloadV1): string {
-  return `${shareTermDays(p)}-day term`;
+  return t('opportunities.share.termDays', { days: shareTermDays(p) });
 }
 
 /** The hedge verdict in words, lowercase for prose; `Sentence` casing for a
@@ -35,7 +36,13 @@ export function shareDaysText(p: SharePayloadV1): string {
  * `h` differently. (The server's OG description keeps its own copy — no
  * cross-tree imports — and the terminal's HedgeChip is a denser register.) */
 export function hedgeLabel(h: SharePayloadV1['h'], sentenceCase = false): string {
-  const label = h === 'h' ? 'fully hedged' : h === 'p' ? 'partially hedged' : 'unhedged';
+  const label = t(
+    h === 'h'
+      ? 'opportunities.share.hedgeFull'
+      : h === 'p'
+        ? 'opportunities.share.hedgePartial'
+        : 'opportunities.share.hedgeNone',
+  );
   return sentenceCase ? label[0].toUpperCase() + label.slice(1) : label;
 }
 
@@ -53,10 +60,12 @@ export function buildShortShareUrl(code: string): string {
 
 /** Tweet body — kept under 200 chars so the t.co link X appends always fits. */
 export function buildTweetText(p: SharePayloadV1): string {
-  return (
-    `I'm getting ${fmtPct(p.a)} fixed APR on ${fmtUsd(p.c, 0)} capital ` +
-    `(${shareDaysText(p)}) — a fully hedged ${p.l.length}-leg ${p.b} position on Boros × Gate CrossEx.`
-  );
+  return t('opportunities.share.tweet', {
+    apr: fmtPct(p.a),
+    capital: fmtUsd(p.c, 0),
+    term: shareDaysText(p),
+    base: p.b,
+  });
 }
 
 /** Web intents cannot attach an image — the modal says so and offers the PNG

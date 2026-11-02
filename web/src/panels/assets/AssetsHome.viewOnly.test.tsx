@@ -81,6 +81,7 @@ function serve(address: string, notionalUsd: number) {
       HttpResponse.json(env(agentStatus({ configured: true, root: ROOT, rootMasked: '0x1111…1111' }))),
     ),
     http.get('/api/fees', () => HttpResponse.json(env<VenueFees[]>([]))),
+    http.get('/api/asset-prefs/:book', () => HttpResponse.json(env({ sinceByAsset: {}, exclusions: {}, legSince: {} }))),
     http.get('/api/asset-view/:address', () => HttpResponse.json(env(view(notionalUsd)))),
     ...baseHandlers(),
   );
@@ -98,11 +99,11 @@ describe.each([50, 6_000_000])('Positions for a view-only wallet at $%d', (size)
         (_, el) =>
           el?.tagName === 'P' &&
           el.textContent ===
-            "Viewing 0x2222…2222, not logged in: view-only. Perps are your connected Gate account's; trading and fee rebates need the logged-in 0x1111…1111.",
+            "Viewing 0x2222…2222 (not logged in). Perps come from your Gate account. Log in as 0x1111…1111 to trade and get fee rebates.",
       ),
     ).toBeInTheDocument();
     // View-only blocks trading and the owner's rebate, never the positions.
-    expect(screen.getByText('Total Account PnL')).toBeInTheDocument();
+    expect(screen.getByText('Total account PnL')).toBeInTheDocument();
     expect(await screen.findByText('SOL')).toBeInTheDocument();
     expect(screen.getByText('ETH')).toBeInTheDocument();
     expect(screen.getByText(/after .* borrow interest/)).toBeInTheDocument();
@@ -117,7 +118,7 @@ describe('Positions for the wallet that trades', () => {
     expect(await screen.findByText('SOL')).toBeInTheDocument();
     expect(screen.getByText('ETH')).toBeInTheDocument();
     expect(screen.queryByText(/not logged in/)).toBeNull();
-    expect(screen.getByText('Total Account PnL')).toBeInTheDocument();
+    expect(screen.getByText('Total account PnL')).toBeInTheDocument();
     expect(screen.getByText(/after .* borrow interest/)).toBeInTheDocument();
   });
 });

@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { claimEscape, useFocusTrap } from '../lib/focusTrap';
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
  * the update pill lives) would otherwise become the containing block for the
  * fixed overlay and trap it — half-hidden behind the page content. */
 export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]', children }: Props) {
+  const { t } = useTranslation();
   const panel = useRef<HTMLDivElement>(null);
   useFocusTrap(panel, true);
   // Lock the page behind the modal (see Drawer): saved and restored, so a
@@ -54,7 +56,7 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
             <button
               type="button"
               onClick={onClose}
-              aria-label="close"
+              aria-label={t('app.closeAria')}
               className="rounded-md px-2 py-0.5 text-ink-400 transition-colors hover:bg-ink-800 hover:text-ink-100"
             >
               <X size={14} aria-hidden />

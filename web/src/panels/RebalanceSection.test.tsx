@@ -289,7 +289,7 @@ describe('RebalanceSection card', () => {
 describe('RebalanceSection verdict', () => {
   it('no borrow verdict says no rebalancing is necessary, without naming an amount', async () => {
     await show(NO_BORROW);
-    expect(line('No borrow. No transfer or rebalancing necessary.')).toBeInTheDocument();
+    expect(line('No borrow. Nothing to move.')).toBeInTheDocument();
     // The amount is deliberately NOT here: it argued for the move the sentence
     // says is unnecessary. It stays on the button and in the modal.
     expect(within(region()).queryByText(/It moves/)).toBeNull();
@@ -297,12 +297,12 @@ describe('RebalanceSection verdict', () => {
 
   it('a borrow inside the interest-free allowance says so, and never weighs the fee against zero interest', async () => {
     await show(rebalanceViews.hyperliquidFreeBorrow);
-    expect(line('No interest payment yet. No transfer or rebalancing necessary.')).toBeInTheDocument();
+    expect(line('No interest yet. Nothing to move.')).toBeInTheDocument();
     // The regression this guards: a wholly-free borrow used to fall through to
     // isNotWorthIt and print "the fee is more than 30 days of the interest it
     // saves" directly beneath a "$0.00 an hour" reading.
     expect(line('Not worth it yet. The fee is more than 30 days of the interest it saves.')).toBeNull();
-    expect(line('No interest payment yet. No transfer or rebalancing necessary.')).toHaveClass('text-pastel-blue');
+    expect(line('No interest yet. Nothing to move.')).toHaveClass('text-pastel-blue');
     const [button] = cardButtons();
     expect(button.className).not.toContain('btn-primary');
     expect(button).toBeEnabled();
@@ -366,7 +366,7 @@ describe('RebalanceSection verdict', () => {
     const user = userEvent.setup();
     await show(feeOf(RATE_READ_FAILED, 20));
     expect(await factRows(user, 'interest', '$0.00 an hour')).toEqual([
-      ['Lighter', 'rate unknown'],
+      ['Lighter', 'Rate unknown'],
       ['Hyperliquid', '$0.00 an hour'],
     ]);
     expect(line('Could not read the borrow interest rate. Check the fee before you move anything.')).toHaveClass('text-gold');
@@ -529,7 +529,7 @@ describe('RebalanceSection gate spot and freshness', () => {
 
   it('no spot read shows nothing on the card, but still on the modal', async () => {
     await show(rebalanceViews.twoBorrows, transferViews.noSpot);
-    expect(within(region()).queryByText('Add Spot read permission to see spot balances.')).toBeNull();
+    expect(within(region()).queryByText('Set Spot Trading to Read Only to see Gate spot balances.')).toBeNull();
     expect(within(region()).queryByText(/not margin/)).toBeNull();
     expect(within(region()).queryByText(/0\.00 USD/)).toBeNull();
     cleanup();
@@ -555,7 +555,7 @@ describe('RebalanceSection gate spot and freshness', () => {
     expect(within(region()).queryByText(/ago$|retrying$/)).toBeNull();
     server.use(http.get('/api/rebalance', () => HttpResponse.json(GATE_ERROR, { status: 500 })));
     await user.click(screen.getByRole('button', { name: 'read again' }));
-    expect(await within(region()).findByText(/^stale \d+s · retrying$/)).toBeInTheDocument();
+    expect(await within(region()).findByText(/^Stale \d+s · retrying$/)).toBeInTheDocument();
     expect(facts().Borrowing).toBe('244.00 USDC');
     expect(within(region()).queryByRole('alert')).toBeNull();
   });
@@ -635,11 +635,11 @@ describe('RebalanceSection info card', () => {
       'USDC · Hyperliquid',
       'USDC · Lighter',
       'Spot loop',
-      'Hyperliquid to USDT',
-      'USDT to Lighter',
-      'Lighter to USDT',
-      'Hyperliquid to Lighter',
-      'Lighter to Hyperliquid',
+      'USDC · Hyperliquid → USDT · CrossEx',
+      'USDT · CrossEx → USDC · Lighter',
+      'USDC · Lighter → USDT · CrossEx',
+      'USDC · Hyperliquid → USDC · Lighter',
+      'USDC · Lighter → USDC · Hyperliquid',
       'Convert',
       'Hyperliquid ↔ Lighter',
     ]);
@@ -649,17 +649,17 @@ describe('RebalanceSection info card', () => {
     const user = userEvent.setup();
     await show(rebalanceViews.accountA);
     const card = await hoverCard(user, 'Rebalance', region());
-    expect(card.text).toContain('USDT to Hyperliquidabout 2 minfrom $0.05');
-    expect(card.text).toContain('Hyperliquid to Lighterabout 10 minfrom $2.03');
+    expect(card.text).toContain('USDT · CrossEx → USDC · HyperliquidAbout 2 minFrom $0.05');
+    expect(card.text).toContain('USDC · Hyperliquid → USDC · LighterAbout 10 minFrom $2.03');
   });
 
   it('info card names the borrow interest of each wallet', async () => {
     const user = userEvent.setup();
     await show(rebalanceViews.accountA);
     const card = await hoverCard(user, 'Rebalance', region());
-    expect(card.text).toContain('USDC · HyperliquidHyperliquidfree up to 10,000 USDC, then about 5% a year');
-    expect(card.text).toContain('USDC · LighterLighterfrom the first dollar, about 11% a year');
-    expect(card.text).toContain('USDT · CrossExGate, Binance, OKX, Bybitfrom the first dollar');
+    expect(card.text).toContain('USDC · HyperliquidHyperliquidFree up to 10,000 USDC, then about 5% a year');
+    expect(card.text).toContain('USDC · LighterLighterFrom the first dollar, about 11% a year');
+    expect(card.text).toContain('USDT · CrossExGate, Binance, OKX, BybitFrom the first dollar');
   });
 });
 
@@ -691,7 +691,7 @@ describe('RebalanceSection presets', () => {
     await show(NO_LEGS_BORROW);
     expect(line('No open positions. Nothing to rebalance.')).toBeNull();
     expect(line('Clear debt recommended.')).toBeInTheDocument();
-    expect(within(region()).getByText('Debt prevents you from withdrawing your cash.')).toBeInTheDocument();
+    expect(within(region()).getByText('You cannot withdraw cash while a wallet borrows.')).toBeInTheDocument();
     expect(cardButtons().map((button) => button.textContent)).toEqual(['Clear debt']);
     expect(cardButtons()[0]).toBeEnabled();
   });

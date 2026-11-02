@@ -87,14 +87,14 @@ const feeRows = [
   { exchange_type: 'BINANCE', future_maker_fee: '0.0002', future_taker_fee: '0.00048' },
 ];
 
-/** Risk-limit tiers behind the capital model's perp legs: the cap is the HIGHEST
- * `leverage_max` across a symbol's tiers, so Hyperliquid is 20x and Binance 25x. */
+/** Risk-limit tiers behind the capital model's perp legs: Hyperliquid runs at
+ * 20x to $1B (its 10x tier is never reached), Binance at 25x. */
 const riskLimits = [
   {
     symbol: 'HYPERLIQUID_FUTURE_ETH_USDC',
-    tiers: [{ leverage_max: '20' }, { leverage_max: '10' }],
+    tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '20' }, { max_risk_limit_value: '2000000000', leverage_max: '10' }],
   },
-  { symbol: 'BINANCE_FUTURE_ETH_USDT', tiers: [{ leverage_max: '25' }] },
+  { symbol: 'BINANCE_FUTURE_ETH_USDT', tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '25' }] },
 ];
 
 /** Deep, tight public books on both venues so slippage never blocks a quote. */
@@ -110,7 +110,7 @@ function mockVenueBooks(times = 1): void {
     .reply(200, { bids: [['1899', '5000']], asks: [['1901', '5000']] });
 }
 
-/** One risk-limits interceptor per request: `getLeverageMax` is comma-joined, so
+/** One risk-limits interceptor per request: `getPositionLimits` is comma-joined, so
  * the whole symbol universe must cost a single call — a per-symbol read would
  * miss the mock on its second hedge symbol. */
 function mockGate(times = 1, limits: unknown = riskLimits): void {
@@ -223,6 +223,22 @@ describe('GET /api/opportunities', () => {
     expect(pair.reasons).toEqual([]);
   });
 
+  it('sizes every pair to a capital target, each at its own notional', async () => {
+    app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
+    mockGate();
+    mockVenueBooks();
+
+    const res = await app.inject({ method: 'GET', url: '/api/opportunities?capitalUsd=5000', headers: HOST });
+    expect(res.statusCode).toBe(200);
+    const { data } = res.json();
+    expect(data.meta).toMatchObject({ notionalUsd: null, capitalUsd: 5_000 });
+    const pair = data.groups[0].bestPair;
+    expect(pair.capitalUsd / 5_000).toBeCloseTo(1, 8);
+    // ~10.3× effective leverage on this book turns $5k of capital into ~$51.7k a leg.
+    expect(pair.notionalUsd).toBeCloseTo(pair.effectiveLeverage * 5_000, 2);
+    expect(pair.notionalUsd).toBeGreaterThan(50_000);
+  });
+
   it('degrades a pair whose venue has no risk-limit row to null capital only', async () => {
     app = makeTestApp({ borosFetch: borosStub(borosBodies()) });
     mockGate(1, [riskLimits[0]]); // Binance has no tiers to read
@@ -288,6 +304,9 @@ describe('GET /api/opportunities', () => {
       'notionalUsd=abc',
       'notionalUsd=999',
       'notionalUsd=100000001',
+      'capitalUsd=abc',
+      'capitalUsd=99',
+      'capitalUsd=100000001',
       'borosEntry=midpoint',
       'entryMode=both',
       'exitMode=rollover',
@@ -385,7 +404,7 @@ describe('GET /api/opportunities', () => {
     const res = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
-    expect(data.warnings.join(' ')).toMatch(/Perp fees assume the VIP 0 Gate CrossEx schedule/);
+    expect(data.warnings.join(' ')).toMatch(/Perp fees assume VIP 0\. Add your Gate API key/);
     // Never claims the listings or leverage are missing — they aren't.
     expect(data.warnings.join(' ')).not.toMatch(/symbol list/);
 
@@ -416,7 +435,7 @@ describe('GET /api/opportunities', () => {
     const res = await app.inject({ method: 'GET', url: '/api/opportunities', headers: HOST });
     expect(res.statusCode).toBe(200);
     const { data } = res.json();
-    expect(data.warnings.join(' ')).toMatch(/Couldn't load the CrossEx symbol list right now/);
+    expect(data.warnings.join(' ')).toMatch(/Couldn't load the CrossEx market list/);
     // The Boros spread still prices; the perp side degrades to null.
     const group = data.groups[0];
     expect(group.pairs[0].grossSpreadApr).toBeGreaterThan(0);
@@ -436,7 +455,7 @@ describe('GET /api/opportunities', () => {
       ],
     });
     mockGateGet('/rule/risk_limits', {
-      body: [riskLimits[0], { symbol: 'LIGHTER_FUTURE_ETH_USDC', tiers: [{ leverage_max: '50' }] }],
+      body: [riskLimits[0], { symbol: 'LIGHTER_FUTURE_ETH_USDC', tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '50' }] }],
     });
     mockGateGet('/fee', {
       body: [feeRows[0], { exchange_type: 'LIGHTER', future_maker_fee: '0.0002', future_taker_fee: '0.0005' }],

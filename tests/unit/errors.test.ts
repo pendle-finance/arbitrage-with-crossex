@@ -57,13 +57,13 @@ describe('classifyGateError label anchoring', () => {
 const said = (status: number, label: string, message: string) => ({ response: { status, data: { label, message } } });
 
 describe('classifyGateError message', () => {
-  it("classifyGateError keeps Gate's status and label in the message", () => {
+  it("classifyGateError leads with a plain line and keeps Gate's label", () => {
     const notFound = Object.assign(new Error('Request failed with status code 400'), {
       response: { status: 400, data: { label: 'ORDER_NOT_FOUND', message: 'order not found' } },
     });
 
-    expect(classifyGateError(notFound).message).toBe('Gate API error (HTTP 400) [ORDER_NOT_FOUND]: order not found');
-    expect(classifyGateError(said(401, 'INVALID_KEY', 'invalid key')).hint).toBe('Check the API key/secret in Settings.');
+    expect(classifyGateError(notFound).message).toBe('Gate no longer has this order or position. Refresh to see where it stands. (Gate: ORDER_NOT_FOUND)');
+    expect(classifyGateError(said(401, 'INVALID_KEY', 'invalid key')).hint).toBe('Check the Gate API key and secret in Settings.');
   });
 });
 

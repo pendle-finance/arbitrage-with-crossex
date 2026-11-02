@@ -13,6 +13,7 @@
  */
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import type { ActionInput, CrossexPosition } from '../api/types';
 import { VenueIcon } from '../components/AssetIcon';
 import { Modal } from '../components/Modal';
@@ -64,13 +65,14 @@ export function ClosePopover({
   hedgedSibling,
   onDismiss,
 }: Props) {
+  const { t } = useTranslation();
   const wholeQty = Math.abs(Number(position.positionQty));
   // A shared leg: this card owns less than the venue holds.
   const shared =
     attributedQty !== undefined &&
     Number.isFinite(attributedQty) &&
     attributedQty > 0 &&
-    attributedQty < wholeQty * 0.999;
+    attributedQty < wholeQty;
   const [slipStr, setSlipStr] = useState('0.5');
   /**
    * ONE size box, pre-filled with the maximum, exactly as the Boros and pair
@@ -241,10 +243,10 @@ export function ClosePopover({
     <Modal
       title={
         <>
-          Close perp leg
+          {t('trade.close.title')}
           <span className="ml-2 inline-flex items-center gap-1.5 text-[12px] font-normal text-ink-300">
             <VenueIcon venue={exchange} size={14} />
-            {prettyVenue(exchange)} · {base}-{quote || 'USDT'} perp
+            {t('trade.close.venueLine', { venue: prettyVenue(exchange), base, quote: quote || 'USDT' })}
           </span>
         </>
       }
@@ -262,7 +264,10 @@ export function ClosePopover({
           valueSub={
             markOk ? (
               <>
-                {notionalUsd !== null ? fmtUsdCompact(notionalUsd) : '—'} · mark {sig(mark)}
+                {t('trade.close.notionalMark', {
+                  notional: notionalUsd !== null ? fmtUsdCompact(notionalUsd) : '—',
+                  mark: sig(mark),
+                })}
               </>
             ) : undefined
           }
@@ -272,8 +277,7 @@ export function ClosePopover({
             Say so where the size is chosen, not after the fact. */}
         {shared && (
           <p className="text-[11px] leading-relaxed text-amber-400/90">
-            This position holds {sigGrouped(attributedQty ?? 0)} of the {sigGrouped(wholeQty)} on the venue; the
-            rest belongs to another position.
+            {t('trade.close.sharedNote', { held: sigGrouped(attributedQty ?? 0), whole: sigGrouped(wholeQty) })}
           </p>
         )}
         {hedgedSibling && (
@@ -281,9 +285,9 @@ export function ClosePopover({
              two floating legs cancel, and closing one end leaves the other
              running as a directional funding bet. */
           <p className="text-[11px] leading-relaxed text-amber-200">
-            This leg hedges the {prettyVenue(hedgedSibling.venue)} {hedgedSibling.side.toLowerCase()}{' '}
-            leg. Closing it leaves that one unhedged — its funding stops cancelling and becomes a
-            directional position.
+            {hedgedSibling.side === 'LONG'
+              ? t('trade.close.hedgesLong', { venue: prettyVenue(hedgedSibling.venue) })
+              : t('trade.close.hedgesShort', { venue: prettyVenue(hedgedSibling.venue) })}
           </p>
         )}
 
@@ -291,24 +295,25 @@ export function ClosePopover({
             sits beside its label as a button, the simulation follows. */}
         <div className="flex flex-col gap-1.5">
           <div className="flex items-baseline justify-between gap-3">
-            <FieldLabel htmlFor={`close-qty-${position.symbol}`}>Close size</FieldLabel>
+            <FieldLabel htmlFor={`close-qty-${position.symbol}`}>{t('trade.close.closeSize')}</FieldLabel>
             <button
               type="button"
               className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-              title={shared ? 'Close everything this position owns on the venue' : 'Close the whole position'}
+              title={shared ? t('trade.close.maxOwnedTitle') : t('trade.close.maxWholeTitle')}
               onClick={() => setQtyEdited(fieldValue(maxInUnit))}
             >
-              max{' '}
-              <span className="text-link underline decoration-link/40 underline-offset-2">
-                {sigGrouped(maxInUnit)} {effUnit === 'usd' ? 'USDT' : base}
-              </span>
+              <Trans
+                i18nKey="trade.close.maxLink"
+                values={{ amount: sigGrouped(maxInUnit), unit: effUnit === 'usd' ? 'USDT' : base }}
+                components={{ u: <span className="text-link underline decoration-link/40 underline-offset-2" /> }}
+              />
             </button>
           </div>
           <AffixedInput
             affix={
               markOk ? (
                 <SegmentedToggle<'base' | 'usd'>
-                  ariaLabel="Close size unit"
+                  ariaLabel={t('trade.close.sizeUnit')}
                   className="seg-xs"
                   value={unit}
                   onChange={(u) => {
@@ -343,31 +348,40 @@ export function ClosePopover({
                  screen reader (and the tests that guard the fallback to coin
                  units) would otherwise have no way to tell 50 dollars from
                  50 coins. */
-              aria-label={effUnit === 'usd' ? 'Close value' : 'Close qty'}
+              aria-label={effUnit === 'usd' ? t('trade.close.closeValue') : t('trade.close.closeQty')}
             />
           </AffixedInput>
           {qtyInvalid && qtyStr.trim() !== '' ? (
             <span className="text-[11px] text-rose-300">
-              close size exceeds {shared ? "this position's share" : 'position'} (
-              {effUnit === 'usd' ? `${sigGrouped(maxInUnit)} USDT` : `${sigGrouped(maxInUnit)} ${base}`})
+              {(() => {
+                const max = effUnit === 'usd' ? `${sigGrouped(maxInUnit)} USDT` : `${sigGrouped(maxInUnit)} ${base}`;
+                return shared ? t('trade.close.exceedsShare', { max }) : t('trade.close.exceedsPosition', { max });
+              })()}
             </span>
           ) : (
             <span className="text-[11px] text-ink-400">
               {closesEverything || leftAfter <= qtyEps ? (
                 <>
-                  whole position · <span className="text-ink-200">flat after</span>
+                  <Trans i18nKey="trade.close.wholeFlat" components={{ s: <span className="text-ink-200" /> }} />
                 </>
               ) : (
                 <>
-                  partial · <span className="num text-ink-200">{sigGrouped(leftAfter)} {base}</span> stays open
+                  <Trans
+                    i18nKey="trade.close.partialOpen"
+                    values={{ left: sigGrouped(leftAfter), base }}
+                    components={{ n: <span className="num text-ink-200" /> }}
+                  />
                 </>
               )}
               {effUnit === 'usd' && !qtyInvalid && qtyStr.trim() !== '' && (
                 // The converted figure is what actually goes to the venue, so it
                 // is shown rather than left to be inferred from the preview.
                 <>
-                  {' · '}≈ <span className="num">{sigGrouped(qtyNum)}</span> {base} at mark{' '}
-                  <span className="num">{sig(mark)}</span>
+                  <Trans
+                    i18nKey="trade.close.atMark"
+                    values={{ qty: sigGrouped(qtyNum), base, mark: sig(mark) }}
+                    components={{ n: <span className="num" /> }}
+                  />
                 </>
               )}
             </span>
@@ -380,8 +394,8 @@ export function ClosePopover({
               <>
                 <div className="flex items-end justify-between gap-3">
                   <div className="flex flex-col">
-                    <span className="text-[12.5px] text-ink-50">uPnL to realise</span>
-                    <span className="text-[11px] text-ink-400">becomes real when this fills</span>
+                    <span className="text-[12.5px] text-ink-50">{t('trade.close.upnlToRealise')}</span>
+                    <span className="text-[11px] text-ink-400">{t('trade.close.becomesReal')}</span>
                   </div>
                   <span className="num text-lg font-semibold">
                     {upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
@@ -389,8 +403,8 @@ export function ClosePopover({
                 </div>
                 <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
                   <EstimateRow
-                    label="Order"
-                    sub="reduce-only IOC"
+                    label={t('common.order')}
+                    sub={t('trade.close.reduceOnlyIoc')}
                     value={
                       <span className="inline-flex items-center gap-1.5">
                         <SideChip side={p.side} />
@@ -399,12 +413,12 @@ export function ClosePopover({
                     }
                   />
                   <EstimateRow
-                    label="Limit px"
-                    sub={`mark ${p.side === 'BUY' ? '+' : '−'} ${slipStr}%`}
-                    title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds"
+                    label={t('trade.close.limitPx')}
+                    sub={p.side === 'BUY' ? t('trade.close.markPlus', { pct: slipStr }) : t('trade.close.markMinus', { pct: slipStr })}
+                    title={t('trade.close.limitPxTitle')}
                     value={p.price ? sig(p.price) : '—'}
                   />
-                  <EstimateRow label="Est fee" sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
+                  <EstimateRow label={t('trade.single.estFee')} sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
                 </div>
                 <div className="border-t border-ink-800/80 pt-2">
                   <SlippageLine
@@ -419,10 +433,10 @@ export function ClosePopover({
                     value={slipStr}
                     onChange={setSlipStr}
                     invalid={slipInvalid}
-                    invalidText="slippage must be in (0, 10]"
-                    inputAriaLabel="Slippage %"
-                    title="The band on the limit: mid ± this much. What the book cannot fill inside it stays open."
-                    hint="Max distance from mid the limit will accept. A wider band may be needed for a large size or a thin book."
+                    invalidText={t('trade.close.slipInvalid')}
+                    inputAriaLabel={t('trade.close.slipAria')}
+                    title={t('trade.close.bandTitle')}
+                    hint={t('trade.close.bandHint')}
                     quick={['0.2', '0.5', '1', '2']}
                   />
                 </div>
@@ -447,9 +461,9 @@ export function ClosePopover({
             value={slipStr}
             onChange={setSlipStr}
             invalid={slipInvalid}
-            invalidText="slippage must be in (0, 10]"
-            inputAriaLabel="Slippage %"
-            hint="Max distance from mid the limit will accept."
+            invalidText={t('trade.close.slipInvalid')}
+            inputAriaLabel={t('trade.close.slipAria')}
+            hint={t('trade.close.bandHint')}
             quick={['0.2', '0.5', '1', '2']}
           />
         )}
@@ -461,7 +475,7 @@ export function ClosePopover({
             tone="red"
             label={
             <>
-              Close now
+              {t('trade.close.closeNow')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -478,8 +492,7 @@ export function ClosePopover({
             }}
           />
           <p className="text-[11px] leading-relaxed text-ink-400">
-            <span className="font-medium text-ink-200">Reduce-only</span> — can never increase the position,
-            never rests on the book. Its Boros legs stay open; the bundle shows as unhedged.
+            <Trans i18nKey="trade.close.reduceOnlyNote" components={{ b: <span className="font-medium text-ink-200" /> }} />
           </p>
         </div>
       </div>

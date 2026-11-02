@@ -161,7 +161,12 @@ function finishIfSettled(pair: PairRow, p: Projection, reason: string, hedgeSize
   const residual = fx(p.residualA);
   let named = reason;
   if (residual > FX_ZERO && !named.includes('residual')) {
-    named += ` (unacquired residual ${p.residualA} — below the venue minimum or blocked)`;
+    // A bare 'stopped' is a user Stop or a cancel on the venue: the rest went
+    // unfilled because of the stop, not because a minimum or a wall blocked it.
+    named +=
+      reason === 'stopped'
+        ? ` (unacquired residual ${p.residualA} — not filled before the stop)`
+        : ` (unacquired residual ${p.residualA} — below the venue minimum or blocked)`;
   }
   if (pair.b !== null && fx(p.unhedged) > FX_ZERO && !named.includes('unhedged')) {
     named += ` (unhedged ${p.unhedged} — below ${pair.b.contract}'s lot, not submittable)`;

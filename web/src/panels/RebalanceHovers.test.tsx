@@ -44,7 +44,7 @@ describe('borrow facts', () => {
     const { container } = show(rebalanceViews.accountB.buckets);
 
     expect([...container.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'Interest now', 'Interest paid']);
-    expect(lines('Borrowing')).toEqual(['none']);
+    expect(lines('Borrowing')).toEqual(['None']);
     expect(lines('Interest now')[0]).toBe('$0.00 an hour');
     expect(lines('Interest paid')).toEqual(['$0.00']);
     for (const label of ['Borrowing', 'Interest now', 'Interest paid']) {
@@ -109,7 +109,7 @@ describe('borrow facts', () => {
   it('a failed rate read on a charged borrow reads rate unknown', async () => {
     show(rebased(rebalanceViews.oneBorrow.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } }));
 
-    expect(await rows('Interest now')).toEqual([{ name: 'Lighter', value: 'rate unknown' }]);
+    expect(await rows('Interest now')).toEqual([{ name: 'Lighter', value: 'Rate unknown' }]);
   });
 
   it('a failed rate read on a Hyperliquid borrow under 10,000 USDC still costs $0.00 an hour', async () => {
@@ -120,7 +120,7 @@ describe('borrow facts', () => {
 
   it('Interest now hover shows the rate for every wallet, even with no borrow', async () => {
     show(rebalanceViews.interestPaidSplit.buckets);
-    expect(lines('Borrowing')[0]).toBe('none');
+    expect(lines('Borrowing')[0]).toBe('None');
 
     await userEvent.hover(screen.getByRole('button', { name: 'Interest now' }));
     const card = await screen.findByRole('tooltip');
@@ -141,7 +141,7 @@ describe('borrow facts', () => {
 
   it('borrow comes from liability', async () => {
     const { unmount } = show(rebalanceViews.gainOverNegativeCash.buckets);
-    expect(lines('Borrowing')[0]).toBe('none');
+    expect(lines('Borrowing')[0]).toBe('None');
     unmount();
 
     show(rebalanceViews.twoBorrows.buckets);
@@ -199,7 +199,7 @@ describe('borrow facts', () => {
 
     expect(lines('Interest paid')).toEqual(['$3.20']);
     expect(await rows('Interest paid')).toEqual([{ name: 'Hyperliquid', value: '$3.20' }]);
-    expect(lines('Borrowing')[0]).toBe('none');
+    expect(lines('Borrowing')[0]).toBe('None');
     expect(lines('Interest now')[0]).toBe('$0.00 an hour');
   });
 });
@@ -321,13 +321,13 @@ describe('the 30-day rule the card and the modal share', () => {
       'USDC/LIGHTER': { borrow: 0, equity: 100, cash: 100, interestPerDayUsd: 0, imHeldUsd: 0, mmHeldUsd: 0 },
     });
     for (const goal of ['even', 'repay'] as const) {
-      expect(worthLine(at(20), free, goal)).toEqual({ text: 'No interest payment yet. No transfer or rebalancing necessary.', tone: 'info' });
+      expect(worthLine(at(20), free, goal)).toEqual({ text: 'No interest yet. Nothing to move.', tone: 'info' });
     }
   });
 
   it('says no borrow with no borrow, and names the failure when a borrow rate cannot be read', () => {
     expect(isNotWorthIt(at(20), rebalanceViews.accountB.buckets)).toBe(false);
-    expect(worthLine(at(20), rebalanceViews.accountB.buckets)).toEqual({ text: 'No borrow. No transfer or rebalancing necessary.', tone: 'info' });
+    expect(worthLine(at(20), rebalanceViews.accountB.buckets)).toEqual({ text: 'No borrow. Nothing to move.', tone: 'info' });
     const unknown = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } });
     expect(isNotWorthIt(at(20), unknown)).toBe(false);
     // An unreadable rate is an error, not silence: the dialog still prices a fee.
@@ -335,7 +335,7 @@ describe('the 30-day rule the card and the modal share', () => {
   });
 
   it('with no legs the borrow blocks a withdrawal, so no fee is weighed — whatever goal asks', () => {
-    const withdrawBlocked = { text: 'Clear debt recommended.', tone: 'act', sub: 'Debt prevents you from withdrawing your cash.' };
+    const withdrawBlocked = { text: 'Clear debt recommended.', tone: 'act', sub: 'You cannot withdraw cash while a wallet borrows.' };
     for (const goal of ['repay', 'custom', 'even'] as const) {
       expect(worthLine(at(3), lighterAt(0.1), goal, true)).toEqual(withdrawBlocked);
     }

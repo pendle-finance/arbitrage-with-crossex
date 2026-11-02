@@ -26,6 +26,7 @@
  * before anything is sent.
  */
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { UnderlineTabs } from '../components/UnderlineTabs';
 import { BorosPairTicket } from './BorosPairTicket';
@@ -38,11 +39,6 @@ type Venue = 'perp' | 'boros';
 /** Perp-only sub-choice; Boros has a single ticket, so it needs none. */
 type PerpMode = 'single' | 'pair';
 
-const VENUE_BLURB: Record<Venue, string> = {
-  perp: 'Opens perp positions on Gate CrossEx.',
-  boros: 'Opens fixed-rate positions on Boros.',
-};
-
 export function TradeRail({
   onBusyChange,
 }: {
@@ -50,6 +46,7 @@ export function TradeRail({
    * locks its close controls off it (see BorosPairTicket.onBusyChange). */
   onBusyChange?: (busy: boolean) => void;
 } = {}) {
+  const { t } = useTranslation();
   const [venue, setVenue] = useState<Venue>('perp');
   // Pair is the default within perps: the terminal exists for delta-neutral
   // pair entries.
@@ -99,36 +96,36 @@ export function TradeRail({
 
   return (
     // The drawer supplies width, heading and scroll; this is just the tickets.
-    <div className="flex flex-col gap-4" aria-label="Order ticket">
+    <div className="flex flex-col gap-4" aria-label={t('trade.rail.orderTicket')}>
       <div>
         {/* The VENUE switch is navigation — which ticket am I on — so it
             reads as tabs. The perp mode below is a setting on the ticket,
             the same choice the Boros ticket makes with a boxed toggle, so
             it is styled to match rather than looking like a third surface. */}
         <UnderlineTabs<Venue>
-          ariaLabel="Venue"
+          ariaLabel={t('common.venue')}
           value={venue}
           onChange={setVenue}
           options={[
-            { value: 'perp', label: 'CrossEx perps' },
-            { value: 'boros', label: 'Boros rates' },
+            { value: 'perp', label: t('trade.rail.crossexPerps') },
+            { value: 'boros', label: t('trade.rail.borosRates') },
           ]}
         />
         {/* Stated, never inferred: the rail says which venue's legs this
             ticket touches before the user reads a single field. */}
-        <p className="mt-2 mb-3 text-[11px] text-ink-400">{VENUE_BLURB[venue]}</p>
+        <p className="mt-2 mb-3 text-[11px] text-ink-400">{venue === 'perp' ? t('trade.rail.perpBlurb') : t('trade.rail.borosBlurb')}</p>
 
         {venue === 'perp' && (
           <>
             <div className="mb-3">
               <SegmentedToggle<PerpMode>
-                ariaLabel="Perp ticket mode"
+                ariaLabel={t('trade.rail.perpMode')}
                 value={perpMode}
                 onChange={setPerpMode}
                 fill
                 options={[
-                  { value: 'pair', label: 'Pair' },
-                  { value: 'single', label: 'Single' },
+                  { value: 'pair', label: t('common.pair') },
+                  { value: 'single', label: t('trade.rail.single') },
                 ]}
               />
             </div>

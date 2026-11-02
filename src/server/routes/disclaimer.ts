@@ -23,7 +23,7 @@ export function disclaimerRoutes(deps: AppDeps) {
     app.post('/disclaimer/accept', async (req, reply) => {
       const { version } = (req.body ?? {}) as { version?: string };
       if (version !== DISCLAIMER_VERSION) {
-        throw new CoreError(`disclaimer version mismatch — this build expects "${DISCLAIMER_VERSION}"`);
+        throw new CoreError('The disclaimer changed. Reload the page and accept it again.');
       }
       if (envPath) recordAcceptance(envPath);
       return reply.ok({ version: DISCLAIMER_VERSION, accepted: true, acceptedVersion: DISCLAIMER_VERSION });

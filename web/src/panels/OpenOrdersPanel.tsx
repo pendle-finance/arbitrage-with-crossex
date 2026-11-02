@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { qk, useCancelOrder, useOpenOrders } from '../api/queries';
 import type { OpenOrder } from '../api/types';
 import { Chip, type ChipTone } from '../components/Chip';
@@ -10,7 +11,9 @@ import { TableSkeleton } from '../components/Skeleton';
 import { Spinner } from '../components/Spinner';
 import { useToast } from '../components/Toast';
 import { SideChip, SymbolCell } from '../components/VenueChip';
+import { t } from '../i18n';
 import { fmtAge, sig, toDate } from '../lib/fmt';
+import { Hourglass } from 'lucide-react';
 
 /** DEFENSIVE state → tone map. Gate's order-state enum is undocumented: match
  * known-ish forms case-insensitively; ANY unknown string renders verbatim in a
@@ -25,12 +28,17 @@ function stateTone(state: string): ChipTone {
   return 'neutral';
 }
 
-/** POC → "post-only"; otherwise "LMT GTC" / "MKT" style. */
+/** POC → "Post-only"; otherwise "LMT GTC" / "MKT" style. */
 function typeLabel(o: OpenOrder): string {
   const type = (o.type ?? '').toUpperCase();
   const tif = (o.timeInForce ?? '').toUpperCase();
-  if (tif === 'POC') return 'post-only';
-  const base = type === 'LIMIT' ? 'LMT' : type === 'MARKET' ? 'MKT' : type || '—';
+  if (tif === 'POC') return t('opportunities.orders.postOnly');
+  const base =
+    type === 'LIMIT'
+      ? t('opportunities.trades.typeLimit')
+      : type === 'MARKET'
+        ? t('opportunities.trades.typeMarket')
+        : type || '—';
   return tif && type !== 'MARKET' ? `${base} ${tif}` : base;
 }
 
@@ -52,6 +60,7 @@ function FillProgress({ o }: { o: OpenOrder }) {
 
 /** Open orders tab: live resting orders with immediate cancel. */
 export function OpenOrdersPanel() {
+  const { t } = useTranslation();
   const { data, isPending, isError, error } = useOpenOrders();
   const cancel = useCancelOrder();
   const toast = useToast();
@@ -86,30 +95,30 @@ export function OpenOrdersPanel() {
 
   if (isPending) return <TableSkeleton rows={3} cols={8} />;
   if (isError && !data) {
-    return <QueryError title="Couldn't load open orders" error={error} />;
+    return <QueryError title={t('opportunities.orders.loadError')} error={error} />;
   }
 
   const isCancelling = (o: OpenOrder) =>
     cancelling.has(o.orderId) || (cancel.isPending && cancel.variables === o.orderId);
 
   const columns: Column<OpenOrder>[] = [
-    { key: 'symbol', header: 'Symbol', render: (o) => <SymbolCell symbol={o.symbol} /> },
-    { key: 'side', header: 'Side', render: (o) => <SideChip side={o.side} /> },
+    { key: 'symbol', header: t('opportunities.trades.symbol'), render: (o) => <SymbolCell symbol={o.symbol} /> },
+    { key: 'side', header: t('common.side'), render: (o) => <SideChip side={o.side} /> },
     {
       key: 'type',
-      header: 'Type',
+      header: t('opportunities.trades.type'),
       render: (o) => (
         <span className="inline-flex items-center gap-1.5">
           <Chip sm className="num">{typeLabel(o)}</Chip>
-          {o.reduceOnly && <span className="text-[9px] uppercase text-ink-500" title="reduce-only">RO</span>}
+          {o.reduceOnly && <Chip sm title={t('opportunities.orders.reduceOnly')}>{t('opportunities.orders.reduceOnlyShort')}</Chip>}
         </span>
       ),
     },
-    { key: 'price', header: 'Price', align: 'right', render: (o) => <span className="num">{sig(o.price)}</span> },
-    { key: 'filled', header: 'Filled', align: 'right', render: (o) => <FillProgress o={o} /> },
+    { key: 'price', header: t('opportunities.trades.price'), align: 'right', render: (o) => <span className="num">{sig(o.price)}</span> },
+    { key: 'filled', header: t('opportunities.orders.filled'), align: 'right', render: (o) => <FillProgress o={o} /> },
     {
       key: 'avg',
-      header: 'Avg fill',
+      header: t('opportunities.orders.avgFill'),
       align: 'right',
       render: (o) =>
         Number(o.executedAvgPrice) > 0 ? (
@@ -120,11 +129,11 @@ export function OpenOrdersPanel() {
     },
     {
       key: 'state',
-      header: 'State',
+      header: t('opportunities.orders.state'),
       render: (o) =>
         isCancelling(o) ? (
-          <Chip sm tone="amber" title={`venue still reports ${o.state}`}>
-            cancelling…
+          <Chip sm tone="amber" title={t('opportunities.orders.venueStillReports', { state: o.state })}>
+            {t('opportunities.orders.cancellingChip')}
           </Chip>
         ) : (
           <Chip sm tone={stateTone(o.state)}>{o.state}</Chip>
@@ -132,7 +141,7 @@ export function OpenOrdersPanel() {
     },
     {
       key: 'age',
-      header: 'Age',
+      header: t('opportunities.orders.age'),
       align: 'right',
       render: (o) => {
         const d = toDate(o.createTime);
@@ -159,7 +168,7 @@ export function OpenOrdersPanel() {
                 if (dealId) {
                   toast.push(
                     'info',
-                    `That order belongs to deal ${dealId.slice(0, 8)} — stopping it. The order clears once the venue confirms.`,
+                    t('opportunities.orders.dealOwned'),
                   );
                 }
               },
@@ -169,17 +178,17 @@ export function OpenOrdersPanel() {
                   next.delete(o.orderId);
                   return next;
                 });
-                toast.push('error', `Cancel ${o.orderId} failed: ${(err as Error).message}`);
+                toast.push('error', t('opportunities.orders.cancelFailed', { error: (err as Error).message }));
               },
             });
           }}
         >
           {isCancelling(o) ? (
             <span className="inline-flex items-center gap-1">
-              <Spinner className="h-3 w-3" /> cancelling
+              <Spinner className="h-3 w-3" /> {t('opportunities.orders.cancelling')}
             </span>
           ) : (
-            'Cancel'
+            t('common.cancel')
           )}
         </button>
       ),
@@ -187,14 +196,16 @@ export function OpenOrdersPanel() {
   ];
 
   return (
-    <DataTable
-      columns={columns}
-      rows={orders}
-      rowKey={(o) => o.orderId}
-      rowClassName={(o) => (isCancelling(o) ? 'opacity-50' : '')}
-      emptyState={
-        <EmptyState icon="⧖" title="No open orders" hint="Resting limit orders appear here the moment they're placed." />
-      }
-    />
+    <div className="flex flex-col gap-3">
+      <DataTable
+        columns={columns}
+        rows={orders}
+        rowKey={(o) => o.orderId}
+        rowClassName={(o) => (isCancelling(o) ? 'opacity-50' : '')}
+        emptyState={
+          <EmptyState icon={<Hourglass size={22} />} title={t('opportunities.orders.emptyTitle')} hint={t('opportunities.orders.emptyHint')} />
+        }
+      />
+    </div>
   );
 }

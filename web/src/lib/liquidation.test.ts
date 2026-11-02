@@ -257,12 +257,12 @@ describe('liquidationLines', () => {
 
   it('names the venue of the losing leg in the sentence, not the wallet it margins in', () => {
     const [pump] = lines(account(), box());
-    expect(describeLine(pump)).toContain('Losing leg: Hyperliquid short.');
+    expect(describeLine(pump)).toContain('Losing leg: Hyperliquid Short.');
 
     const flipped = box();
     flipped.exposure[0].legs[0].side = 'SHORT';
     flipped.exposure[0].legs[1].side = 'LONG';
-    expect(describeLine(lines(account(), flipped)[0])).toContain('Losing leg: Gate short.');
+    expect(describeLine(lines(account(), flipped)[0])).toContain('Losing leg: Gate Short.');
 
     const binance = box();
     binance.positions[1].symbol = 'BINANCE_FUTURE_ETH_USDT';
@@ -272,7 +272,7 @@ describe('liquidationLines', () => {
       exchange: 'BINANCE',
       quote: 'USDT',
     };
-    expect(describeLine(lines(account(), binance)[0])).toContain('Losing leg: Binance short.');
+    expect(describeLine(lines(account(), binance)[0])).toContain('Losing leg: Binance Short.');
   });
 
   it('matches the live account of 2026-09-07 within a percent', () => {
@@ -359,10 +359,10 @@ describe('formatting', () => {
       'Liquidation ~$1,840 (-20%)',
     );
     expect(describeLine({ base: 'ETH', venue: 'Hyperliquid', side: 'short', price: 3150, move: 0.37 })).toBe(
-      'ETH rises to $3,150 (+37%). Losing leg: Hyperliquid short. Assumes other coins do not move.',
+      'ETH rises to $3,150 (+37%). Losing leg: Hyperliquid Short. Assumes other coins do not move.',
     );
     expect(describeLine({ base: 'ETH', venue: 'Gate', side: 'long', price: 1840, move: -0.2 })).toBe(
-      'ETH falls to $1,840 (-20%). Losing leg: Gate long. Assumes other coins do not move.',
+      'ETH falls to $1,840 (-20%). Losing leg: Gate Long. Assumes other coins do not move.',
     );
     expect(describeLine({ base: 'ETH', venue: 'Gate', side: null, price: 1840, move: -0.2 })).toBe(
       'ETH falls to $1,840 (-20%). Assumes other coins do not move.',

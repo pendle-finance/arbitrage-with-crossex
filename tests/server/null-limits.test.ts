@@ -9,6 +9,9 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import nock from 'nock';
 import type { PreviewResult } from '../../src/core/actions';
+import { makeClients } from '../../src/core/clients';
+import { Store } from '../../src/engine/db';
+import { gateVenue } from '../../src/engine/venueGate';
 import { gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
 
 const NULLS = 'rule-symbols-nulls.json';
@@ -72,9 +75,17 @@ describe('null rule limits', () => {
   });
 
   it('deal creation does NOT reject on the null limits (oversize passes uncapped -> 202)', async () => {
-    app = makeTestApp();
+    // The deal's position-cap check needs a price; the real one reads a venue book.
+    const venue = gateVenue(() => makeClients({ key: 'k', secret: 's' }));
+    app = makeTestApp({
+      engine: { store: new Store(':memory:'), venue: { ...venue, refPrice: async () => '10' }, clock: { now: () => Date.now() } },
+    });
     mockGateGet('/rule/symbols', { fixture: NULLS });
     mockGateGet('/accounts', { fixture: 'account.json' });
+    // The position cap is a separate rule; a cap far above this qty keeps it out of the way.
+    mockGateGet('/rule/risk_limits', { body: [{ symbol: SYMBOL, tiers: [{ max_risk_limit_value: '1e30', leverage_max: '10' }] }] });
+    mockGateGet('/positions', { body: [] });
+    mockGateGet('/open_orders', { body: [] });
 
     const res = await app.inject({
       method: 'POST',

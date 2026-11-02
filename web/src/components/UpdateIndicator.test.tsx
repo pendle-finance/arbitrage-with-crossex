@@ -38,7 +38,7 @@ function logHandler(text = '') {
 
 /** The install command lives behind the second route now — the dialog opens on
  * the one-click one. */
-const manualRoute = () => fireEvent.click(screen.getByRole('radio', { name: 'Run it in my terminal' }));
+const manualRoute = () => fireEvent.click(screen.getByRole('radio', { name: 'Run the command myself' }));
 
 /** An install-info block, so a test can say which commit is being served. */
 function installedAt(commit: string): UpdateStatus['install'] {
@@ -186,16 +186,20 @@ describe('UpdateIndicator', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Update to v1.2.0' }));
     const panel = await screen.findByRole('status');
-    expect(panel).toHaveTextContent('Installation running in the background.');
+    expect(panel).toHaveTextContent('Installing. This page reloads when done.');
     expect(calls).toHaveLength(1);
     expect(screen.queryByRole('button', { name: /^Update to/ })).toBeNull();
 
     // The step the installer named, and the checklist caught up to it.
     await waitFor(() => expect(panel).toHaveTextContent('Installing dependencies'));
     expect(panel).toHaveTextContent('/Users/x/.boros-crossex/logs/update.log');
-    expect(within(panel).getAllByRole('listitem')[1]).toHaveTextContent('✓Download');
-    expect(within(panel).getAllByRole('listitem')[2]).toHaveTextContent('●Dependencies');
-    expect(within(panel).getAllByRole('listitem')[3]).toHaveTextContent('○Build');
+    const steps = within(panel).getAllByRole('listitem');
+    expect(steps[1]).toHaveTextContent('Download');
+    expect(steps[1].querySelector('svg.lucide-check')).not.toBeNull();
+    expect(steps[2]).toHaveTextContent('Dependencies');
+    expect(steps[2].querySelector('svg.lucide-circle-dot')).not.toBeNull();
+    expect(steps[3]).toHaveTextContent('Build');
+    expect(steps[3].querySelector('svg.lucide-circle')).not.toBeNull();
   });
 
   it('says an update failed rather than spinning, and offers another go', async () => {

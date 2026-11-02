@@ -11,6 +11,7 @@
 import { fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, fmtUsdCompact, prettyVenue } from './fmt';
 import { spreadName } from './spread';
 import { hedgeLabel, shareDaysText } from './share';
+import { t } from '../i18n';
 import type { SharePayloadV1 } from './shareCodec';
 
 /** 16:9 at X's summary_large_image ratio; drawn at `scale`× for crispness. */
@@ -107,25 +108,35 @@ function borosMark(ctx: CanvasRenderingContext2D, x: number, y: number, size: nu
 export function shareCardLines(p: SharePayloadV1): ShareCardLines {
   const hedge = hedgeLabel(p.h);
   return {
-    headline: "I'm getting",
+    headline: t('opportunities.share.cardHeadline'),
     aprText: fmtPct(p.a),
-    headlineTail: 'fixed APR',
-    capitalLine: `on ${fmtUsd(p.c, 0)} capital (${shareDaysText(p)})`,
-    contextLine: `${p.b} · ${fmtPct(p.sp)} locked spread · matures ${fmtDateLocal(p.m)} · ${hedge}`,
+    headlineTail: t('opportunities.share.cardHeadlineTail'),
+    capitalLine: t('opportunities.share.cardCapital', { capital: fmtUsd(p.c, 0), term: shareDaysText(p) }),
+    contextLine: t('opportunities.share.cardContext', {
+      base: p.b,
+      spread: fmtPct(p.sp),
+      date: fmtDateLocal(p.m),
+      hedge,
+    }),
     hedgeLabel: hedge,
     legs: p.l.slice(0, MAX_LEG_ROWS).map((l) => ({
       side: l.s === 'S' ? 'SHORT' : 'LONG',
       kind: l.k === 'b' ? 'Boros' : 'Perp',
       venue: l.k === 'b' && l.x.includes('_') ? spreadName(p.b, l.x.split('_') as [string, string]) : prettyVenue(l.x),
-      detail: l.k === 'b' ? (l.r !== undefined ? `${fmtPct(l.r)} fixed` : 'rate leg') : 'funding hedge',
+      detail:
+        l.k === 'b'
+          ? l.r !== undefined
+            ? t('opportunities.share.cardFixed', { rate: fmtPct(l.r) })
+            : t('opportunities.share.cardRateLeg')
+          : t('opportunities.share.cardFundingHedge'),
       notional:
         l.tn !== undefined && l.ts !== undefined
           ? `${fmtUsdCompact(l.n)} (${fmtTokenQty(l.tn, l.ts)})`
           : fmtUsdCompact(l.n),
     })),
-    legOverflow: p.l.length > MAX_LEG_ROWS ? `+${p.l.length - MAX_LEG_ROWS} more legs` : null,
-    footerLeft: 'Powered by Boros × Gate CrossEx',
-    footerRightPrefix: 'Executed with the open-source tool at ',
+    legOverflow: p.l.length > MAX_LEG_ROWS ? t('opportunities.share.cardMoreLegs', { n: p.l.length - MAX_LEG_ROWS }) : null,
+    footerLeft: t('opportunities.share.cardFooterLeft'),
+    footerRightPrefix: t('opportunities.share.cardFooterPrefix'),
     footerRightBrand: 'boros.pendle.finance/arbitrage-crossex',
   };
 }
@@ -158,14 +169,20 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: num
   ctx.closePath();
 }
 
-/** Small bordered pill with centered text; returns its width. When `right` is
- * given the pill is laid out ending at that x (right-aligned). */
+const CHECK_PATH = 'M20 6 9 17l-5-5';
+const CHECK_SIZE = 12;
+const CHECK_GAP = 5;
+
+/** Small bordered pill with centered text, and Lucide's check after it when
+ * `check` is set; returns its width. When `right` is given the pill is laid
+ * out ending at that x (right-aligned). */
 function pill(
   ctx: CanvasRenderingContext2D,
-  opts: { text: string; centerY: number; left?: number; right?: number; color: string; bg: string; border: string },
+  opts: { text: string; centerY: number; left?: number; right?: number; color: string; bg: string; border: string; check?: boolean },
 ): number {
   ctx.font = `600 12px ${SANS}`;
-  const w = Math.ceil(ctx.measureText(opts.text).width) + 24;
+  const textW = Math.ceil(ctx.measureText(opts.text).width);
+  const w = textW + (opts.check ? CHECK_GAP + CHECK_SIZE : 0) + 24;
   const h = 26;
   const x = opts.right !== undefined ? opts.right - w : (opts.left ?? 0);
   const y = opts.centerY - h / 2;
@@ -176,11 +193,20 @@ function pill(
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = opts.color;
-  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(opts.text, x + w / 2, opts.centerY + 0.5);
-  ctx.textAlign = 'left';
+  ctx.fillText(opts.text, x + 12, opts.centerY + 0.5);
   ctx.textBaseline = 'alphabetic';
+  if (opts.check) {
+    ctx.save();
+    ctx.translate(x + 12 + textW + CHECK_GAP, opts.centerY - CHECK_SIZE / 2);
+    ctx.scale(CHECK_SIZE / 24, CHECK_SIZE / 24);
+    ctx.strokeStyle = opts.color;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(new Path2D(CHECK_PATH));
+    ctx.restore();
+  }
   return w;
 }
 
@@ -244,8 +270,8 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
     p.h === 'h'
       ? { color: GRASS, bg: 'rgba(27,227,194,0.12)', border: 'rgba(27,227,194,0.35)' }
       : { color: GOLD, bg: 'rgba(240,206,116,0.12)', border: 'rgba(240,206,116,0.35)' };
-  const hedgeText = p.h === 'h' ? 'hedged ✓' : lines.hedgeLabel;
-  const hedgeW = pill(ctx, { text: hedgeText, centerY: 68, right, ...hedgeTone });
+  const hedgeText = p.h === 'h' ? t('opportunities.share.cardHedgedPill') : lines.hedgeLabel;
+  const hedgeW = pill(ctx, { text: hedgeText, centerY: 68, right, ...hedgeTone, check: p.h === 'h' });
   pill(ctx, {
     text: p.b,
     centerY: 68,
@@ -290,7 +316,7 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
     }
     const long = leg.side === 'LONG';
     pill(ctx, {
-      text: leg.side,
+      text: t(long ? 'common.longUpper' : 'common.shortUpper'),
       centerY,
       left,
       color: long ? EMERALD : ROSE,
@@ -300,7 +326,11 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
     ctx.textBaseline = 'middle';
     ctx.fillStyle = TEXT_FAINT;
     ctx.font = `500 12px ${SANS}`;
-    ctx.fillText(leg.kind.toUpperCase(), left + 96, centerY + 0.5);
+    ctx.fillText(
+      leg.kind === 'Perp' ? t('opportunities.share.cardKindPerp') : leg.kind.toUpperCase(),
+      left + 96,
+      centerY + 0.5,
+    );
     ctx.fillStyle = TEXT_HI;
     ctx.font = `500 21px ${SANS}`;
     ctx.fillText(leg.venue, left + 176, centerY + 0.5);

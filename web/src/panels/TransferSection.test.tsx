@@ -32,7 +32,7 @@ describe('TransferSection', () => {
   it('at rest shows just a Manual Transfer button, nothing else', async () => {
     await renderCard();
 
-    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeEnabled();
     expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.queryByRole('radio')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();
@@ -40,7 +40,7 @@ describe('TransferSection', () => {
 
   it('has no title and no hover', async () => {
     await renderCard();
-    const button = screen.getByRole('button', { name: 'Manual Transfer' });
+    const button = screen.getByRole('button', { name: 'Manual transfer' });
 
     await userEvent.hover(button);
 
@@ -69,17 +69,17 @@ describe('TransferSection', () => {
   it('lock note names the reason, and disables the button', async () => {
     await renderCard(transferViews.lockRebalance);
     expect(screen.getByText('Rebalance running')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeDisabled();
     cleanup();
 
     await renderCard(transferViews.lockHalted);
     expect(screen.getByText('Rebalance stopped')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeDisabled();
     cleanup();
 
     await renderCard(transferViews.lockDeal);
     expect(screen.getByText('Deal running')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Manual Transfer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeDisabled();
   });
 
   it('a moving transfer opens the modal on the sending view', async () => {
@@ -150,7 +150,7 @@ describe('TransferSection', () => {
     server.use(transferPostHandler(posts, 'silent'));
     await renderCard();
     const holdTen = async () => {
-      await userEvent.click(screen.getByRole('button', { name: 'Manual Transfer' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Manual transfer' }));
       const dialog = await screen.findByRole('dialog');
       await userEvent.type(within(dialog).getByRole('textbox'), '10');
       const hold = within(dialog).getByRole('button', { name: 'Hold to send 10.00 USDT to Gate spot' });
@@ -222,6 +222,6 @@ describe('TransferSection', () => {
     serve();
     await userEvent.click(retry);
 
-    expect(await screen.findByRole('button', { name: 'Manual Transfer' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Manual transfer' })).toBeInTheDocument();
   });
 });

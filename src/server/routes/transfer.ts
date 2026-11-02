@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { SpotAccount } from 'gate-api';
-import { classifyGateError, classifyPlain, CoreError } from '../../core/errors';
+import { classifyGateError, classifyPlain, CoreError, describeError } from '../../core/errors';
 import { floorDecimalString } from '../../core/numbers';
 import { pathRule, transferPaths, type SpotBalance, type TransferCoin, type TransferPath } from '../../core/rebalance/plan';
 import type { AppDeps } from '../app';
@@ -70,7 +70,7 @@ export function transferRoutes(deps: AppDeps) {
         sleep: deps.transfer?.sleep ?? sleep,
         onDone: deps.transfer?.onDone,
       })
-        .catch((err: unknown) => console.error(`transfer ${transfer.id} stopped: ${classifyGateError(err).message}`))
+        .catch((err: unknown) => console.error(`transfer ${transfer.id} stopped: ${describeError(err)}`))
         .finally(() => {
           if (runningId === transfer.id) runningId = null;
         });

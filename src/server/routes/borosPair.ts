@@ -70,12 +70,20 @@ import {
   type BorosMarginBucket,
   type BorosPairAccountState,
   type BorosPairLegInput,
+  type BorosPairSimulation,
+  type PairBlocker,
   type PairIntent,
 } from '../../core/boros/pair';
 import { CoreError } from '../../core/errors';
+import { PLAN_NOTE, PLAN_SHARE } from '../../core/positionLimit';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { catchRateLimit, refuse } from '../errorReply';
+import { perpLimitBreach } from '../perpLimit';
+import { livePerps } from './symbols';
+
+const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
+const HEDGE_LIMIT_UNREAD = 'Could not check the hedge against the perp position limit. Try again.';
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -83,9 +91,9 @@ const CLOSE_RUNNING = 'A close on this market is already running.';
 const ORDER_RUNNING = 'An order on this market is already running.';
 const MAY_HAVE_FILLED = ' — Boros gave no answer, so the orders may have filled. Check your positions on Boros before sending again.';
 const CLOSE_ISOLATED = 'This position is on isolated margin. Close it on Boros.';
-const READS_LIMITED_NOTHING_SENT = 'Boros is limiting reads. Nothing was sent. Try again in a minute.';
+const READS_LIMITED_NOTHING_SENT = 'Boros is limiting requests. Nothing was sent. Try again in a minute.';
 const READS_LIMITED_AFTER_CANCEL =
-  'Boros is limiting reads. Your open orders on this market were cancelled. The close was not sent. Try again in a minute.';
+  'Boros is limiting requests. Your open orders on this market were cancelled. The close was not sent. Try again in a minute.';
 
 /**
  * Rate tolerance a §6A force-close carries, as an APR fraction. Wider than a
@@ -135,6 +143,14 @@ interface PairBody {
   /** §4 acknowledgement, required whenever a leg opposes an existing position. */
   opposingAcknowledged?: unknown;
   onlyLeg?: unknown;
+  /** The perps the next step sends against this open. */
+  hedge?: unknown;
+}
+
+interface HedgePlan {
+  base: string;
+  longVenue: string | null;
+  shortVenue: string | null;
 }
 
 interface RollStepBody {
@@ -153,6 +169,14 @@ interface RollBody {
   opposingAcknowledged?: unknown;
   /** Replay keys, one per leg, deduped as one (see `recentRolls`). */
   clientOrderIds?: unknown;
+}
+
+function parseHedge(raw: unknown): HedgePlan | null {
+  if (raw === undefined || raw === null) return null;
+  const h = raw as Record<string, unknown>;
+  const venue = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+  if (typeof h.base !== 'string' || h.base === '') throw new CoreError('hedge.base must be a coin', 'validation');
+  return { base: h.base.toUpperCase(), longVenue: venue(h.longVenue), shortVenue: venue(h.shortVenue) };
 }
 
 function parseOnlyLeg(raw: unknown, count: number): number | undefined {
@@ -524,7 +548,7 @@ export function createPairPricer(deps: AppDeps) {
 
   const marketOr404 = (markets: BorosMarket[], marketId: number): BorosMarket => {
     const m = markets.find((x) => x.marketId === marketId);
-    if (!m) throw new CoreError(`unknown Boros market ${marketId}`, 'symbol-invalid');
+    if (!m) throw new CoreError(`Unknown Boros market ${marketId}`, 'symbol-invalid');
     return m;
   };
 
@@ -537,6 +561,51 @@ export function createPairPricer(deps: AppDeps) {
       return (await deps.cache.get('boros:gas-balance', TTL.boros, read, { fresh })).value;
     } catch {
       return null;
+    }
+  };
+
+  /**
+   * A blocker when the perps that hedge this open would break their position
+   * limit. CrossEx refuses those perps only after the Boros legs have filled,
+   * which leaves the rate leg unhedged, so the open is refused before it.
+   * The check uses PLAN_SHARE of the limit; the perps are checked again at
+   * the full limit when they are sent.
+   */
+  const hedgeLimitBlocker = async (
+    hedge: HedgePlan,
+    simulation: BorosPairSimulation,
+    collateralPriceUsd: number | null,
+    fresh: boolean,
+  ): Promise<PairBlocker | null> => {
+    if (!deps.engine || !(Number(collateralPriceUsd) > 0)) return null;
+    const growth = Math.max(
+      0,
+      ...simulation.legs.map((l) => Math.abs(l.sizing.resultingSize) - Math.abs(l.sizing.currentSize)),
+    );
+    if (!(growth > 0)) return null;
+    const notionalUsd = growth * Number(collateralPriceUsd);
+    try {
+      const { list } = await livePerps(deps, false);
+      const legs = (
+        [
+          [hedge.longVenue, 'BUY'],
+          [hedge.shortVenue, 'SELL'],
+        ] as const
+      ).flatMap(([venue, side]) => {
+        const contract = list.find((s) => s.base === hedge.base && s.exchange === venue)?.symbol;
+        return contract ? [{ contract, side, notionalUsd }] : [];
+      });
+      const breach = await perpLimitBreach(deps, legs, { share: PLAN_SHARE, fresh });
+      if (breach?.reason === 'over') {
+        return {
+          code: 'perp-limit',
+          message: `The hedge takes ${breach.contract} to ${usd(breach.afterUsd)}, above ${usd(breach.maxUsd)} (${PLAN_NOTE}). The perps can add at most ${usd(breach.roomQty * breach.priceUsd)}.`,
+        };
+      }
+      if (breach) return { code: 'perp-limit', message: HEDGE_LIMIT_UNREAD };
+      return null;
+    } catch {
+      return { code: 'perp-limit', message: HEDGE_LIMIT_UNREAD };
     }
   };
 
@@ -556,6 +625,7 @@ export function createPairPricer(deps: AppDeps) {
     const parsed = parseLegs(body.legs);
     const intent = parseIntent(body.intent);
     const onlyLeg = parseOnlyLeg(body.onlyLeg, parsed.length);
+    const hedge = parseHedge(body.hedge);
 
     const [markets, account] = preloaded
       ? [preloaded.markets, preloaded.account]
@@ -619,6 +689,10 @@ export function createPairPricer(deps: AppDeps) {
       simulatedAtMs,
       nowMs: simulatedAtMs,
     });
+    if (intent === 'open' && hedge) {
+      const blocker = await hedgeLimitBlocker(hedge, simulation, collateralPriceUsd, fresh);
+      if (blocker) gate.blockers.push(blocker);
+    }
 
     return {
       simulation,
@@ -710,7 +784,7 @@ export function borosPairRoutes(deps: AppDeps) {
   const assertNotUpdating = (): void => {
     if (isUpdating()) {
       throw new CoreError(
-        'the app is updating — it will restart shortly, then you can send this again',
+        'The app is updating. It restarts shortly, then you can send this again.',
         'validation',
       );
     }
@@ -719,7 +793,7 @@ export function borosPairRoutes(deps: AppDeps) {
   const assertAgentNotExpired = async (): Promise<void> => {
     const refuseExpired = (): never => {
       throw new CoreError(
-        'the Boros agent approval has expired — approve a new agent key before trading.',
+        'Your Boros login has expired. Log in again before trading.',
         'auth',
       );
     };
@@ -740,7 +814,7 @@ export function borosPairRoutes(deps: AppDeps) {
     if (approval.state === 'expired') refuseExpired();
     if (approval.state === 'not-approved') {
       throw new CoreError(
-        'the Boros agent key is not approved on-chain (the approval was rejected or revoked) — log in again before trading.',
+        'Your Boros login was rejected or revoked. Log in again before trading.',
         'auth',
       );
     }
@@ -958,7 +1032,7 @@ export function borosPairRoutes(deps: AppDeps) {
           });
         }
         if (simulation.legs.length === 2 && simulation.receiveLeg === null) {
-          throw new CoreError('the two legs do not offset — no spread to trade', 'validation');
+          throw new CoreError('The two legs do not offset — no spread to trade', 'validation');
         }
 
         /**
@@ -1002,7 +1076,7 @@ export function borosPairRoutes(deps: AppDeps) {
 
         const legOrders = simulation.legs.map((leg, i) => orderFor(leg, clientOrderIds[i]));
         if (legOrders.every((o) => o === null)) {
-          throw new CoreError('no leg has anything to trade', 'validation');
+          throw new CoreError('No leg has anything to trade', 'validation');
         }
 
         // A second request that priced concurrently with this one lands here
@@ -1298,7 +1372,7 @@ export function borosPairRoutes(deps: AppDeps) {
       const address = configuredRoot();
       if (!address) {
         throw new CoreError(
-          'no Boros root address is configured on this install.',
+          'No Boros root address is configured on this install.',
           'not-configured',
         );
       }
@@ -1341,8 +1415,8 @@ export function borosPairRoutes(deps: AppDeps) {
           const flattens = preOpen > 0 && sizeOverride >= preOpen;
           if (!flattens && value !== null && value <= MIN_ORDER_VALUE_USD) {
             throw new CoreError(
-              `this close is worth $${value.toFixed(2)}, and Boros takes nothing at or under ` +
-                `$${MIN_ORDER_VALUE_USD} — close more of the position, or all of it.`,
+              `This close is worth $${value.toFixed(2)}. Boros takes no order of ` +
+                `$${MIN_ORDER_VALUE_USD} or less. Close more of the position, or all of it.`,
               'size-too-small',
             );
           }
@@ -1454,7 +1528,7 @@ export function borosPairRoutes(deps: AppDeps) {
             // "any", not "the": cancelOrders sends cancelAll and reports no
             // count, so the route cannot claim anything was actually resting.
             `${msg} — any resting orders on this market have already been cancelled, and that ` +
-              `is not undone. Check your open orders before retrying.`,
+              `is not undone. Check your open orders before you send again.`,
             err instanceof CoreError ? err.category : 'venue-rejected',
           );
         }

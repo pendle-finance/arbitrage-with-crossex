@@ -95,7 +95,7 @@ function applySnapshot(deps: LoopDeps, pair: PairRow, o: OrderRow, snap: OrderSn
     deps.store.alert(
       'error',
       pair.id,
-      `venue reported an unparseable fill quantity on ${o.clientId} — quarantined`,
+      `The venue sent a fill size we can't read for order ${o.clientId}. The order is paused. Check it on Gate.`,
       now,
     );
     return;
@@ -105,7 +105,7 @@ function applySnapshot(deps: LoopDeps, pair: PairRow, o: OrderRow, snap: OrderSn
     deps.store.alert(
       'error',
       pair.id,
-      `venue reported SHRINKING fill on ${o.clientId} (${o.cumQty} -> ${snap.cumQty}) — quarantined`,
+      `The venue reported a smaller fill on order ${o.clientId} (${o.cumQty} -> ${snap.cumQty}). The order is paused. Check it on Gate.`,
       now,
     );
     patch.quarantinedStatus = `cum-shrink:${snap.rawStatus}`;
@@ -131,7 +131,7 @@ function applySnapshot(deps: LoopDeps, pair: PairRow, o: OrderRow, snap: OrderSn
     deps.store.alert(
       'warn',
       pair.id,
-      `unclassifiable venue status "${snap.rawStatus}" on ${o.clientId} — frozen until it resolves${snap.reason ? ` (venue said: ${snap.reason})` : ''}`,
+      `Order ${o.clientId} has an unknown venue status "${snap.rawStatus}". The deal waits until it resolves${snap.reason ? ` (venue said: ${snap.reason})` : ''}.`,
       now,
     );
   } else {
@@ -192,7 +192,7 @@ function bumpClipWall(deps: LoopDeps, pair: PairRow, now: number): void {
     deps.store.alert(
       'error',
       pair.id,
-      'A-leg wall: repeated order failures (rejects/whiffs) — the deal is stopping with whatever filled',
+      'Orders on the first leg keep failing. The deal is stopping with what filled.',
       now,
     );
   }
@@ -211,7 +211,7 @@ function bumpHedgeWall(deps: LoopDeps, pair: PairRow, now: number): void {
     deps.store.alert(
       'error',
       pair.id,
-      'hedge wall: repeated hedge attempts are failing — exposure is not being neutralized',
+      'Hedge orders keep failing. The position is not hedged. Check it on Gate.',
       now,
     );
   }
@@ -236,7 +236,7 @@ async function resolvePending(deps: LoopDeps, pair: PairRow, o: OrderRow): Promi
       deps.store.alert(
         'error',
         pair.id,
-        `cannot read pending order ${o.clientId} from the venue (${streak} consecutive failures: ${read.message}) — it may be live and filling; check credentials and connectivity`,
+        `Can't read pending order ${o.clientId} from Gate (${read.message}). It may be live and filling. Check your internet and Gate API key.`,
         now,
       );
     }
@@ -277,7 +277,7 @@ async function resolvePending(deps: LoopDeps, pair: PairRow, o: OrderRow): Promi
   deps.store.alert(
     'warn',
     pair.id,
-    `order ${o.clientId} unresolved: venue listings could not prove absence — pair stays frozen`,
+    `Order ${o.clientId} could not be confirmed gone on the venue. The deal stays paused.`,
     now,
   );
 }
@@ -303,7 +303,7 @@ async function observeOpen(deps: LoopDeps, pair: PairRow, o: OrderRow): Promise<
       deps.store.alert(
         'error',
         pair.id,
-        `cannot read live order ${o.clientId} from the venue (${streak} consecutive failures: ${read.message}) — its fills are NOT being tracked; check credentials and connectivity`,
+        `Can't read order ${o.clientId} from Gate (${read.message}). Its fills are not tracked. Check your internet and Gate API key.`,
         deps.clock.now(),
       );
     }
@@ -321,7 +321,7 @@ async function observeOpen(deps: LoopDeps, pair: PairRow, o: OrderRow): Promise<
   deps.store.alert(
     'error',
     pair.id,
-    `open order ${o.clientId} not found on the venue — quarantined for operator review`,
+    `Open order ${o.clientId} is not on the venue. The order is paused. Check it on Gate.`,
     deps.clock.now(),
   );
 }
@@ -432,7 +432,7 @@ async function performCancel(deps: LoopDeps, pair: PairRow, o: OrderRow): Promis
   deps.store.alert(
     'warn',
     pair.id,
-    `${o.clientId} stayed unclassifiable ("${fresh.quarantinedStatus}"), but the venue confirmed the cancel — closing it out at ${fresh.cumQty} filled so the deal can settle`,
+    `Order ${o.clientId} had an unknown status ("${fresh.quarantinedStatus}"), but the venue confirmed the cancel. It is closed at ${fresh.cumQty} filled so the deal can settle.`,
     deps.clock.now(),
   );
 }
@@ -477,7 +477,7 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
           deps.store.alert(
             'error',
             pair.id,
-            `deal finished with ${report.unhedged} UNHEDGED on ${pair.b.contract} — below that venue's minimum order size/notional, so the engine could not neutralize it. You are holding a one-sided position.`,
+            `Deal ended with ${report.unhedged} unhedged on ${pair.b.contract}, below the venue minimum. You hold a one-sided position. Close it by hand.`,
             deps.clock.now(),
           );
         }
@@ -666,7 +666,7 @@ export function startLoop(deps: LoopDeps, opts?: { signal?: AbortSignal }): { wa
         } catch (err) {
           // A handler throw is a code bug: surface loudly, keep other pairs alive.
           try {
-            deps.store.alert('error', pair.id, `tick failed: ${(err as Error).message}`, deps.clock.now());
+            deps.store.alert('error', pair.id, `Deal check failed and retries on its own: ${(err as Error).message}`, deps.clock.now());
           } catch {
             console.error(`[engine] tick failed for ${pair.id} (alert write also failed)`, err);
           }

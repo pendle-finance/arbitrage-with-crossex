@@ -1,5 +1,6 @@
 /** Shared render helpers for preview estimates (ticket, pair, basket, review). */
 import { X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type {
   ActionInput,
   CrossexPosition,
@@ -12,6 +13,8 @@ import { Chip } from '../components/Chip';
 import { SideChip } from '../components/VenueChip';
 import { SignedNumber } from '../components/SignedNumber';
 import { bps, fmtUsd, sig } from '../lib/fmt';
+import { t } from '../i18n';
+import { localizeServerText } from '../i18n/serverMessages';
 
 /** Slippage severity coloring: green < 0.05%, amber < 0.3%, red above. */
 export function slippageClass(pct: number): string {
@@ -34,10 +37,10 @@ export function feeText(fees: FeeEstimate | undefined): string {
   if (!fees) return '—';
   const { est, quote } = fees;
   if (est.maker !== undefined && est.taker !== undefined) {
-    return `${sig(est.maker)}–${sig(est.taker)} ${quote} (maker–taker)`;
+    return t('pairTicket.fee.rangeText', { maker: sig(est.maker), taker: sig(est.taker), quote });
   }
-  if (est.taker !== undefined) return `${sig(est.taker)} ${quote} (taker, ${bps(fees.takerRate)})`;
-  if (est.maker !== undefined) return `${sig(est.maker)} ${quote} (maker-only, ${bps(fees.makerRate)})`;
+  if (est.taker !== undefined) return t('pairTicket.fee.takerText', { amount: sig(est.taker), quote, rate: bps(fees.takerRate) });
+  if (est.maker !== undefined) return t('pairTicket.fee.makerText', { amount: sig(est.maker), quote, rate: bps(fees.makerRate) });
   return '—';
 }
 
@@ -46,9 +49,9 @@ export function feeText(fees: FeeEstimate | undefined): string {
 export function feeKind(fees: FeeEstimate | undefined): string {
   if (!fees) return '';
   const { est } = fees;
-  if (est.maker !== undefined && est.taker !== undefined) return 'maker–taker';
-  if (est.taker !== undefined) return `taker · ${bps(fees.takerRate)}`;
-  if (est.maker !== undefined) return `maker-only · ${bps(fees.makerRate)}`;
+  if (est.maker !== undefined && est.taker !== undefined) return t('pairTicket.fee.rangeKind');
+  if (est.taker !== undefined) return t('pairTicket.fee.takerKind', { rate: bps(fees.takerRate) });
+  if (est.maker !== undefined) return t('pairTicket.fee.makerKind', { rate: bps(fees.makerRate) });
   return '';
 }
 
@@ -74,12 +77,12 @@ export function ViolationList({ violations, warnings }: { violations: Violation[
     <ul className="flex flex-col gap-0.5 text-[11px]">
       {violations.map((v, i) => (
         <li key={`v-${i}`} className="text-rose-400">
-          <X size={12} aria-hidden className="inline" /> {v.message}
+          <X size={12} aria-hidden className="inline" /> {localizeServerText(v.message)}
         </li>
       ))}
       {(warnings ?? []).map((w, i) => (
         <li key={`w-${i}`} className="text-ink-500">
-          {w}
+          {localizeServerText(w)}
         </li>
       ))}
     </ul>
@@ -88,20 +91,22 @@ export function ViolationList({ violations, warnings }: { violations: Violation[
 
 /** Preview-box tail while no preview is available: error text or "previewing…". */
 export function PreviewFallback({ isError, error }: { isError: boolean; error: unknown }) {
+  const { t } = useTranslation();
   return isError ? (
-    <span className="text-rose-400">preview failed: {(error as Error).message}</span>
+    <span className="text-rose-400">{t('pairTicket.preview.failed', { message: (error as Error).message })}</span>
   ) : (
-    <span className="text-ink-500">previewing…</span>
+    <span className="text-ink-500">{t('trade.execute.pricing')}</span>
   );
 }
 
 /** BUY (green) / SELL (red) / CLOSE (amber) action chip, with ⛓ for pair legs. */
 export function ActionKindChip({ input }: { input: ActionInput }) {
+  const { t } = useTranslation();
   return (
     <span className="inline-flex items-center gap-1">
-      {input.kind === 'close-position' ? <Chip sm tone="amber">CLOSE</Chip> : <SideChip side={input.side} />}
+      {input.kind === 'close-position' ? <Chip sm tone="amber">{t('pairTicket.preview.closeUpper')}</Chip> : <SideChip side={input.side} />}
       {input.pairGroupId && (
-        <span title="pair-linked leg (unhedged guard armed)" className="text-[10px] text-cyan-400">
+        <span title={t('pairTicket.preview.pairLinkedHint')} className="text-[10px] text-cyan-400">
           ⛓
         </span>
       )}
@@ -217,6 +222,7 @@ export function ClosePreviewPanel({
    */
   hedgeAtMarket?: boolean;
 }) {
+  const { t } = useTranslation();
   if (!previews || previews.length === 0) {
     return (
       <div className="rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
@@ -226,7 +232,7 @@ export function ClosePreviewPanel({
   }
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
-      {estimating && <span className="text-amber-400">estimating…</span>}
+      {estimating && <span className="text-amber-400">{t('trade.execute.pricing')}</span>}
       {previews.map((p, i) => {
         const realized = realizedFor?.(p, i) ?? null;
         return (
@@ -238,29 +244,29 @@ export function ClosePreviewPanel({
             </span>
             {hedgeAtMarket && i > 0 ? (
               <span className="flex justify-between text-ink-400">
-                <span title="Sent as a market IOC inside the venue's price-limit band.">order</span>
-                <span className="text-ink-100">market IOC</span>
+                <span title={t('pairTicket.preview.marketIocHint')}>{t('pairTicket.preview.order')}</span>
+                <span className="text-ink-100">{t('pairTicket.preview.marketIoc')}</span>
               </span>
             ) : (
               <span className="flex justify-between text-ink-400">
-                <span title="Reduce-only IOC limit at mid ± slippage — fills what it can at once, never rests, never adds">limit px</span>
+                <span title={t('trade.close.limitPxTitle')}>{t('pairTicket.preview.limitPx')}</span>
                 <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
               </span>
             )}
             {p.fillEstimate && (
               <span className="flex items-center justify-between text-ink-400">
-                <span>slippage</span>
+                <span>{t('pairTicket.preview.slippage')}</span>
                 <SlippageBadge est={p.fillEstimate} />
               </span>
             )}
             {realized !== null && (
               <span className="flex justify-between text-ink-400">
-                <span>PnL realised</span>
+                <span>{t('pairTicket.preview.pnlRealised')}</span>
                 <SignedNumber value={realized} format={(n) => fmtUsd(n)} />
               </span>
             )}
             <span className="flex justify-between text-ink-400">
-              <span>est fee</span>
+              <span>{t('pairTicket.preview.estFee')}</span>
               <span className="text-ink-200">{feeText(p.fees)}</span>
             </span>
           </div>
@@ -268,10 +274,10 @@ export function ClosePreviewPanel({
       })}
       {note && hedgeAtMarket ? (
         <span className="text-ink-500" title={note}>
-          reduce-only ⓘ <span className="text-ink-500">— first leg limit at mid ± slippage; hedge leg at market</span>
+          {t('pairTicket.preview.reduceOnly')} ⓘ <span className="text-ink-500">{t('pairTicket.preview.hedgeAtMarketNote')}</span>
         </span>
       ) : (
-        note && <span className="cursor-help text-ink-500" title={note}>reduce-only ⓘ</span>
+        note && <span className="cursor-help text-ink-500" title={note}>{t('pairTicket.preview.reduceOnly')} ⓘ</span>
       )}
       <ViolationList
         violations={previews.flatMap((p) => p.violations ?? [])}

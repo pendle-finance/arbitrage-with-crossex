@@ -525,6 +525,7 @@ export function makeOpportunityPair(overrides: Partial<OpportunityPair> = {}): O
     execSpreadApr,
     borosImpactApr: grossSpreadApr - execSpreadApr,
     makerLeg: null,
+    notionalUsd: OPP_NOTIONAL,
     costs: {
       borosTakerFeeUsd,
       borosSettleFeeUsd,
@@ -604,6 +605,7 @@ export function makeSpreadOpportunityPair(overrides: Partial<OpportunityPair> = 
     execSpreadApr: execApr,
     borosImpactApr: midApr - execApr,
     makerLeg: null,
+    notionalUsd: OPP_NOTIONAL,
     costs: {
       borosTakerFeeUsd,
       borosSettleFeeUsd,

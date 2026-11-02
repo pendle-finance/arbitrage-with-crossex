@@ -255,7 +255,7 @@ describe('runTransfer sends once', () => {
     await h.run();
 
     expect(h.onDisk()).toMatchObject({ status: 'failed', failText: HALT_TEXT.transferRateLimited, venueId: null });
-    expect(h.onDisk().failText).toBe('Gate is rate-limiting this account. Nothing was sent. Try again in a minute.');
+    expect(h.onDisk().failText).toBe('Gate is limiting requests from this account. Nothing was sent. Try again in a minute.');
     expect(h.count('createCrossexTransfer')).toBe(1);
     expect(h.count('listCrossexTransfers')).toBe(0);
   });

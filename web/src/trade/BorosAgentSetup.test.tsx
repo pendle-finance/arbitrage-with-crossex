@@ -273,7 +273,7 @@ describe('BorosAgentSetup — no gas balance on the strip', () => {
     const ask = await screen.findByRole('alertdialog', { name: 'Log out 0x2222…2222 and log in 0x1111…1111?' });
     expect(ask).toHaveTextContent('Log out 0x2222…2222 and log in 0x1111…1111?');
     expect(ask).not.toHaveTextContent('Telegram alerts');
-    expect(ask).toHaveTextContent('0x2222…2222 Boros legs stay open. Its Gate perps show unhedged until you log it back in.');
+    expect(ask).toHaveTextContent('0x2222…2222 Boros positions stay open. Its Gate perps show unhedged until you log it back in.');
     expect(ask).not.toHaveTextContent('Close them in the Boros app');
     // The question's buttons are the only choices while it is open.
     expect(screen.queryByRole('button', { name: /Waiting for your answer/ })).toBeNull();

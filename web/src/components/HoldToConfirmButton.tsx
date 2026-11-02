@@ -1,3 +1,4 @@
+import { useTranslation } from 'react-i18next';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 
 interface Props {
@@ -38,6 +39,7 @@ const CIRC = 2 * Math.PI * R;
  * stray keypress can never send an order.
  */
 export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 'cyan', className, title, children }: Props) {
+  const { t } = useTranslation();
   const [progress, setProgress] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const fired = useRef(false);
@@ -85,7 +87,7 @@ export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 
       type="button"
       disabled={disabled}
       aria-label={typeof children === 'string' ? children : undefined}
-      title={title ? `${title}\n\nPress and hold to confirm.` : 'press and hold to confirm'}
+      title={title ? t('app.hold.titleWith', { title }) : t('app.hold.title')}
       onPointerDown={(e) => {
         // Only the primary button holds; jsdom events omit `button`, so treat
         // a missing value as primary.

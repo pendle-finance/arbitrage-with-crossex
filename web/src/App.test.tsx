@@ -141,7 +141,7 @@ describe('App tab shell', () => {
     // /api/opportunities fixture resolves).
     expect(
       await within(panel('opportunities')).findByRole('button', {
-        name: /^Open this strategy — ETH short/,
+        name: /^Open this strategy — ETH Long/,
       }),
     ).toBeInTheDocument();
     expect(panel('opportunities')).toBeVisible();
@@ -174,11 +174,11 @@ describe('App tab shell', () => {
     expect(scrollSpy).toHaveBeenCalledWith({ top: 0 });
   });
 
-  it('shows the live order count on the tab while Open Orders is inactive', async () => {
+  it('shows the live order count on the tab while Limit orders is inactive', async () => {
     mockApp({ orders: [order('1'), order('2')] });
     await renderApp();
 
-    const ordersTab = tab(/^Open Orders/);
+    const ordersTab = tab(/^Limit orders/);
     expect(ordersTab).toHaveAttribute('aria-selected', 'false');
 
     // The badge lands once the (still-mounted) query resolves.
@@ -363,7 +363,7 @@ describe('user guide', () => {
     await userEvent.click(screen.getByRole('button', { name: 'User guide' }));
 
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/Couldn’t load the guide/);
+    expect(alert).toHaveTextContent(/Could not load the guide/);
     expect(within(alert).getByRole('link', { name: 'docs/USER_GUIDE.md' })).toHaveAttribute(
       'href',
       'https://github.com/pendle-finance/arbitrage-with-crossex/blob/main/docs/USER_GUIDE.md',

@@ -12,6 +12,7 @@
  * Returns null for shapes the engine does not model (confirm stays disabled).
  */
 import type { ActionInput, DealRequest, PreviewResult } from '../api/types';
+import { parseSymbol } from '../lib/fmt';
 
 interface Zipped {
   action: ActionInput;
@@ -22,6 +23,8 @@ function zip(actions: ActionInput[], previews: PreviewResult[]): Zipped[] | null
   if (actions.length !== previews.length) return null;
   return actions.map((action, i) => ({ action, preview: previews[i] }));
 }
+
+const isGate = (leg: Zipped): boolean => parseSymbol(leg.preview.symbol).exchange === 'GATE';
 
 function levOf(action: ActionInput): number | undefined {
   return 'leverage' in action ? action.leverage : undefined;
@@ -73,7 +76,10 @@ export function dealFromActions(
 
   // --- both-market pair ---
   if (legs.length === 2) {
-    const [a, b] = legs;
+    // Leg A clips first and B only hedges A's fills. Gate refuses an order past
+    // its position cap a few seconds after taking it, so a Gate leg goes first:
+    // a refusal there leaves nothing to hedge.
+    const [a, b] = isGate(legs[1]) && !isGate(legs[0]) ? [legs[1], legs[0]] : legs;
     if (a.action.kind !== 'open-market' || b.action.kind !== 'open-market') return null;
     if (!a.preview.qty || Number(a.preview.qty) !== Number(b.preview.qty)) return null;
     return {

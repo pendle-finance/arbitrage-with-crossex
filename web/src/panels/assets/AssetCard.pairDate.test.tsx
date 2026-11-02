@@ -213,15 +213,15 @@ describe('case 6: rule A1 picks the date for a perps-only unit', () => {
   it.each([
     ['the case 6 book: a spread at 27 Nov only, D = 25 Dec', [NOV], NOV],
     ['a spread at D wins over an earlier one', [NOV, DEC], DEC],
-    ['the latest spread before D, not one after it', [NOV, FEB], NOV],
+    ['#54: the card date D is not listed, so the latest listed date', [NOV, FEB], FEB],
     ['the latest of two before D', [SOON, NOV], NOV],
-    ['only after D: the soonest', [FEB, FEB + 90 * DAY], FEB],
+    ['#54: only dates after D listed, so the latest of them', [FEB, FEB + 90 * DAY], FEB + 90 * DAY],
   ])('%s', async (_label, listed, want) => {
     listSpreads(listed.map((m) => spreadRow(m)));
     const user = userEvent.setup();
     renderCard(case6Book());
     await showPairs(user);
-    await user.click(await screen.findByRole('button', { name: 'Open Boros leg' }));
+    await user.click(await screen.findByRole('button', { name: 'Open Boros position' }));
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     expect(flow?.borosOpenPrefill).toMatchObject({ base: 'BTC', longVenue: 'GATE', shortVenue: 'HYPERLIQUID', maturity: want, sizeBase: 1 });
   });
@@ -231,7 +231,7 @@ describe('case 6: rule A1 picks the date for a perps-only unit', () => {
     const user = userEvent.setup();
     renderCard(case6Book());
     await showPairs(user);
-    await user.click(await screen.findByRole('button', { name: 'Open Boros leg' }));
+    await user.click(await screen.findByRole('button', { name: 'Open Boros position' }));
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     expect(flow?.borosOpenPrefill?.maturity).toBe(NOV);
   });
@@ -240,7 +240,7 @@ describe('case 6: rule A1 picks the date for a perps-only unit', () => {
     const user = userEvent.setup();
     renderCard(case6Book());
     await showPairs(user);
-    await user.click(await screen.findByRole('button', { name: 'Open both Boros legs' }));
+    await user.click(await screen.findByRole('button', { name: 'Open both Boros positions' }));
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     expect(flow?.borosOpenPrefill?.maturity).toBe(DEC);
   });
@@ -250,7 +250,7 @@ describe('case 6: rule A1 picks the date for a perps-only unit', () => {
     const user = userEvent.setup();
     renderCard(case6Book([]));
     await showPairs(user);
-    await user.click(await screen.findByRole('button', { name: 'Open Boros leg' }));
+    await user.click(await screen.findByRole('button', { name: 'Open Boros position' }));
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     expect(flow?.borosOpenPrefill?.maturity).toBe(NOV);
   });
@@ -262,8 +262,8 @@ describe('case 6: rule A1 picks the date for a perps-only unit', () => {
     const user = userEvent.setup();
     renderCard(g);
     await showPairs(user);
-    expect(screen.queryByRole('button', { name: 'Open Boros leg' })).toBeNull();
-    await user.click(await screen.findByRole('button', { name: 'Open leg' }));
+    expect(screen.queryByRole('button', { name: 'Open Boros position' })).toBeNull();
+    await user.click(await screen.findByRole('button', { name: 'Open position' }));
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: null, shortVenue: 'HYPERLIQUID', maturity: NOV });
   });
@@ -286,7 +286,7 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
   const bundlesArm = async (user: ReturnType<typeof userEvent.setup>) => {
     await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
     await user.click(screen.getByRole('button', { name: /^OKX/ }));
-    await user.click(await screen.findByRole('button', { name: 'open both Boros legs' }));
+    await user.click(await screen.findByRole('button', { name: 'Open Boros on both venues' }));
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
     return flow?.borosOpenPrefill;
   };
@@ -306,7 +306,7 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
   it('no spread: the pairs card arms the same date', async () => {
     const user = userEvent.setup();
     renderCard(case5Book());
-    expect(await pairsArm(user, 'Open both Boros legs')).toMatchObject({ longVenue: 'OKX', shortVenue: 'LIGHTER', maturity: DEC });
+    expect(await pairsArm(user, 'Open both Boros positions')).toMatchObject({ longVenue: 'OKX', shortVenue: 'LIGHTER', maturity: DEC });
   });
 
   it('a bundle leg not open yet names its gap on the badge, not a bare "missing" (owner 2026-10-17)', async () => {
@@ -314,9 +314,9 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
     renderCard(case5Book());
     await user.click(screen.getByRole('tab', { name: /^Funding Bundles/ }));
     await user.click(screen.getByRole('button', { name: /^OKX/ }));
-    const rows = (await screen.findAllByText('not open yet')).map((el) => el.closest('tr') as HTMLElement);
+    const rows = (await screen.findAllByText('Not open yet')).map((el) => el.closest('tr') as HTMLElement);
     expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) expect(within(row).getByText('missing 1 BTC')).toBeInTheDocument();
+    for (const row of rows) expect(within(row).getByText('Missing 1 BTC')).toBeInTheDocument();
     expect(screen.queryByText('missing')).not.toBeInTheDocument();
   });
 
@@ -327,7 +327,7 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
     const user = userEvent.setup();
     renderCard(case5Book());
     await showPairs(user);
-    await screen.findByRole('button', { name: 'Open Boros leg' });
+    await screen.findByRole('button', { name: 'Open Boros position' });
     expect((await bundlesArm(user))?.maturity).toBe(NOV);
   });
 
@@ -335,57 +335,58 @@ describe('case 5: the Funding Bundles pair open uses the same date as the Fixed 
     okxLighter();
     const user = userEvent.setup();
     renderCard(case5Book());
-    expect((await pairsArm(user, 'Open Boros leg'))?.maturity).toBe(NOV);
+    expect((await pairsArm(user, 'Open Boros position'))?.maturity).toBe(NOV);
   });
 });
 
-describe('an open stops at what the venue lacks (owner 2026-10-16)', () => {
+describe('an open past what the venue lacks: the ticket learns of the held leg', () => {
   const capBook = (perps: number) =>
     book(
       'BTC',
       [perp('BTC', 'GATE', 'LONG', perps), perp('BTC', 'HYPERLIQUID', 'SHORT', perps)],
       [leg('BTC', 'GATE', 'LONG', 3, NOV), leg('BTC', 'HYPERLIQUID', 'SHORT', 3, DEC)],
     );
-  const reason = `Hyperliquid already holds 3 BTC at ${fmtDateShort(DEC)}`;
+  const held = `Gate Long holds 3 BTC at ${fmtDateShort(NOV)}.`;
 
-  it('perps 3: the card says why, and offers no HL open', async () => {
+  it('perps 3: the card takes the later HL leg (score date term) and opens the whole Gate leg', async () => {
     const user = userEvent.setup();
     renderCard(capBook(3));
     await showPairs(user);
-    expect(await screen.findByText(reason)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Open leg' })).toBeNull();
-    expect(screen.queryByRole('button', { name: /^Open (both )?Boros leg/ })).toBeNull();
+    const open = await screen.findByRole('button', { name: 'Open position' });
+    expect(open).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByText(/ holds /)).toBeNull();
+    await user.click(open);
+    await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
+    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: 'GATE', shortVenue: null, maturity: DEC, sizeBase: 3 });
+    expect(flow?.borosOpenPrefill?.overlaps).toMatchObject([{ venue: 'GATE', side: 'LONG', held, roomBase: 0, legs: [{ sizeBase: 3, maturity: NOV }] }]);
   });
 
-  it('perps 3: a held leg reads its size, a missing one held / target', async () => {
+  it('perps 3: a held leg reads its size, a missing one held / target (the card holds the later HL leg)', async () => {
     const user = userEvent.setup();
     renderCard(capBook(3));
     await showPairs(user);
     const row = (venue: string) => screen.getAllByRole('row').find((r) => (r.textContent ?? '').startsWith(`${venue}Boros`));
-    await screen.findByText(reason);
-    expect(row('Gate')?.textContent).toMatch(/3 BTC/);
-    expect(row('Gate')?.textContent).not.toMatch(/\//);
-    // Held elsewhere, so nothing to open here: the target still shows.
-    expect(row('Hyperliquid')?.textContent).toMatch(/0 \/ 3 BTC/);
-    expect(row('Hyperliquid')?.textContent).not.toMatch(/open /);
+    await screen.findByRole('button', { name: 'Open position' });
+    expect(row('Hyperliquid')?.textContent).toMatch(/3 BTC/);
+    expect(row('Hyperliquid')?.textContent).not.toMatch(/\//);
+    expect(row('Gate')?.textContent).toMatch(/0 \/ 3 BTC/);
+    expect(row('Gate')?.textContent).not.toMatch(/\/ 3 BTCopen /);
   });
 
-  it('perps 4: HL opens the 1 BTC it lacks, at the held single date', async () => {
+  it('perps 4: Gate opens all 3 BTC at the held single date; 1 BTC of it is room', async () => {
     const user = userEvent.setup();
     renderCard(capBook(4));
     await showPairs(user);
-    expect(await screen.findByText(reason)).toBeTruthy();
-    const opens = screen.getAllByRole('button', { name: 'Open leg' });
+    const opens = await screen.findAllByRole('button', { name: 'Open position' });
     expect(opens.map((b) => b.getAttribute('title'))).toEqual([
-      'Open only the Hyperliquid SHORT Boros leg, at 1 BTC',
-      'Open only the Gate LONG Boros leg, at 1 BTC',
+      'Open only the Gate Long Boros position, at 3 BTC',
+      'Open only the Hyperliquid Short Boros position, at 1 BTC',
     ]);
-    // The 3 BTC card: HL needs 3 here but lacks only 1, so the row says both.
-    const hl = screen.getAllByRole('row').find((r) => /^HyperliquidBoros.*0 \/ 3 BTC/.test(r.textContent ?? ''));
-    expect(hl?.textContent).toMatch(/0 \/ 3 BTCopen 1 BTC/);
+    expect(opens.some((b) => b.getAttribute('aria-disabled') === 'true')).toBe(false);
     await user.click(opens[0]);
     await waitFor(() => expect(flow?.borosOpenPrefill).not.toBeNull());
-    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: null, shortVenue: 'HYPERLIQUID', maturity: NOV, sizeBase: 1, size: 80_000 });
+    expect(flow?.borosOpenPrefill).toMatchObject({ longVenue: 'GATE', shortVenue: null, maturity: DEC, sizeBase: 3 });
+    expect(flow?.borosOpenPrefill?.overlaps).toMatchObject([{ venue: 'GATE', side: 'LONG', held, roomBase: 1 }]);
   });
 
   // Live 16 Oct: a $0.01 cut said "already holds" and "open 0.143" under "0 / 0.143".

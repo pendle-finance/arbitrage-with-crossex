@@ -37,7 +37,7 @@ interface TabState {
 }
 
 const NO_POSITIONS: PositionsResponse = { positions: [], exposure: [] };
-const NO_SPOT_READ = 'Add Spot read permission to see spot balances.';
+const NO_SPOT_READ = 'Set Spot Trading to Read Only to see Gate spot balances.';
 
 const ACCOUNT_A: TabState = {
   name: 'accountA',
@@ -218,7 +218,7 @@ describe('BalancesPanel layout', () => {
     expect(facts.compareDocumentPosition(rebalance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(rebalance.compareDocumentPosition(transfer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(rebalance.parentElement).toBe(transfer.parentElement);
-    expect(within(transfer).getByRole('button', { name: 'Manual Transfer' })).toBeInTheDocument();
+    expect(within(transfer).getByRole('button', { name: 'Manual transfer' })).toBeInTheDocument();
     expect([...facts.querySelectorAll('dt')].map((dt) => dt.textContent)).toEqual(['Borrowing', 'Interest now', 'Interest paid']);
   });
 
@@ -238,7 +238,7 @@ describe('BalancesPanel layout', () => {
     );
     renderWithClient(<BalancesPanel />);
     const transfer = await screen.findByRole('group', { name: 'Transfer' });
-    expect(within(transfer).getByRole('button', { name: 'Manual Transfer' })).toBeEnabled();
+    expect(within(transfer).getByRole('button', { name: 'Manual transfer' })).toBeEnabled();
     expect(await within(region('CrossEx assets')).findByText(/^Could not load Rebalance\./)).toBeInTheDocument();
     expect(transfer).toBeInTheDocument();
   });
@@ -264,7 +264,7 @@ describe('BalancesPanel layout', () => {
       </>,
     );
     const transfer = await screen.findByRole('group', { name: 'Transfer' });
-    await user.click(within(transfer).getByRole('button', { name: 'Manual Transfer' }));
+    await user.click(within(transfer).getByRole('button', { name: 'Manual transfer' }));
     const window = await screen.findByRole('dialog');
 
     answer = 'fail';
@@ -330,14 +330,14 @@ describe('BalancesPanel copy in every state', () => {
     await screen.findByRole('region', { name: 'Rebalance' });
     server.use(http.get('/api/rebalance', () => HttpResponse.json(GATE_ERROR, { status: 500 })));
     await user.click(screen.getByRole('button', { name: 'read rebalance again' }));
-    const staleChip = await screen.findByText(/^stale \d+s · retrying$/);
+    const staleChip = await screen.findByText(/^Stale \d+s · retrying$/);
     expect(staleChip.textContent, 'stale · retrying').not.toMatch(/[–—]/);
     stale.unmount();
 
     const loading = renderWithClient(
       <FreshnessButton dataUpdatedAt={0} staleError={false} title="Refetch all panels" onRefetch={() => {}} />,
     );
-    expect(screen.getByText('loading').textContent, 'before the first read').not.toMatch(/[–—]/);
+    expect(screen.getByText('Loading').textContent, 'before the first read').not.toMatch(/[–—]/);
     loading.unmount();
 
     const noFunds = await show({ ...ACCOUNT_B, account: accountBodies.noAssets });
@@ -510,7 +510,7 @@ describe('BalancesPanel spot group', () => {
     const assets = region('CrossEx assets');
     expect(within(assets).queryByRole('button', { name: 'Gate spot' })).toBeNull();
     expect(within(assets).getByText(NO_SPOT_READ)).toBeInTheDocument();
-    expect(within(assets).getByText('No non-zero balances')).toBeInTheDocument();
+    expect(within(assets).getByText('No balances')).toBeInTheDocument();
   });
 
   it('an empty CrossEx with no Spot read shows the deposit hint and the spot line', async () => {
@@ -526,6 +526,6 @@ describe('BalancesPanel spot group', () => {
     const rows = assetRows();
     expect(rows.map((row) => row.Coin)).toContain('Gate spot');
     expect(rows.find((row) => row.Coin === 'USDT SPOT')).toMatchObject({ Balance: '318.42' });
-    expect(within(assets).queryByText('No non-zero balances')).toBeNull();
+    expect(within(assets).queryByText('No balances')).toBeNull();
   });
 });

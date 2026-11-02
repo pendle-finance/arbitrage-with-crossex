@@ -623,7 +623,7 @@ describe('POST /api/transfer refusals', () => {
     for (const body of [HL_OUT, { coin: 'USDT', from: 'SPOT', to: 'CROSSEX', amount: '5' }]) {
       const res = await t.post(body);
       expect(res.statusCode, body.from).toBe(409);
-      expect(res.json().error.message).toBe('Gate is rate-limiting the account read. Try again in a few seconds.');
+      expect(res.json().error.message).toBe('Gate is limiting requests from this account. Try again in a few seconds.');
     }
 
     expect(calls.account).toBe(3);
@@ -640,7 +640,7 @@ describe('POST /api/transfer refusals', () => {
     const res = await t.post({ coin: 'USDT', from: 'SPOT', to: 'CROSSEX', amount: '5' });
 
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('Gate is rate-limiting the account read. Try again in a few seconds.');
+    expect(res.json().error.message).toBe('Gate is limiting requests from this account. Try again in a few seconds.');
     expect(calls.spot).toBe(2);
     expect(sent).toHaveLength(0);
     expect(t.transfers.read()).toBeNull();

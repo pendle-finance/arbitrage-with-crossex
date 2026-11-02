@@ -72,7 +72,7 @@
   }
 
   .chip-sm {
-    @apply px-1 py-[2.5px] text-[9.5px];
+    @apply px-1 py-[2.5px] text-[11px];
   }
 
   /* PpSegmentedControlV2 — the mock's control is a row of BUTTED cells, each

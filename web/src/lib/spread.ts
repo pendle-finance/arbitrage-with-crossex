@@ -12,3 +12,20 @@ export const spreadName = (base: string, venues: SpreadVenues): string => `${bas
 export const spreadShareVenue = (venues: SpreadVenues): string => venues.join('_');
 
 export const isSpreadLeg = (leg: { spreadVenues?: SpreadVenues | null }): boolean => Boolean(leg.spreadVenues);
+
+export type VenueLeg = { venue: string; side: 'LONG' | 'SHORT'; size: number };
+
+const otherSide = (side: 'LONG' | 'SHORT'): 'LONG' | 'SHORT' => (side === 'LONG' ? 'SHORT' : 'LONG');
+
+export function venueLegsOf(
+  leg: { venue: string; side: 'LONG' | 'SHORT'; spreadVenues?: SpreadVenues | readonly string[] | null },
+  size: number,
+): VenueLeg[] {
+  const venues = leg.spreadVenues;
+  if (!venues) return [{ venue: leg.venue, side: leg.side, size }];
+  if (venues.length !== 2) return venues.map((venue) => ({ venue, side: leg.side, size }));
+  return [
+    { venue: venues[0], side: leg.side, size },
+    { venue: venues[1], side: otherSide(leg.side), size },
+  ];
+}

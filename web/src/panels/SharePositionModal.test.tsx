@@ -111,9 +111,9 @@ describe('SharePositionModal', () => {
   it('explains the manual image attach and the address privacy', () => {
     mount();
     expect(screen.getByText(/X can't attach an image from a link/)).toBeInTheDocument();
-    expect(screen.getByText(/wallet address is not part of the link/)).toBeInTheDocument();
+    expect(screen.getByText(/link and image do not show your wallet address/)).toBeInTheDocument();
     // The address is not in the link, but it IS recorded — say both.
-    expect(screen.getByText(/does store\s+your address with the short code/)).toBeInTheDocument();
+    expect(screen.getByText(/stores your address with the link/)).toBeInTheDocument();
   });
 
   it('sends the tracked address raw alongside the payload — never inside it', async () => {

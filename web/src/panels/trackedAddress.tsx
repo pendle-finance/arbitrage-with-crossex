@@ -4,6 +4,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useBorosAgent } from '../api/queries';
+import { t } from '../i18n';
 import { writeJson } from '../lib/storage';
 import { readWalletAccount, watchWalletAccount } from '../lib/wallet';
 import { loadStored, short, STRATEGY_STORAGE_KEY, type Stored } from './HomeControls';
@@ -181,8 +182,8 @@ export function useActiveWallet(): ActiveWallet {
     loginLabel:
       address && !canTrade && canLogIn
         ? state === 'expired'
-          ? `Renew login for ${short(address)}`
-          : `Log in to trade ${short(address)}`
+          ? t('accounts.tracked.renewLogin', { address: short(address) })
+          : t('accounts.tracked.logInToTrade', { address: short(address) })
         : null,
     openLogin: () => tracked?.openLogin(),
   };

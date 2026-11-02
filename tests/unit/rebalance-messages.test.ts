@@ -132,8 +132,8 @@ describe('halt texts', () => {
   it('a message and its hint always have a period between them', () => {
     const bare403 = Object.assign(new Error('Request failed with status code 403'), { response: { status: 403 } });
 
-    expect(haltReasonFor(bare403)).toBe('Request failed with status code 403. Check the API key/secret in Settings.');
-    expect(haltReasonFor(gateError(403, 'FORBIDDEN', 'forbidden.'))).toBe('Forbidden. Check the API key/secret in Settings.');
+    expect(haltReasonFor(bare403)).toBe('Request failed with status code 403. Check the Gate API key and secret in Settings.');
+    expect(haltReasonFor(gateError(403, 'FORBIDDEN', 'forbidden.'))).toBe('Forbidden. Check the Gate API key and secret in Settings.');
   });
 
   it('no halt text carries the raw Gate error prefix', () => {

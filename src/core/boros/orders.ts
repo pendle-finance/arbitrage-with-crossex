@@ -365,7 +365,7 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
         gasTopUpMarket: input.gasTopUpMarket,
       });
       submitted.forEach(({ index, req }, i) => {
-        byIndex.set(index, fills[i] ?? failed(req, new Error(`no result returned for leg ${index + 1}`)));
+        byIndex.set(index, fills[i] ?? failed(req, new Error(`no result returned for order ${index + 1}`)));
       });
     } catch (err) {
       for (const { index, req } of submitted) byIndex.set(index, failed(req, err));
@@ -488,8 +488,9 @@ export function classifyLegFailure(err: unknown): BorosLegFailureCode {
     // (A refusal BEFORE submission never gets here as unknown — the venue
     // adapter's `neverSentLeg` folds it back to a plain rejection, and a
     // `[SIMULATE]` refusal provably sent nothing, whatever its status.)
+    // A 408 is the relayer still sending the batch ("do not resubmit").
     const status = (err.details as { status?: unknown } | undefined)?.status;
-    if (!simulated && typeof status === 'number' && status >= 500) return 'unknown';
+    if (!simulated && typeof status === 'number' && (status >= 500 || status === 408)) return 'unknown';
   }
   if (!simulated && /TIMEOUT|NETWORK|UNREACHABLE|ECONN|ABORT/.test(text)) return 'unknown';
   return 'rejected';

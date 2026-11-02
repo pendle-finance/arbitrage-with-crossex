@@ -43,8 +43,8 @@ describe('quick-pick coins', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'HYPE' }));
 
-    expect(await screen.findByLabelText('LONG venue')).toBeInTheDocument();
-    expect(screen.getByLabelText('SHORT venue')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Long venue')).toBeInTheDocument();
+    expect(screen.getByLabelText('Short venue')).toBeInTheDocument();
     // One venue option per dropdown for each fixture venue.
     expect(await screen.findAllByRole('option', { name: 'Gate' })).toHaveLength(2);
     expect(screen.getAllByRole('option', { name: 'Binance' })).toHaveLength(2);

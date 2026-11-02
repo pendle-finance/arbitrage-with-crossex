@@ -5,6 +5,7 @@
  */
 import { ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SignedNumber } from '../components/SignedNumber';
@@ -18,7 +19,8 @@ import { usePreviewDebounced } from '../trade/usePreview';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 
 /**
- * ⚠ Accurate for a PAIR, which is not what the single-leg note says.
+ * ⚠ The pair note (`accounts.closePair.pairNote`) is accurate for a PAIR,
+ * which is not what the single-leg note says.
  *
  * Only the first leg carries the mid ± slippage band; the hedge leg is sent
  * as a plain MARKET IOC on purpose, because a book-mid limit band cannot
@@ -27,8 +29,6 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
  * decide.ts). Claiming the band covers both would promise protection the
  * hedge leg does not have.
  */
-const PAIR_NOTE =
-  "The first leg is a reduce-only IOC limit at mid ± slippage; the hedge leg is sent at market, inside the venue's own price band. Neither can increase a position or rest on the book.";
 
 /**
  * The pair close as a FORM: what is being closed, at what price, for what fee.
@@ -50,6 +50,7 @@ export function ClosePairForm({
   /** symbol → live position, for the uPnL each close realises. */
   livePositions?: Map<string, CrossexPosition>;
 }) {
+  const { t } = useTranslation();
   const flow = useTradeFlowOptional();
   const pairGroupId = useMemo(() => uuid(), []);
   /**
@@ -78,6 +79,8 @@ export function ClosePairForm({
   const qtyEps = Math.max(1e-9, maxCloseQty * 1e-7);
   const qtyInvalid =
     qtyStr.trim() === '' || !Number.isFinite(qtyNum) || qtyNum <= 0 || qtyNum > maxCloseQty + qtyEps;
+  const atMax = qtyNum >= maxCloseQty - qtyEps;
+  const closeQtyOf = (legQty: number) => (atMax ? legQty : Math.min(qtyNum, legQty));
   // null, not [] — ExecuteControl disables on `!actions`, and an empty array
   // is truthy, so [] would leave the button live with nothing to send.
   const actions: ActionInput[] | null =
@@ -94,8 +97,8 @@ export function ClosePairForm({
           // typed size can be the whole of the smaller leg and only part of
           // the larger one, and a qty-less action there would close the
           // larger leg entirely — leaving the difference naked.
-          ...(l.partial || Math.min(qtyNum, l.qty) < l.qty - Math.max(1e-9, l.qty * 1e-7)
-            ? { qty: String(Math.min(qtyNum, l.qty)) }
+          ...(l.partial || closeQtyOf(l.qty) < l.qty - Math.max(1e-9, l.qty * 1e-7)
+            ? { qty: fieldValue(closeQtyOf(l.qty)) }
             : {}),
         }))
       : null;
@@ -120,7 +123,7 @@ export function ClosePairForm({
   const totalPnl = realized.some((r) => r !== null)
     ? realized.reduce<number>((s, r) => s + (r ?? 0), 0)
     : null;
-  // Which leg is the hedge (market IOC) vs the band-carrying first leg: see PAIR_NOTE.
+  // Which leg is the hedge (market IOC) vs the band-carrying first leg: see accounts.closePair.pairNote.
   const sideOf = (symbol: string): 'LONG' | 'SHORT' => {
     const live = livePositions?.get(symbol);
     const q = Number(live?.positionQty ?? NaN);
@@ -142,16 +145,16 @@ export function ClosePairForm({
           const live = livePositions?.get(l.symbol);
           const held = live ? Math.abs(Number(live.positionQty)) : null;
           const { quote } = parseSymbol(l.symbol);
-          const slice = held !== null && l.qty < held * 0.9995;
+          const slice = l.partial === true;
           return (
             <LegCard
               key={l.symbol}
               kind="Perp"
               venue={prettyVenue(l.venue)}
               side={sideOf(l.symbol)}
-              sub={`${base}-${quote || 'USDT'} · ${slice ? 'pair slice' : 'whole position'}`}
+              sub={`${base}-${quote || 'USDT'} · ${t(slice ? 'accounts.closePair.pairSlice' : 'accounts.closePair.wholePosition')}`}
               value={`${sig(l.qty)} ${base}`}
-              valueSub={slice && held !== null ? `of ${sig(held)} on the venue` : undefined}
+              valueSub={slice && held !== null ? t('accounts.closePair.ofHeld', { held: sig(held) }) : undefined}
             />
           );
         })}
@@ -162,16 +165,16 @@ export function ClosePairForm({
           closes the pair exactly as before. */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-3">
-          <FieldLabel htmlFor={`close-pair-qty-${base}`}>Close size · both legs</FieldLabel>
+          <FieldLabel htmlFor={`close-pair-qty-${base}`}>{t('accounts.closePair.sizeLabel')}</FieldLabel>
           {/* The ceiling — this pair's own allocation — stated where the
               number is typed, and clickable. */}
           <button
             type="button"
             className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-            title="Close this pair's whole allocation on both legs"
+            title={t('accounts.closePair.maxTitle')}
             onClick={() => setQtyEdited(fieldValue(maxCloseQty))}
           >
-            max{' '}
+            {t('accounts.closePair.max')}{' '}
             <span className="text-link underline decoration-link/40 underline-offset-2">
               {sig(maxCloseQty)} {base}
             </span>
@@ -184,15 +187,15 @@ export function ClosePairForm({
             inputMode="decimal"
             value={qtyStr}
             onChange={(e) => setQtyEdited(e.target.value)}
-            aria-label="Close size, applied to both legs"
+            aria-label={t('accounts.closePair.sizeAria')}
           />
         </AffixedInput>
         {qtyInvalid ? (
           <span className="text-[11px] text-rose-300">
-            size must be above 0 and at most {sig(maxCloseQty)} {base}
+            {t('accounts.closePair.sizeInvalid', { max: sig(maxCloseQty), base })}
           </span>
         ) : (
-          <span className="text-[11px] text-ink-400">each venue floors to its own lot — see the rows above</span>
+          <span className="text-[11px] text-ink-400">{t('accounts.closePair.sizeHint')}</span>
         )}
       </div>
 
@@ -202,8 +205,8 @@ export function ClosePairForm({
             {/* The aggregate only: each leg's own figure is in the table. */}
             <div className="flex items-end justify-between gap-3">
               <div className="flex flex-col">
-                <span className="text-[12.5px] text-ink-50">PnL to realise</span>
-                <span className="text-[11px] text-ink-400">both legs · before fees</span>
+                <span className="text-[12.5px] text-ink-50">{t('accounts.closePair.pnlToRealise')}</span>
+                <span className="text-[11px] text-ink-400">{t('accounts.closePair.pnlSub')}</span>
               </div>
               <span className="num text-lg font-semibold">
                 {totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
@@ -212,11 +215,11 @@ export function ClosePairForm({
             <table className="w-full">
               <thead>
                 <tr className="text-[12px] font-normal text-ink-300">
-                  <th className="pb-1 text-left font-medium">leg</th>
-                  <th className="pb-1 text-right font-medium">limit px</th>
-                  <th className="pb-1 text-right font-medium">slip</th>
-                  <th className="pb-1 text-right font-medium">pnl</th>
-                  <th className="pb-1 text-right font-medium">est fee</th>
+                  <th className="pb-1 text-left font-medium">{t('accounts.closePair.head.leg')}</th>
+                  <th className="pb-1 text-right font-medium">{t('accounts.closePair.head.limitPx')}</th>
+                  <th className="pb-1 text-right font-medium">{t('accounts.closePair.head.slip')}</th>
+                  <th className="pb-1 text-right font-medium">{t('accounts.closePair.head.pnl')}</th>
+                  <th className="pb-1 text-right font-medium">{t('accounts.closePair.head.estFee')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -225,7 +228,7 @@ export function ClosePairForm({
                     <td className="py-1.5">
                       <span className="inline-flex items-center gap-1.5">
                         <Chip sm tone={p.side === 'BUY' ? 'green' : 'red'} className="font-semibold">
-                          {p.side}
+                          {t(p.side === 'BUY' ? 'app.side.buy' : 'app.side.sell')}
                         </Chip>
                         <span className="text-[12px] text-ink-50">{prettyVenue(legs[i]?.venue ?? '')}</span>
                         <span className="num text-[11px] text-ink-400">{p.qty ? sig(p.qty) : ''}</span>
@@ -237,9 +240,9 @@ export function ClosePairForm({
                       {i > 0 ? (
                         <span
                           className="text-[11px] text-ink-400"
-                          title="Sent as a market IOC inside the venue's price-limit band."
+                          title={t('accounts.closePair.marketTitle')}
                         >
-                          market IOC
+                          {t('accounts.closePair.marketIoc')}
                         </span>
                       ) : p.price ? (
                         sig(p.price)
@@ -292,10 +295,10 @@ export function ClosePairForm({
             value={slipStr}
             onChange={setSlipStr}
             invalid={slipInvalid}
-            invalidText="slippage must be in (0, 10]"
-            inputAriaLabel="Slippage %"
-            title="The band on the first leg's limit: mid ± this much. The hedge leg goes at market."
-            hint="Max distance from mid the first leg's limit will accept. A wider band may be needed for a large size or a thin book."
+            invalidText={t('accounts.closePair.slipInvalid')}
+            inputAriaLabel={t('accounts.closePair.slipAria')}
+            title={t('accounts.closePair.slipTitle')}
+            hint={t('accounts.closePair.slipHint')}
             quick={['0.2', '0.5', '1', '2']}
           />
         </div>
@@ -308,7 +311,7 @@ export function ClosePairForm({
           tone="red"
           label={
             <>
-              Close both
+              {t('accounts.closePair.closeBoth')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -333,9 +336,8 @@ export function ClosePairForm({
         />
         {/* The mechanics, once, under the button — with the qualification
             about which leg carries the band as the hover text. */}
-        <p className="text-[11px] leading-relaxed text-ink-400" title={PAIR_NOTE}>
-          <span className="font-medium text-ink-200">Reduce-only</span> — first leg limit at mid ± slippage;
-          hedge leg at market. Neither can increase a position or rest on the book.
+        <p className="text-[11px] leading-relaxed text-ink-400" title={t('accounts.closePair.pairNote')}>
+          <Trans i18nKey="accounts.closePair.mechanics" components={{ b: <span className="font-medium text-ink-200" /> }} />
         </p>
       </div>
     </div>

@@ -180,3 +180,12 @@ export function parseSymbol(symbol: string): {
   const base = parts.slice(2, -1).join('_');
   return { exchange, business, base, quote, pair: `${base}_${quote}` };
 }
+
+const EXCLUDED_QUOTE_TWINS: Record<string, string> = {
+  BINANCE: 'USDC',
+  OKX: 'USDC',
+  BYBIT: 'USDC',
+};
+
+export const isQuoteTwin = (exchange: string, quote: string): boolean =>
+  EXCLUDED_QUOTE_TWINS[exchange] === quote;

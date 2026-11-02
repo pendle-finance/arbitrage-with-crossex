@@ -1,27 +1,8 @@
-/**
- * Asset-view preferences — the ONLY durable state the asset view has:
- *   - sinceSec: the user-chosen start date the lifetime sums are windowed to
- *     (0 = all time), and
- *   - exclusions: legs (or portions of legs) the user does not consider part
- *     of the funding farm (see assetModel.ts Exclusions).
- *
- * Stored under its own key (`crossex.assetView.v1`), per book. Everything else
- * the view shows is derived from the venue feeds, which is the point of the
- * model: lose this key and only preferences are lost, never numbers.
- */
+import type { AssetPrefsPatch } from '../../api/queries';
 import { readJson, writeJson } from '../../lib/storage';
-import { bookKey } from '../bookId';
 import type { Exclusions } from './assetModel';
 
-const KEY = 'crossex.assetView.v1';
-
-export interface AssetViewPrefs {
-  sinceByAsset: Record<string, number>;
-  exclusions: Exclusions;
-  /** Per-Boros-leg "counted from" (borosKey → unix sec): history before it
-   * belongs to an earlier use of the same market, not to this farm. */
-  legSince: Record<string, number>;
-}
+const LEGACY_KEY = 'crossex.assetView.v1';
 
 /** The `legSince` query value: `marketId:sec` pairs, sorted for a stable key. */
 export function legSinceParam(legSince: Record<string, number>): string {
@@ -33,65 +14,36 @@ export function legSinceParam(legSince: Record<string, number>): string {
     .join(',');
 }
 
-type AllBooks = Record<string, AssetViewPrefs>;
-
-const EMPTY: AssetViewPrefs = { sinceByAsset: {}, exclusions: {}, legSince: {} };
-
-const validate = (parsed: unknown): AllBooks => {
-  if (!parsed || typeof parsed !== 'object') return {};
-  const out: AllBooks = {};
-  for (const [book, v] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!v || typeof v !== 'object') continue;
-    const p = v as Partial<AssetViewPrefs> & { sinceSec?: unknown };
-    const legSince: Record<string, number> = {};
-    if (p.legSince && typeof p.legSince === 'object') {
-      for (const [k, q] of Object.entries(p.legSince)) {
-        const n = Number(q);
-        if (k.startsWith('boros:') && Number.isFinite(n) && n > 0) legSince[k] = n;
-      }
-    }
-    const sinceByAsset: Record<string, number> = {};
-    if (p.sinceByAsset && typeof p.sinceByAsset === 'object') {
-      for (const [base, q] of Object.entries(p.sinceByAsset)) {
-        const n = Number(q);
-        // 0 is "All time", a choice of its own.
-        if (Number.isFinite(n) && n >= 0) sinceByAsset[base.toUpperCase()] = n;
-      }
-    }
-    // Legacy shape carried ONE app-wide sinceSec — the window is per asset
-    // now; a legacy date is simply dropped (preferences only, never numbers).
-    const exclusions: Exclusions = {};
-    if (p.exclusions && typeof p.exclusions === 'object') {
-      for (const [k, q] of Object.entries(p.exclusions)) {
-        // Exclusions are Boros-only (his call 2026-09-09): a perp leg is
-        // never set aside, so a legacy `perp:` entry is dropped rather than
-        // left silently shaping the numbers with no row to restore it from.
-        if (!k.startsWith('boros:')) continue;
-        if (q === 'all') exclusions[k] = 'all';
-        else if (q && typeof q === 'object') {
-          // The priced-slice shape. A bad qty drops the entry; a bad price
-          // keeps the qty and falls back to pro-rata.
-          const slice = q as { qty?: unknown; at?: unknown };
-          const qty = Number(slice.qty);
-          if (!Number.isFinite(qty) || qty <= 0) continue;
-          const at = Number(slice.at);
-          // A Boros fixed rate can be negative (negative-funding regime), so
-          // only a non-number is dropped — the sign is part of the price.
-          exclusions[k] = Number.isFinite(at) ? { qty, at } : { qty };
-        } else if (Number.isFinite(Number(q)) && Number(q) > 0) exclusions[k] = Number(q);
-      }
-    }
-    out[book] = { sinceByAsset, exclusions, legSince };
-  }
-  return out;
-};
-
-export function loadPrefs(bookId: string | null): AssetViewPrefs {
-  return readJson<AllBooks>(KEY, {}, validate)[bookKey(bookId)] ?? EMPTY;
+export function readLegacyPrefs(): unknown {
+  return readJson<unknown>(LEGACY_KEY, null, (parsed) => parsed);
 }
 
-export function savePrefs(bookId: string | null, prefs: AssetViewPrefs): void {
-  const all = readJson<AllBooks>(KEY, {}, validate);
-  all[bookKey(bookId)] = prefs;
-  writeJson(KEY, all);
+export function clearLegacyPrefs(): void {
+  localStorage.removeItem(LEGACY_KEY);
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+function legacyBook(map: unknown, book: string): Record<string, unknown> | null {
+  const entry = isRecord(map) ? map[book] : undefined;
+  return isRecord(entry) ? entry : null;
+}
+
+export function legacyExclusionsFor(book: string): Exclusions {
+  const exclusions = legacyBook(readLegacyPrefs(), book)?.exclusions;
+  if (!isRecord(exclusions)) return {};
+  return Object.fromEntries(
+    Object.entries(exclusions).filter(([k, v]) => k.startsWith('boros:') && v !== null),
+  ) as Exclusions;
+}
+
+export function dropLegacyKeys(book: string, patch: AssetPrefsPatch): void {
+  const map = readLegacyPrefs();
+  const entry = legacyBook(map, book);
+  if (!entry) return;
+  for (const [section, keys] of Object.entries(patch)) {
+    const target = entry[section];
+    if (isRecord(target)) for (const key of Object.keys(keys ?? {})) delete target[key];
+  }
+  writeJson(LEGACY_KEY, map);
 }

@@ -42,7 +42,7 @@ describe('cancel-and-close when Boros limits reads', () => {
     app = makeTestApp({ borosFetch: limitedAccountReads([1]), getBorosOrders: () => relay(calls) });
     const res = await close({ clientOrderId: 'coid-429-pre', size: 25_000 });
     expect(res.statusCode).toBe(503);
-    expect(res.json().error.message).toBe('Boros is limiting reads. Nothing was sent. Try again in a minute.');
+    expect(res.json().error.message).toBe('Boros is limiting requests. Nothing was sent. Try again in a minute.');
     expect(calls).toEqual([]);
   });
 
@@ -52,7 +52,7 @@ describe('cancel-and-close when Boros limits reads', () => {
     const res = await close({ clientOrderId: 'coid-429-post', size: 25_000 });
     expect(res.statusCode).toBe(503);
     expect(res.json().error.message).toBe(
-      'Boros is limiting reads. Your open orders on this market were cancelled. The close was not sent. Try again in a minute.',
+      'Boros is limiting requests. Your open orders on this market were cancelled. The close was not sent. Try again in a minute.',
     );
     expect(calls).toEqual(['cancel']);
   });

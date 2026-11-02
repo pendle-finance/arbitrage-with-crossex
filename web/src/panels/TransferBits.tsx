@@ -1,5 +1,6 @@
 import { ChevronRight } from 'lucide-react';
 import { useId } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { GateAccount, RebalanceBucket, SpotBalance, TransferCoin, TransferPath } from '../api/types';
 import { TokenIcon, VenueIcon } from '../components/AssetIcon';
 import { HoverCard } from '../components/HoverCard';
@@ -8,7 +9,7 @@ import { fmtAbout, fmtUsd, num, sig } from '../lib/fmt';
 import { roundToStep, stripZeros } from '../lib/ticks';
 import { Ext, GATE_API_KEYS_URL, PERMISSION_ROWS } from './onboardingBits';
 import { Facts, keyOf, Term, type Fact } from './RebalanceHovers';
-import { GATE_SPOT, HOVER, WALLET_LABEL } from './rebalanceCopy';
+import { gateSpot, HOVER, WALLET_LABEL } from './rebalanceCopy';
 
 export type CrossexWallet = Exclude<GateAccount, 'SPOT'>;
 
@@ -26,11 +27,7 @@ export function coinOf(wallet: CrossexWallet): TransferCoin {
 }
 
 export function walletName(account: GateAccount): string {
-  return account === 'SPOT' ? GATE_SPOT : WALLET_LABEL[keyOf(WALLET[account])];
-}
-
-export function destinationOf(to: GateAccount): string {
-  return `to ${walletName(to)}`;
+  return account === 'SPOT' ? gateSpot() : WALLET_LABEL[keyOf(WALLET[account])];
 }
 
 export function WalletList({
@@ -46,12 +43,13 @@ export function WalletList({
   disabled: boolean;
   onPick: (next: CrossexWallet) => void;
 }) {
+  const { t } = useTranslation();
   const headerId = useId();
   const groupName = useId();
   return (
     <div role="radiogroup" aria-labelledby={headerId} className="flex flex-col gap-1.5">
       <span id={headerId} className="text-[12px] font-normal leading-[14.52px] text-ink-300">
-        {`${side} · CrossEx wallet`}
+        {t(side === 'From' ? 'accounts.transfer.fromWallet' : 'accounts.transfer.toWallet')}
       </span>
       {WALLET_ORDER.map((account) => {
         const { coin, venue } = WALLET[account];
@@ -83,14 +81,15 @@ function spotAvailable(spot: SpotBalance[], coin: TransferCoin): number {
 }
 
 export function SpotTile({ side, spot, disabled }: { side: 'From' | 'To'; spot: SpotBalance[] | null; disabled: boolean }) {
+  const { t } = useTranslation();
   const headerId = useId();
   return (
     <div role="group" aria-labelledby={headerId} className={`flex flex-col gap-1.5 ${disabled ? 'opacity-50' : ''}`}>
       <span id={headerId} className="text-[12px] font-normal leading-[14.52px] text-ink-300">
-        {side}
+        {t(side === 'From' ? 'accounts.rebalanceModal.from' : 'accounts.rebalanceModal.to')}
       </span>
       <div className="flex flex-col items-start gap-1 rounded border border-dashed border-gold/40 px-3 py-2.5 text-xs">
-        <HoverCard label={GATE_SPOT} icon={false} widthPx={200}>
+        <HoverCard label={gateSpot()} icon={false} widthPx={200}>
           {HOVER.gateSpot}
         </HoverCard>
         {spot ? (
@@ -102,7 +101,7 @@ export function SpotTile({ side, spot, disabled }: { side: 'From' | 'To'; spot: 
             {`${num(spotAvailable(spot, 'USDC'))} USDC`}
           </span>
         ) : (
-          <span className="num text-ink-300">balance hidden</span>
+          <span className="num text-ink-300">{t('accounts.transfer.balanceHidden')}</span>
         )}
       </div>
     </div>
@@ -128,21 +127,27 @@ export function TransferFacts({
   showYouGet: boolean;
   disabled: boolean;
 }) {
+  const { t } = useTranslation();
   const items: Fact[] = [
-    { key: 'fee', label: <Term label="Fee" text={HOVER.fee} />, value: path.feeUsd === 0 ? 'free' : fmtUsd(path.feeUsd) },
-    { key: 'time', label: <Term label="Time" text={HOVER.time} />, value: fmtAbout(path.seconds) },
-    { key: 'min', label: <Term label="Minimum" text={HOVER.minimum} />, value: sig(path.min) },
+    {
+      key: 'fee',
+      label: <Term label={t('common.fee')} text={HOVER.fee} />,
+      value: path.feeUsd === 0 ? t('accounts.transfer.free') : fmtUsd(path.feeUsd),
+    },
+    { key: 'time', label: <Term label={t('accounts.rebalanceModal.time')} text={HOVER.time} />, value: fmtAbout(path.seconds) },
+    { key: 'min', label: <Term label={t('accounts.transfer.minimum')} text={HOVER.minimum} />, value: sig(path.min) },
   ];
   if (showYouGet) {
-    items.push({ key: 'get', label: 'You get', value: `${fmtTransferAmount(Math.max(0, amount - path.feeUsd))} ${path.coin}` });
+    items.push({ key: 'get', label: t('accounts.transfer.youGet'), value: `${fmtTransferAmount(Math.max(0, amount - path.feeUsd))} ${path.coin}` });
   }
   return <Facts items={items} className={`grid w-fit grid-cols-2 gap-x-7 gap-y-3 ${disabled ? 'opacity-50' : ''}`} />;
 }
 
 export function NoSpotReadHow() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col gap-2 text-xs">
-      <Ext href={GATE_API_KEYS_URL}>API Management</Ext>
+      <Ext href={GATE_API_KEYS_URL}>{t('accounts.transfer.apiManagement')}</Ext>
       <ul className="flex flex-col gap-1">
         {PERMISSION_ROWS.map((row) => (
           <li key={row.label} className="grid grid-cols-3 gap-2">
@@ -157,11 +162,12 @@ export function NoSpotReadHow() {
 }
 
 export function NoSpotReadLine() {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-wrap items-center gap-2 rounded border border-dashed border-ink-600 px-3 py-2 text-xs">
-      <span className="text-ink-200">Add Spot read permission to see spot balances.</span>
+      <span className="text-ink-200">{t('accounts.transfer.addSpotRead')}</span>
       <HoverCard
-        label={<span className="text-link">How <ChevronRight size={12} aria-hidden className="inline" /></span>}
+        label={<span className="text-link">{t('accounts.transfer.how')} <ChevronRight size={12} aria-hidden className="inline" /></span>}
         icon={false}
         underline={false}
         widthPx={400}

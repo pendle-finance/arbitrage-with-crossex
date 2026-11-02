@@ -1,6 +1,8 @@
+import type { TFunction } from 'i18next';
 import { Check, X } from 'lucide-react';
 import { useCredentials } from '../../api/queries';
 import { Fragment, type ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { CredentialsForm } from '../../components/CredentialsForm';
 import { HoverCard } from '../../components/HoverCard';
 import { Ext, GATE_API_KEYS_URL, GATE_CROSSEX_URL, GATE_SIGNUP_URL, PERMISSION_ROWS } from '../onboardingBits';
@@ -10,49 +12,30 @@ import type { SetupRowProps } from './setupState';
 /** The Gate steps to a key, as the 1.7.0 guide had them. The terminal cannot
  * check them, so they are a list, not checklist rows. The hover keeps the
  * guide's detail; step 4 also shows the key settings under it. */
-const GATE_STEPS: { title: string; href: string; site: string; detail: ReactNode }[] = [
+const gateSteps = (t: TFunction): { title: string; href: string; site: string; detail: ReactNode }[] => [
   {
-    title: 'Fund Gate',
+    title: t('app.gateSteps.fundGate'),
     href: GATE_SIGNUP_URL,
     site: 'gate.com/signup',
-    detail: (
-      <>
-        Sign up on <Ext href={GATE_SIGNUP_URL}>gate.com/signup</Ext>. Deposit the capital you will deploy.
-      </>
-    ),
+    detail: <Trans i18nKey="app.gateSteps.fundGateDetail" components={{ a: <Ext href={GATE_SIGNUP_URL} /> }} />,
   },
   {
-    title: 'Enable CrossEx',
+    title: t('app.gateSteps.enable'),
     href: GATE_CROSSEX_URL,
     site: 'gate.com/crossex',
-    detail: (
-      <>
-        Switch on CrossEx at <Ext href={GATE_CROSSEX_URL}>gate.com/crossex</Ext>. The Cross-Exchange key permission
-        and transfers need it first.
-      </>
-    ),
+    detail: <Trans i18nKey="app.gateSteps.enableDetail" components={{ a: <Ext href={GATE_CROSSEX_URL} /> }} />,
   },
   {
-    title: 'Fund CrossEx',
+    title: t('app.gateSteps.fundCrossex'),
     href: GATE_CROSSEX_URL,
     site: 'gate.com/crossex',
-    detail: (
-      <>
-        Move funds into <Ext href={GATE_CROSSEX_URL}>CrossEx</Ext>, Gate's cross-exchange margin account. Every
-        CrossEx trade uses this margin.
-      </>
-    ),
+    detail: <Trans i18nKey="app.gateSteps.fundCrossexDetail" components={{ a: <Ext href={GATE_CROSSEX_URL} /> }} />,
   },
   {
-    title: 'Create an API key',
+    title: t('app.gateSteps.createKey'),
     href: GATE_API_KEYS_URL,
-    site: 'API Management',
-    detail: (
-      <>
-        In <Ext href={GATE_API_KEYS_URL}>API Management</Ext>, create an APIv4 key for your Trading account. Set IP
-        Permissions to "Later" unless your IP is fixed.
-      </>
-    ),
+    site: t('app.gateSteps.apiManagement'),
+    detail: <Trans i18nKey="app.gateSteps.createKeyDetail" components={{ a: <Ext href={GATE_API_KEYS_URL} /> }} />,
   },
 ];
 
@@ -64,11 +47,12 @@ const GATE_STEPS: { title: string; href: string; site: string; detail: ReactNode
  * list semantics without boxes of their own.
  */
 function KeyGuide({ showSteps }: { showSteps: boolean }) {
+  const { t } = useTranslation();
   return (
     <div className="grid grid-cols-[auto_auto_auto_1fr] items-baseline gap-x-2 gap-y-1 text-xs">
       {showSteps && (
-        <ol aria-label="Steps to a key" className="contents">
-          {GATE_STEPS.map((step, i) => (
+        <ol aria-label={t('app.gateSteps.aria')} className="contents">
+          {gateSteps(t).map((step, i) => (
             <li key={step.title} className="contents">
               <span className="num text-ink-500">{i + 1}</span>
               <span className="whitespace-nowrap font-medium text-ink-100">
@@ -84,7 +68,7 @@ function KeyGuide({ showSteps }: { showSteps: boolean }) {
         </ol>
       )}
       <div className={`col-span-4 text-ink-300 ${showSteps ? 'mt-1' : ''}`}>
-        APIv4 key · Trading account · IP Permissions: Later
+        {t('app.gateSteps.summary')}
       </div>
       {PERMISSION_ROWS.map((permission) => (
         <Fragment key={permission.label}>
@@ -101,17 +85,18 @@ function KeyGuide({ showSteps }: { showSteps: boolean }) {
 }
 
 export function GateKeyRow(p: SetupRowProps) {
+  const { t } = useTranslation();
   const credentials = useCredentials();
   const info = credentials.data;
   const isDone = info?.configured === true;
-  const state = info?.configured ? [info.keyMasked, 'works'].filter(Boolean).join(' · ') : null;
+  const state = info?.configured ? [info.keyMasked, t('app.setup.keyWorks')].filter(Boolean).join(' · ') : null;
 
   return (
-    <SetupRowFrame n={1} title="Gate API key" row={p} isDone={isDone} state={state}>
+    <SetupRowFrame n={1} title={t('app.setup.gateKeyTitle')} row={p} isDone={isDone} state={state}>
       {/* A set-up terminal replacing its key needs only the settings. */}
       <KeyGuide showSteps={!isDone} />
       <CredentialsForm
-        submitLabel={p.variant === 'settings' ? 'Replace credentials' : 'Check key'}
+        submitLabel={p.variant === 'settings' ? t('app.setup.replaceCredentials') : t('app.setup.checkKey')}
         onSaved={p.onDone}
       />
     </SetupRowFrame>

@@ -69,7 +69,7 @@ describe('RollOverBanner', () => {
     render([signal('ETH', 5)], () => seen.push('positions'));
 
     const explain = await screen.findByRole('button', { name: 'Explain rollover to me' });
-    const show = screen.getByRole('button', { name: 'Show Me ›' });
+    const show = screen.getByRole('button', { name: 'Show me ›' });
     // Explain comes first in document order, Show Me last.
     expect(explain.compareDocumentPosition(show) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 

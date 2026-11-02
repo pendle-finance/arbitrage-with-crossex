@@ -4,16 +4,18 @@
  * a separate step, like the Boros app.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { describeWalletError, hasInjectedWallet, requestWalletAccount } from '../lib/wallet';
 import { useTrackedAddressOptional } from '../panels/trackedAddress';
 
 export function ConnectWalletButton() {
   const tracked = useTrackedAddressOptional();
+  const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!hasInjectedWallet()) {
-    return <p className="text-xs text-ink-400">Install Rabby or MetaMask, then reload.</p>;
+    return <p className="text-xs text-ink-400">{t('app.connect.install')}</p>;
   }
 
   const connect = async () => {
@@ -30,9 +32,9 @@ export function ConnectWalletButton() {
 
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="text-xs text-ink-400">Connect the wallet that holds your Boros account.</p>
+      <p className="text-xs text-ink-400">{t('app.connect.hint')}</p>
       <button type="button" className="btn-primary w-full" disabled={busy} onClick={connect}>
-        {busy ? 'Waiting for your wallet…' : 'Connect wallet'}
+        {busy ? t('app.connect.waiting') : t('app.connect.button')}
       </button>
       {error && (
         <p role="alert" className="text-[11px] text-rose-300">
