@@ -67,7 +67,7 @@
     "notionalTitle": "{{notional}} per position",
     "notionalTitleQty": "{{notional}} per position ≈ {{qty}} {{symbol}}",
     "grossSpread": "Gross spread",
-    "grossSpreadTitle": "Short mid rate − long mid rate, before execution and costs.",
+    "grossSpreadTitle": "Short mid rate − Long mid rate, before execution and costs.",
     "grossOnly": "only",
     "openStrategyFor": "Open this strategy — {{base}} Long {{long}} / Short {{short}}, {{collateral}}-margined {{date}}",
     "openStrategy": "Open this strategy",
