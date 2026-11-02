@@ -130,7 +130,7 @@ A position that no pair uses shows under **Ungrouped positions**, tagged **not i
 
 #### Leaving a position out
 
-If a position, or part of one, is not part of the arb (for example one you trade by hand), on a Boros position press **Exclude** on its row in Fixed Rate Pairs. For any position, you can also use the row's **Edit** button on the Funding Bundles tab. Set how much of it to exclude. That part moves to the **Excluded** section, out of the hedge, the PnL and the capital. **Restore** counts the whole position again. Exclusions are saved on the terminal.
+If a position, or part of one, is not part of the arb (for example one you trade by hand), on a Boros position open the **⋯** menu on its row in Fixed Rate Pairs and pick **Exclude**. For any position, you can also use the row's **Edit** button on the Funding Bundles tab. Set how much of it to exclude. That part moves to the **Excluded** section, out of the hedge, the PnL and the capital. **Restore** counts the whole position again. Exclusions are saved on the terminal.
 
 #### What counts as your capital
 

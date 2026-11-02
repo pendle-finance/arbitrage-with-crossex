@@ -151,6 +151,7 @@ export function DropdownMenu({
         ref={button}
         type="button"
         aria-label={label}
+        title={label}
         aria-haspopup="menu"
         aria-expanded={open !== null}
         aria-controls={open ? menuId : undefined}

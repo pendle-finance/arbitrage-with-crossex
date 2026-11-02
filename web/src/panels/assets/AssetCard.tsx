@@ -116,6 +116,7 @@ import {
   sizeIn,
 } from './assetModel';
 import { DUST_USD, sameSize } from './grouping';
+import { DropdownMenu } from '../../components/DropdownMenu';
 import { exclusionAfter, legVenueName } from './excludeLeg';
 import { daysToMaturity, knownRate } from '../../lib/boros';
 import { rebatedSettleApr } from '../../lib/rebate';
@@ -125,7 +126,7 @@ import { SinceChip } from './SinceChip';
 import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 import { localizeServerText } from '../../i18n/serverMessages';
-import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, RotateCw, Share } from 'lucide-react';
+import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
 
 interface Props {
   group: AssetGroup;
@@ -4378,13 +4379,16 @@ function EditCell({
   );
 }
 
-function RowExcludeButton(props: Omit<React.ComponentProps<typeof LegEditModal>, 'onClose'>) {
+function RowExcludeMenu(props: Omit<React.ComponentProps<typeof LegEditModal>, 'onClose'>) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button type="button" className="btn-ghost-xs !py-[5px]" title={t('assetCard.edit.excludeTitle')} onClick={() => setOpen(true)}>
-        {t('assetCard.edit.exclude')}
-      </button>
+      <DropdownMenu
+        label={t('assetCard.moreActions')}
+        trigger={<MoreHorizontal size={12} aria-hidden />}
+        triggerClassName="btn-ghost-xs !px-1.5"
+        items={[{ label: t('assetCard.edit.exclude'), onSelect: () => setOpen(true) }]}
+      />
       {open && <LegEditModal {...props} onClose={() => setOpen(false)} />}
     </>
   );
@@ -5709,7 +5713,7 @@ export function AssetCard({
     if (!leg || !(y.rowSizeToken > 0)) return null;
     const key = borosKey(leg.marketId);
     return (
-      <RowExcludeButton
+      <RowExcludeMenu
         exKey={key}
         label={borosLegLabel(leg)}
         unit={leg.collateral}

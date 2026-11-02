@@ -27,7 +27,7 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
   Boros position while the venue still held one at the old date. Now it opens, and the Boros ticket
   says how much of it covers the perp twice and until when, at the size you type. For example:
   "Hyperliquid SHORT holds 10 ETH at 30 Oct. This open covers 4 ETH twice until 30 Oct."
-- **Exclude part of a Boros position.** The Exclude button on a Boros row opens
+- **Exclude part of a Boros position.** The `⋯` menu on a Boros row has one item, Exclude. It opens
   the same size popup as Edit on Funding Bundles. Nothing saves until you press Save. The
   excluded part moves to an Excluded list on both tabs, with Restore and Edit. Exclusions now
   live on the terminal, so a new browser keeps them. The first load moves the exclusions your
