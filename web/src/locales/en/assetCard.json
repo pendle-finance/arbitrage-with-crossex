@@ -309,7 +309,7 @@
   "ticketUnavailable": "Order ticket unavailable here",
   "edit": {
     "title": "Edit position — {{label}}",
-    "intro": "Pick how much of this position counts in the farm. The rest moves to Excluded and leaves the hedge, PnL and capital.",
+    "intro": "Pick how much of this position to exclude. The excluded part moves to Excluded and leaves the hedge, PnL and capital.",
     "includeAria": "Include",
     "includeAll": "Include all",
     "excludePortion": "Exclude a portion",
