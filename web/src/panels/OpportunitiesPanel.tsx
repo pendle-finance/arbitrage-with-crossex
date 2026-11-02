@@ -143,7 +143,7 @@ export interface StoredControls {
 const DEFAULTS: StoredControls = {
   capitalUsd: 200_000,
   borosEntry: 'market',
-  entryMode: 'both-market',
+  entryMode: 'maker-hedge',
   // 'roll' by default: an assumed exit cost is a decision the user has not
   // made yet, and it understates every quote.
   exitMode: 'roll',

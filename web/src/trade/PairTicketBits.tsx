@@ -17,11 +17,11 @@ import { ChevronDown, RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
 
-/** The ticket starts on the perp entry picked on Opportunities (default: 2
- * market orders), so one setting has one default on both screens. */
+/** The ticket starts on the perp entry picked on Opportunities (default:
+ * Limit + hedge), so one setting has one default on both screens. */
 export function storedExecMode(): ExecMode {
-  return readJson<ExecMode>(OPPORTUNITIES_STORAGE_KEY, 'market', (p) =>
-    (p as { entryMode?: unknown } | null)?.entryMode === 'maker-hedge' ? 'maker' : 'market',
+  return readJson<ExecMode>(OPPORTUNITIES_STORAGE_KEY, 'maker', (p) =>
+    (p as { entryMode?: unknown } | null)?.entryMode === 'both-market' ? 'market' : 'maker',
   );
 }
 export const TIMEOUT_CHOICES = [

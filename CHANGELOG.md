@@ -56,7 +56,9 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
   capital, or on $200k. The presets now include $1M. The Custom button is gone: click the box and
   type any amount, or pick a preset. Open this strategy fills the ticket at the
   card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
-  another, and a note under the size says so.
+  another, and a note under the size says so. Perp entry now starts on Limit + hedge, on
+  Opportunities and in the pair ticket, and the ticket follows the entry you pick on
+  Opportunities. A card's Return is now called Est. profit.
 - **Perp legs stop under the CrossEx position cap.** CrossEx gives a perp its top leverage
   only up to a size cap, for example $50M on Gate BTC and $1M on Gate HYPE. Gate refuses an
   order past it. Before, Opportunities priced cards past that cap, and an open past it failed
