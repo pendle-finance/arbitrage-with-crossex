@@ -2,7 +2,7 @@
   "version": "1.7.8",
   "highlights": [
     "Fixed Rate Pairs pairs your legs by venue at any Boros date, so a half roll still shows its card",
-    "Exclude part of a Boros leg from the ⋯ menu, and a new browser keeps your exclusions",
+    "Exclude part of a Boros position from the ⋯ menu, and a new browser keeps your exclusions",
     "A Boros send that times out no longer says nothing traded: the terminal checks what filled",
     "The pair ticket warns when the two legs would fill to different sizes",
     "Opportunities sizes every card by the capital you put in, $200k by default",

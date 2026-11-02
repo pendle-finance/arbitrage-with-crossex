@@ -286,7 +286,7 @@
     "maxInto": "最多 {{max}} {{coin}}。即您的 Gate 现货余额。",
     "minimumLine": "最低 {{min}} {{coin}}。",
     "stepAsked": "已请求 Gate 划转",
-    "stepWaiting": "等待 {{wallet}}显示到账",
+    "stepWaiting": "等待 {{wallet}} 显示到账",
     "stepReading": "重新读取余额",
     "moving": "划转中",
     "startedUsually": "{{age}} 前开始，通常需 {{usual}}。可关闭此窗口。",

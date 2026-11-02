@@ -58,7 +58,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     expect(slipOf(seen.at(-1)!)).toEqual([0.5, 0.5]);
 
     await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Slippage %');
+    const slip = screen.getByLabelText('Max slippage %');
     await userEvent.clear(slip);
     await userEvent.type(slip, '2');
 
@@ -104,7 +104,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
 
     await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Slippage %');
+    const slip = screen.getByLabelText('Max slippage %');
     await userEvent.clear(slip);
     await userEvent.type(slip, '50');
 
@@ -211,7 +211,7 @@ describe('ClosePairForm — slippage is part of the close intent', () => {
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
 
     await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Slippage %');
+    const slip = screen.getByLabelText('Max slippage %');
     await userEvent.clear(slip);
     await userEvent.type(slip, '2');
 

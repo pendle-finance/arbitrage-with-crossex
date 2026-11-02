@@ -130,7 +130,7 @@ describe('pairEligibility', () => {
     const res = pairEligibility([hlMarket, btcCollateral], NOW);
     expect(res.eligible).toBe(false);
     expect(res.code).toBe('different-collateral');
-    expect(res.reason).toBe('different collateral — USDT vs BTC');
+    expect(res.reason).toBe('Different collateral — USDT vs BTC');
   });
 
   it('names the maturity mismatch', () => {

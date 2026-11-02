@@ -9,12 +9,12 @@
     "tradeFee": "Boros trade fees",
     "perpFeesTitle": "Perp trading fees, open + closed positions {{amount}}",
     "perpFees": "Perp fees",
-    "basisTitle": "Perp basis: open uPnL + closed price PnL (near 0 when hedged) {{amount}}",
-    "basis": "Perp basis",
+    "basisTitle": "Price PnL: open uPnL + closed price PnL (near 0 when hedged) {{amount}}",
+    "basis": "Price PnL",
     "rebateTitle": "Boros settlement-fee rebate credited back {{amount}}",
     "rebate": "Settlement rebate",
     "netTitle": "Net PnL {{amount}}",
-    "caption": "Fixed funding is the locked spread. Then Boros trade PnL, trade fees, perp fees and perp basis."
+    "caption": "Fixed funding is the locked spread. Then Boros trade PnL, trade fees, perp fees and price PnL."
   },
   "home": {
     "headingTitle": "Every position grouped by its underlying asset.",

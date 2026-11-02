@@ -191,7 +191,7 @@ export function pairEligibility(
     reason,
   });
   if (new Set(markets.map((m) => m.marketId)).size !== markets.length) {
-    return no('same-market', 'same market — a leg cannot offset itself');
+    return no('same-market', 'Same market — a market cannot offset itself');
   }
   const dead = markets.find(
     (m) => (m.state !== 'Normal' && m.state !== 'CloseOnly') || m.maturity <= nowSec,
@@ -209,9 +209,9 @@ export function pairEligibility(
   const otherToken = markets.find((m) => m.tokenId !== first.tokenId);
   if (otherToken) {
     const nameOf = (m: BorosMarket) => BOROS_TOKEN_SYMBOLS[m.tokenId] ?? `token#${m.tokenId}`;
-    return no('different-collateral', `different collateral — ${nameOf(first)} vs ${nameOf(otherToken)}`);
+    return no('different-collateral', `Different collateral — ${nameOf(first)} vs ${nameOf(otherToken)}`);
   }
-  if (markets.some((m) => m.maturity !== first.maturity)) return no('different-maturity', 'different maturity');
+  if (markets.some((m) => m.maturity !== first.maturity)) return no('different-maturity', 'Different maturities');
   return { eligible: true, code: null, reason: null };
 }
 
@@ -802,7 +802,7 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const unhedgedSize = rawUnhedged > Math.max(1e-12, largestSize * 1e-9) ? rawUnhedged : 0;
   if (unhedgedSize > 0) {
     reasons.push(
-      'The two legs fill to different sizes at this notional — the difference is left directional.',
+      'The two markets fill to different sizes at this notional — the difference is left directional.',
     );
   }
 

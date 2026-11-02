@@ -247,7 +247,7 @@ describe('PairTicket execution modes', () => {
     await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ leverage: 10 }), { timeout: 4000 });
     expect(calls.at(-1)?.[1]).toMatchObject({ symbol: 'OKX_FUTURE_ETH_USDT', leverage: 50 });
     // Shown, not editable.
-    expect(await screen.findByText('10x long / 50x short', undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(await screen.findByText('10x Long / 50x Short', undefined, { timeout: 4000 })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText(/venue max/)).not.toBeInTheDocument();
     // Total initial margin the pair posts: 1000/10 + 1000/50 = $120.
     expect(screen.getByText('Margin required')).toBeInTheDocument();
