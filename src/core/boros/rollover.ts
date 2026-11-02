@@ -572,7 +572,7 @@ export function readRollFills(fills: BorosLegFill[], keys: RollLegKey[]): BorosR
   const entries = keys.map((k) => [k, legs[k]] as const);
   const missing = entries.find(([, f]) => f === undefined);
   if (missing) {
-    return { status: 'unknown', legs, reason: { code: 'unknown', message: `no result came back for ${missing[0]}`, leg: missing[0] }, rolledSize: 0 };
+    return { status: 'unknown', legs, reason: { code: 'unknown', message: `No result came back for the ${missing[0].startsWith('exit:') ? 'close' : 'open'} on market ${missing[0].split(':')[1]}`, leg: missing[0] }, rolledSize: 0 };
   }
   const reasonOf = (code: BorosLegFailureCode) => {
     const named = entries.find(([, f]) => f.failure?.code === code && f.failure.cause === 'this-leg');

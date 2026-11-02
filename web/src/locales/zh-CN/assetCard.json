@@ -342,7 +342,7 @@
   "openMore": "加仓",
   "bundleHead": {
     "notionalTitle": "持仓中永续的名义规模；没有永续时为 Boros 仓位的名义规模。",
-    "fixedAprTitle": "该交易所对冲所用的固定利率，按其持仓中的 Boros 仓位加权，已扣除结算手续费。组合的各腿显示的是扣费前的利率。",
+    "fixedAprTitle": "该交易所对冲所用的固定利率，按其持仓中的 Boros 仓位加权，已扣除结算手续费。每个 Boros 仓位显示的是扣费前的利率。",
     "fixedApr": "净固定 APR",
     "fundingTitle": "永续资金费 + Boros 结算，已扣除结算手续费。",
     "funding": "资金费结算",
@@ -472,7 +472,7 @@
     "noRateLegs": "无 Boros 仓位",
     "closeName": "平掉 {{name}}",
     "noPerps": "无永续",
-    "borosStaysOpen": "Boros 仓位仍会持有。关闭永续后，它不再有对冲：在平仓或到期前，您将承担资金费率变动的风险。",
+    "borosStaysOpen": "Boros 仓位仍会持有。平掉永续后，它不再有对冲：在平仓或到期前，您将承担资金费率变动的风险。",
     "perpsStayOpen": "永续仍会持有，继续按浮动资金费率支付或收取，不再有锁定利率对冲。"
   },
   "breakdown": {
@@ -487,7 +487,7 @@
     "settlementRebate": "结算返佣",
     "mtmTitle": "持有中的 Boros 仓位的标记价值，不计入盈亏。",
     "borosMtm": "Boros 盯市价值",
-    "netCarryTitle": "按交易所：时间窗口内的永续资金费 + Boros 结算和交易盈亏。未扣手续费和价格基差。",
+    "netCarryTitle": "按交易所：时间窗口内的永续资金费 + Boros 结算和交易盈亏。未扣手续费和价格盈亏。",
     "netCarry": "各交易所息差收益（扣费前）",
     "perpsByVenue": "永续 — 按交易所",
     "funding": "资金费",

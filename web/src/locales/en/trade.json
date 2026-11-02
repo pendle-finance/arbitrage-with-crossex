@@ -146,7 +146,7 @@
     "markMinus": "Mark −{{pct}}%",
     "limitPxTitle": "Reduce-only IOC at mid ± slippage. Fills what it can now and never rests.",
     "slipInvalid": "Must be above 0 and at most 10%",
-    "slipAria": "Slippage %",
+    "slipAria": "Max slippage %",
     "bandTitle": "Max slippage: mid ± this much. What the book cannot fill inside it stays open.",
     "bandHint": "Max slippage from mid. Widen it for a large size or a thin book.",
     "closeNow": "Close now",

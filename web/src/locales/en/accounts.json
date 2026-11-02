@@ -353,7 +353,7 @@
     "marketTitle": "Market order, inside the venue's price limit.",
     "marketIoc": "Market",
     "slipInvalid": "Slippage must be above 0% and at most 10%.",
-    "slipAria": "Slippage %",
+    "slipAria": "Max slippage %",
     "slipTitle": "First leg's limit: mid ± this much.",
     "slipHint": "Raise it for a large size or a thin book.",
     "closeBoth": "Close both",

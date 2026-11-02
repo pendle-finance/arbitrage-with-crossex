@@ -36,7 +36,7 @@
     "shortVenue": "Short venue",
     "longVenue": "Long venue",
     "swapVenues": "Swap venues",
-    "swapVenuesHint": "Swap the long and short venues",
+    "swapVenuesHint": "Swap the Long and Short venues",
     "makerLeg": "Maker leg",
     "autoHint": "Auto-chosen: the cheapest maker+taker fee combo",
     "auto": "Auto",
@@ -135,7 +135,7 @@
     "footBoth": "Cancels resting orders, then closes both positions in one batch, all or none."
   },
   "pair": {
-    "leverage": "{{long}}x long / {{short}}x short",
+    "leverage": "{{long}}x Long / {{short}}x Short",
     "sizePerLeg": "Size per leg",
     "sizeUnit": "Size unit",
     "sizePerLegAria": "Size per leg ({{unit}})",
@@ -147,7 +147,7 @@
     "limitHedge": "Limit + hedge",
     "savesFees": "Saves fees",
     "execute": "Execute pair",
-    "leverageDetail": "Leverage {{long}}x long / {{short}}x short (venue max)",
+    "leverageDetail": "Leverage {{long}}x Long / {{short}}x Short (venue max)",
     "pegNote": "Maker price pegs to the best price when sent"
   },
   "borosBits": {
@@ -228,7 +228,7 @@
     "paused": "Paused",
     "closeOnly": "Close only",
     "swapSides": "Swap sides",
-    "swapSidesHint": "Swap long and short on the spread",
+    "swapSidesHint": "Swap Long and Short on the spread",
     "marketLetter": "Market {{letter}}",
     "borosMarketLetter": "Boros market {{letter}}",
     "swapMarkets": "Swap markets",
