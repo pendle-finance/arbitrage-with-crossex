@@ -13,7 +13,7 @@
  * drive. Executing only PREFILLS the pair ticket — submission stays behind its
  * hold-to-confirm control.
  */
-import { ArrowRight, ArrowUpRight, Search } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Search, TriangleAlert } from 'lucide-react';
 import {
   memo,
   useCallback,
@@ -1252,7 +1252,10 @@ export function OpportunitiesPanel() {
           orders (src/core/boros/opportunities.ts). The open ticket still
           walks the full book. */}
       {slippageClipped && (
-        <span className="text-[11px] text-ink-400">{t('opportunities.panel.slippageClipped')}</span>
+        <span className="flex items-start gap-1.5 text-[11px] text-ink-400">
+          <TriangleAlert size={12} aria-hidden className="mt-px flex-none text-warning" />
+          {t('opportunities.panel.slippageClipped')}
+        </span>
       )}
     </div>
   );
