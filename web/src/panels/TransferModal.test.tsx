@@ -86,9 +86,9 @@ describe('TransferModal', () => {
 
     expect(within(dialog()).getByText('Sending')).toBeInTheDocument();
     expect(facts()).toEqual({ Moving: '11.88 USDC', From: 'USDC · Hyperliquid', To: 'Gate spot' });
-    expect(screen.getByText('✓ Asked Gate to move it')).toBeInTheDocument();
-    expect(screen.getByText('• Waiting for Gate spot to show it')).toBeInTheDocument();
-    expect(screen.getByText('○ Reading your balances again')).toBeInTheDocument();
+    expect(screen.getByText('Asked Gate to move it')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for Gate spot to show it')).toBeInTheDocument();
+    expect(screen.getByText('Reading your balances again')).toBeInTheDocument();
     expect(screen.getByText('Started 2m 10s ago, usually about 6.5 min. You can close this.')).toBeInTheDocument();
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
   });

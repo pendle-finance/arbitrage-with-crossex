@@ -107,7 +107,7 @@
     "fromBid": "{{title}} (from bid {{price}})",
     "ask": "Ask",
     "bid": "Bid",
-    "mkt": "Mkt",
+    "mkt": "MKT",
     "limit": "Limit",
     "limitTag": "Limit {{price}} × {{qty}}",
     "limitTitle": "Our resting limit — {{qty}} @ {{price}}",

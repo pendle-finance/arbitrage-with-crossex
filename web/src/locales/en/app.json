@@ -1,7 +1,7 @@
 {
   "language": "Language",
-  "openOrders_one": "{{count}} open order",
-  "openOrders_other": "{{count}} open orders",
+  "openOrders_one": "{{count}} limit order",
+  "openOrders_other": "{{count}} limit orders",
   "userGuide": "User guide",
   "userGuideTitle": "How to read the Opportunities scan and open a pair well",
   "tabs": {

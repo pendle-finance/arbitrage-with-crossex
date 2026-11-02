@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from './EmptyState';
+import { TriangleAlert } from 'lucide-react';
 
 /** Standard "couldn't load X" state for a failed query, with an optional Retry. */
 export function QueryError({
@@ -16,7 +17,7 @@ export function QueryError({
   const { t } = useTranslation();
   const el = (
     <EmptyState
-      icon="⚠"
+      icon={<TriangleAlert size={22} />}
       title={title}
       hint={(error as Error)?.message}
       action={

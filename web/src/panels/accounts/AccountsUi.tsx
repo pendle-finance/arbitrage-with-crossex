@@ -100,7 +100,7 @@ export function AccountsOverview() {
     return (
       <>
         <tr>
-          <td colSpan={4} className="pb-1.5 pt-4 text-[11px] font-semibold uppercase tracking-wider text-ink-500">
+          <td colSpan={4} className="pb-1.5 pt-4 text-[11px] font-semibold text-ink-500">
             {venue}
           </td>
         </tr>

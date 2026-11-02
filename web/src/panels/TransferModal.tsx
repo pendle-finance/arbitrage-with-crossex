@@ -28,6 +28,7 @@ import {
   type CrossexWallet,
 } from './TransferBits';
 import { localizeServerText } from '../i18n/serverMessages';
+import { Check, Circle, CircleDot } from 'lucide-react';
 
 type Tab = 'into' | 'out';
 
@@ -77,9 +78,18 @@ function SendingSteps({ to }: { to: GateAccount }) {
   const { t } = useTranslation();
   return (
     <ol className="flex flex-col gap-1.5 text-xs">
-      <li className="text-grass">{`✓ ${t('accounts.transfer.stepAsked')}`}</li>
-      <li aria-current="step" className="text-pastel-blue">{`• ${t('accounts.transfer.stepWaiting', { wallet: walletName(to) })}`}</li>
-      <li className="text-ink-600">{`○ ${t('accounts.transfer.stepReading')}`}</li>
+      <li className="flex items-center gap-1.5 text-grass">
+        <Check size={12} aria-hidden />
+        {t('accounts.transfer.stepAsked')}
+      </li>
+      <li aria-current="step" className="flex items-center gap-1.5 text-pastel-blue">
+        <CircleDot size={12} aria-hidden />
+        {t('accounts.transfer.stepWaiting', { wallet: walletName(to) })}
+      </li>
+      <li className="flex items-center gap-1.5 text-ink-600">
+        <Circle size={12} aria-hidden />
+        {t('accounts.transfer.stepReading')}
+      </li>
     </ol>
   );
 }

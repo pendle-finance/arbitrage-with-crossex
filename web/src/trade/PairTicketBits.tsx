@@ -13,7 +13,7 @@ import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
 import { FieldLabel } from './SymbolCombobox';
-import { ChevronDown, RotateCw } from 'lucide-react';
+import { BookOpen, ChevronDown, RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
 
@@ -640,7 +640,7 @@ export function PairEstimate({
               : ''
           }`}
         >
-          <span aria-hidden>▤</span> {t('pairTicket.bits.book')}
+          <BookOpen size={12} aria-hidden /> {t('pairTicket.bits.book')}
         </button>
       }
     >

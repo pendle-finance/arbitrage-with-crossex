@@ -1,6 +1,6 @@
 {
   "language": "语言",
-  "openOrders_other": "{{count}} 笔委托",
+  "openOrders_other": "{{count}} 笔限价单",
   "userGuide": "用户指南",
   "userGuideTitle": "如何读懂机会扫描结果，并建立组合",
   "tabs": {

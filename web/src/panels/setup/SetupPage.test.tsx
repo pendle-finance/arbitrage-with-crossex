@@ -552,7 +552,7 @@ describe('setup rows in Settings', () => {
     expect(
       screen.getByText(`Login ends ${day(2_000_000_000)}. The key cannot withdraw.`),
     ).toBeInTheDocument();
-    expect(dot('Boros wallet')).toBe('✓');
+    expect(header('Boros wallet').firstElementChild?.querySelector('svg.lucide-check')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove key' })).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Log out' }));
     const ask = screen.getByRole('alertdialog', { name: 'Log out 0xab18…ed9d?' });

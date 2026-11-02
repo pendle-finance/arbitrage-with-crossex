@@ -193,9 +193,13 @@ describe('UpdateIndicator', () => {
     // The step the installer named, and the checklist caught up to it.
     await waitFor(() => expect(panel).toHaveTextContent('Installing dependencies'));
     expect(panel).toHaveTextContent('/Users/x/.boros-crossex/logs/update.log');
-    expect(within(panel).getAllByRole('listitem')[1]).toHaveTextContent('✓Download');
-    expect(within(panel).getAllByRole('listitem')[2]).toHaveTextContent('●Dependencies');
-    expect(within(panel).getAllByRole('listitem')[3]).toHaveTextContent('○Build');
+    const steps = within(panel).getAllByRole('listitem');
+    expect(steps[1]).toHaveTextContent('Download');
+    expect(steps[1].querySelector('svg.lucide-check')).not.toBeNull();
+    expect(steps[2]).toHaveTextContent('Dependencies');
+    expect(steps[2].querySelector('svg.lucide-circle-dot')).not.toBeNull();
+    expect(steps[3]).toHaveTextContent('Build');
+    expect(steps[3].querySelector('svg.lucide-circle')).not.toBeNull();
   });
 
   it('says an update failed rather than spinning, and offers another go', async () => {

@@ -59,6 +59,14 @@ describe('DropdownMenu', () => {
     expect(item('Alpha')).toHaveFocus();
   });
 
+  it('Space on the menu itself does not scroll the page', async () => {
+    const { trigger } = renderMenu();
+    await userEvent.click(trigger);
+    const menu = screen.getByRole('menu');
+    expect(fireEvent.keyDown(menu, { key: ' ' })).toBe(false);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
   it('click on an open trigger closes it', async () => {
     const { trigger, spies } = renderMenu();
     await userEvent.click(trigger);
