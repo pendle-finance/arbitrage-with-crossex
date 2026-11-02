@@ -3950,6 +3950,7 @@ function UngroupedCard({
                     <td className="whitespace-nowrap">
                       <LegIdentity
                         kind="perp"
+                        perp="CrossEx"
                         venue={l.venue}
                         name={prettyVenue(l.venue)}
                         sub={whole(l.share) ? t('assetCard.ungrouped.perpSubWhole') : t('assetCard.ungrouped.perpSubPart', { pct: fmtPct(l.share) })}
@@ -4421,8 +4422,10 @@ function LegIdentity({
   name,
   sub,
   chips,
+  perp,
 }: {
   kind: 'perp' | 'boros';
+  perp?: string;
   venue?: string;
   spreadVenues?: [string, string] | null;
   /** A finished or absent leg — drawn quieter. */
@@ -4449,7 +4452,7 @@ function LegIdentity({
           good/bad everywhere else. A leg that isn't there yet keeps the
           dashed outline instead of a fill, which is how the mock draws an
           absent thing — absence outranks kind, so `dim` drops the colour. */}
-      <LegKind boros={boros} dim={dim} className="w-[52px]" />
+      <LegKind boros={boros} dim={dim} className="w-[52px]" perp={perp} />
       <span className="flex min-w-0 flex-col gap-1">
         <span className="flex flex-wrap items-center gap-x-[7px] gap-y-1">
           {named ? (

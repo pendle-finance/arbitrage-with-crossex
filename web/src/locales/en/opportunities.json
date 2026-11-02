@@ -248,7 +248,7 @@
     "cardMoreLegs": "+{{n}} more positions",
     "cardFooterLeft": "Powered by Boros × Gate CrossEx",
     "cardFooterPrefix": "Executed with the open-source tool at ",
-    "cardHedgedPill": "hedged ✓",
+    "cardHedgedPill": "hedged",
     "cardKindPerp": "PERP"
   },
   "roll": {
