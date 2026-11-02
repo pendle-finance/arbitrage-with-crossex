@@ -169,14 +169,20 @@ function roundedRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: num
   ctx.closePath();
 }
 
-/** Small bordered pill with centered text; returns its width. When `right` is
- * given the pill is laid out ending at that x (right-aligned). */
+const CHECK_PATH = 'M20 6 9 17l-5-5';
+const CHECK_SIZE = 12;
+const CHECK_GAP = 5;
+
+/** Small bordered pill with centered text, and Lucide's check after it when
+ * `check` is set; returns its width. When `right` is given the pill is laid
+ * out ending at that x (right-aligned). */
 function pill(
   ctx: CanvasRenderingContext2D,
-  opts: { text: string; centerY: number; left?: number; right?: number; color: string; bg: string; border: string },
+  opts: { text: string; centerY: number; left?: number; right?: number; color: string; bg: string; border: string; check?: boolean },
 ): number {
   ctx.font = `600 12px ${SANS}`;
-  const w = Math.ceil(ctx.measureText(opts.text).width) + 24;
+  const textW = Math.ceil(ctx.measureText(opts.text).width);
+  const w = textW + (opts.check ? CHECK_GAP + CHECK_SIZE : 0) + 24;
   const h = 26;
   const x = opts.right !== undefined ? opts.right - w : (opts.left ?? 0);
   const y = opts.centerY - h / 2;
@@ -187,11 +193,20 @@ function pill(
   ctx.lineWidth = 1;
   ctx.stroke();
   ctx.fillStyle = opts.color;
-  ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(opts.text, x + w / 2, opts.centerY + 0.5);
-  ctx.textAlign = 'left';
+  ctx.fillText(opts.text, x + 12, opts.centerY + 0.5);
   ctx.textBaseline = 'alphabetic';
+  if (opts.check) {
+    ctx.save();
+    ctx.translate(x + 12 + textW + CHECK_GAP, opts.centerY - CHECK_SIZE / 2);
+    ctx.scale(CHECK_SIZE / 24, CHECK_SIZE / 24);
+    ctx.strokeStyle = opts.color;
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.stroke(new Path2D(CHECK_PATH));
+    ctx.restore();
+  }
   return w;
 }
 
@@ -256,7 +271,7 @@ export async function renderShareCard(p: SharePayloadV1, scale = 2): Promise<HTM
       ? { color: GRASS, bg: 'rgba(27,227,194,0.12)', border: 'rgba(27,227,194,0.35)' }
       : { color: GOLD, bg: 'rgba(240,206,116,0.12)', border: 'rgba(240,206,116,0.35)' };
   const hedgeText = p.h === 'h' ? t('opportunities.share.cardHedgedPill') : lines.hedgeLabel;
-  const hedgeW = pill(ctx, { text: hedgeText, centerY: 68, right, ...hedgeTone });
+  const hedgeW = pill(ctx, { text: hedgeText, centerY: 68, right, ...hedgeTone, check: p.h === 'h' });
   pill(ctx, {
     text: p.b,
     centerY: 68,

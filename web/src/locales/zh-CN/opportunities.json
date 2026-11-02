@@ -244,7 +244,7 @@
     "cardMoreLegs": "另有 {{n}} 个仓位",
     "cardFooterLeft": "由 Boros × Gate CrossEx 提供支持",
     "cardFooterPrefix": "使用开源工具执行：",
-    "cardHedgedPill": "已对冲 ✓",
+    "cardHedgedPill": "已对冲",
     "cardKindPerp": "永续"
   },
   "roll": {
