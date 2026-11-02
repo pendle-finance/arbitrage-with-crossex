@@ -965,7 +965,7 @@ function PairCard({
               {canSharePair && (
                 <button
                   type="button"
-                  className="btn-ghost-xs inline-flex items-center gap-1.5 !py-[4px] !text-ink-200"
+                  className="btn !h-[30px] !border-ink-700/60 !px-3 !text-[12px] !text-ink-200"
                   title={t('assetCard.share.linkTitle')}
                   onClick={() =>
                     setSharePayload(
