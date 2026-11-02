@@ -4001,7 +4001,7 @@ function UngroupedCard({
                         kind="boros"
                         venue={l.venue}
                         spreadVenues={l.spreadVenues}
-                        name={prettyVenue(l.venue)}
+                        name={l.spreadVenues ? spreadName(base, l.spreadVenues) : prettyVenue(l.venue)}
                         sub={
                           <span title={t('assetCard.ungrouped.yuMaturityTitle')}>
                             {fmtDateLocal(l.maturity)}
@@ -4047,7 +4047,7 @@ function UngroupedCard({
                     </td>
                     <td className="whitespace-nowrap text-right">
                       {closeBtn(
-                        t('assetCard.ungrouped.closeYuAria', { venue: prettyVenue(l.venue), side: sideWord(l.side) }),
+                        t('assetCard.ungrouped.closeYuAria', { venue: l.spreadVenues ? spreadName(base, l.spreadVenues) : prettyVenue(l.venue), side: sideWord(l.side) }),
                         can
                           ? () =>
                               onCloseLeg({
@@ -4647,7 +4647,6 @@ function BorosRow({
           kind="boros"
           chips={
             <>
-              {leg.spreadVenues && <SpreadIcon venues={leg.spreadVenues} />}
               {deficit && <DeficitChip gap={deficit} base={base} />}
             </>
           }

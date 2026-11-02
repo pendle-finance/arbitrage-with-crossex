@@ -73,7 +73,9 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
   rate, and its column says so: Net fixed APR.
 - **Long first on every screen.** Opportunities, Open this strategy, the Boros ticket and the perp
   ticket all list the Long side or Market A first.
-- **Smaller things.** Every position row shows its venue icon. The open-only roll review names the
+- **Smaller things.** Every position row shows its venue icon, and a spread row shows its icon once.
+  A spread left in Ungrouped is named as the spread, for example "ETH Spread HL-GATE", not
+  "Hyperliquid". The open-only roll review names the
   spread market it opens, for example "ETH Spread HL-GATE". The coin chip says `Not fully hedged`
   when a Boros position is held but too small or the wrong way, and names the side only when it is
   truly missing. Opportunities says how many pairs it leaves out at your capital. The Boros ticket
