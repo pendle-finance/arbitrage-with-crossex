@@ -467,7 +467,8 @@ async function rowMenuExclude(): Promise<HTMLElement> {
   if (tab) await userEvent.click(tab);
   const toggle = await screen.findByRole('button', { name: /Ungrouped positions/ });
   if (toggle.getAttribute('aria-expanded') === 'false') await userEvent.click(toggle);
-  return screen.getByRole('button', { name: 'Exclude' });
+  await userEvent.click(screen.getByRole('button', { name: 'More actions' }));
+  return screen.findByRole('menuitem', { name: /^Exclude/ });
 }
 
 describe('the row menu popup', () => {

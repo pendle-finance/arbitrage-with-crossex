@@ -338,6 +338,7 @@
     "closeAria": "平掉 {{label}}",
     "exclude": "排除"
   },
+  "moreActions": "更多操作",
   "openMore": "加仓",
   "bundleHead": {
     "notionalTitle": "持仓中永续的名义规模；没有永续时为 Boros 仓位的名义规模。",

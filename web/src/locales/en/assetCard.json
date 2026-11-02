@@ -340,6 +340,7 @@
     "closeAria": "Close {{label}}",
     "exclude": "Exclude"
   },
+  "moreActions": "More actions",
   "openMore": "Open more",
   "bundleHead": {
     "notionalTitle": "Notional of the live perp, or of the Boros positions when there is no perp.",

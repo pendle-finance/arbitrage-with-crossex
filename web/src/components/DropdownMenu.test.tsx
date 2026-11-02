@@ -41,6 +41,7 @@ describe('DropdownMenu', () => {
   it('trigger says it opens a menu', async () => {
     const { trigger } = renderMenu();
     expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    expect(trigger).toHaveAttribute('title', 'More actions');
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('menu')).toBeNull();
     await userEvent.click(trigger);
