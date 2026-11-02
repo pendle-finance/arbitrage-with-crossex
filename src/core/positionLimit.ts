@@ -14,6 +14,15 @@ const CAP_HEADROOM = 0.98;
  * the other venues keep it because no test has shown they do not. */
 export const LIMIT_NOTE = '2% under the CrossEx risk-limit cap';
 
+/** The share of `maxUsd` a two-step plan sizes to: Boros first, then the
+ * perps. The perps are checked at the full `maxUsd` when they are sent, so a
+ * price move between the steps has this much room before the hedge is
+ * refused with the Boros leg already open. */
+export const PLAN_SHARE = 0.99;
+
+/** How the copy names `maxUsd × PLAN_SHARE`. */
+export const PLAN_NOTE = '3% under the CrossEx risk-limit cap';
+
 interface RiskLimitTierRow {
   maxRiskLimitValue?: string;
   leverageMax?: string;

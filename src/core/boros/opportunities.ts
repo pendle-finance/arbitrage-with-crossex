@@ -38,7 +38,7 @@ import { walkBook } from '../estimate/fill';
 import { resolveFeeRates, resolveVenueFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { BOROS_TOKEN_SYMBOLS, type BorosMarket, type BorosOrderBook } from './client';
 import { prettyVenue } from '../../../web/src/lib/fmt';
-import { LIMIT_NOTE, type PositionLimit } from '../positionLimit';
+import { LIMIT_NOTE, PLAN_NOTE, PLAN_SHARE, type PositionLimit } from '../positionLimit';
 import { isSpreadMarket, type SpreadSide } from './spread';
 import { normalizeVenue, SECONDS_IN_YEAR } from './venue';
 
@@ -311,7 +311,7 @@ export function priceAtSize<P extends { capitalUsd: number | null; reasons: stri
       ...pair,
       reasons: [
         ...pair.reasons,
-        `This pair takes at most ${usd(pair.capitalUsd)} of capital, not ${usd(size.capitalUsd)}. One of its perps stops at ${usd(notional)}, ${LIMIT_NOTE}.`,
+        `This pair takes at most ${usd(pair.capitalUsd)} of capital, not ${usd(size.capitalUsd)}. One of its perps stops at ${usd(notional)}, ${PLAN_NOTE}.`,
       ],
     };
   }
@@ -1089,7 +1089,7 @@ export function buildOpportunities(
         ...[shortLeg, longLeg].map(
           (leg) => (leg.crossexSymbol && input.positionLimitBySymbol.get(leg.crossexSymbol)?.maxUsd) || Infinity,
         ),
-      );
+      ) * PLAN_SHARE;
       return priceAtSize(at, options, maxNotional);
     };
 

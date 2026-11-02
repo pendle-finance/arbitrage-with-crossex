@@ -1309,6 +1309,14 @@ export interface BorosPairRequest {
   intent: BorosPairIntent;
   opposingAcknowledged?: boolean;
   onlyLeg?: number;
+  hedge?: BorosPairHedge;
+}
+
+/** The CrossEx perps that will hedge a Boros open, by coin and venue. */
+export interface BorosPairHedge {
+  base: string;
+  longVenue: string | null;
+  shortVenue: string | null;
 }
 
 // ---------------------------------------------------------------------------
