@@ -266,7 +266,7 @@ const closeWrongSideText = (y: PendingLeg) =>
   t('assetCard.wrongSide.closeToOpen', { venue: legVenueName(y), side: sideWord(y.side), date: fmtDateShort(y.maturity) });
 const BLOCKED_OPEN = 'cursor-not-allowed !border-ink-700/60 !bg-transparent !text-ink-500';
 
-const LegKind = ({ boros, dim, className = '' }: { boros: boolean; dim?: boolean; className?: string }) => (
+const LegKind = ({ boros, dim, className = '', perp = t('common.perp') }: { boros: boolean; dim?: boolean; className?: string; perp?: string }) => (
   <span
     className={`pp-pill shrink-0 justify-center ${className} ${
       dim
@@ -276,7 +276,7 @@ const LegKind = ({ boros, dim, className = '' }: { boros: boolean; dim?: boolean
           : 'bg-crossex/[0.15] text-crossex'
     }`}
   >
-    {boros ? 'Boros' : t('common.perp')}
+    {boros ? 'Boros' : perp}
   </span>
 );
 
@@ -294,7 +294,7 @@ function LegName({ venue, kind, side, base, spreadVenues }: { venue: string; kin
           <span className="font-medium text-ink-50">{prettyVenue(venue)}</span>
         </>
       )}
-      <LegKind boros={kind === 'yu'} />
+      <LegKind boros={kind === 'yu'} perp="CrossEx" />
       <Chip
         sm
         tone={side === 'LONG' ? 'green' : 'red'}
