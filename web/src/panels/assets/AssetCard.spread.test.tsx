@@ -444,6 +444,26 @@ describe('AssetCard with a spread leg', () => {
     expect(close).toHaveAttribute('title', expect.stringMatching(/^Close the Boros position of this pair/));
     expect(screen.queryByRole('button', { name: 'Close Boros positions' })).toBeNull();
   });
+
+  it('the Funding Bundles spread row draws the spread icon once', async () => {
+    const user = userEvent.setup();
+    renderCard(book([spreadLeg]));
+    await showBundles(user);
+    await user.click(screen.getByRole('button', { name: /^Hyperliquid\s*SHORT/ }));
+    const borosRow = (await screen.findByText('ETH Spread HL-GATE')).closest('tr') as HTMLElement;
+    expect(borosRow.querySelectorAll('img[src*="hyperliquid-gate"]')).toHaveLength(1);
+  });
+
+  it('a spread left over in Ungrouped is named as the spread, not its first venue', async () => {
+    const user = userEvent.setup();
+    renderCard({ ...book([{ ...spreadLeg, sizeToken: 0.01, notionalUsd: 0.01 * PX }]), perpOpen: [] });
+    await showPairs(user);
+    await user.click(await screen.findByText('Ungrouped positions'));
+    const close = screen.getByRole('button', { name: 'Close ETH Spread HL-GATE Short YU' });
+    const row = close.closest('tr') as HTMLElement;
+    expect(within(row).getByText('ETH Spread HL-GATE')).toBeInTheDocument();
+    expect(within(row).queryByText('Hyperliquid')).toBeNull();
+  });
 });
 
 // A market held the other way: an Open there nets against it, not hedges (report 2026-10-18).
