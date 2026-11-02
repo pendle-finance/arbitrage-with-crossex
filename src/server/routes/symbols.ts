@@ -52,7 +52,7 @@ function toInfo(rule: RuleSymbol): SymbolInfo {
 
 /** Cached full rule list mapped to SymbolInfo, filtered to live FUTURE perps
  * (minus the excluded USDC twins). */
-async function livePerps(
+export async function livePerps(
   deps: AppDeps,
   fresh: boolean,
 ): Promise<{ list: SymbolInfo[]; stale: boolean }> {

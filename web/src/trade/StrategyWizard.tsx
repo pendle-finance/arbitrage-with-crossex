@@ -23,7 +23,7 @@
  * (the asset card's missing-perp cue) and re-enters here at step 2.
  */
 import { ArrowRight, Check, ChevronRight } from 'lucide-react';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { BorosLegFill, BorosLegSizing, BorosPairResult, BorosPairSimulation } from '../api/types';
 import { useBorosPairContext } from '../api/queries';
@@ -189,6 +189,11 @@ function WizardBody({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const hedgePlan = useMemo(
+    () => ({ base: w.base, longVenue: w.crossexLongVenue, shortVenue: w.crossexShortVenue }),
+    [w.base, w.crossexLongVenue, w.crossexShortVenue],
+  );
 
   const armPerps = (notionalUsd: number, sizeBase?: number) =>
     prefillPair({
@@ -411,6 +416,7 @@ function WizardBody({
               <BorosPairTicket
                 twoColumn
                 guided
+                hedge={hedgePlan}
                 active={step === 1}
                 onBusyChange={setExecuting}
                 onExecuted={recordExecution}

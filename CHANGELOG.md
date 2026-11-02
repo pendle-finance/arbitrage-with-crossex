@@ -36,7 +36,8 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
   reason, for example "Close the Wrong side Gate LONG at 30 Oct to open here". On Funding Bundles,
   Open more no longer opens into a Boros leg that you hold the wrong way.
 - **Current APR counts hedged pairs only.** The asset card's Current APR no longer counts a
-  Boros leg whose perps moved to another pair, nor its margin.
+  Boros leg whose perps moved to another pair, nor its margin. A `Wrong side` leg is left out
+  on every card.
 - **Close perps closes the card's size.** On a card that shares a venue position with another
   card, Close perps sends only that card's size.
 - **The pair ticket warns about an uneven fill.** On a thin book the two legs can fill to
@@ -59,9 +60,11 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
 - **Perp legs stop under the CrossEx position cap.** CrossEx gives a perp its top leverage
   only up to a size cap, for example $50M on Gate BTC and $1M on Gate HYPE. Gate refuses an
   order past it. Before, Opportunities priced cards past that cap, and an open past it failed
-  after the first leg. Now every perp stops 2% under its cap. A card sizes up to that limit and
-  says "This pair takes at most $X of capital". An open past it is refused before anything is
-  sent. The check counts deals still working and orders resting on the same perp. A trade
+  after the first leg. Now every perp stops 2% under its cap. Opportunities sizes a card 3% under
+  it and says "This pair takes at most $X of capital". An open past it is refused before anything
+  is sent. Open this strategy checks its perps before the Boros step too, so the Boros legs never
+  fill when CrossEx would refuse their hedge. The 1% between the two leaves room for the price to
+  move between the steps. The check counts deals still working and orders resting on the same perp. A trade
   that shrinks a position always goes through. A market pair sends its Gate leg first.
 - **Smaller things.** Every leg row shows its venue icon. The open-only roll review names the
   spread market it opens, for example "ETH Spread HL-GATE".

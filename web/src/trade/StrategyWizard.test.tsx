@@ -250,6 +250,23 @@ describe('StrategyWizard — a fill that closes an existing position is not new 
   });
 });
 
+describe('StrategyWizard — the Boros step names its hedge', () => {
+  it("sends the card's perp venues with every quote, so the server can check their limit", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    // msw takes the first handler that answers: the spy returns nothing, so the next one does.
+    server.use(
+      http.post('/api/boros/pair/simulate', async ({ request }) => {
+        seen.push((await request.clone().json()) as Record<string, unknown>);
+      }),
+      ...tradableHandlers(CLEAN_FILL),
+      ...symbolHandlers([ETH_GATE]),
+    );
+    renderWizard({ ...INTENT, maturity: MAT });
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
+    expect(seen[0].hedge).toEqual({ base: 'ETH', longVenue: 'OKX', shortVenue: 'GATE' });
+  });
+});
+
 describe('StrategyWizard — the hedge is sized off the EXECUTED collateral', () => {
   it('an ETH-collateral fill with no sizeBase arms the perps in DOLLARS, not the coin count', async () => {
     /**

@@ -38,6 +38,7 @@ import type {
   BorosLegDirection,
   BorosPairIntent,
   BorosPairMarketRow,
+  BorosPairHedge,
   BorosPairRequest,
   BorosPairResult,
 } from '../api/types';
@@ -164,6 +165,7 @@ export function BorosPairTicket({
   onBusyChange,
   twoColumn = false,
   guided = false,
+  hedge,
 }: {
   active?: boolean;
   /**
@@ -208,6 +210,12 @@ export function BorosPairTicket({
    * executes at the venue regardless.
    */
   onBusyChange?: (busy: boolean) => void;
+  /**
+   * The perps the next step sends against an open. The server refuses the
+   * open when those perps would break their position limit: CrossEx refuses
+   * them only after the Boros legs have filled.
+   */
+  hedge?: BorosPairHedge;
 } = {}) {
   const { t } = useTranslation();
   const agent = useBorosAgent();
@@ -688,6 +696,9 @@ export function BorosPairTicket({
     ? slipOutOfRange(slipStrA) || slipOutOfRange(slipStrB)
     : slipOutOfRange(slipStrShared);
 
+  const hedgeBase = hedge?.base ?? null;
+  const hedgeLong = hedge?.longVenue ?? null;
+  const hedgeShort = hedge?.shortVenue ?? null;
   const request = useMemo<BorosPairRequest | null>(() => {
     /**
      * Single mode still needs a leg B on the wire.
@@ -711,12 +722,14 @@ export function BorosPairTicket({
         : marketB;
     // Two markets sharing no maturity are no pair: nothing to quote.
     if (!address || marketA === null || !sizeOk) return null;
+    const hedgeBody = hedgeBase ? { hedge: { base: hedgeBase, longVenue: hedgeLong, shortVenue: hedgeShort } } : {};
     if (isSpread) {
       return {
         address,
         legs: [{ marketId: marketA, direction: dirA, slippageApr: aprA, size: sizeNum }],
         intent,
         opposingAcknowledged: acknowledged,
+        ...hedgeBody,
       };
     }
     if (partnerId === null || noSharedMaturity) return null;
@@ -731,8 +744,9 @@ export function BorosPairTicket({
       // Recovery takes precedence: a half-filled pair must complete the leg
       // that fell short, whatever mode the toggle is showing.
       ...(onlyLeg !== null ? { onlyLeg } : mode === 'single' ? { onlyLeg: 0 } : {}),
+      ...hedgeBody,
     };
-  }, [address, marketA, marketB, dirA, dirB, aprA, aprB, sizeNum, sizeOk, intent, acknowledged, onlyLeg, mode, markets, rowA, noSharedMaturity, isSpread]);
+  }, [address, marketA, marketB, dirA, dirB, aprA, aprB, sizeNum, sizeOk, intent, acknowledged, onlyLeg, mode, markets, rowA, noSharedMaturity, isSpread, hedgeBase, hedgeLong, hedgeShort]);
 
   // Paused while a report is on screen: the numbers behind that report must not
   // shift under it, and nothing can be confirmed until it is dismissed. Also

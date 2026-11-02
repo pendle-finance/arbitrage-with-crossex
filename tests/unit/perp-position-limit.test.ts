@@ -14,7 +14,7 @@ import {
   type OpportunityPair,
 } from '../../src/core/boros/opportunities';
 import type { NormalizedBook } from '../../src/core/estimate/books';
-import { positionLimitOf, type PositionLimit } from '../../src/core/positionLimit';
+import { PLAN_SHARE, positionLimitOf, type PositionLimit } from '../../src/core/positionLimit';
 import { imInputs } from '../helpers/boros-fixtures';
 
 interface RecordedRow {
@@ -171,11 +171,11 @@ describe.each(['BTC', 'ETH'])('%s pairs sized by capital on the recorded limits'
       const after = priced(rich, cheap, coin, capitalUsd, limitOf);
       const short = limitOf(rich.symbol(coin));
       const long = limitOf(cheap.symbol(coin));
-      const cap = Math.min(short.maxUsd, long.maxUsd);
+      const cap = Math.min(short.maxUsd, long.maxUsd) * PLAN_SHARE;
       const n = after.notionalUsd;
 
       // Both perp legs post margin at the venue max leverage, and the size
-      // never passes the smaller leg's largest position.
+      // never passes PLAN_SHARE of the smaller leg's largest position.
       expect(after.capital.shortLeverageMax).toBe(short.leverage);
       expect(after.capital.longLeverageMax).toBe(long.leverage);
       expect(after.capital.perpShortImUsd).toBeCloseTo(n / short.leverage, 2);

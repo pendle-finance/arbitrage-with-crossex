@@ -9,8 +9,8 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { CoreError } from '../../core/errors';
 import { formatRestPrice, parseSymbol } from '../../core/numbers';
-import { heldQty, setLeverage } from '../../core/orders';
-import { breaksLimit, LIMIT_NOTE } from '../../core/positionLimit';
+import { setLeverage } from '../../core/orders';
+import { LIMIT_NOTE } from '../../core/positionLimit';
 import { resolveDeal, type DealRequest } from '../../engine/create';
 import { project } from '../../engine/decide';
 import { commands } from '../../engine/loop';
@@ -19,6 +19,7 @@ import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { refuse } from '../errorReply';
+import { perpLimitBreach } from '../perpLimit';
 import { positionLimitFor } from './leverage';
 import { conflict } from './rebalance';
 
@@ -97,32 +98,6 @@ export function dealsRoutes(deps: AppDeps) {
             fresh,
           })
         ).value ?? [];
-      // Qty still to trade on a contract in one direction: the unfilled part of
-      // active deals (what a stopping or halted deal still has resting), plus
-      // orders resting there that no active deal placed.
-      const pendingQty = async (contract: string, side: 'BUY' | 'SELL'): Promise<number> => {
-        let qty = 0;
-        const ours = new Set<string>();
-        for (const pair of deps.engine!.store.listPairs({ activeOnly: true })) {
-          const orders = deps.engine!.store.listOrders(pair.id);
-          for (const o of orders) ours.add(o.clientId);
-          const p = project(pair, orders);
-          const pursuing = pair.mode === 'OPENING' || pair.mode === 'CONVERTING';
-          for (const [leg, filled, reserved] of [
-            [pair.a, p.aFilled, p.aReserved],
-            [pair.b, p.bFilled, p.bReserved],
-          ] as const) {
-            if (!leg || leg.reduceOnly || leg.contract !== contract || leg.side !== side) continue;
-            qty += Math.max(0, Number(pursuing ? pair.targetQty : reserved) - Number(filled));
-          }
-        }
-        const open = (await clients.crossEx.listCrossexOpenOrders({ symbol: contract })).body ?? [];
-        for (const o of open) {
-          if (ours.has(String(o.text ?? '')) || o.side !== side || String(o.reduceOnly) === 'true') continue;
-          qty += Math.max(0, Number(o.qty) - (Number(o.executedQty) || 0));
-        }
-        return qty;
-      };
       const refPriceA =
         body.execution === 'taker' && body.a?.symbol
           ? await deps.engine!.venue.refPrice(body.a.symbol.toUpperCase()).catch(() => null)
@@ -159,28 +134,22 @@ export function dealsRoutes(deps: AppDeps) {
 
       // CrossEx also refuses an order that takes the position past the symbol's
       // largest size, at any leverage — and it does so after the order call
-      // succeeds, when the other leg may already have filled. It counts resting
-      // orders, so the check counts what active deals still mean to trade on the
-      // contract and any order resting there that no deal placed.
-      for (const { leg } of legs) {
-        if (leg.reduceOnly) continue;
-        const limit = await positionLimitFor(deps, leg.contract, false);
-        const price = await deps.engine!.venue.refPrice(leg.contract).catch(() => null);
-        if (!(Number(price) > 0)) {
-          throw new CoreError(`No price for ${leg.contract} to check the position size. Nothing was sent. Try again.`, 'leverage');
-        }
-        const sign = leg.side === 'BUY' ? 1 : -1;
-        // Fresh: a fill the cache has not seen yet is already out of the deal's
-        // unfilled part, and would be counted nowhere.
-        const before = heldQty(await getPositions(true), leg.contract) + sign * (await pendingQty(leg.contract, leg.side));
-        const after = before + sign * Number(row.targetQty);
-        const afterUsd = Math.abs(after) * Number(price);
-        if (breaksLimit(Math.abs(before) * Number(price), afterUsd, limit)) {
-          throw new CoreError(
-            `This deal takes ${leg.contract} to ${usd(afterUsd)}, above its limit of ${usd(limit.maxUsd)} (${LIMIT_NOTE}). Nothing was sent.`,
-            'leverage',
-          );
-        }
+      // succeeds, when the other leg may already have filled. Fresh positions:
+      // a fill the cache has not seen yet is already out of the deal's unfilled
+      // part, and would be counted nowhere.
+      const breach = await perpLimitBreach(
+        deps,
+        legs.filter(({ leg }) => !leg.reduceOnly).map(({ leg }) => ({ contract: leg.contract, side: leg.side, qty: Number(row.targetQty) })),
+        { fresh: true },
+      );
+      if (breach?.reason === 'no-price') {
+        throw new CoreError(`No price for ${breach.contract} to check the position size. Nothing was sent. Try again.`, 'leverage');
+      }
+      if (breach) {
+        throw new CoreError(
+          `This deal takes ${breach.contract} to ${usd(breach.afterUsd)}, above its limit of ${usd(breach.maxUsd)} (${LIMIT_NOTE}). Nothing was sent.`,
+          'leverage',
+        );
       }
 
       // Apply, remembering each leg's previous value so a partial application can

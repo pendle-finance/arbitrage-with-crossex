@@ -899,7 +899,8 @@ export type BlockerCode =
   | 'below-min-order-value'
   | 'stale-simulation'
   | 'mixed-open'
-  | 'unhedged-open';
+  | 'unhedged-open'
+  | 'perp-limit';
 
 export interface PairBlocker {
   code: BlockerCode;

@@ -70,12 +70,20 @@ import {
   type BorosMarginBucket,
   type BorosPairAccountState,
   type BorosPairLegInput,
+  type BorosPairSimulation,
+  type PairBlocker,
   type PairIntent,
 } from '../../core/boros/pair';
 import { CoreError } from '../../core/errors';
+import { PLAN_NOTE, PLAN_SHARE } from '../../core/positionLimit';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { catchRateLimit, refuse } from '../errorReply';
+import { perpLimitBreach } from '../perpLimit';
+import { livePerps } from './symbols';
+
+const usd = (n: number): string => `$${Math.round(n).toLocaleString('en-US')}`;
+const HEDGE_LIMIT_UNREAD = 'Could not check the hedge against the perp position limit. Try again.';
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -135,6 +143,14 @@ interface PairBody {
   /** §4 acknowledgement, required whenever a leg opposes an existing position. */
   opposingAcknowledged?: unknown;
   onlyLeg?: unknown;
+  /** The perps the next step sends against this open. */
+  hedge?: unknown;
+}
+
+interface HedgePlan {
+  base: string;
+  longVenue: string | null;
+  shortVenue: string | null;
 }
 
 interface RollStepBody {
@@ -153,6 +169,14 @@ interface RollBody {
   opposingAcknowledged?: unknown;
   /** Replay keys, one per leg, deduped as one (see `recentRolls`). */
   clientOrderIds?: unknown;
+}
+
+function parseHedge(raw: unknown): HedgePlan | null {
+  if (raw === undefined || raw === null) return null;
+  const h = raw as Record<string, unknown>;
+  const venue = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+  if (typeof h.base !== 'string' || h.base === '') throw new CoreError('hedge.base must be a coin', 'validation');
+  return { base: h.base.toUpperCase(), longVenue: venue(h.longVenue), shortVenue: venue(h.shortVenue) };
 }
 
 function parseOnlyLeg(raw: unknown, count: number): number | undefined {
@@ -541,6 +565,51 @@ export function createPairPricer(deps: AppDeps) {
   };
 
   /**
+   * A blocker when the perps that hedge this open would break their position
+   * limit. CrossEx refuses those perps only after the Boros legs have filled,
+   * which leaves the rate leg unhedged, so the open is refused before it.
+   * The check uses PLAN_SHARE of the limit; the perps are checked again at
+   * the full limit when they are sent.
+   */
+  const hedgeLimitBlocker = async (
+    hedge: HedgePlan,
+    simulation: BorosPairSimulation,
+    collateralPriceUsd: number | null,
+    fresh: boolean,
+  ): Promise<PairBlocker | null> => {
+    if (!deps.engine || !(Number(collateralPriceUsd) > 0)) return null;
+    const growth = Math.max(
+      0,
+      ...simulation.legs.map((l) => Math.abs(l.sizing.resultingSize) - Math.abs(l.sizing.currentSize)),
+    );
+    if (!(growth > 0)) return null;
+    const notionalUsd = growth * Number(collateralPriceUsd);
+    try {
+      const { list } = await livePerps(deps, false);
+      const legs = (
+        [
+          [hedge.longVenue, 'BUY'],
+          [hedge.shortVenue, 'SELL'],
+        ] as const
+      ).flatMap(([venue, side]) => {
+        const contract = list.find((s) => s.base === hedge.base && s.exchange === venue)?.symbol;
+        return contract ? [{ contract, side, notionalUsd }] : [];
+      });
+      const breach = await perpLimitBreach(deps, legs, { share: PLAN_SHARE, fresh });
+      if (breach?.reason === 'over') {
+        return {
+          code: 'perp-limit',
+          message: `The hedge takes ${breach.contract} to ${usd(breach.afterUsd)}, above ${usd(breach.maxUsd)} (${PLAN_NOTE}). The perps can add at most ${usd(breach.roomQty * breach.priceUsd)}.`,
+        };
+      }
+      if (breach) return { code: 'perp-limit', message: HEDGE_LIMIT_UNREAD };
+      return null;
+    } catch {
+      return { code: 'perp-limit', message: HEDGE_LIMIT_UNREAD };
+    }
+  };
+
+  /**
    * Everything from a validated body up to (but not including) submission —
    * shared verbatim by /simulate and /execute so the two can never price the
    * same request differently.
@@ -556,6 +625,7 @@ export function createPairPricer(deps: AppDeps) {
     const parsed = parseLegs(body.legs);
     const intent = parseIntent(body.intent);
     const onlyLeg = parseOnlyLeg(body.onlyLeg, parsed.length);
+    const hedge = parseHedge(body.hedge);
 
     const [markets, account] = preloaded
       ? [preloaded.markets, preloaded.account]
@@ -619,6 +689,10 @@ export function createPairPricer(deps: AppDeps) {
       simulatedAtMs,
       nowMs: simulatedAtMs,
     });
+    if (intent === 'open' && hedge) {
+      const blocker = await hedgeLimitBlocker(hedge, simulation, collateralPriceUsd, fresh);
+      if (blocker) gate.blockers.push(blocker);
+    }
 
     return {
       simulation,
