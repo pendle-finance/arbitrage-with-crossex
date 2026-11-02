@@ -21,7 +21,7 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
 - **Fixed Rate Pairs pairs positions by venue at any date.** Each card pairs your perps and Boros
   positions by venue and side, at any Boros date. After a half roll, the new date gets its card and
   the old Boros position goes to Ungrouped. A position on the wrong side shows a `Wrong side` tag at any date,
-  and its row has a faint red tint. A USDC perp shows `no Boros hedge`: Boros tracks the USDT
+  and its row has a faint red tint. A USDC perp shows `No Boros hedge`: Boros tracks the USDT
   perp's funding, not the USDC one's.
 - **After a half roll, the other Boros position opens at the new date.** Before, a card refused to open a
   Boros position while the venue still held one at the old date. Now it opens, and the Boros ticket
@@ -33,7 +33,7 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
   live on the terminal, so a new browser keeps them. The first load moves the exclusions your
   browser saved to the terminal.
 - **A blocked open says why.** An open that cannot go is a grey button. Its hover gives the
-  reason, for example "Close the Wrong side Gate LONG at 30 Oct to open here". On Funding Bundles,
+  reason, for example "Close the Gate Long tagged "Wrong side" (30 Oct) to open here." On Funding Bundles,
   Open more no longer opens into a Boros position that you hold the wrong way.
 - **Current APR counts hedged pairs only.** The asset card's Current APR no longer counts a
   Boros position whose perps moved to another pair, nor its margin. A `Wrong side` position is left out
@@ -52,8 +52,8 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
 - **Opportunities sizes by capital.** The size box now sets Capital: the margin you post on all
   positions, which is what the APR is on. Each card finds the notional per position that uses exactly
   that capital, walks the Boros and perp books at that size, and shows it. The default is $200k
-  of capital. The Notional per leg mode is gone; a saved notional pick opens on your saved
-  capital, or on $200k. The presets now include $1M. The Custom button is gone: click the box and
+  of capital. The Notional per leg mode is gone, and a size saved in 1.7.7 does not carry over:
+  the box opens on $200k once, then keeps your pick. The presets now include $1M. The Custom button is gone: click the box and
   type any amount, or pick a preset. Open this strategy fills the ticket at the
   card's own notional. Above $1M per leg, the perp slippage assumes $1M orders sent one after
   another, and a note under the size says so. Perp entry now starts on Limit + hedge, on
@@ -68,11 +68,22 @@ Opportunities sizes every card by the capital you put in. Every screen can show 
   open when CrossEx would refuse their hedge. The 1% between the two leaves room for the price to
   move between the steps. The check counts deals still working and orders resting on the same perp. A trade
   that shrinks a position always goes through. A market pair sends its Gate leg first.
+- **A locked rate reads pay or receive everywhere.** Pair rows, Funding Bundles and Close Boros
+  say "pay 8.74%" or "receive 7.12%" instead of a signed rate. Funding Bundles keeps its after-fee
+  rate, and its column says so: Net fixed APR.
+- **Long first on every screen.** Opportunities, Open this strategy, the Boros ticket and the perp
+  ticket all list the Long side or Market A first.
 - **Smaller things.** Every position row shows its venue icon. The open-only roll review names the
-  spread market it opens, for example "ETH Spread HL-GATE".
-  Perp and Boros legs carry one marker in every table. Small tags are easier to read, and a
-  yellow tag and its row use one yellow. Limit orders shows its count once and names CrossEx when
-  empty. Icons are the same set as the Boros app.
+  spread market it opens, for example "ETH Spread HL-GATE". The coin chip says `Not fully hedged`
+  when a Boros position is held but too small or the wrong way, and names the side only when it is
+  truly missing. Opportunities says how many pairs it leaves out at your capital. The Boros ticket
+  names its two markets Market A and Market B, and Open this strategy says which venue each step
+  trades on. Boros Long and Short chips say in their hover what the side pays and receives. The
+  Chinese uses one glossary on every screen. Boros and perp positions carry the same round tag in
+  every table: "CrossEx" on Fixed Rate Pairs and Ungrouped, "Perp" on Funding Bundles. A missing
+  position looks the same on both tabs. Small tags are easier to read, and a yellow tag and its row
+  use one yellow. Limit orders shows its count once and names CrossEx when empty. Icons are the same
+  set as the Boros app, including the check on the share image.
 
 Existing installs get this through the in-app Update.
 
