@@ -9,7 +9,7 @@
     "exitProseClose": "close at maturity",
     "exitProseRoll": "roll over",
     "capitalAria": "Capital (USD)",
-    "capitalTitle": "Margin you post on every position. Each pair's notional is set to use this amount.",
+    "capitalTitle": "Total margin posted on all positions. Each pair's notional is set to use this amount.",
     "capitalPresets": "Capital presets",
     "perpEntry": "Perp entry",
     "perpEntryAria": "Perp entry mode",
