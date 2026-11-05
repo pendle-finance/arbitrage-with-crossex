@@ -7,7 +7,14 @@
     "borosTitle": "Mark rate that liquidates this position, from Boros.",
     "lowRiskTitle": "Low risk. Boros shows no liquidation rate yet.",
     "na": "Liq. N/A",
-    "apr": "Liq. {{apr}}"
+    "apr": "Liq. {{apr}}",
+    "suggested": "Suggested {{bound}}",
+    "suggestedTitle": "Suggested liquidation: {{suggested}}, 5% APR from the current rate.",
+    "suggestedShortTitle": "Suggested liquidation: {{suggested}}, 5% APR from the current rate. Add about {{usd}} of Boros margin to get there.",
+    "why": "Your perp gains land on CrossEx, but Boros payments come out of Boros margin. They don't offset, so keep a buffer here.",
+    "chip": "Low Boros buffer",
+    "chipTitle": "Liquidation is within 5% APR of the current rate on:",
+    "chipRow": "liq. {{apr}}, suggested {{bound}}"
   },
   "listSep": ", ",
   "listLast": "{{head}} and {{last}}",

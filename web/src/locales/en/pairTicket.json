@@ -157,6 +157,8 @@
     "selectMarket": "Select market",
     "liqTitle": "Mark rate that liquidates this position on its required margin alone. More collateral moves it further away.",
     "liqNaHint": "Position risk is low, so there is no liquidation rate for the time being.",
+    "suggestedLiq": "suggested {{bound}}",
+    "suggestedLiqTitle": "Suggested: liquidation at {{suggested}}, 5% APR from the current rate. Deposit more collateral to Boros to get there. Your perp gains land on CrossEx, but Boros payments come out of Boros margin, so keep a buffer here.",
     "na": "N/A",
     "spreadHint": "Net of settlement fees. Execution rates at this size:\n{{rates}}",
     "estimatedRate": "Estimated rate",

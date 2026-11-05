@@ -476,6 +476,46 @@ export function borosLiquidationApr(
   return liq;
 }
 
+/** How far from the current mark rate the terminal suggests a Boros
+ * position's liquidation rate sit: 5% APR. A suggestion, never enforced. */
+export const SUGGESTED_LIQ_DISTANCE_APR = 0.05;
+
+/** The suggested liquidation rate: the mark less the distance for a long (it
+ * liquidates as the rate falls), plus it for a short. */
+export function borosSuggestedLiquidationApr(side: 'long' | 'short', markApr: number): number | null {
+  if (!Number.isFinite(markApr)) return null;
+  return side === 'long' ? markApr - SUGGESTED_LIQ_DISTANCE_APR : markApr + SUGGESTED_LIQ_DISTANCE_APR;
+}
+
+/**
+ * Cash, in collateral units, that moves a HELD position's liquidation rate
+ * from `liq` (as the venue reports it) out to `target`. Every case of
+ * borosLiquidationRate solves availValue + size × t × r = MM(r), so the
+ * availValue a rate needs is MM(r) − size × t × r, and the cash is the
+ * difference of the two. Like the venue's own rate, it holds the account's
+ * other positions where they are. 0 when `liq` is already past the target;
+ * null near maturity, where the contract charges an MM the solve does not
+ * cover.
+ */
+export function borosCashToLiquidationRate(
+  m: BorosMarket,
+  size: number,
+  liq: number,
+  target: number,
+  nowSec: number,
+): number | null {
+  if (!Number.isFinite(m.kMM) || m.kMM <= 0 || !Number.isFinite(liq) || !Number.isFinite(target)) return null;
+  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
+  if (!(dtmDays > 0) || size === 0) return null;
+  const t = dtmDays / DAYS_IN_YEAR;
+  const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
+  if (t < tThresh * m.kMM) return null;
+  const floor = borosAprFloor(m);
+  const mm = Math.abs(size) * m.kMM * Math.max(t, tThresh);
+  const needs = (r: number) => mm * Math.max(Math.abs(r), floor) - size * t * r;
+  return Math.max(0, needs(target) - needs(liq));
+}
+
 /**
  * A margin bucket's health factor: equity over maintenance margin, the same
  * equity/maintenance ratio CrossEx's own liquidation condition uses

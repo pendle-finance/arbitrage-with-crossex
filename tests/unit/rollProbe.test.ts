@@ -37,6 +37,7 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
   marginRequired: 25,
   marginReleased: 0,
   liquidationApr: null,
+  suggestedLiquidationApr: null,
   slippageApr: 0.01,
   sizing: {
     currentSize: 0,

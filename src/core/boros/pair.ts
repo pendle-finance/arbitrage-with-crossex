@@ -32,6 +32,7 @@
 import {
   borosInitialMarginUsd,
   borosLiquidationApr,
+  borosSuggestedLiquidationApr,
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
@@ -440,6 +441,10 @@ export interface SimulatedLeg {
    * leg ends flat, has no rate, the market carries no margin coefficients,
    * or the rate is past the range the Boros app shows (it shows "N/A"). */
   liquidationApr: number | null;
+  /** The liquidation rate the terminal suggests for the resulting position:
+   * 5% APR past the market's mark (borosSuggestedLiquidationApr). Null when
+   * the leg ends flat. */
+  suggestedLiquidationApr: number | null;
   /** Effective tolerance after clamping. */
   slippageApr: number;
   sizing: LegSizing;
@@ -671,6 +676,8 @@ function simulateLeg(
     execApr === null || resultingSide === null
       ? null
       : borosLiquidationApr(leg.market, execApr, resultingSide, nowSec);
+  const suggestedLiquidationApr =
+    resultingSide === null ? null : borosSuggestedLiquidationApr(resultingSide, leg.market.markApr);
 
   const estFill = walk ? walk.filledUsd : 0;
   return {
@@ -693,6 +700,7 @@ function simulateLeg(
     marginRequired,
     marginReleased,
     liquidationApr,
+    suggestedLiquidationApr,
     slippageApr,
     sizing,
     takerFeeCost: 0, // priced by the caller, which knows the rate and the term

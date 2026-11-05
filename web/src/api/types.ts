@@ -1133,6 +1133,8 @@ export interface BorosSimulatedLeg {
    * carries no margin coefficients, or past the range the Boros app shows.
    * Optional only for an older server. */
   liquidationApr?: number | null;
+  /** Suggested liquidation rate: 5% APR past the mark. Absent on an older server. */
+  suggestedLiquidationApr?: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
   /** This leg's taker fee at its traded size, collateral units (× the
@@ -1553,6 +1555,11 @@ export interface AssetBorosOpen {
   /** The mark rate at which the venue liquidates this leg, as it reports it
    * (a rate, unscaled). Null when none; absent only on an older server. */
   liquidationApr?: number | null;
+  /** Suggested liquidation rate: 5% APR past the mark. Absent on an older server. */
+  suggestedLiquidationApr?: number | null;
+  /** USD of margin that moves the liquidation rate out to the suggested one;
+   * 0 when already there. Absent on an older server. */
+  toSuggestedUsd?: number | null;
   /** Cumulative settlement of the CURRENT position (display only — totals
    * come from borosHistory, which covers the same flows plus closed legs). */
   settleUsd: number;

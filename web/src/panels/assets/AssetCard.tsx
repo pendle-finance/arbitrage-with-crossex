@@ -508,20 +508,80 @@ function SectionTabs<T extends string>({
  * nothing when the venue reports none (flat, unpriced, no coefficients) or on
  * an older server (absent). "N/A" past max(250%, 10 × |mark|), as the Boros
  * app shows it (dapp-nitro isLiquidationAprOutOfRange). */
-function BorosLiqAprLine({ leg }: { leg: Pick<AssetBorosOpen, 'liquidationApr' | 'markApr'> | undefined }) {
+type BorosLiqLeg = Pick<
+  AssetBorosOpen,
+  'liquidationApr' | 'markApr' | 'side' | 'suggestedLiquidationApr' | 'toSuggestedUsd'
+>;
+
+/** Out of the range the Boros app prices: it shows "N/A" (dapp-nitro
+ * isLiquidationAprOutOfRange). */
+const liqOutOfRange = (leg: Pick<AssetBorosOpen, 'markApr'>, apr: number): boolean =>
+  Math.abs(apr) > Math.max(2.5, 10 * Math.abs(leg.markApr));
+
+/** True when the leg liquidates closer to the mark than the suggested rate:
+ * above it for a long (which liquidates as the rate falls), below it for a
+ * short. An N/A rate is past any suggestion. */
+function belowSuggested(leg: BorosLiqLeg): boolean {
+  const apr = leg.liquidationApr;
+  const suggested = leg.suggestedLiquidationApr;
+  if (apr == null || suggested == null || !Number.isFinite(apr) || liqOutOfRange(leg, apr)) return false;
+  return leg.side === 'LONG' ? apr > suggested : apr < suggested;
+}
+
+const suggestedBound = (leg: BorosLiqLeg): string =>
+  `${leg.side === 'LONG' ? '≤' : '≥'} ${fmtPct(leg.suggestedLiquidationApr ?? 0)}`;
+
+/** The top-up, when the venue's solve could price one. */
+const topUpText = (leg: BorosLiqLeg): string | null =>
+  leg.toSuggestedUsd != null && leg.toSuggestedUsd >= 0.01 ? fmtUsd(leg.toSuggestedUsd, 0) : null;
+
+/** The venue-reported liquidation APR, under a Boros leg's rate. Renders
+ * nothing when the venue reports none (flat, unpriced, no coefficients) or on
+ * an older server (absent). "N/A" past max(250%, 10 × |mark|), as the Boros
+ * app shows it. The suggested rate shows only when the leg is short of it. */
+function BorosLiqAprLine({ leg }: { leg: BorosLiqLeg | undefined }) {
   const apr = leg?.liquidationApr;
   if (!leg || apr == null || !Number.isFinite(apr)) return null;
-  if (Math.abs(apr) > Math.max(2.5, 10 * Math.abs(leg.markApr))) {
+  if (liqOutOfRange(leg, apr)) {
     return (
       <div className="num text-[10px] text-ink-500" title={t('assetCard.liq.lowRiskTitle')}>
         {t('assetCard.liq.na')}
       </div>
     );
   }
+  if (!belowSuggested(leg)) {
+    return (
+      <div className="num text-[10px] text-ink-500" title={t('assetCard.liq.borosTitle')}>
+        {t('assetCard.liq.apr', { apr: fmtPct(apr) })}
+      </div>
+    );
+  }
+  const usd = topUpText(leg);
+  const bound = suggestedBound(leg);
   return (
-    <div className="num text-[10px] text-ink-500" title={t('assetCard.liq.borosTitle')}>
+    <div
+      className="num cursor-help text-[10px] text-amber-300"
+      title={`${usd ? t('assetCard.liq.suggestedShortTitle', { suggested: bound, usd }) : t('assetCard.liq.suggestedTitle', { suggested: bound })}\n${t('assetCard.liq.why')}`}
+    >
       {t('assetCard.liq.apr', { apr: fmtPct(apr) })}
+      <span className="text-ink-500"> · {t('assetCard.liq.suggested', { bound })}</span>
     </div>
+  );
+}
+
+/** The header's quiet warning, beside the hedge chip, when any Boros leg
+ * liquidates closer to the mark than the suggested rate. */
+function LowBufferChip({ legs }: { legs: AssetBorosOpen[] }) {
+  const low = legs.filter(belowSuggested);
+  if (low.length === 0) return null;
+  const rows = low.map((l) => {
+    const usd = topUpText(l);
+    return `${borosLegLabel(l)}\t${t('assetCard.liq.chipRow', { apr: fmtPct(l.liquidationApr ?? 0), bound: suggestedBound(l) })}${usd ? ` · +${usd}` : ''}`;
+  });
+  return (
+    <Chip tone="amber" className={HEAD_CHIP} title={[t('assetCard.liq.chipTitle'), ...rows, '', t('assetCard.liq.why')].join('\n')}>
+      {t('assetCard.liq.chip')}
+    </Chip>
   );
 }
 
@@ -5847,6 +5907,7 @@ export function AssetCard({
             </Chip>
           ))}
         {hasLegs && liquidation && <LiquidationChip line={liquidation} base={group.base} />}
+        {hasLegs && <LowBufferChip legs={group.borosOpen} />}
         <span className="ml-auto" />
         {windowPending && <span className="text-xs text-ink-600">{t('assetCard.head.updatingWindow')}</span>}
         <SinceChip base={group.base} storedSec={storedSinceSec} defaultSec={defaultSinceSec} onChange={onChangeSince} />
