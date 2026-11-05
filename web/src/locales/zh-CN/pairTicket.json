@@ -154,6 +154,8 @@
     "selectMarket": "选择市场",
     "liqTitle": "仅靠所需保证金时，此仓位被清算的标记利率。更多抵押品会让清算 APR离当前利率更远。",
     "liqNaHint": "仓位风险较低，暂时没有清算 APR。",
+    "suggestedLiq": "建议 {{bound}}",
+    "suggestedLiqTitle": "建议：清算 APR 在 {{suggested}}，距当前利率 5% APR。向 Boros 存入更多抵押品即可达到。永续合约的收益留在 CrossEx，而 Boros 的支付从 Boros 保证金扣除，请在这里保留缓冲。",
     "na": "N/A",
     "spreadHint": "已扣除结算手续费。此规模下的成交利率：\n{{rates}}",
     "estimatedRate": "预估利率",

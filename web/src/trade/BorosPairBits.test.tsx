@@ -24,6 +24,19 @@ describe('LiquidationRows', () => {
     );
     expect(screen.getByText('—')).toBeInTheDocument();
   });
+
+  it('adds the suggested rate only to a leg that would liquidate closer to the mark', () => {
+    const sim = {
+      legs: [
+        { ...leg('Gate', 0.0996, -100), suggestedLiquidationApr: 0.135 },
+        { ...leg('Hyperliquid', -0.3, 100), suggestedLiquidationApr: 0.003 },
+      ],
+    } as unknown as BorosPairSimulation;
+    render(<LiquidationRows sim={sim} />);
+    expect(screen.getByText('· suggested ≥ 13.50%', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('-30.00%')).toBeInTheDocument();
+    expect(screen.queryByText('≤ 0.30%', { exact: false })).toBeNull();
+  });
 });
 
 describe('UnevenFillWarning', () => {

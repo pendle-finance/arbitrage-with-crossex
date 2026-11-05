@@ -42,7 +42,11 @@ import {
   type BorosTxn,
   type FetchLike,
 } from '../../core/boros/client';
-import { borosHealthFactor } from '../../core/boros/opportunities';
+import {
+  borosCashToLiquidationRate,
+  borosHealthFactor,
+  borosSuggestedLiquidationApr,
+} from '../../core/boros/opportunities';
 import { normalizeVenue, type PerpPositionLike } from '../../core/boros/venue';
 import { isSupportedCoin, SUPPORTED_COINS } from '../../core/coins';
 import { classifyGateError, CoreError } from '../../core/errors';
@@ -162,6 +166,12 @@ export interface AssetBorosOpenOut {
   /** The mark rate at which the venue liquidates this leg, as it reports it
    * (a rate, unscaled). Null when the venue reports none. */
   liquidationApr: number | null;
+  /** The liquidation rate the terminal suggests: 5% APR past the mark
+   * (borosSuggestedLiquidationApr). A suggestion only. */
+  suggestedLiquidationApr: number | null;
+  /** USD of margin that moves `liquidationApr` out to the suggested rate; 0
+   * when it is already there. Null when either rate is unknown. */
+  toSuggestedUsd: number | null;
   /** Cumulative settlement of the CURRENT position, net of settle fees.
    * DISPLAY ONLY — totals come from borosHistory (see the double-count
    * guard in the header). */
@@ -1074,6 +1084,12 @@ export function createAssetViewBuilder(deps: AppDeps) {
           if (!market) continue;
           const g = groupFor(market.base);
           if (g.priceUsd === 0 && market.assetMarkPriceUsd > 0) g.priceUsd = market.assetMarkPriceUsd;
+          const liquidationApr = p.liquidationApr ?? null;
+          const suggestedLiquidationApr = borosSuggestedLiquidationApr(sizeSigned > 0 ? 'long' : 'short', p.markApr);
+          const toSuggested =
+            liquidationApr === null || suggestedLiquidationApr === null
+              ? null
+              : borosCashToLiquidationRate(market, sizeSigned, liquidationApr, suggestedLiquidationApr, nowSec);
           g.borosOpen.push({
             marketId: p.marketId,
             venue: normalizeVenue(market.spreadVenues?.[0] ?? market.venue),
@@ -1086,7 +1102,9 @@ export function createAssetViewBuilder(deps: AppDeps) {
             entryApr: p.fixedApr,
             markApr: p.markApr,
             floatingApr: market.floatingApr,
-            liquidationApr: p.liquidationApr ?? null,
+            liquidationApr,
+            suggestedLiquidationApr,
+            toSuggestedUsd: toSuggested === null ? null : toSuggested * px,
             settleUsd: norm18(p.pnl.rateSettlementPnl) * px,
             mtmUsd: norm18(p.pnl.unrealisedPnl) * px,
             imUsd: norm18(p.positionInitialMargin ?? p.initialMargin) * px,

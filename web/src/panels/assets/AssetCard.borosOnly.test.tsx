@@ -152,6 +152,35 @@ describe('BorosOnlyPairCard', () => {
     expect(within(table).getByText('Liq. 12.30%')).toBeInTheDocument();
   });
 
+  it('shows the suggested liquidation APR only on a leg short of it, and flags the card', () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], side: 'LONG', liquidationApr: 0.015, suggestedLiquidationApr: 0.03, toSuggestedUsd: 0 },
+      { ...g.borosOpen[1], side: 'SHORT', liquidationApr: 0.1, suggestedLiquidationApr: 0.13, toSuggestedUsd: 62.5 },
+    ];
+    renderCard(g);
+    const table = legTable();
+    // Past the suggestion: the plain line, nothing more.
+    expect(within(table).getByText('Liq. 1.50%')).toBeInTheDocument();
+    expect(within(table).queryByText('Suggested ≤ 3.00%', { exact: false })).toBeNull();
+    const short = within(table).getByText('Suggested ≥ 13.00%', { exact: false }).closest('div')!;
+    expect(short.textContent).toBe('Liq. 10.00% · Suggested ≥ 13.00%');
+    expect(short.getAttribute('title')).toMatch(/Add about \$63 of Boros margin to get there\./);
+    const chip = screen.getByText('Low Boros buffer');
+    expect(chip.closest('[title]')?.getAttribute('title')).toMatch(/liq\. 10\.00%, suggested ≥ 13\.00% · \+\$63/);
+    expect(chip.closest('[title]')?.getAttribute('title')).not.toMatch(/1\.50%/);
+  });
+
+  it('shows no warning when every leg is past the suggestion', () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], side: 'LONG', liquidationApr: 0.015, suggestedLiquidationApr: 0.03, toSuggestedUsd: 0 },
+      { ...g.borosOpen[1], side: 'SHORT', liquidationApr: 0.2, suggestedLiquidationApr: 0.13, toSuggestedUsd: 0 },
+    ];
+    renderCard(g);
+    expect(screen.queryByText('Low Boros buffer')).toBeNull();
+  });
+
   it('shows N/A, as the Boros app does, past max(250%, 10 × |mark|)', () => {
     const g = book([]);
     g.borosOpen = [

@@ -426,9 +426,24 @@ function LiqValue({ leg, className = '', tone = '' }: { leg: BorosSimulatedLeg; 
   if (leg.liquidationApr == null && leg.execApr !== null && leg.sizing.resultingSize !== 0) {
     return <span className={`${className} text-ink-500`} title={t('pairTicket.borosBits.liqNaHint')}>{t('pairTicket.borosBits.na')}</span>;
   }
+  // The suggested rate shows only when the position would liquidate closer
+  // to the mark than it: above it for a long, below it for a short.
+  const long = leg.sizing.resultingSize > 0;
+  const suggested = leg.liquidationApr == null ? null : leg.suggestedLiquidationApr;
+  const short =
+    suggested != null && leg.liquidationApr != null && (long ? leg.liquidationApr > suggested : leg.liquidationApr < suggested);
+  if (suggested == null || !short) {
+    return (
+      <span className={`${className} ${leg.liquidationApr == null ? 'text-ink-500' : tone}`}>
+        {pct(leg.liquidationApr)}
+      </span>
+    );
+  }
+  const bound = `${long ? '≤' : '≥'} ${pct(suggested)}`;
   return (
-    <span className={`${className} ${leg.liquidationApr == null ? 'text-ink-500' : tone}`}>
-      {pct(leg.liquidationApr)}
+    <span className={`${className} cursor-help`} title={t('pairTicket.borosBits.suggestedLiqTitle', { suggested: bound })}>
+      <span className="text-amber-300">{pct(leg.liquidationApr)}</span>
+      <span className="text-ink-500"> · {t('pairTicket.borosBits.suggestedLiq', { bound })}</span>
     </span>
   );
 }

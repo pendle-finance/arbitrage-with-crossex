@@ -128,6 +128,7 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
   marginRequired: 25,
   marginReleased: 0,
   liquidationApr: null,
+  suggestedLiquidationApr: null,
   slippageApr: 0.01,
   sizing: { currentSize: 0, deltaSize: 100, resultingSize: 100, opposing: false, flips: false, clampedToClose: false, orderSide: 'long' },
   takerFeeCost: 0,
