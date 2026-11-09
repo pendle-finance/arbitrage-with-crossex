@@ -581,7 +581,11 @@ export function useRebalance() {
     queryKey: qk.rebalance,
     queryFn: () => fetchJson<RebalanceView>('/rebalance'),
     enabled: (query) => canFetch(shown, query),
-    refetchInterval: shown ? (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 4_000) : false,
+    // 10 s between quotes while idle (was 4 s, his catch 2026-11-09: the
+    // routes moved before he could pick one). The server re-prices at send
+    // and refuses a fee that rose past its tolerance, so a slower quote
+    // cannot send a worse move than the one shown.
+    refetchInterval: shown ? (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 10_000) : false,
     refetchIntervalInBackground: true,
   });
 }
@@ -605,7 +609,7 @@ export function useCustomPlan(custom: CustomMove | null) {
       ),
     enabled: live,
     placeholderData: keepPreviousData,
-    refetchInterval: 4_000,
+    refetchInterval: 10_000,
   });
 }
 

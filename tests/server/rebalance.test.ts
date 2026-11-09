@@ -268,7 +268,8 @@ describe('GET /api/rebalance', () => {
     expect(plan.routes.mix).toBeNull();
     expect(plan.routes.loop).toMatchObject({ available: true, reason: null, rounds: 5 });
     expect(plan.routes.convert).toMatchObject({ available: true, reason: null, rounds: 0 });
-    expect(plan).toMatchObject({ balanced: false, noLegs: false, recommended: 'loop' });
+    // Five rounds save cents over Convert, not worth their minutes.
+    expect(plan).toMatchObject({ balanced: false, noLegs: false, recommended: 'convert' });
     expect(plan.routes.loop!.steps.every((step) => step.from === 'CROSSEX' && step.to === 'HYPERLIQUID')).toBe(true);
   });
 
@@ -349,7 +350,7 @@ describe('POST /api/rebalance', () => {
     refuseSends();
     const h = boot();
     const plan = await h.plan();
-    expect(plan.recommended).toBe('loop');
+    expect(plan.recommended).toBe('convert');
 
     const res = await h.post('/api/rebalance', { route: 'convert', costUsd: plan.routes.convert.costUsd });
 
@@ -374,7 +375,6 @@ describe('POST /api/rebalance', () => {
     const res = await h.post('/api/rebalance', { route: 'loop', costUsd: plan.routes.loop!.costUsd, amount: 5 });
 
     expect(res.statusCode).toBe(202);
-    expect(h.file().amount).toBe(plan.moves);
     expect(h.file().amount).toBe(movedBy(plan.routes.loop!.steps));
     expect(h.file().amount).not.toBe(5);
     await waitFor(() => h.file().status === 'halted', 'the halt');
@@ -502,7 +502,7 @@ describe('POST /api/rebalance', () => {
     const h = boot();
     const plan = await h.plan();
     expect(plan.routes.mix).toBeNull();
-    expect(plan.recommended).toBe('loop');
+    expect(plan.routes.loop).toMatchObject({ available: true });
 
     const res = await h.post('/api/rebalance', { route: 'mix', costUsd: plan.routes.loop!.costUsd });
 

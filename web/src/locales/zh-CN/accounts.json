@@ -111,7 +111,7 @@
         },
         "costFrom": "{{usd}} 起",
         "twoSwaps": "0.4%，兑换两次",
-        "recommended": "推荐：15 分钟内完成的最便宜路线。"
+        "recommended": "推荐：手续费与耗时的最佳平衡。"
       },
       "presets": "按仓位平衡：按仓位规模分配权益。还清借款：从权益最多的钱包偿还所有借款。自定义金额：按您输入的金额划转。",
       "custom": "从一个 CrossEx 钱包向另一个划转此金额。费用从到账金额中扣除。",
@@ -134,7 +134,7 @@
       "borrowing": "钱包为负即为借款。上方账户卡片中的“初始保证金占用”显示其占用的保证金。",
       "route": "资金的划转方式。费用包含 Gate 手续费和现货价差。",
       "mix": "现货循环最多 {{rounds}}，其余部分兑换。",
-      "recommended": "15 分钟内完成的最便宜路线。",
+      "recommended": "手续费与耗时的最佳平衡：路线越久，需要省下的越多，且每多一小时的代价都高于前一小时。",
       "noDirectTransfer": "Gate 不支持 CrossEx 钱包之间直接划转。",
       "repeats": "按轮重复。",
       "convert": "在您的 CrossEx USDT 与 USDC 钱包之间即时兑换。手续费 0.2%。",
@@ -152,7 +152,8 @@
       "time": "常规耗时。转入或转出 CrossEx Hyperliquid 和 Lighter 钱包可能更久。",
       "minimum": "转入或转出 CrossEx Hyperliquid 和 Lighter 钱包的 Gate 最低金额，含手续费。",
       "upToOut": "可用保证金，上限为该钱包现金。",
-      "upToInto": "您的 Gate 现货余额。"
+      "upToInto": "您的 Gate 现货余额。",
+      "priceImpact": "不是手续费。在 Gate 现货以高于 $1 买入或低于 $1 卖出 USDC 的差价，以及吃到盘口以外深度的部分。"
     },
     "verdict": {
       "noBorrow": "无借款，无需划转。",
@@ -186,7 +187,10 @@
       "steps": "显示步骤",
       "refreshRoute": "刷新路线",
       "resume": "恢复",
-      "abandon": "放弃"
+      "abandon": "放弃",
+      "priceImpact": "价格影响",
+      "priceImpactUsd": "+ {{usd}} 价格影响",
+      "feePlusImpact": "{{fee}} 手续费，另有 {{impact}} 价格影响"
     },
     "waits": {
       "transfer": "划转进行中",

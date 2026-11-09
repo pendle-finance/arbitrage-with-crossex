@@ -204,7 +204,11 @@ export interface PlannedStep {
 export interface RoutePlan {
   available: boolean;
   reason: string | null;
+  /** Fees plus price impact. */
   costUsd: number;
+  /** The part of costUsd that is price impact (USDC above or below $1, book
+   * depth), not a fee. Absent on older servers. */
+  priceImpactUsd?: number;
   seconds: number;
   rounds: number;
   oneMoreRoundCostUsd: number | null;
