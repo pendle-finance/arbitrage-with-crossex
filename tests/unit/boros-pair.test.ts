@@ -211,80 +211,11 @@ describe('resolveLegSizing', () => {
     expect(resolveLegSizing(0, 100, 'short', 'close').deltaSize).toBe(0);
   });
 
-  it("'target' aims at an END STATE: the delta is whatever is missing", () => {
-    // Flat → the whole target.
-    expect(resolveLegSizing(0, 100, 'long', 'target').deltaSize).toBe(100);
-    // Half-filled → only the remainder. This is the wizard's half-fill case:
-    // same target, less to do.
-    expect(resolveLegSizing(40, 100, 'long', 'target').deltaSize).toBe(60);
-    // Already there → NO CHANGE, which is what the ticket should show once a
-    // leg has landed.
-    expect(resolveLegSizing(100, 100, 'long', 'target').deltaSize).toBe(0);
-    // Overshot → trimmed back to the target.
-    expect(resolveLegSizing(140, 100, 'long', 'target').deltaSize).toBe(-40);
-    // Short side reads the same way, signs mirrored.
-    expect(resolveLegSizing(-40, 100, 'short', 'target').deltaSize).toBe(-60);
-    expect(resolveLegSizing(-100, 100, 'short', 'target')).toMatchObject({
-      deltaSize: 0,
-      resultingSize: -100,
-    });
-  });
-
-  it("'target' never crosses zero — it stops at flat rather than flipping", () => {
-    // Holding +100, aiming at 100 SHORT: closing and re-opening the other way
-    // in one order is a different trade from the one being quoted.
-    const s = resolveLegSizing(100, 100, 'short', 'target');
-    expect(s.deltaSize).toBe(-100);
-    expect(s.resultingSize).toBe(0);
-    expect(s.flips).toBe(false);
-    expect(resolveLegSizing(40, 100, 'long', 'close').deltaSize).toBe(0);
-  });
-
-  it('orderSide is the sign of the DELTA, not the side held', () => {
-    // The two intents that can only ever add to, or only ever reduce, a
-    // position already agree with the side held — nothing changes for them.
+  it('orderSide agrees with the leg: an open adds on its side, a close only reduces', () => {
     expect(resolveLegSizing(0, 100, 'long', 'open').orderSide).toBe('long');
     expect(resolveLegSizing(100, 100, 'long', 'open').orderSide).toBe('long');
     expect(resolveLegSizing(100, 40, 'short', 'close').orderSide).toBe('short');
-
-    // `target` is the one that parts company. Aiming a LONG 1,000 leg at 500
-    // is a SELL of 500: the leg stays long, the order does not.
-    const down = resolveLegSizing(1_000, 500, 'long', 'target');
-    expect(down.deltaSize).toBe(-500);
-    expect(down.resultingSize).toBe(500);
-    expect(down.orderSide).toBe('short');
-    // Reading the held side here sent a BUY of 500 against a long 1,000 and
-    // finished at 1,500 — the opposite of what the §4 row promised — and the
-    // reduce-only cap could not catch it, because 500 < 1,000.
-    expect(down.orderSide).not.toBe('long');
-
-    // Mirrored on the short side: a SHORT 1,000 aimed at 500 is a BUY.
-    expect(resolveLegSizing(-1_000, 500, 'short', 'target')).toMatchObject({
-      deltaSize: 500,
-      resultingSize: -500,
-      orderSide: 'long',
-    });
-
-    // Still growing towards the target: the order agrees with the side again.
-    expect(resolveLegSizing(400, 1_000, 'long', 'target').orderSide).toBe('long');
-
-    // A leg that does not trade keeps the side it holds; it has no order.
-    expect(resolveLegSizing(1_000, 1_000, 'long', 'target')).toMatchObject({
-      deltaSize: 0,
-      orderSide: 'long',
-    });
-  });
-
-  it("'target' with a ZERO request leaves the leg alone — it is not a target of flat", () => {
-    // `onlyLeg` sizes the other leg to 0 to keep it out of the order. Read as
-    // "aim at 0" that would have sent a full close of the leg that already
-    // filled, in the one flow (a half-filled wizard step) built to repair it.
-    expect(resolveLegSizing(-100, 0, 'short', 'target')).toMatchObject({
-      deltaSize: 0,
-      resultingSize: -100,
-      opposing: false,
-    });
-    expect(resolveLegSizing(100, 0, 'long', 'target').deltaSize).toBe(0);
+    expect(resolveLegSizing(40, 100, 'long', 'close').deltaSize).toBe(0);
   });
 });
 
@@ -396,8 +327,8 @@ describe('simulateBorosPair', () => {
 
   it('measures Est. from mid the adverse way, and blocks a fill past the bound', () => {
     // Leg A is receive-fixed: bids at 0.080 against a 0.090 mid is 1.00%
-    // of adverse slippage, past a 0.25% tolerance. The order would not fill
-    // inside its own bound, so the gate refuses it up front.
+    // of adverse slippage, past a 0.25% tolerance. Nothing on the book sits
+    // inside the order's limit, so the gate refuses it up front.
     const sim = simulateBorosPair(
       simInput({
         legA: leg({ book: book(hlMarket.marketId, 0.08, 0.082), slippageApr: 0.0025 }),
@@ -412,32 +343,42 @@ describe('simulateBorosPair', () => {
     const blocker = g.blockers.find((b) => b.code === 'slippage-exceeds-max');
     expect(blocker).toBeDefined();
     expect(blocker!.leg).toBe(0);
-    expect(blocker!.message).toMatch(/1\.00% from mid/);
-    expect(blocker!.message).toMatch(/0\.25% max/);
+    expect(blocker!.message).toMatch(/past your 0\.25% max slippage\. Raise max slippage/);
   });
 
-  it('refuses a leg whose RATE BOUND falls outside the venue band, even when the fill is fine', () => {
+  it("clamps the order's limit inside the venue band, so a wide tolerance never blocks by itself", () => {
     /**
-     * The order is sent carrying `worstApr` as its limit, and the venue
-     * rejects a limit outside mark ± maxRateDeviationApr with "Executed Rate
-     * Out of Range". A clean fill is no defence: what matters is the bound.
+     * The venue refuses an order reaching past mark ± maxRateDeviationApr
+     * ("Executed Rate Out of Range"), whatever tolerance the user set. So the
+     * order carries the nearer edge (his call 2026-11-09).
      *
-     * hlMarket marks 8.9% with a 1.6% cap ⇒ the band is 7.3%–10.5%. A short
-     * leg hitting bids at 9% with a 2% tolerance carries a bound of 7%, which
-     * is under the floor, while its own fill sits comfortably inside.
+     * hlMarket marks 8.9% with a 1.6% cap ⇒ the floor is 7.3%, and the limit
+     * may use 90% of the 1.7% room below the 9% mid: 7.47%. A 2% tolerance
+     * (bound 7%) is clamped there, and a fill at 9% goes through.
      */
-    const sim = simulateBorosPair(
-      simInput({ legA: leg({ slippageApr: 0.02 }), size: 1_000 }),
-    );
-    expect(sim.legs[0].execApr).toBeCloseTo(0.09, 12);
-    expect(sim.legs[0].slippageExceeded).toBe(false); // the FILL is fine
-    expect(sim.legs[0].worstApr).toBeCloseTo(0.07, 12); // the BOUND is not
+    const sim = simulateBorosPair(simInput({ legA: leg({ slippageApr: 0.02 }), size: 1_000 }));
+    expect(sim.legs[0].worstApr).toBeCloseTo(0.07, 12); // the user's bound, as shown
+    expect(sim.legs[0].limitApr).toBeCloseTo(0.0747, 12); // what the order carries
+    expect(sim.legs[0].limitBy).toBe('band');
+    const g = evaluatePairGate(gateInput({ simulation: sim }));
+    expect(g.blockers.map((b) => b.code)).not.toContain('rate-bound-out-of-range');
+    expect(g.blockers.map((b) => b.code)).not.toContain('slippage-exceeds-max');
+  });
+
+  it('says Boros\'s band, not the slippage, stopped a size whose last level sits past it', () => {
+    // Bids 9% / 8% / 7.2% against the 7.47% clamped limit: 200k fills whole,
+    // 250k needs the 7.2% level. Widening the 3% tolerance would not help.
+    const ladder: BorosOrderBook = { marketId: 155, bids: [[0.09, 100_000], [0.08, 100_000], [0.072, 100_000]], asks: [[0.092, 100_000]] };
+    const sim = simulateBorosPair(simInput({ legA: leg({ book: ladder, slippageApr: 0.03 }), size: 250_000 }));
+    expect(sim.legs[0].sizeWithinTolerance).toBe(200_000);
+    expect(sim.legs[0].bandExceeded).toBe(true);
+    expect(sim.legs[0].slippageExceeded).toBe(false);
     const g = evaluatePairGate(gateInput({ simulation: sim }));
     const blocker = g.blockers.find((b) => b.code === 'rate-bound-out-of-range');
-    expect(blocker).toBeDefined();
-    expect(blocker!.leg).toBe(0);
-    expect(blocker!.message).toMatch(/7\.00%/);
-    expect(blocker!.message).toMatch(/7\.30%–10\.50%/);
+    expect(blocker).toMatchObject({ leg: 0, maxSize: 200_000 });
+    expect(blocker!.limitApr).toBeCloseTo(0.0747, 12);
+    expect(blocker!.message).toMatch(/Boros only fills this market up to 7\.47% right now\. Reduce the size\./);
+    expect(g.blockers.map((b) => b.code)).not.toContain('slippage-exceeds-max');
   });
 
   it('allows a bound that sits inside the venue band', () => {
@@ -502,57 +443,14 @@ describe('simulateBorosPair', () => {
     expect(noMm.legs[0].liquidationApr).toBeNull();
   });
 
-  it('quotes a REDUCING target off the other half of the book', () => {
-    // Re-running the wizard at a lower notional: the leg holds 1,000 long and
-    // the box now says 500, so the delta is −500 and the ORDER is a sell.
-    // Reading the held side instead walked the asks, quoted the buy rate, put
-    // the bound on the wrong side of mid, and sent a BUY that finished at
-    // 1,500 under a §4 row reading 1,000 → 500.
-    const sim = simulateBorosPair(
-      simInput({
-        intent: 'target',
-        size: 500,
-        // Deliberately asymmetric around the 0.09 mid, so the side walked is
-        // readable straight off the rate: bid 0.088, ask 0.092.
-        legA: leg({ book: book(hlMarket.marketId, 0.088, 0.092), direction: 'long', currentSize: 1_000 }),
-        legB: leg({ market: bnMarket, book: book(bnMarket.marketId, 0.04, 0.042), direction: 'short', currentSize: 0 }),
-      }),
-    );
-
-    expect(sim.legs[0].sizing).toMatchObject({
-      currentSize: 1_000,
-      deltaSize: -500,
-      resultingSize: 500,
-      opposing: true,
-      flips: false,
-      orderSide: 'short',
-    });
-    // The side the account HOLDS is untouched — it is what the §4 row and the
-    // acknowledgement describe, and it is still long.
-    expect(sim.legs[0].direction).toBe('long');
-
-    // Crossed the BIDS: 0.088, not the 0.092 ask the old read quoted.
-    expect(sim.legs[0].execApr).toBeCloseTo(0.088, 12);
-    expect(sim.legs[0].estFillSize).toBeCloseTo(500, 12);
-    // Worse-than-mid for a SELL is a LOWER rate: 0.09 − 0.088.
-    expect(sim.legs[0].estSlippageApr).toBeCloseTo(0.002, 12);
-    // The bound sits a full tolerance BELOW mid, not above it.
-    expect(sim.legs[0].worstApr).toBeCloseTo(0.09 - DEFAULT_SLIPPAGE_APR, 12);
-    expect(sim.legs[0].slippageExceeded).toBe(false);
-
-    // A leg growing towards its target is unchanged: order side = side held.
-    expect(sim.legs[1].sizing).toMatchObject({ deltaSize: -500, resultingSize: -500, orderSide: 'short' });
-    expect(sim.legs[1].execApr).toBeCloseTo(0.04, 12);
-  });
-
   it('totals the taker fee over BOTH legs\' own sizes when they differ', () => {
-    // A target repair: A is flat and aims at SIZE, B already holds 60% and
-    // aims at the same SIZE. Deltas differ; the fee is what each leg pays.
+    // A close of SIZE where B only holds 40%: B clamps to what it holds, so
+    // the deltas differ and the fee is what each leg pays.
     const sim = simulateBorosPair(
       simInput({
-        intent: 'target',
-        legA: leg({ market: hlMarket, book: book(hlMarket.marketId, 0.088, 0.09), direction: 'short', currentSize: 0 }),
-        legB: leg({ market: bnMarket, book: book(bnMarket.marketId, 0.044, 0.046), direction: 'long', currentSize: SIZE * 0.6 }),
+        intent: 'close',
+        legA: leg({ market: hlMarket, book: book(hlMarket.marketId, 0.088, 0.09), direction: 'short', currentSize: SIZE }),
+        legB: leg({ market: bnMarket, book: book(bnMarket.marketId, 0.044, 0.046), direction: 'long', currentSize: -SIZE * 0.4 }),
       }),
     );
     const sizeA = Math.abs(sim.legs[0].sizing.deltaSize);
@@ -576,11 +474,17 @@ describe('simulateBorosPair', () => {
     // refused the 80k it counted from the far level.
     const ladder: BorosOrderBook = { marketId: 155, bids: [[0.09, 100_000]], asks: [[0.092, 100_000], [0.094, 100_000], [0.1, 100_000]] };
     const small = simulateBorosPair(simInput({ legA: leg({ book: ladder, direction: 'long', slippageApr: 0.005 }), size: 10_000 }));
-    const large = simulateBorosPair(simInput({ legA: leg({ book: ladder, direction: 'long', slippageApr: 0.005 }), size: 500_000 }));
+    // Inside the 300k the book holds, past the 200k inside the limit.
+    const large = simulateBorosPair(simInput({ legA: leg({ book: ladder, direction: 'long', slippageApr: 0.005 }), size: 250_000 }));
     expect(small.legs[0].sizeWithinTolerance).toBe(200_000);
     expect(large.legs[0].sizeWithinTolerance).toBe(200_000);
+    // 250k AVERAGES 9.44%, inside the 9.5% bound, but its last 50k sit at
+    // 10%: the venue would refuse the fill-or-kill, so the gate does too.
+    expect(large.legs[0].execApr).toBeLessThan(0.095);
     expect(large.legs[0].slippageExceeded).toBe(true);
     expect(small.legs[0].slippageExceeded).toBe(false);
+    const blocked = evaluatePairGate(gateInput({ simulation: large })).blockers.find((b) => b.code === 'slippage-exceeds-max');
+    expect(blocked).toMatchObject({ leg: 0, maxSize: 200_000 });
     // The ladder the figure is read off: the same whatever was asked, so a
     // caller can answer "what tolerance does size s need" for any s.
     const rungs = small.legs[0].depth as Array<[number, number]>;
@@ -608,13 +512,16 @@ describe('simulateBorosPair', () => {
 
 
   it("caps the fit at the venue's own band when the tolerance reaches past it", () => {
-    // Mark 0.089, max deviation 0.016 → the venue refuses a last level past
-    // 0.105. A 0.02 tolerance from a 0.09 mid bounds the order at 0.11, but
-    // the 0.108 level is still off limits: the venue's edge is the nearer one.
+    // Mark 0.089, max deviation 0.016 → the venue refuses past 0.105, and the
+    // limit uses 90% of the room above the 0.09 mid: 0.1035. A 0.02
+    // tolerance bounds the user at 0.11, but the order is sent at 0.1035,
+    // so the 0.104 and 0.108 levels are off limits.
     const ladder: BorosOrderBook = { marketId: 155, bids: [[0.09, 100_000]], asks: [[0.095, 100_000], [0.104, 100_000], [0.108, 100_000]] };
     const sim = simulateBorosPair(simInput({ legA: leg({ book: ladder, direction: 'long', slippageApr: 0.02 }), size: 10_000 }));
     expect(sim.legs[0].worstApr).toBeCloseTo(0.11, 9);
-    expect(sim.legs[0].sizeWithinTolerance).toBe(200_000);
+    expect(sim.legs[0].limitApr).toBeCloseTo(0.1035, 9);
+    expect(sim.legs[0].limitBy).toBe('band');
+    expect(sim.legs[0].sizeWithinTolerance).toBe(100_000);
   });
   it('reports a thin book as a real fill plus a shortfall, never an invented rate', () => {
     const thin = book(155, 0.09, 0.092, 40_000);
@@ -639,22 +546,15 @@ describe('simulateBorosPair', () => {
     expect(sim.reasons.join(' ')).not.toMatch(/fill short/);
   });
 
-  it('states the largest size in the ticket\'s terms: a target adds the fit to what is held', () => {
+  it('states the largest size as the tightest leg\'s fit', () => {
     const sim = simulateBorosPair(simInput()) as BorosPairSimulation;
-    const withFit = (fitA: number, fitB: number, intent: BorosPairSimulation['intent'], cur = 0): BorosPairSimulation => ({
+    const withFit = (fitA: number, fitB: number): BorosPairSimulation => ({
       ...sim,
-      intent,
-      legs: sim.legs.map((l, i) => ({
-        ...l,
-        sizeWithinTolerance: i === 0 ? fitA : fitB,
-        sizing: { ...l.sizing, currentSize: i === 0 ? -cur : cur, deltaSize: i === 0 ? -1 : 1 },
-      })),
+      legs: sim.legs.map((l, i) => ({ ...l, sizeWithinTolerance: i === 0 ? fitA : fitB })),
     });
     // The tighter leg wins: the pair is one size.
-    expect(maxFillableSize(withFit(30, 50, 'open'))).toBe(30);
-    // A target of 100 on 20 held: 30 more fills, so 50 is the most to aim for.
-    expect(maxFillableSize(withFit(30, 50, 'target', 20))).toBe(50);
-    expect(maxFillableSize({ ...withFit(30, 50, 'open'), legs: [{ ...sim.legs[0], sizeWithinTolerance: null }] })).toBeNull();
+    expect(maxFillableSize(withFit(30, 50))).toBe(30);
+    expect(maxFillableSize({ ...withFit(30, 50), legs: [{ ...sim.legs[0], sizeWithinTolerance: null }] })).toBeNull();
   });
 
   it('refuses to quote a spread when the legs do not offset', () => {
@@ -844,8 +744,10 @@ describe('evaluatePairGate', () => {
 
   it('checks cross margin against the COMBINED requirement of both legs', () => {
     const sim = gateInput().simulation;
-    const imA = sim.legs[0].marginRequired!;
-    const imB = sim.legs[1].marginRequired!;
+    // Each leg funds its margin and its taker fee: Boros takes the fee out
+    // of cash before it checks margin.
+    const imA = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost;
+    const imB = sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost;
     const total = imA + imB;
     // A balance that clears EITHER leg on its own but not the two together —
     // checking each leg independently would wrongly let this through.
@@ -865,9 +767,9 @@ describe('evaluatePairGate', () => {
     // that position posts, so charging the full resulting margin again would
     // block a trade the account can plainly fund.
     const sim = gateInput().simulation;
-    const imA = sim.legs[0].marginRequired!;
-    const imB = sim.legs[1].marginRequired!;
-    const committed = imA * 0.8;
+    const imA = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost;
+    const imB = sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost;
+    const committed = sim.legs[0].marginRequired! * 0.8;
     const legA = leg({ committedMargin: committed });
 
     const clean = evaluatePairGate(
@@ -898,7 +800,7 @@ describe('evaluatePairGate', () => {
    * margin check, so the gate counts it. */
   it('counts the automatic gas top-up in the cross requirement, in collateral units', () => {
     const sim = gateInput().simulation;
-    const im = sim.legs.reduce((s, l) => s + l.marginRequired!, 0);
+    const im = sim.legs.reduce((s, l) => s + l.marginRequired! + l.takerFeeCost, 0);
     const exact = account({ cross: { available: im, hasPositionOrOrders: false }, gasBalanceUsd: 0 });
     const usdt = evaluatePairGate(gateInput({ account: exact }));
     const b = usdt.blockers.find((x) => x.code === 'cross-short-margin')!;
@@ -925,7 +827,7 @@ describe('evaluatePairGate', () => {
     ['$6M', 6_000_000],
   ])('an open takes the top-up from another coin when its own cannot spare it (%s elsewhere)', (_book, otherUsd) => {
     const sim = { ...gateInput().simulation, collateralPriceUsd: 2500 };
-    const im = sim.legs.reduce((t, l) => t + l.marginRequired!, 0);
+    const im = sim.legs.reduce((t, l) => t + l.marginRequired! + l.takerFeeCost, 0);
     const g = evaluatePairGate(
       gateInput({
         simulation: sim,
@@ -939,7 +841,7 @@ describe('evaluatePairGate', () => {
 
   it('still blocks an open when no other coin can pay the top-up either', () => {
     const sim = { ...gateInput().simulation, collateralPriceUsd: 2500 };
-    const im = sim.legs.reduce((t, l) => t + l.marginRequired!, 0);
+    const im = sim.legs.reduce((t, l) => t + l.marginRequired! + l.takerFeeCost, 0);
     const g = evaluatePairGate(
       gateInput({
         simulation: sim,
@@ -952,7 +854,7 @@ describe('evaluatePairGate', () => {
 
   it('keeps the top-up on the traded coin when it can spare it', () => {
     const sim = { ...gateInput().simulation, collateralPriceUsd: 2500 };
-    const im = sim.legs.reduce((t, l) => t + l.marginRequired!, 0);
+    const im = sim.legs.reduce((t, l) => t + l.marginRequired! + l.takerFeeCost, 0);
     const g = evaluatePairGate(
       gateInput({
         simulation: sim,
@@ -964,16 +866,34 @@ describe('evaluatePairGate', () => {
     expect(g.warnings.join(' ')).toMatch(/from this market's cross margin/);
   });
 
-  it('never lets a leg that frees margin lend it to the other leg', () => {
+  it('lets margin one leg frees back the other: Boros checks once the batch has run', () => {
     const sim = gateInput().simulation;
-    const imB = sim.legs[1].marginRequired!;
-    // Leg A already posts far more than its resulting position needs.
-    const legA = leg({ committedMargin: sim.legs[0].marginRequired! * 5 });
-    const g = evaluatePairGate(
-      gateInput({ legA, account: account({ cross: { available: imB - 1, hasPositionOrOrders: true } }) }),
+    const needB = sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost;
+    const needA = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost;
+    // Leg A already posts more than its resulting position needs: the extra
+    // goes back to the account and funds leg B in the same batch.
+    const legA = leg({ committedMargin: needA + 2 });
+    const covered = evaluatePairGate(
+      gateInput({ legA, account: account({ cross: { available: needB - 1, hasPositionOrOrders: true } }) }),
     );
-    // Leg A contributes 0, not a negative — leg B's own shortfall still stands.
-    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(1, 6);
+    expect(codes(covered)).not.toContain('cross-short-margin');
+    expect(covered.funding[0].availableAfter).toBeCloseTo(1, 6);
+    // Short of what is left: blocked by exactly what the after figure misses.
+    const short = evaluatePairGate(
+      gateInput({ legA, account: account({ cross: { available: needB - 3, hasPositionOrOrders: true } }) }),
+    );
+    expect(short.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(1, 6);
+    expect(short.funding[0].availableAfter).toBeCloseTo(-1, 6);
+  });
+
+  it('counts the taker fee: margin that covers the position but not the fee is short', () => {
+    const sim = gateInput().simulation;
+    const margin = sim.legs.reduce((t, l) => t + l.marginRequired!, 0);
+    const fee = sim.legs.reduce((t, l) => t + l.takerFeeCost, 0);
+    expect(fee).toBeGreaterThan(0);
+    const g = evaluatePairGate(gateInput({ account: account({ cross: { available: margin, hasPositionOrOrders: false } }) }));
+    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(fee, 6);
+    expect(g.funding[0].availableAfter).toBeCloseTo(-fee, 6);
   });
 
   it('reports an isolated-only leg as its own shortfall, never summed', () => {
@@ -996,8 +916,8 @@ describe('evaluatePairGate', () => {
     );
     const shorts = g.blockers.filter((b) => b.code === 'isolated-short-margin');
     expect(shorts).toHaveLength(2);
-    expect(shorts[0].shortfall).toBeCloseTo(sim.legs[0].marginRequired!, 6);
-    expect(shorts[1].shortfall).toBeCloseTo(sim.legs[1].marginRequired!, 6);
+    expect(shorts[0].shortfall).toBeCloseTo(sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost, 6);
+    expect(shorts[1].shortfall).toBeCloseTo(sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost, 6);
     // Two separate numbers — the balances are not fungible.
     expect(shorts[0].shortfall).not.toBeCloseTo(shorts[1].shortfall!, 6);
     expect(codes(g)).not.toContain('cross-short-margin');
@@ -1006,7 +926,7 @@ describe('evaluatePairGate', () => {
   it('quotes the SHORTFALL, not the total required', () => {
     const legA = leg({ isolatedOnly: true });
     const sim = simulateBorosPair(simInput({ legA }));
-    const required = sim.legs[0].marginRequired!;
+    const required = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost;
     const g = evaluatePairGate(
       gateInput({
         legA,
@@ -1101,8 +1021,9 @@ describe('evaluatePairGate', () => {
   });
 
   const closeAt = (size: number, gasBalanceUsd: number, available: number, collateralPriceUsd: number | null = 1) => {
-    const legA = leg({ currentSize: size });
-    const legB = leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'long', currentSize: -size });
+    // The positions post margin, which the close hands back: it covers the fee.
+    const legA = leg({ currentSize: size, committedMargin: size });
+    const legB = leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'long', currentSize: -size, committedMargin: size });
     return evaluatePairGate(
       gateInput({
         legA,
@@ -1346,7 +1267,7 @@ describe('pairs over legs: spread opens and mixed closes', () => {
 
   it.each([50, 6_000_000])('counts the gas top-up once on a 1-leg spread open of %s', (size) => {
     const sim = { ...pairOf([{ ...spreadLeg(), size }]), collateralPriceUsd: 2490.3 };
-    const im = sim.legs[0].marginRequired!;
+    const im = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost;
     const g = evaluatePairGate({
       simulation: sim,
       legs: [spreadLeg()],
@@ -1368,7 +1289,7 @@ describe('pairs over legs: spread opens and mixed closes', () => {
     expect(codes(gateOf(sim, [spreadLeg({ direction: 'long' })]))).not.toContain('legs-do-not-offset');
   });
 
-  it.each(['open', 'target'] as const)('refuses a %s that mixes a spread and a single market', (intent) => {
+  it.each(['open'] as const)('refuses a %s that mixes a spread and a single market', (intent) => {
     const legs = [leg(), spreadLeg({ direction: 'long' })];
     const sim = pairOf(
       legs.map((l) => ({ ...l, size: SIZE })),

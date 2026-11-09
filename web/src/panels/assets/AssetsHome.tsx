@@ -37,7 +37,7 @@ import { ConnectWalletButton } from '../../components/ConnectWalletButton';
 import { isSameAddress, useActiveWallet, useTrackedAddress } from '../trackedAddress';
 import { assetIsActive, deriveAsset, SECONDS_IN_YEAR } from './assetModel';
 import { clearLegacyPrefs, dropLegacyKeys, legacyExclusionsFor, legSinceParam, readLegacyPrefs } from './assetPrefsStore';
-import { AssetCard } from './AssetCard';
+import { AssetCard, PortfolioBorosLegs } from './AssetCard';
 import { sizesForWholeExclusions } from './excludeLeg';
 import { Wallet } from 'lucide-react';
 
@@ -150,6 +150,9 @@ export function AssetsHome() {
    * 2026-09-20). Not persisted: the default is the right start every time.
    */
   const [hideInactive, setHideInactive] = useState(true);
+  // Every asset's Boros legs, hidden ones included: a cross account's
+  // deposit covers them all whether or not their card is shown.
+  const borosLegs = useMemo(() => derived.flatMap(({ group }) => group.borosOpen.map((leg) => ({ base: group.base, leg }))), [derived]);
   const inactive = derived.filter((a) => !assetIsActive(a.group, prefs.exclusions, data?.nowSec ?? 0));
   const shown = hideInactive ? derived.filter((a) => !inactive.includes(a)) : derived;
 
@@ -381,6 +384,7 @@ export function AssetsHome() {
           hint={t('assets.home.emptyHint')}
         />
       ) : (
+        <PortfolioBorosLegs.Provider value={borosLegs}>
         <div className="flex flex-col gap-8">
           {shown.length === 0 && (
             <p className="rounded-md border border-dashed border-ink-700 px-3 py-3 text-center text-sm text-ink-500">
@@ -411,6 +415,7 @@ export function AssetsHome() {
             />
           ))}
         </div>
+        </PortfolioBorosLegs.Provider>
       )}
     </section>
   );

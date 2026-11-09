@@ -488,7 +488,7 @@ export function rollPlanFor(
   entry: BorosPairSimulation,
   options: RollPlanOptions = {},
 ): RollPlan | null {
-  const trades = (l: SimulatedLeg): boolean => Math.abs(l.sizing.deltaSize) > 0 && l.execApr !== null && l.worstApr !== null;
+  const trades = (l: SimulatedLeg): boolean => Math.abs(l.sizing.deltaSize) > 0 && l.execApr !== null && l.limitApr !== null;
   if (exit.legs.length === 0 || entry.legs.length === 0 || ![...exit.legs, ...entry.legs].every(trades)) return null;
 
   const order = (step: RollStep, leg: SimulatedLeg, sizedAs?: BorosMarketOrderRequest): BorosMarketOrderRequest => {
@@ -500,7 +500,7 @@ export function rollPlanFor(
       marketId: leg.marketId,
       direction: leg.sizing.orderSide,
       size: sizedAs?.size ?? reduced?.size ?? asked,
-      limitApr: leg.worstApr as number,
+      limitApr: leg.limitApr as number,
       clientOrderId: options.ids?.[fillKey(step, leg.marketId)] ?? fillKey(step, leg.marketId),
       ...(sizeWei !== undefined ? { sizeWei } : {}),
     };

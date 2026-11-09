@@ -359,15 +359,12 @@ const loneOf = (sim: BorosPairSimulation, solo: SoloLeg | undefined): BorosSimul
 export function SpreadReadout({
   sim,
   singleLeg,
-  between,
   boxed = false,
 }: {
   sim: BorosPairSimulation;
   /** The one leg that trades, when only one does — the readout is then that
    * leg's rate, whichever slot it sits in. */
   singleLeg?: SoloLeg;
-  /** Rendered directly under the headline. */
-  between?: ReactNode;
   /** The headline in its own tinted box, label over figure, as the Boros
    * app sets its summary apart from the figures under it. Off where a hero
    * above already states the rate (a roll's "You lock"). */
@@ -417,7 +414,6 @@ export function SpreadReadout({
           {pct(headline)}
         </span>
       </div>
-      {between}
     </div>
   );
 }
@@ -765,6 +761,19 @@ const BUTTON_REASONS: Array<[string[], () => string]> = [
   [['below-min-order-value'], () => t('pairTicket.borosBits.reason.tooSmall')],
 ];
 
+/**
+ * Which legs' liquidation turns amber: only a leg whose OWN account (an
+ * isolated-only leg's, else cross) still needs a top-up — free margin left
+ * after the trade may already cover it, and cash in another account never
+ * does. Older servers send no funding, so every short leg warns.
+ */
+export const liqWarnOf =
+  (funding: BorosPairFunding[] | undefined) =>
+  (leg: BorosSimulatedLeg): boolean => {
+    const f = funding?.find((x) => x.marketId === leg.marketId) ?? funding?.find((x) => x.marketId === null);
+    return f === undefined || f.suggestedTopUp === null || f.suggestedTopUp > 0;
+  };
+
 export function blockerButtonReason(blockers: BorosPairBlocker[]): string | null {
   for (const [codes, label] of BUTTON_REASONS) {
     if (blockers.some((b) => codes.includes(b.code))) return label();
@@ -792,10 +801,22 @@ export function BlockerList({
   if (blockers.length === 0) return null;
   // The pair is one size, so every leg's blocker carries the same figure.
   const max = fillable.length > 0 ? floorSig(Math.min(...fillable.map((b) => b.maxSize ?? 0))) : null;
+  // Which limit stopped the size, so the line says what would help: a book
+  // that runs out needs nothing more; past the user's max slippage, widening
+  // it helps; past Boros's band, only a smaller size does.
+  const band = fillable.find((b) => b.code === 'rate-bound-out-of-range');
+  const why = fillable.some((b) => b.code === 'insufficient-depth')
+    ? null
+    : band
+      ? t('pairTicket.borosBits.bandLimit', { apr: fmtPct(band.limitApr ?? 0) })
+      : fillable.some((b) => b.code === 'slippage-exceeds-max')
+        ? t('pairTicket.borosBits.slippageLimit')
+        : null;
   return (
     <ul className="flex flex-col gap-1.5">
       {max !== null && onUseSize && (
         <li className="rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200">
+          {why !== null && <>{why} </>}
           {max > 0 ? (
             <>
               {t('pairTicket.borosBits.maxFillable')}{' '}
@@ -809,7 +830,7 @@ export function BlockerList({
               </button>
             </>
           ) : (
-            t('pairTicket.borosBits.nothingFills')
+            t(band ? 'pairTicket.borosBits.nothingFillsBand' : 'pairTicket.borosBits.nothingFills')
           )}
         </li>
       )}
@@ -844,31 +865,6 @@ export function BlockerList({
         </li>
       ))}
     </ul>
-  );
-}
-
-/** A pair whose legs the books fill to different sizes. Orders are now
- * fill-or-kill and the gate blocks such a size, so the ticket no longer
- * shows this; kept for a result report's own use. */
-export function UnevenFillWarning({ sim, onUse }: { sim: BorosPairSimulation; onUse?: (size: number) => void }) {
-  const { t } = useTranslation();
-  if (sim.legs.length !== 2 || !(sim.hedgedSize > 0) || !(sim.unhedgedSize > 0)) return null;
-  const unit = sim.collateral;
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-200">
-      <span>
-        {t('pairTicket.borosBits.uneven', { hedged: sigGrouped(sim.hedgedSize), unhedged: sigGrouped(sim.unhedgedSize), unit })}
-      </span>
-      {onUse && (
-        <button
-          type="button"
-          className="rounded border border-amber-400/40 px-2 py-0.5 font-medium text-amber-100 transition-colors hover:bg-amber-500/10"
-          onClick={() => onUse(sim.hedgedSize)}
-        >
-          {t('pairTicket.borosBits.useSize', { size: sigGrouped(sim.hedgedSize), unit })}
-        </button>
-      )}
-    </div>
   );
 }
 

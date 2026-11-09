@@ -17,7 +17,7 @@ import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { useDebounced } from '../lib/useDebounced';
 import { useNow } from '../lib/useNow';
-import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList, VerdictAlert } from './RebalanceBits';
+import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, routeScore, scaleOf, StepList, VerdictAlert } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
 import { AFTER_LABEL, gateSpot, GOAL_LABEL, HOLD_ANYWAY_LABEL, HOLD_LABEL, HOVER, modalAbandon, OPTIONAL_MOVE } from './rebalanceCopy';
 import { FEE_PLUS_IMPACT, modalFeeLabel, modalFrees, modalImpactLabel, modalInterest, modalRefreshRoute, modalResume, modalSteps, PER_MONTH } from './rebalanceCopy';
@@ -137,7 +137,7 @@ function isStale(accepted: Accepted | null, plan: EvenPlan, name: RouteName | nu
 function routeOrder(plan: EvenPlan): RouteName[] {
   const { recommended, routes } = plan;
   const rest = ROUTE_ORDER.filter((name) => name !== recommended && routes[name] !== null);
-  rest.sort((a, b) => (routes[a]?.costUsd ?? 0) - (routes[b]?.costUsd ?? 0));
+  rest.sort((a, b) => routeScore(routes[a] ?? { costUsd: 0, seconds: 0 }) - routeScore(routes[b] ?? { costUsd: 0, seconds: 0 }));
   return recommended !== null && routes[recommended] ? [recommended, ...rest] : rest;
 }
 

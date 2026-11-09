@@ -85,6 +85,12 @@ export const ALWAYS_SHOWN = ['USDT/CROSSEX', 'USDC/HYPERLIQUID'];
 
 export const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
 
+/** A route's fee with its time priced in, $1 × (e^(hours) − 1): what the
+ * server's recommendation ranks by. FAITHFUL PORT of routeScore in
+ * src/core/rebalance/plan.ts, so the rows below Recommended rank the same way. */
+export const routeScore = (route: { costUsd: number; seconds: number }): number =>
+  route.costUsd + Math.expm1(Math.max(0, route.seconds) / 3600);
+
 const barEnds = (row: BarRow): number[] => [row.cash, row.cash + row.upnl, row.target ?? 0];
 
 const widestEnd = (rows: BarRow[]): number => Math.max(0, ...rows.flatMap(barEnds).map((end) => Math.abs(end)));

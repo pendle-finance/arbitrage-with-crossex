@@ -20,7 +20,8 @@
     "isolatedAccount": "{{market}} isolated margin",
     "deposit": "Deposit {{amount}} to Boros {{account}} to reach the suggested liquidation APR.",
     "depositNoAmount": "Add to Boros {{account}} to reach the suggested liquidation APR.",
-    "depositMany": "Deposit to Boros to reach the suggested liquidation APR:"
+    "depositMany": "Deposit to Boros to reach the suggested liquidation APR:",
+    "covers": "Covers your {{bases}} positions on it."
   },
   "listSep": ", ",
   "listLast": "{{head}} and {{last}}",

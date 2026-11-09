@@ -1040,8 +1040,8 @@ export interface BookTouch {
 
 /** 'short' RECEIVES fixed (hits bids); 'long' PAYS fixed (lifts asks). */
 export type BorosLegDirection = 'long' | 'short';
-/** `target` sizes to the end state (the guided wizard); see core PairIntent. */
-export type BorosPairIntent = 'open' | 'close' | 'target';
+/** See core PairIntent. */
+export type BorosPairIntent = 'open' | 'close';
 
 export interface BorosPairMarketRow {
   marketId: number;
@@ -1110,9 +1110,15 @@ export interface BorosSimulatedLeg {
   midApr?: number;
   /** Adverse distance of the fill from mid (positive = worse than mid). */
   estSlippageApr?: number | null;
-  /** The rate bound the order carries: mid ± tolerance. */
+  /** The user's own bound, mid ± tolerance: what the ticket shows as the max. */
   worstApr: number | null;
+  /** The limit the order is sent with: `worstApr`, clamped inside the venue's
+   * band (core SimulatedLeg.limitApr). Optional for an older server. */
+  limitApr?: number | null;
+  /** Past the user's max slippage: widening it would help. */
   slippageExceeded?: boolean;
+  /** Past Boros's band: only a smaller size helps. */
+  bandExceeded?: boolean;
   /** The largest order size (collateral units) this side fills inside the
    * rate bound the order carries — the levels whose own rate sits inside it,
    * which is what the venue fills. A property of the book, not of the size
@@ -1191,6 +1197,9 @@ export interface BorosPairBlocker {
   /** A size the book or the bound cannot fill whole: the largest that does,
    * in the ticket's own terms (orders are fill-or-kill). */
   maxSize?: number;
+  /** `rate-bound-out-of-range`: the furthest rate Boros fills this market to
+   * right now. */
+  limitApr?: number;
 }
 
 export interface BorosPairGate {

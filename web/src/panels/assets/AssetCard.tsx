@@ -5,7 +5,7 @@
  *
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
-import { cloneElement, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { cloneElement, createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
@@ -58,7 +58,7 @@ import {
   usePositions,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, SuggestedTopUpLines } from '../../trade/BorosPairBits';
+import { AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, SuggestedTopUpLines } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -540,11 +540,15 @@ const topUpQty = (leg: Pick<AssetBorosOpen, 'toSuggestedUsd' | 'toSuggestedToken
     ? leg.toSuggestedToken
     : null;
 
-/** A deposit amount, rounded UP to three significant figures: an amount
- * rounded down would leave the position just short of the suggestion. */
+/** A deposit amount in full ("1,234.5 USDT", never "1.2k"), rounded UP at
+ * the sixth significant figure: an amount rounded down would leave the
+ * position just short of the suggestion. */
+const depositQty = (qty: number, coin: string): string => {
+  const step = 10 ** (Math.floor(Math.log10(qty)) - 5);
+  return exactQty(Math.ceil(qty / step - 1e-9) * step, coin);
+};
 const depositText = (qty: number, coin: string, usd: number | null): string => {
-  const step = 10 ** (Math.floor(Math.log10(qty)) - 2);
-  const token = fmtTokenQty(Math.ceil(qty / step - 1e-9) * step, coin);
+  const token = depositQty(qty, coin);
   return usd === null ? token : `${token} (${fmtUsd(Math.ceil(usd), 0)})`;
 };
 
@@ -609,36 +613,70 @@ function BorosLiq({ leg, inline = false }: { leg: BorosLiqLeg | undefined; inlin
   );
 }
 
+/** Every Boros leg in the portfolio, with the asset it hedges. A cross
+ * account spans every asset in its coin, so the chip prices each account
+ * across all of them rather than one card's legs. */
+export const PortfolioBorosLegs = createContext<Array<{ base: string; leg: AssetBorosOpen }> | null>(null);
+
 /** The quiet warning chip, beside the hedge chip on the asset header and on
  * each pair row that holds such a leg, when a Boros leg liquidates closer to
  * the mark than the suggested rate. The hover is the instruction: what to
  * deposit, per margin account. Cash added to a cross account backs every
  * position on it at once, so an account needs the LARGEST of its positions'
- * top-ups, never their sum. */
+ * top-ups across the whole portfolio, never their sum and never one card's:
+ * every chip on one account then names the same deposit, and it covers all
+ * of them. */
 function AddMarginChip({ legs, sm = false }: { legs: AssetBorosOpen[]; sm?: boolean }) {
+  const portfolio = useContext(PortfolioBorosLegs);
   const low = legs.filter(belowSuggested);
   if (low.length === 0) return null;
-  const accounts = new Map<string, { name: string; coin: string; qty: number | null; usd: number | null }>();
-  for (const l of low) {
+  const keyOf = (l: AssetBorosOpen) => (l.marginMode === 'isolated' ? `iso:${l.marketId}` : `cross:${l.collateral}`);
+  const mine = new Set(low.map(keyOf));
+  const accounts = new Map<string, { name: string; coin: string; qty: number | null; usd: number | null; bases: Set<string> }>();
+  // This card's own legs too, in case the portfolio list has not caught up.
+  const pool = [...(portfolio ?? []), ...low.map((leg) => ({ base: '', leg }))];
+  for (const { base, leg: l } of pool) {
+    const key = keyOf(l);
+    if (!mine.has(key) || !belowSuggested(l)) continue;
     const isolated = l.marginMode === 'isolated';
-    const key = isolated ? `iso:${l.marketId}` : `cross:${l.collateral}`;
-    const name = isolated
-      ? t('assetCard.liq.isolatedAccount', { market: borosLegLabel(l) })
-      : t('assetCard.liq.crossAccount', { coin: l.collateral });
-    const prev = accounts.get(key);
+    const prev = accounts.get(key) ?? {
+      name: isolated
+        ? t('assetCard.liq.isolatedAccount', { market: borosLegLabel(l) })
+        : t('assetCard.liq.crossAccount', { coin: l.collateral }),
+      coin: l.collateral,
+      qty: null,
+      usd: null,
+      bases: new Set<string>(),
+    };
+    if (base) prev.bases.add(base);
     const qty = topUpQty(l);
     // One account, one coin: the leg needing the most tokens needs the most $.
-    if (prev?.qty != null && (qty === null || prev.qty >= qty)) continue;
-    accounts.set(key, { name, coin: l.collateral, qty, usd: qty === null ? null : (l.toSuggestedUsd ?? null) });
+    if (qty !== null && (prev.qty === null || qty > prev.qty)) {
+      prev.qty = qty;
+      prev.usd = l.toSuggestedUsd ?? null;
+    }
+    accounts.set(key, prev);
   }
   const list = [...accounts.values()];
   const amount = (a: (typeof list)[number]) => (a.qty === null ? null : depositText(a.qty, a.coin, a.usd));
+  // Said only when the deposit backs more than this card: the reason every
+  // card on the account names the same figure.
+  const covers = (a: (typeof list)[number]) =>
+    a.bases.size > 1 ? t('assetCard.liq.covers', { bases: [...a.bases].sort().join(t('assetCard.listSep')) }) : null;
   const title =
     list.length === 1
-      ? amount(list[0]) === null
-        ? t('assetCard.liq.depositNoAmount', { account: list[0].name })
-        : t('assetCard.liq.deposit', { amount: amount(list[0]), account: list[0].name })
-      : [t('assetCard.liq.depositMany'), ...list.map((a) => `${a.name}\t${amount(a) ?? '—'}`)].join('\n');
+      ? [
+          amount(list[0]) === null
+            ? t('assetCard.liq.depositNoAmount', { account: list[0].name })
+            : t('assetCard.liq.deposit', { amount: amount(list[0]), account: list[0].name }),
+          covers(list[0]),
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : [
+          t('assetCard.liq.depositMany'),
+          ...list.map((a) => `${a.name}\t${amount(a) ?? '—'}${covers(a) ? ` · ${covers(a)}` : ''}`),
+        ].join('\n');
   return (
     <Chip sm={sm} tone="amber" className={sm ? '!font-medium' : HEAD_CHIP} title={title}>
       {t('assetCard.liq.chip')}
@@ -1539,7 +1577,7 @@ function RollProbe({
     quoted2 &&
     legs2.length > 0 &&
     !(entrySim.legs.length === 2 && entrySim.receiveLeg === null) &&
-    legs2.every((l) => l.bookStatus === 'ok' && !l.slippageExceeded && !(l.shortfallSize > 0));
+    legs2.every((l) => l.bookStatus === 'ok' && !l.slippageExceeded && !l.bandExceeded && !(l.shortfallSize > 0));
   const { netRate } = rollFigures({
     entrySim,
     exitSim,
@@ -2876,7 +2914,7 @@ function RollReview({
             title={t('pairTicket.borosBits.suggestedTopUpHint')}
             value={
               <span className="text-amber-300">
-                +{fmtTokenQty(suggestedTopUp, collateral)}
+                +{depositQty(suggestedTopUp, collateral)}
                 {usdNote(suggestedTopUp)}
               </span>
             }
@@ -3140,15 +3178,7 @@ function OpenOnlyReview({
           <>
             <SpreadReadout sim={simulation} boxed />
             <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-              <LiquidationLines
-                sim={simulation}
-                // Amber only while some account still needs a top-up; an older
-                // server sends no funding, so every short leg warns.
-                warn={() => {
-                  const funding = sim.data?.gate.funding ?? [];
-                  return funding.length === 0 || funding.some((f) => f.suggestedTopUp === null || f.suggestedTopUp > 0);
-                }}
-              />
+              <LiquidationLines sim={simulation} warn={liqWarnOf(sim.data?.gate.funding)} />
             </div>
             <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
               <PairCosts

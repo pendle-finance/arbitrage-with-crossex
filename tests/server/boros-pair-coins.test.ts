@@ -77,27 +77,10 @@ describe('the Boros pair ticket keeps to the supported coins', () => {
     expect(calls).toEqual([]);
   });
 
-  it('refuses a target that grows an off-list position before any order', async () => {
-    const calls: string[] = [];
-    start([], calls);
-    const res = await execute('target', 1_000);
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe(NOT_SUPPORTED);
-    expect(calls).toEqual([]);
-  });
-
   it('sends a pair close on an off-list coin', async () => {
     const calls: string[] = [];
     start([{ marketId: SOL_A, size: 75_000 }, { marketId: SOL_B, size: -75_000 }], calls);
     const res = await execute('close', 75_000);
-    expect(res.statusCode).toBe(200);
-    expect(calls).toEqual(['place']);
-  });
-
-  it('sends a target that only reduces an off-list position', async () => {
-    const calls: string[] = [];
-    start([{ marketId: SOL_A, size: 75_000 }, { marketId: SOL_B, size: -75_000 }], calls);
-    const res = await execute('target', 50_000, ['long', 'short']);
     expect(res.statusCode).toBe(200);
     expect(calls).toEqual(['place']);
   });

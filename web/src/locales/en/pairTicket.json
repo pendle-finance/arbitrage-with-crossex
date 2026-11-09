@@ -177,8 +177,6 @@
     "tradeFeeHint": "Boros taker fee at this size — charged once, when the order fills",
     "tradeFeeLegsHint": "Boros taker fee on both markets at this size — charged once, when the orders fill",
     "isolatedSwitch": "Cancel its orders and close the position <a>on Boros</a> first.",
-    "uneven": "Only {{hedged}} {{unit}} fills on both markets. {{unhedged}} {{unit}} would be left unhedged.",
-    "useSize": "Use {{size}} {{unit}}",
     "nothingFilled": "Nothing filled",
     "partiallyFilled": "Partly filled",
     "filled": "Filled",
@@ -207,9 +205,12 @@
       "margin": "Insufficient margin",
       "tooSmall": "Order too small"
     },
+    "bandLimit": "Boros only fills this market up to {{apr}} right now.",
+    "slippageLimit": "Raise max slippage or reduce the size.",
     "maxFillable": "Max fillable size:",
     "useMaxSizeTitle": "Set the size to the largest that fills whole.",
     "nothingFills": "Nothing fills whole at this slippage. Raise the max slippage.",
+    "nothingFillsBand": "Boros fills nothing on this market right now. Try again shortly.",
     "marginUsage": "Margin usage"
   },
   "failure": {

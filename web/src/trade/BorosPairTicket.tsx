@@ -41,7 +41,6 @@ import type {
   BorosPairHedge,
   BorosPairRequest,
   BorosPairResult,
-  BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
@@ -65,6 +64,7 @@ import {
   BlockerList,
   blockerButtonReason,
   DirectionToggle,
+  liqWarnOf,
   LiquidationLines,
   MarketCard,
   MarketSelect,
@@ -798,16 +798,7 @@ export function BorosPairTicket({
     return lone.estSlippageApr == null ? null : Math.max(0, lone.estSlippageApr);
   })();
   const gate = sim.data?.gate ?? null;
-  /** The account a leg draws on: an isolated-only leg's own, else cross. */
-  const fundingOf = (leg: BorosSimulatedLeg) =>
-    gate?.funding?.find((f) => f.marketId === leg.marketId) ?? gate?.funding?.find((f) => f.marketId === null);
-  /** A leg's liquidation turns amber only while its account still needs a
-   * top-up; free margin left after the trade may already cover it. Older
-   * servers send no funding, so every short leg warns. */
-  const liqWarn = (leg: BorosSimulatedLeg): boolean => {
-    const f = fundingOf(leg);
-    return f === undefined || f.suggestedTopUp === null || f.suggestedTopUp > 0;
-  };
+  const liqWarn = liqWarnOf(gate?.funding);
   const fundingName = (marketId: number | null): string =>
     marketId === null ? t('pairTicket.borosBits.crossAccount') : (legName(marketId) ?? '');
 
@@ -900,12 +891,7 @@ export function BorosPairTicket({
         ]
       : []),
   ];
-  const legGrows = (sizing?: { currentSize: number; resultingSize: number }): boolean =>
-    sizing !== undefined && Math.abs(sizing.resultingSize) > Math.abs(sizing.currentSize);
-  const closeOnlyIndex = [rowA, rowB].findIndex(
-    (row, i) =>
-      row?.closeOnly && (intent === 'open' || (intent === 'target' && legGrows(simulation?.legs[i]?.sizing))),
-  );
+  const closeOnlyIndex = [rowA, rowB].findIndex((row) => row?.closeOnly && intent === 'open');
   const closeOnlyLeg: number | null = closeOnlyIndex < 0 ? null : closeOnlyIndex;
 
   /** The short reason a blocked size shows on the button, if any. */
@@ -1274,13 +1260,7 @@ export function BorosPairTicket({
         )}
       </div>
 
-      {/* The wizard has no intent control: it always sends `target`, the END
-          STATE, so step 1 can be re-run at a new notional without the
-          operator working out the remainder. `target` is not "only opens" —
-          a notional BELOW what the leg holds reduces it, and the order side
-          follows the sign of the delta (`sizing.orderSide`), not the side
-          held. A reduce-only `close` here would be a different trade: it
-          could never grow a leg that is short of its target. */}
+      {/* The wizard has no intent control: it always opens the size typed. */}
       {!guided && (
         <label className="flex cursor-pointer items-center gap-2 text-[11.5px] text-ink-200">
           <input
