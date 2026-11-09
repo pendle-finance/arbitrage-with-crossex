@@ -19,6 +19,7 @@ import {
   gateSpot,
   HOVER,
   MODAL_FEE,
+  MODAL_IMPACT,
   MOVE_TEXT,
   PAYS_BACK,
   poolKey,
@@ -328,6 +329,11 @@ export const MONTH_DAYS = 30;
 
 const cents = (usd: number): number => Math.round(usd * 100);
 
+/** A route's price impact, and its cost without it: the fee Gate and the
+ * venues charge. The total still decides the route and the verdict. */
+export const routeImpactUsd = (route: RoutePlan): number => Math.max(0, route.priceImpactUsd ?? 0);
+export const routeFeeUsd = (route: RoutePlan): number => Math.max(0, route.costUsd - routeImpactUsd(route));
+
 export const hasUnknownRate = (buckets: RebalanceBucket[]): boolean => borrowingBuckets(buckets).some(isRateUnknown);
 
 /** The interest a day the route stops, from the wallets it repays. The
@@ -507,7 +513,14 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
         {plan.recommended === route && <Term label={<Chip tone="green" sm>{t('common.recommended')}</Chip>} text={HOVER.recommended} />}
       </span>
       <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason && localizeServerText(routePlan.reason) : time}</span>
-      {!blocked && <span className="num text-ink-100">{MODAL_FEE(fmtUsd(routePlan.costUsd))}</span>}
+      {!blocked && (
+        <span className="num text-right text-ink-100">
+          {MODAL_FEE(fmtUsd(routeFeeUsd(routePlan)))}
+          {routeImpactUsd(routePlan) > 0 && (
+            <span className="block text-[11px] text-ink-400">{MODAL_IMPACT(fmtUsd(routeImpactUsd(routePlan)))}</span>
+          )}
+        </span>
+      )}
     </RadioRow>
   );
 }

@@ -23,7 +23,8 @@ export const SPOT_MIN_QUOTE_USDT = 3;
 export const SPOT_ORDER_MAX_USDC = 4_900_000;
 export const SPOT_MARKET_MAX_USDT = 5_000_000;
 const SPOT_ORDER_SHARE = 0.98;
-const RECOMMENDED_MAX_SECONDS = 900;
+/** How long the mix's rounds may run before it Converts the rest. */
+const MIX_MAX_SECONDS = 900;
 /** Rounds a Spot loop may take before it stops being a route: 100 rounds is
  * over three hours at the fastest hop. Past it the row stays, closed, with
  * the reason, so the trader still sees what the loop would have cost. */
@@ -182,7 +183,12 @@ export interface PlannedStep {
 export interface RoutePlan {
   available: boolean;
   reason: string | null;
+  /** Everything the route costs: fees plus price impact. Routes are picked on it. */
   costUsd: number;
+  /** The part of `costUsd` that is price, not fee: USDC bought above $1 or
+   * sold below it, and depth walked past the top of the book. Shown apart so
+   * the fee reads as what Gate and the venues charge (his call 2026-11-09). */
+  priceImpactUsd: number;
   seconds: number;
   rounds: number;
   oneMoreRoundCostUsd: number | null;
@@ -486,6 +492,8 @@ interface Run extends Wallets {
   gateMovable: number;
   received: Record<Pool, number>;
   costUsd: number;
+  /** The share of costUsd that is price impact, not fee. */
+  impactUsd: number;
   steps: PlannedStep[];
   cashLimited: boolean;
   usdtShort: boolean;
@@ -600,11 +608,9 @@ function roundInto(book: Book, run: Run, move: Move, size: number): void {
   run.venues[venue] = shifted(run.venues[venue], arrives);
   run.received[venue] += arrives;
   run.beyondBook ||= paid.beyond;
-  run.costUsd +=
-    VENUE[venue].inFeeUsd +
-    buy * Math.max(0, book.ask - 1) +
-    Math.max(0, paid.usdt - buy * book.ask) +
-    paid.usdt * book.takerRate;
+  const impact = buy * Math.max(0, book.ask - 1) + Math.max(0, paid.usdt - buy * book.ask);
+  run.costUsd += VENUE[venue].inFeeUsd + impact + paid.usdt * book.takerRate;
+  run.impactUsd += impact;
   pushRound(book, run, move, { buy, move: size, arrives });
 }
 
@@ -617,8 +623,9 @@ function sellUsdc(book: Book, run: Run, move: Move, arrived: number): void {
   run.gateMovable = 0;
   if (move.to === 'CROSSEX') run.received.CROSSEX += gained;
   run.beyondBook ||= sale.beyond;
-  run.costUsd +=
-    sold * Math.max(0, 1 - book.bid) + Math.max(0, sold * book.bid - sale.usdt) + sale.usdt * book.takerRate;
+  const impact = sold * Math.max(0, 1 - book.bid) + Math.max(0, sold * book.bid - sale.usdt);
+  run.costUsd += impact + sale.usdt * book.takerRate;
+  run.impactUsd += impact;
 }
 
 function roundOut(book: Book, run: Run, move: Move, size: number): void {
@@ -666,7 +673,9 @@ function convertRest(book: Book, run: Run, move: Move, left: number): void {
   shiftPool(run, move.from, -size);
   shiftPool(run, move.to, arrives);
   run.received[move.to] += arrives;
-  run.costUsd += fee + size * kept * (1 - convertPrice(move, Math.max(1, ask), Math.min(1, bid)));
+  const impact = size * kept * (1 - convertPrice(move, Math.max(1, ask), Math.min(1, bid)));
+  run.costUsd += fee + impact;
+  run.impactUsd += impact;
   run.steps.push({
     round: null,
     kind: 'convert',
@@ -688,6 +697,7 @@ function startRun(book: Book): Run {
     gateMovable: book.gateMovable,
     received: { CROSSEX: 0, HYPERLIQUID: 0, LIGHTER: 0 },
     costUsd: 0,
+    impactUsd: 0,
     steps: [],
     cashLimited: false,
     usdtShort: false,
@@ -786,6 +796,7 @@ function routePlan(book: Book, run: Run, reason: string | null): RoutePlan {
     available: reason === null,
     reason,
     costUsd: nearestCents(run.costUsd),
+    priceImpactUsd: Math.min(nearestCents(run.costUsd), nearestCents(run.impactUsd)),
     seconds: run.steps.reduce((total, step) => total + step.seconds, 0),
     rounds: run.steps.filter((step) => step.kind === 'round').length,
     oneMoreRoundCostUsd: null,
@@ -808,13 +819,33 @@ function blockedReason(inputs: PlanInputs, moves: Move[]): string | null {
   return null;
 }
 
+/**
+ * What waiting costs, in dollars: TIME_COST_USD × (e^(seconds / TIME_SCALE) − 1).
+ * Exponential so a long route has to save more the longer it runs (his call
+ * 2026-11-09): 10 min ≈ $0.18, 20 min ≈ $0.40, 1 h ≈ $1.72, 2 h ≈ $6.39,
+ * 3 h ≈ $19, 5 h ≈ $147. A 5 h route at $0 loses to a 10 min one at $50.
+ */
+const TIME_COST_USD = 1;
+const TIME_SCALE_SECONDS = 3600;
+export const timeCostUsd = (seconds: number): number => TIME_COST_USD * Math.expm1(Math.max(0, seconds) / TIME_SCALE_SECONDS);
+
+/** A route's cost with its time priced in: what the recommendation ranks. */
+export const routeScore = (route: Pick<RoutePlan, 'costUsd' | 'seconds'>): number => route.costUsd + timeCostUsd(route.seconds);
+
+/** The open route with the lowest fee-plus-time score. It replaced
+ * "cheapest within 15 min", which put a $125 route over a $5 one that took
+ * 20 min; pure cheapest would put a 5 h route over a 10 min one. */
 function recommend(routes: EvenPlan['routes']): RouteName | null {
   const open = (['mix', 'loop', 'convert'] as const).flatMap((name) => {
     const route = routes[name];
-    return route?.available && route.seconds <= RECOMMENDED_MAX_SECONDS ? [{ name, route }] : [];
+    return route?.available ? [{ name, route }] : [];
   });
   if (open.length === 0) return null;
-  return open.reduce((best, next) => (cheaper(best.route, next.route) === next.route ? next : best)).name;
+  return open.reduce((best, next) => {
+    const a = routeScore(best.route);
+    const b = routeScore(next.route);
+    return b < a || (b === a && next.route.seconds < best.route.seconds) ? next : best;
+  }).name;
 }
 
 function loopReason(book: Book, moves: Move[], loopRun: Run): string | null {
@@ -914,7 +945,7 @@ function roundBudgets(moves: Move[]): number[][] {
       budgets.push(picked);
       return;
     }
-    for (let rounds = 0; used + rounds * seconds[index] <= RECOMMENDED_MAX_SECONDS; rounds += 1) {
+    for (let rounds = 0; used + rounds * seconds[index] <= MIX_MAX_SECONDS; rounds += 1) {
       walk(index + 1, used + rounds * seconds[index], [...picked, rounds]);
     }
   };

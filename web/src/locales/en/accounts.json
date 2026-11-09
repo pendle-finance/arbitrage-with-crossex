@@ -112,7 +112,7 @@
         },
         "costFrom": "From {{usd}}",
         "twoSwaps": "0.4%, two swaps",
-        "recommended": "Recommended: cheapest route that takes 15 min or less."
+        "recommended": "Recommended: the best balance of fee and time."
       },
       "presets": "Balance positions: split equity by position size. Clear debt: repay every borrow from the wallet with the most equity. Custom amount: move what you type.",
       "custom": "Moves this amount out of one CrossEx wallet into another. Fees come off what lands.",
@@ -135,7 +135,7 @@
       "borrowing": "A negative wallet is a borrow. IM used (initial margin) in the Accounts card above shows the margin it locks.",
       "route": "How the money moves. Fee includes Gate fees and the spot spread.",
       "mix": "Spot loop for up to {{rounds}}, then Convert the rest.",
-      "recommended": "Cheapest route that takes 15 min or less.",
+      "recommended": "Best balance of fee and time: a longer route has to save more, and each extra hour counts for more than the last.",
       "noDirectTransfer": "Gate has no direct transfer between CrossEx wallets.",
       "repeats": "Repeats in rounds.",
       "convert": "Instant swap between your CrossEx USDT and USDC wallets. 0.2% fee.",
@@ -153,7 +153,8 @@
       "time": "Typical time. Moves into or out of the CrossEx Hyperliquid and Lighter wallets can take longer.",
       "minimum": "Gate minimum for moves into or out of the CrossEx Hyperliquid and Lighter wallets. Fee included.",
       "upToOut": "Free margin, capped at this wallet's cash.",
-      "upToInto": "Your Gate spot balance."
+      "upToInto": "Your Gate spot balance.",
+      "priceImpact": "Not a fee. USDC bought above $1 or sold below it on Gate spot, and depth taken past the top of the book."
     },
     "verdict": {
       "noBorrow": "No borrow. Nothing to move.",
@@ -187,7 +188,10 @@
       "steps": "Show steps",
       "refreshRoute": "Refresh route",
       "resume": "Resume",
-      "abandon": "Abandon"
+      "abandon": "Abandon",
+      "priceImpact": "Price impact",
+      "priceImpactUsd": "+ {{usd}} price impact",
+      "feePlusImpact": "{{fee}} in fees plus {{impact}} of price impact"
     },
     "waits": {
       "transfer": "Transfer running",
