@@ -1,7 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { BorosPairSimulation, BorosSimulatedLeg } from '../api/types';
-import { AvailableMarginLines, BlockerList, blockerButtonReason, LiquidationLines, PairCosts, SuggestedTopUpLines, UnevenFillWarning } from './BorosPairBits';
+import type { BorosPairBlocker, BorosPairSimulation, BorosSimulatedLeg } from '../api/types';
+import { AvailableMarginLines, BlockerList, blockerButtonReason, LiquidationLines, liqWarnOf, PairCosts, SuggestedTopUpLines } from './BorosPairBits';
 
 const leg = (venue: string, liquidationApr: number | null, resultingSize: number): BorosSimulatedLeg =>
   ({
@@ -109,8 +109,21 @@ describe('AvailableMarginLines / SuggestedTopUpLines', () => {
   });
 });
 
+describe('liqWarnOf', () => {
+  it("warns a leg only when its OWN account still needs a top-up", () => {
+    const funding = [
+      { marketId: null, availableBefore: 10, availableAfter: 5, suggestedTopUp: 0 },
+      { marketId: 7, availableBefore: 1, availableAfter: 0, suggestedTopUp: 2 },
+    ];
+    const warn = liqWarnOf(funding);
+    expect(warn({ marketId: 3 } as BorosSimulatedLeg)).toBe(false); // cross, covered
+    expect(warn({ marketId: 7 } as BorosSimulatedLeg)).toBe(true); // its isolated account is short
+    expect(liqWarnOf(undefined)({ marketId: 3 } as BorosSimulatedLeg)).toBe(true); // older server
+  });
+});
+
 describe('blocked sizes', () => {
-  const b = (code: string, maxSize?: number) => ({ code, message: `${code} message`, maxSize });
+  const b = (code: string, maxSize?: number): BorosPairBlocker => ({ code, message: `${code} message`, maxSize });
 
   it('names the most specific reason for the button, and none for a blocker without one', () => {
     expect(blockerButtonReason([b('cross-short-margin'), b('insufficient-depth', 5)])).toBe('Insufficient liquidity');
@@ -132,44 +145,16 @@ describe('blocked sizes', () => {
     fireEvent.click(screen.getByRole('button', { name: '58.92 BTC' }));
     expect(onUse).toHaveBeenCalledWith(58.92);
   });
-});
-
-describe('UnevenFillWarning', () => {
-  const pair = (hedgedSize: number, unhedgedSize: number) =>
-    ({
-      legs: [leg('Gate', null, -1), leg('Hyperliquid', null, 1)],
-      hedgedSize,
-      unhedgedSize,
-      collateral: 'ETH',
-    }) as unknown as BorosPairSimulation;
-
-  it('names the hedged and unhedged sizes and sets the size to the hedged one', () => {
-    const onUse = vi.fn();
-    render(<UnevenFillWarning sim={pair(0.775, 0.225)} onUse={onUse} />);
-    expect(
-      screen.getByText('Only 0.775 ETH fills on both markets. 0.225 ETH would be left unhedged.'),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Use 0.775 ETH' }));
-    expect(onUse).toHaveBeenCalledWith(0.775);
-  });
-
-  it('shows no button without a handler', () => {
-    render(<UnevenFillWarning sim={pair(0.775, 0.225)} />);
-    expect(screen.getByText(/would be left unhedged/)).toBeInTheDocument();
-    expect(screen.queryByRole('button')).toBeNull();
-  });
-
-  it('renders nothing when both legs fill evenly, one leg fills nothing, or only one leg trades', () => {
-    const { container, rerender } = render(<UnevenFillWarning sim={pair(1, 0)} onUse={() => {}} />);
-    expect(container).toBeEmptyDOMElement();
-    rerender(<UnevenFillWarning sim={pair(0, 0.775)} onUse={() => {}} />);
-    expect(container).toBeEmptyDOMElement();
-    rerender(
-      <UnevenFillWarning
-        sim={{ ...pair(1, 0.2), legs: [leg('Gate', null, 1)] } as BorosPairSimulation}
-        onUse={() => {}}
-      />,
+  it('says which limit stopped the size: nothing more for a thin book, slippage, or Boros\'s band', () => {
+    const line = (blockers: BorosPairBlocker[]) => {
+      cleanup();
+      render(<BlockerList blockers={blockers} onUseSize={() => {}} unit="BTC" />);
+      return screen.getByText(/Max fillable size/).closest('li')!.textContent;
+    };
+    expect(line([b('insufficient-depth', 10), b('slippage-exceeds-max', 10)])).toBe('Max fillable size: 10 BTC');
+    expect(line([b('slippage-exceeds-max', 10)])).toBe('Raise max slippage or reduce the size. Max fillable size: 10 BTC');
+    expect(line([{ ...b('rate-bound-out-of-range', 10), limitApr: 0.0612 }])).toBe(
+      'Boros only fills this market up to 6.12% right now. Max fillable size: 10 BTC',
     );
-    expect(container).toBeEmptyDOMElement();
   });
 });

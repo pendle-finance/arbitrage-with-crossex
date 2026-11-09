@@ -454,7 +454,9 @@ describe('POST /api/boros/pair/simulate', () => {
 
 describe('the automatic gas top-up picks a zone that can pay', () => {
   const ETH_MARKET = (id: number, venue: string, apr: number) => ({ ...market(id, venue, apr), tokenId: 2 });
-  const ethBook = (ethNet: number, usdtNet: number, usdtPositions: Array<Record<string, unknown>> = []) => {
+  // `posted`: the margin each held ETH position posts, which a close hands
+  // back and which covers the close's own taker fee. The free ETH stays ethNet.
+  const ethBook = (ethNet: number, usdtNet: number, usdtPositions: Array<Record<string, unknown>> = [], posted = 0) => {
     const eth = marketAcc(ADDRESS, 2);
     const held = [
       { marketId: HL, size: 100_000 },
@@ -467,9 +469,9 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
           { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(usdtNet), initialMargin: raw(0), positions: usdtPositions },
           {
             marketAcc: eth,
-            netBalance: raw(ethNet),
+            netBalance: raw(ethNet + 2 * posted),
             initialMargin: raw(0),
-            positions: held.map((p) => ({ marketId: p.marketId, signedSize: raw(p.size), initialMargin: raw(0), orders: [] })),
+            positions: held.map((p) => ({ marketId: p.marketId, signedSize: raw(p.size), initialMargin: raw(posted), orders: [] })),
           },
         ],
       },
@@ -488,7 +490,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
   };
   const closeAtGasDebt = async (ethNet: number, usdtNet: number, usdtPositions?: Array<Record<string, unknown>>) => {
     const seen: PlaceOrdersOptions[] = [];
-    makeApp(ethBook(ethNet, usdtNet, usdtPositions), undefined, {
+    makeApp(ethBook(ethNet, usdtNet, usdtPositions, 50), undefined, {
       ...orderClient(),
       getGasBalance: async () => -0.02,
       placeMarketOrders: async (reqs, opts) => {
@@ -545,7 +547,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
 
   /** 1.7.5: an open whose ETH cannot spare the top-up after its legs pays it
    * from idle USDT instead of blocking. The ETH free margin is set to exactly
-   * what the legs need, read from a first simulate. */
+   * what the legs need (margin and fees), read from a first simulate. */
   it.each([
     ['$50', 50],
     ['$6M', 6_000_000],
@@ -557,7 +559,8 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     });
     makeApp(ethBook(1_000, usdtNet), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody())).json().data;
-    const need = (probe.simulation.legs as Array<{ marginRequired: number }>).reduce((t, l) => t + l.marginRequired, 0);
+    // Margin plus taker fee: Boros takes the fee from cash before it checks margin.
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number }>).reduce((t, l) => t + l.marginRequired + l.takerFeeCost, 0);
     expect(need).toBeGreaterThan(0);
     await app!.close();
 
@@ -586,7 +589,8 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     };
     makeApp(ethBook(1_000, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody)).json().data;
-    const need = (probe.simulation.legs as Array<{ marginRequired: number }>).reduce((t, l) => t + l.marginRequired, 0);
+    // Margin plus taker fee: Boros takes the fee from cash before it checks margin.
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number }>).reduce((t, l) => t + l.marginRequired + l.takerFeeCost, 0);
     await app!.close();
     makeApp(ethBook(need, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const res = await post('/api/boros/pair/execute', openBody);
@@ -829,61 +833,6 @@ describe('POST /api/boros/pair/execute', () => {
       expect(res.statusCode).toBe(200);
       expect(seen).toEqual([undefined]);
     });
-  });
-
-  it('sends a reducing TARGET as a SELL of the delta, not a buy on the side held', async () => {
-    // The wizard re-run at a lower notional. The leg holds 1,000 LONG and the
-    // box now says 500, so §4 reads 1,000 → 500 and the acknowledgement says
-    // "reduces". Reading the side HELD instead of the sign of the delta sent a
-    // BUY of 500 and finished at 1,500 — and the reduce-only wei cap could not
-    // catch it, because 500 is not greater than the 1,000 open.
-    const sent: BorosMarketOrderRequest[] = [];
-    makeApp(
-      {
-        ...account(500_000, [{ marketId: HL, size: 1_000 }]),
-      },
-      undefined,
-      {
-        placeMarketOrders: async (reqs) => {
-          reqs.forEach((r) => sent.push(r));
-          return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction, filledSize: r.size }));
-        },
-        cancelOrders: async () => {},
-        closePosition: async () => okFill(),
-      },
-    );
-
-    const res = await post(
-      '/api/boros/pair/execute',
-      pairBody({
-        legs: [
-          pairLeg(HL, 'long', 0.0025, 500, 'coid-aaaa'),
-          // The Binance fixture's BID sits 0.5% under its mid, so a sell there
-          // needs a tolerance that admits it; the point under test is the SIDE.
-          pairLeg(BN, 'short', 0.01, 500, 'coid-bbbb'),
-        ],
-        intent: 'target',
-        opposingAcknowledged: true,
-      }),
-    );
-    expect(res.statusCode).toBe(200);
-
-    const hl = sent.find((r) => r.marketId === HL)!;
-    expect(hl).toBeDefined();
-    // Declared 'long' in the body; the ORDER is the other way.
-    expect(hl.direction).toBe('short');
-    expect(hl.size).toBeCloseTo(500, 9);
-    // A sell's bound sits BELOW the 0.09 mid. The old read put it above.
-    expect(hl.limitApr).toBeLessThan(0.09);
-    // Nothing to cap: the delta is smaller than the position, so it cannot
-    // cross flat and the wei override must stay off.
-    expect(hl.sizeWei).toBeUndefined();
-
-    // The leg that is only growing towards its target is untouched: its order
-    // side is still the side it declared.
-    const bn = sent.find((r) => r.marketId === BN)!;
-    expect(bn.direction).toBe('short');
-    expect(bn.limitApr).toBeLessThan(0.045);
   });
 
   it('trades ONE leg when onlyLeg is set, for a completion', async () => {

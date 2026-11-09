@@ -11,7 +11,7 @@ import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types'
 import { fmtDateLocal } from '../../lib/fmt';
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
-import { AssetCard } from './AssetCard';
+import { AssetCard, PortfolioBorosLegs } from './AssetCard';
 import { deriveAsset } from './assetModel';
 
 const DAY = 86_400;
@@ -63,8 +63,9 @@ const book = (perpOpen: AssetPerpOpen[]): AssetGroup => ({
   borosHistory: [],
 });
 
-const renderCard = (group: AssetGroup) =>
+const renderCard = (group: AssetGroup, portfolio?: Array<{ base: string; leg: AssetBorosOpen }>) =>
   renderWithClient(
+    <PortfolioBorosLegs.Provider value={portfolio ?? null}>
     <AssetCard
       group={group}
       derived={deriveAsset(group, {}, 0, NOW)}
@@ -77,7 +78,8 @@ const renderCard = (group: AssetGroup) =>
       onChangeSince={() => {}}
       exclusions={{}}
       onExclude={() => {}}
-    />,
+    />
+    </PortfolioBorosLegs.Provider>,
   );
 
 /** The expanded card's leg table (the one with a "Leg" header). */
@@ -184,14 +186,14 @@ describe('BorosOnlyPairCard', () => {
     const short = liqCell(table, /Hyperliquid/);
     expect(short.textContent).toBe('10.00%Suggested ≥ 13.00%');
     expect(short.querySelector('[title]')?.getAttribute('title')).toBe(
-      'Add 0.0313 ETH ($63) to Boros margin to reach the suggested liquidation APR (≥ 13.00%).',
+      'Add 0.03125 ETH ($63) to Boros margin to reach the suggested liquidation APR (≥ 13.00%).',
     );
     // The asset header and the pair row both carry the chip: one deposit.
     const chips = screen.getAllByText('Add Boros margin');
     expect(chips).toHaveLength(2);
     for (const chip of chips) {
       expect(chip.closest('[title]')?.getAttribute('title')).toBe(
-        'Deposit 0.0313 ETH ($63) to Boros ETH cross margin to reach the suggested liquidation APR.',
+        'Deposit 0.03125 ETH ($63) to Boros ETH cross margin to reach the suggested liquidation APR.',
       );
     }
   });
@@ -205,7 +207,7 @@ describe('BorosOnlyPairCard', () => {
     renderCard(g);
     const header = screen.getAllByText('Add Boros margin')[0];
     expect(header.closest('[title]')?.getAttribute('title')).toBe(
-      'Deposit 0.0313 ETH ($63) to Boros ETH cross margin to reach the suggested liquidation APR.',
+      'Deposit 0.03125 ETH ($63) to Boros ETH cross margin to reach the suggested liquidation APR.',
     );
 
     g.borosOpen[0] = { ...g.borosOpen[0], marginMode: 'isolated' };
@@ -215,8 +217,25 @@ describe('BorosOnlyPairCard', () => {
     expect(title.split('\n')).toEqual([
       'Deposit to Boros to reach the suggested liquidation APR:',
       expect.stringMatching(/^Gate Long YU · .* isolated margin\t0\.02 ETH \(\$40\)$/),
-      'ETH cross margin\t0.0313 ETH ($63)',
+      'ETH cross margin\t0.03125 ETH ($63)',
     ]);
+  });
+
+  it('prices a cross account across the whole portfolio, in full, and says what it covers', () => {
+    const g = book([]);
+    g.borosOpen = [
+      g.borosOpen[0],
+      { ...g.borosOpen[1], side: 'SHORT', liquidationApr: 0.1, suggestedLiquidationApr: 0.13, toSuggestedUsd: 62.5, toSuggestedToken: 0.03125, marginMode: 'cross' },
+    ];
+    // A BTC position on the same ETH cross account needs more: that is the
+    // one deposit, on this card too, never 0.03125 plus it.
+    const btc: AssetBorosOpen = { ...g.borosOpen[1], marketId: 999, toSuggestedUsd: 2_469_135.6, toSuggestedToken: 1_234.56789 };
+    renderCard(g, [...g.borosOpen.map((leg) => ({ base: 'ETH', leg })), { base: 'BTC', leg: btc }]);
+    for (const chip of screen.getAllByText('Add Boros margin')) {
+      expect(chip.closest('[title]')?.getAttribute('title')).toBe(
+        'Deposit 1,234.57 ETH ($2,469,136) to Boros ETH cross margin to reach the suggested liquidation APR.\nCovers your BTC, ETH positions on it.',
+      );
+    }
   });
 
   it('shows no warning when every leg is past the suggestion', () => {

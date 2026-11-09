@@ -20,7 +20,8 @@
     "isolatedAccount": "{{market}} 逐仓保证金",
     "deposit": "向 Boros {{account}}存入 {{amount}}，即可达到建议清算 APR。",
     "depositNoAmount": "向 Boros {{account}}追加保证金，即可达到建议清算 APR。",
-    "depositMany": "向 Boros 存入以下金额，即可达到建议清算 APR："
+    "depositMany": "向 Boros 存入以下金额，即可达到建议清算 APR：",
+    "covers": "可覆盖该账户中的 {{bases}} 仓位。"
   },
   "listSep": "、",
   "listLast": "{{head}} 和 {{last}}",

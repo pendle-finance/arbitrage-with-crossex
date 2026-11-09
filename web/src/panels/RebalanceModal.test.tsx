@@ -1389,6 +1389,18 @@ describe('RebalanceModal hovers and facts', () => {
     expect(dialog().textContent).not.toMatch(/\d+ rounds?/);
   });
 
+  it('ranks the rows below Recommended by fee plus time, as the recommendation does', async () => {
+    // Loop $20 over 4 h scores about $74 against Convert's $40 instant: by fee
+    // alone Loop sits above Convert, by fee plus time it sits below.
+    const view = rebalanceViews.twoBorrows;
+    const routes = view.plans.even.routes;
+    const mix = { ...routes.mix!, costUsd: 5, seconds: 600 };
+    const loop = { ...routes.mix!, costUsd: 20, seconds: 4 * 3600 };
+    const convert = { ...routes.convert!, costUsd: 40, seconds: 0 };
+    show({ ...view, plans: plansOf({ ...view.plans.even, recommended: 'mix', routes: { mix, loop, convert } }) });
+    expect(routeNames().slice(1)).toEqual(['Convert', 'Spot loop']);
+  });
+
   it('the step control names the margin the borrow holds', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);

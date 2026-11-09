@@ -174,8 +174,6 @@
     "tradeFeeHint": "此规模下的 Boros 吃单手续费 — 订单成交时收取一次",
     "tradeFeeLegsHint": "此规模下两个市场的 Boros 吃单手续费 — 订单成交时收取一次",
     "isolatedSwitch": "请先<a>在 Boros 上</a>撤销其挂单并平仓。",
-    "uneven": "两个市场只能同时成交 {{hedged}} {{unit}}。将有 {{unhedged}} {{unit}} 未对冲。",
-    "useSize": "改用 {{size}} {{unit}}",
     "nothingFilled": "未成交",
     "partiallyFilled": "部分成交",
     "filled": "已成交",
@@ -204,9 +202,12 @@
       "margin": "保证金不足",
       "tooSmall": "订单金额过小"
     },
+    "bandLimit": "Boros 目前在此市场最多只能成交到 {{apr}}。",
+    "slippageLimit": "请提高最大滑点或减小规模。",
     "maxFillable": "最大可成交规模：",
     "useMaxSizeTitle": "将规模设为可完整成交的最大值。",
     "nothingFills": "在当前滑点下无法完整成交。请提高最大滑点。",
+    "nothingFillsBand": "Boros 目前在此市场无法成交，请稍后再试。",
     "marginUsage": "保证金占用"
   },
   "failure": {

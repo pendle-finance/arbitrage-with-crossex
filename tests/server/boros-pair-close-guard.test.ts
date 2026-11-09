@@ -64,7 +64,8 @@ const bothHeld = (): Record<string, unknown> => ({
   ]),
 });
 
-const target = (id: string) =>
+/** A pair close of part of what is held: reducing, so it guards its markets. */
+const partialClose = (id: string) =>
   app!.inject({
     method: 'POST',
     url: '/api/boros/pair/execute',
@@ -72,10 +73,10 @@ const target = (id: string) =>
     payload: {
       address: ADDRESS,
       legs: [
-        { marketId: HL, direction: 'long', slippageApr: 0.0025, size: 50_000, clientOrderId: `${id}-a` },
-        { marketId: BN, direction: 'short', slippageApr: 0.0025, size: 50_000, clientOrderId: `${id}-b` },
+        { marketId: HL, direction: 'short', slippageApr: 0.0025, size: 25_000, clientOrderId: `${id}-a` },
+        { marketId: BN, direction: 'long', slippageApr: 0.0025, size: 25_000, clientOrderId: `${id}-b` },
       ],
-      intent: 'target',
+      intent: 'close',
       opposingAcknowledged: true,
     },
   });
@@ -197,7 +198,7 @@ describe('cancel-and-close guards', () => {
     expect(calls).toEqual(['cancel', 'close']);
   });
 
-  it('a reducing target waits for a running close on its market', async () => {
+  it('a partial pair close waits for a running close on its market', async () => {
     const calls: string[] = [];
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -215,9 +216,9 @@ describe('cancel-and-close guards', () => {
 
     const single = close({ clientOrderId: 'coid-target-one' });
     await closing;
-    const reduce = await target('coid-target-wait');
+    const reduce = await partialClose('coid-partial-wait');
     expect(reduce.statusCode).toBe(409);
-    expect(reduce.json().error.message).toBe('An order on this market is already running.');
+    expect(reduce.json().error.message).toBe('A close on this market is already running.');
 
     release();
     expect((await single).statusCode).toBe(200);
@@ -267,7 +268,7 @@ describe('cancel-and-close guards', () => {
     expect(calls).toEqual(['cancel', 'close']);
   });
 
-  it('a reducing target holds its markets until its orders land', async () => {
+  it('a partial pair close holds its markets until its orders land', async () => {
     const calls: string[] = [];
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -286,7 +287,7 @@ describe('cancel-and-close guards', () => {
       }),
     });
 
-    const reduce = target('coid-target-hold');
+    const reduce = partialClose('coid-partial-hold');
     await Promise.race([placing, reduce]);
     const single = await close({ clientOrderId: 'coid-target-two' });
     expect(single.statusCode).toBe(409);

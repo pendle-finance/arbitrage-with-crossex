@@ -277,10 +277,7 @@ function parseSize(raw: unknown, which: string): number {
 function parseIntent(raw: unknown): PairIntent {
   if (raw === undefined || raw === null || raw === 'open') return 'open';
   if (raw === 'close') return 'close';
-  // `target` sizes to an END STATE rather than an increment — the guided
-  // wizard's form, where a half-filled leg must not be topped up twice.
-  if (raw === 'target') return 'target';
-  throw new CoreError('intent must be "open", "close" or "target"', 'validation');
+  throw new CoreError('intent must be "open" or "close"', 'validation');
 }
 
 function parseClientOrderId(raw: unknown, which: string): string {
@@ -1049,26 +1046,19 @@ export function borosPairRoutes(deps: AppDeps) {
         ): BorosMarketOrderRequest | null => {
           const size = Math.abs(leg.sizing.deltaSize);
           if (size === 0 || leg.execApr === null) return null;
-          const legMarket = pricedLegs.find((p) => p.market.marketId === leg.marketId)?.market ?? { spreadVenues: null };
           const raw = account.positionRawByMarket.get(leg.marketId);
           const reducing =
             leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? reducingOrderSize(raw, size) : null;
-          /**
-           * ⚠ The side the ORDER takes, never the side the account holds.
-           * They part company on a reducing `target`: the leg stays 'long' and
-           * the delta is negative, so sending `leg.direction` bought MORE of
-           * the position the §4 row promised to reduce. The cancel-and-close
-           * route below already derives its side from the position sign for
-           * the same reason; this is that rule, applied from the delta.
-           */
+          // The side the ORDER takes, from the delta.
           const { orderSide } = leg.sizing;
           return {
             marketId: leg.marketId,
             direction: orderSide,
             size: reducing?.size ?? size,
-            // Bound off the book MID, the same anchor the ticket's "Est." and
-            // "Max" use; a mid-less market falls back to the fill rate.
-            limitApr: limitAprFor(orderSide, knownRateOf(legMarket, leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
+            // The simulation's limit: the user's bound off the book MID (the
+            // anchor the ticket's "Est." and "Max" use), clamped inside the
+            // venue's band, which refuses anything past it.
+            limitApr: leg.limitApr as number,
             clientOrderId,
             ...(reducing?.sizeWei !== undefined ? { sizeWei: reducing.sizeWei } : {}),
           };
