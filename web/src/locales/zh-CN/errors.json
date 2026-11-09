@@ -440,5 +440,6 @@
     "payFixed": "付固定",
     "ask": "卖盘",
     "bid": "买盘"
-  }
+  },
+  "notEnoughLiquidity": "{{market}}：流动性不足，无法完整成交该规模。"
 }

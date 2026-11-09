@@ -440,5 +440,6 @@
     "payFixed": "pay-fixed",
     "ask": "ask",
     "bid": "bid"
-  }
+  },
+  "notEnoughLiquidity": "{{market}}: not enough liquidity to fill this size whole."
 }

@@ -172,6 +172,7 @@ const RULES: readonly Rule[] = [
   [/^(.+): this order is worth \$(\S+), and Boros takes nothing at or under \$(\S+) — increase the size\.$/, 'legTooSmall', ['market', 'value', 'min']],
   [/^(.+): order book unavailable — cannot price this position\.$/, 'noBook', ['market']],
   [/^(.+): nothing resting on the side this order would cross\.$/, 'noLiquidity', ['market']],
+  [/^(.+): not enough liquidity to fill this size whole\.$/, 'notEnoughLiquidity', ['market']],
   [/^(.+): this size fills (\S+) from mid, past the (\S+) max — raise the tolerance or reduce the size\.$/, 'slippageTooHigh', ['market', 'fill', 'max']],
   [/^(.+): the order's rate limit \((\S+)\) is outside the (\S+?)–(\S+) range Boros accepts\. Lower the max slippage or the size\.$/, 'rateOutsideBand', ['market', 'bound', 'low', 'high']],
   [/^(.+): initial margin cannot be modelled, so margin sufficiency is unknown\.$/, 'marginUnknown', ['market']],

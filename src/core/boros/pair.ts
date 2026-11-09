@@ -32,6 +32,7 @@
 import {
   borosInitialMarginUsd,
   borosLiquidationApr,
+  borosMarginForLiquidationRate,
   borosSuggestedLiquidationApr,
   walkBorosBook,
   type BookStatus,
@@ -445,6 +446,10 @@ export interface SimulatedLeg {
    * 5% APR past the market's mark (borosSuggestedLiquidationApr). Null when
    * the leg ends flat. */
   suggestedLiquidationApr: number | null;
+  /** Margin the resulting position needs posted to liquidate at the
+   * suggested rate, on its own (borosMarginForLiquidationRate), never below
+   * `marginRequired`. Null when flat or the solve does not apply. */
+  suggestedMargin: number | null;
   /** Effective tolerance after clamping. */
   slippageApr: number;
   sizing: LegSizing;
@@ -498,6 +503,8 @@ export interface BorosPairSimulation {
   marginRequiredTotal: number | null;
   /** Σ of the legs' `marginReleased`; null if either leg's is unknown. */
   marginReleasedTotal: number | null;
+  /** Σ of the traded legs' `suggestedMargin`; null if any is unknown. */
+  suggestedMarginTotal: number | null;
   /** min(fill A, fill B) — the size that actually ends up hedged. */
   hedgedSize: number;
   /** How much of the entered size ends up directional if both legs fill to
@@ -601,10 +608,9 @@ function simulateLeg(
       );
     }
   } else if (walk.insufficient) {
+    // A blocker now (`insufficient-depth`): orders are fill-or-kill, so a
+    // size the book cannot fill whole is refused, never part-filled.
     bookStatus = 'insufficient-depth';
-    reasons.push(
-      `${leg.market.name}: the book only supports ${fmtSize(walk.filledUsd)} of the ${fmtSize(size)} requested — this order will fill short.`,
-    );
   }
 
   const execApr = walk ? walk.execApr : null;
@@ -678,6 +684,11 @@ function simulateLeg(
       : borosLiquidationApr(leg.market, execApr, resultingSide, nowSec);
   const suggestedLiquidationApr =
     resultingSide === null ? null : borosSuggestedLiquidationApr(resultingSide, leg.market.markApr);
+  const suggestedRaw =
+    execApr === null || suggestedLiquidationApr === null || marginRequired === null
+      ? null
+      : borosMarginForLiquidationRate(leg.market, sizing.resultingSize, execApr, suggestedLiquidationApr, nowSec);
+  const suggestedMargin = suggestedRaw === null || marginRequired === null ? null : Math.max(marginRequired, suggestedRaw);
 
   const estFill = walk ? walk.filledUsd : 0;
   return {
@@ -701,6 +712,7 @@ function simulateLeg(
     marginReleased,
     liquidationApr,
     suggestedLiquidationApr,
+    suggestedMargin,
     slippageApr,
     sizing,
     takerFeeCost: 0, // priced by the caller, which knows the rate and the term
@@ -794,6 +806,10 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const marginRequiredTotal = marginParts.some((m) => m === null)
     ? null
     : marginParts.reduce<number>((sum, m) => sum + (m ?? 0), 0);
+  const suggestedParts = legs.filter((_, i) => tradedSizes[i] > 0).map((l) => l.suggestedMargin);
+  const suggestedMarginTotal = suggestedParts.some((m) => m === null)
+    ? null
+    : suggestedParts.reduce<number>((sum, m) => sum + (m ?? 0), 0);
   const marginReleasedTotal = legs.some((l) => l.marginReleased === null)
     ? null
     : legs.reduce((sum, l) => sum + (l.marginReleased ?? 0), 0);
@@ -826,6 +842,7 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
     takerDragApr,
     intent,
     marginRequiredTotal,
+    suggestedMarginTotal,
     marginReleasedTotal,
     hedgedSize,
     unhedgedSize,
@@ -897,6 +914,7 @@ export type BlockerCode =
   | 'legs-do-not-offset'
   | 'book-unavailable'
   | 'no-depth'
+  | 'insufficient-depth'
   | 'slippage-exceeds-max'
   | 'rate-bound-out-of-range'
   | 'isolated-must-switch'
@@ -920,6 +938,34 @@ export interface PairBlocker {
   /** The exact top-up a margin blocker needs, collateral units — the SHORTFALL
    * (required − available), never the total required (§6). */
   shortfall?: number;
+  /** For a size the book cannot fill whole inside the order's bound and the
+   * venue's band: the largest size, in the ticket's own terms, that does
+   * (maxFillableSize). Absent when it cannot be worked out. */
+  maxSize?: number;
+}
+
+/** Blockers a smaller size clears: the book or the bound cannot take this
+ * one whole, and orders are fill-or-kill. */
+const SIZE_BLOCKERS: ReadonlySet<BlockerCode> = new Set(['insufficient-depth', 'slippage-exceeds-max', 'rate-bound-out-of-range']);
+
+/**
+ * The largest size, in the ticket's own terms, every traded leg fills WHOLE:
+ * each leg's `sizeWithinTolerance` is an ORDER size, which is the ticket's
+ * size for an open or a close, and moves the held position that far toward
+ * the target for a `target`. The pair is one size, so the tightest leg wins.
+ * Null when a traded leg has no fit (no book or mid).
+ */
+export function maxFillableSize(sim: BorosPairSimulation): number | null {
+  let max = Number.POSITIVE_INFINITY;
+  for (const leg of sim.legs) {
+    const delta = leg.sizing.deltaSize;
+    if (delta === 0) continue;
+    const fit = leg.sizeWithinTolerance;
+    if (fit === null) return null;
+    const ticket = sim.intent === 'target' ? Math.abs(leg.sizing.currentSize + Math.sign(delta) * fit) : fit;
+    max = Math.min(max, ticket);
+  }
+  return Number.isFinite(max) ? max : null;
 }
 
 export interface EvaluatePairInput {
@@ -947,6 +993,41 @@ export interface PairGate {
   /** An open's gas top-up cannot come from its own coin after the legs, so the
    * order pays it from the coin with the most free cross margin. */
   gasTopUpFromFallback: boolean;
+  /** Each margin account the traded legs draw on: cross first, then any
+   * isolated-only leg's own. */
+  funding: PairFunding[];
+}
+
+/** One margin account a trade draws on, around the trade. Collateral units. */
+export interface PairFunding {
+  /** null for the cross account; the market for an isolated-only leg's own. */
+  marketId: number | null;
+  /** Free margin before the trade. */
+  availableBefore: number;
+  /** …and after its margin, fees and any gas top-up; null when a leg is
+   * unpriced. Negative means the account is short (a blocker says so). */
+  availableAfter: number | null;
+  /** Deposit that puts the account's legs at the suggested liquidation rate
+   * (borosSuggestedTopUp); 0 when the free margin covers it. */
+  suggestedTopUp: number | null;
+}
+
+/**
+ * Collateral to deposit so every leg in one margin account liquidates no
+ * closer to the mark than the suggested rate, after the margin the account
+ * still has free once the trade is in. A leg needs `suggestedMargin` behind
+ * it and the trade already reserves `marginRequired`, so the extra is the
+ * difference. Cash in an account backs every leg on it at once, so the
+ * account needs the LARGEST extra, never the sum. Null when the free margin
+ * after the trade is unknown.
+ */
+export function borosSuggestedTopUp(legs: SimulatedLeg[], availableAfter: number | null): number | null {
+  if (availableAfter === null) return null;
+  const extra = Math.max(
+    0,
+    ...legs.map((l) => (l.suggestedMargin === null || l.marginRequired === null ? 0 : l.suggestedMargin - l.marginRequired)),
+  );
+  return Math.max(0, extra - Math.max(0, availableAfter));
 }
 
 /**
@@ -1055,6 +1136,13 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         leg: index,
         marketId: leg.marketId,
         message: `${leg.marketName}: nothing resting on the side this order would cross.`,
+      });
+    } else if (leg.bookStatus === 'insufficient-depth') {
+      blockers.push({
+        code: 'insufficient-depth',
+        leg: index,
+        marketId: leg.marketId,
+        message: `${leg.marketName}: not enough liquidity to fill this size whole.`,
       });
     } else if (leg.slippageExceeded) {
       // The fill already sits past the bound the order would carry, so the
@@ -1253,12 +1341,57 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     });
   }
 
+  // --- The largest size that fills whole -------------------------------------
+  // Orders are fill-or-kill: a size the book or the bound cannot take whole
+  // is refused, so every such blocker says what size would go through.
+  if (blockers.some((b) => SIZE_BLOCKERS.has(b.code))) {
+    const maxSize = maxFillableSize(sim);
+    if (maxSize !== null) {
+      for (const b of blockers) if (SIZE_BLOCKERS.has(b.code)) b.maxSize = maxSize;
+    }
+  }
+
+  // --- Free margin around the trade ------------------------------------------
+  // Unclamped, unlike `required` above: a leg that frees margin does hand it
+  // back to its own account, and the after figure says what is left.
+  const traded = legs.filter((l) => Math.abs(l.sim.sizing.deltaSize) > 0);
+  const fundingOf = (
+    marketId: number | null,
+    bucket: BorosMarginBucket | null | undefined,
+    group: typeof traded,
+    extra: number,
+  ): PairFunding => {
+    const availableBefore = bucket?.available ?? 0;
+    const availableAfter = group.some((l) => l.sim.marginRequired === null)
+      ? null
+      : group.reduce(
+          (left, l) => left - ((l.sim.marginRequired ?? 0) - (l.input.committedMargin ?? 0)) - l.sim.takerFeeCost,
+          availableBefore - extra,
+        );
+    return {
+      marketId,
+      availableBefore,
+      availableAfter,
+      suggestedTopUp: borosSuggestedTopUp(group.map((l) => l.sim), availableAfter),
+    };
+  };
+  const crossTraded = traded.filter((l) => !l.input.isolatedOnly);
+  const funding: PairFunding[] = [
+    ...(crossTraded.length > 0
+      ? [fundingOf(null, account.cross, crossTraded, sim.intent !== 'close' && !openTopUpElsewhere ? autoTopUpToken : 0)]
+      : []),
+    ...traded
+      .filter((l) => l.input.isolatedOnly)
+      .map((l) => fundingOf(l.sim.marketId, account.isolatedByMarket.get(l.sim.marketId), [l], 0)),
+  ];
+
   return {
     blockers,
     warnings,
     requiresAcknowledgement: opposingLegs.length > 0,
     opposingLegs,
     gasTopUpFromFallback: openTopUpElsewhere,
+    funding,
   };
 }
 

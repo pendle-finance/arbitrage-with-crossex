@@ -15,6 +15,7 @@ import {
   borosInitialMarginUsd,
   borosLiquidationApr,
   borosLiquidationRate,
+  borosMarginForLiquidationRate,
   borosSuggestedLiquidationApr,
   buildOpportunities,
   clippedCrossCostUsd,
@@ -422,6 +423,29 @@ describe('borosCashToLiquidationRate', () => {
   it('is null at maturity or with no MM coefficient', () => {
     expect(borosCashToLiquidationRate(hlMarket, 1, 0.06, 0.03, MATURITY)).toBeNull();
     expect(borosCashToLiquidationRate({ ...hlMarket, kMM: NaN }, 1, 0.06, 0.03, NOW)).toBeNull();
+  });
+});
+
+describe('borosMarginForLiquidationRate', () => {
+  const { kMM, kIM } = imInputs;
+  const tThresh = imInputs.tThreshSec / SECONDS_IN_YEAR;
+  const mmPerUnit = kMM * Math.max(T, tThresh);
+
+  it('prices a new short: the availValue the target needs plus the upfront fixed cost', () => {
+    // availValue = margin − size × execApr × t; at liquidation it equals
+    // MM(r) − size × t × r, and 13.9% is above the floor.
+    const got = borosMarginForLiquidationRate(hlMarket, -2, 0.09, 0.139, NOW)!;
+    expect(got).toBeCloseTo(2 * 0.139 * (mmPerUnit + T) - 2 * 0.09 * T, 12);
+  });
+
+  it('gives back the initial margin at the rate that margin liquidates at', () => {
+    const liq = borosLiquidationApr(hlMarket, 0.09, 'short', NOW)!;
+    const im = Math.max(0.09, FLOOR) * kIM * Math.max(T, tThresh);
+    expect(borosMarginForLiquidationRate(hlMarket, -1, 0.09, liq, NOW)).toBeCloseTo(im, 12);
+  });
+
+  it('is null at maturity', () => {
+    expect(borosMarginForLiquidationRate(hlMarket, -1, 0.09, 0.139, MATURITY)).toBeNull();
   });
 });
 

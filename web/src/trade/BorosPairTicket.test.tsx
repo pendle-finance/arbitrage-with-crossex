@@ -5,7 +5,7 @@
  * §4 acknowledgement gates confirm and retracts when the trade changes, and a
  * partial fill is reported as a residual rather than a success.
  */
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -432,12 +432,18 @@ describe('BorosPairTicket', () => {
     );
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
-    const max = await screen.findByRole('button', { name: /^Max 10,000 USDT$/ });
-    await user.click(max);
+    const slider = await screen.findByRole('slider', { name: 'Share of max size' });
+    expect(slider.getAttribute('title')).toMatch(/^Max 10,000 USDT — /);
+    // The typed 100,000 is past the max, so the slider already sits at 100.
+    fireEvent.change(slider, { target: { value: '50' } });
+    expect((screen.getByLabelText(/^Size per market/) as HTMLInputElement).value).toBe('5000');
+    fireEvent.change(slider, { target: { value: '100' } });
     expect((screen.getByLabelText(/^Size per market/) as HTMLInputElement).value).toBe('10000');
 
     await user.click(screen.getByRole('radio', { name: 'Single' }));
-    expect(await screen.findByRole('button', { name: /^Max 16,666\.6/ })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('slider', { name: 'Share of max size' }).getAttribute('title')).toMatch(/^Max 16,666\.6/),
+    );
   });
 
   it('Single mode sends one leg, borrowing an eligible partner for the pair shape', async () => {
@@ -618,24 +624,39 @@ describe('BorosPairTicket', () => {
     expect(atomicity).toMatch(/can still fill short/i);
   });
 
-  it('warns when the books fill the legs unevenly and offers the size both legs fill', async () => {
+  it('blocks a size the books cannot fill whole, and offers the largest that does', async () => {
+    // Orders are fill-or-kill: no part fill, so no "would be left unhedged".
     const user = userEvent.setup();
     const sizes: unknown[] = [];
     server.use(
       ...handlers({
         sim: { hedgedSize: 60_000, unhedgedSize: 40_000 },
+        gate: {
+          blockers: [
+            {
+              code: 'insufficient-depth',
+              leg: 1,
+              message: 'Binance ETHUSDT 31 Aug 2026: not enough liquidity to fill this size whole.',
+              maxSize: 60_123.456,
+            },
+          ],
+        },
         onSimulate: (body) => sizes.push((body.legs as { size: number }[])[0].size),
       }),
     );
     renderWithClient(<BorosPairTicket />);
     await fillTicket(user);
 
-    expect(
-      await screen.findByText('Only 60,000 USDT fills on both markets. 40,000 USDT would be left unhedged.'),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Use 60,000 USDT' }));
-    expect(screen.getByLabelText(/^Size per market/)).toHaveValue('60000');
-    await waitFor(() => expect(sizes).toContain(60_000));
+    // The button says why, disabled, as the Boros app does; the box under
+    // the estimate keeps only the size that fills.
+    expect(await screen.findByRole('button', { name: 'Insufficient liquidity' })).toBeDisabled();
+    expect(screen.getByText('Max fillable size:')).toBeInTheDocument();
+    expect(screen.queryByText(/not enough liquidity to fill this size whole/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/would be left unhedged/)).not.toBeInTheDocument();
+    // Rounded DOWN, never up past what fills.
+    await user.click(screen.getByRole('button', { name: '60,120 USDT' }));
+    expect(screen.getByLabelText(/^Size per market/)).toHaveValue('60120');
+    await waitFor(() => expect(sizes).toContain(60_120));
   });
 
   it('renders ETH-collateral sizes at real precision, never rounded to 0', async () => {
@@ -684,9 +705,8 @@ describe('BorosPairTicket', () => {
     await fillTicket(user);
 
     await screen.findByText('Est. spread after settlement fees');
-    // The COMBINED margin survives at ETH scale. The per-leg margins are no
-    // longer shown — only the combined figure has to clear the account — so
-    // the total is what this now pins.
+    // The COMBINED margin survives at ETH scale; the per-leg margins are its
+    // hover.
     expect(screen.getByText(/0\.00073/)).toBeInTheDocument();
     // The position lines keep their MAGNITUDE at this scale — direction is
     // carried by colour now, so the sign is gone but "0.01" must not round
@@ -1824,7 +1844,7 @@ describe('BorosPairTicket — spread ticket', () => {
 
     expect(await screen.findByText('Liquidation APR')).toBeInTheDocument();
     expect(screen.queryByText(/ liquidation APR$/)).not.toBeInTheDocument();
-    expect(screen.getByText('Margin')).toBeInTheDocument();
+    expect(screen.getByText('Margin usage')).toBeInTheDocument();
     expect(screen.getByText('Trade fee')).toBeInTheDocument();
     expect(screen.getByText('Est. spread after settlement fees')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
@@ -2047,7 +2067,9 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     expect(tradeOn()).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /^Max\s*0\.05 ETH/ })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('slider', { name: 'Share of max size' }).getAttribute('title')).toMatch(/^Max 0\.05 ETH/),
+    );
   });
 
   it('a 3.64 spread with one 0.36 Gate single held: Reduce-only stays on the spread, max 3.64', async () => {
@@ -2057,7 +2079,9 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     expect(tradeOn()).toBeInTheDocument();
-    expect(await screen.findByRole('button', { name: /^Max\s*3\.64 ETH/ })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('slider', { name: 'Share of max size' }).getAttribute('title')).toMatch(/^Max 3\.64 ETH/),
+    );
   });
 
   it('a close with one single held and an empty spread goes to the singles', async () => {

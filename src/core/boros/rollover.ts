@@ -34,7 +34,7 @@ import type {
   BorosRollSimulation,
   PlaceOrdersOptions,
 } from './orders';
-import { fmtSize, reducingOrderSize } from './pair';
+import { borosSuggestedTopUp, fmtSize, reducingOrderSize } from './pair';
 import type { BlockerCode, BorosLegDirection, BorosPairLegInput, BorosPairSimulation, PairGate, SimulatedLeg } from './pair';
 import { normalizeVenue } from './venue';
 
@@ -106,6 +106,9 @@ export interface RollMargin {
    * that is negative; on a batch the venue refused for margin without an
    * after-state, `need − availableAfterExit`; else 0; 0 when unknown. */
   shortfall: number;
+  /** Deposit that puts the new legs at the suggested liquidation rate after
+   * the margin left free (borosSuggestedTopUp); null without an after. */
+  suggestedTopUp: number | null;
 }
 
 export interface RollGate {
@@ -452,6 +455,10 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     availableAfter: venue?.availableAfter ?? null,
     availableAfterExit: venue?.availableAfterExit ?? null,
     shortfall: shortfall(),
+    suggestedTopUp: borosSuggestedTopUp(
+      newLegs.map((l) => l.sim),
+      venue?.availableAfter ?? null,
+    ),
   };
   // Account-level notices (gas) come from both steps' gates; say them once.
   return { blockers, warnings: [...new Set(warnings)], margin };

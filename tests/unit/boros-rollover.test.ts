@@ -131,7 +131,7 @@ describe('evaluateRollGate', () => {
     const g = evaluateRollGate({ ...rollInput(), venue: venueOk() });
     expect(g.blockers).toEqual([]);
     expect(g.warnings).toEqual([]);
-    expect(g.margin).toEqual({ need: 700, availableBefore: 5_000, availableAfter: 4_100, availableAfterExit: 5_300, shortfall: 0 });
+    expect(g.margin).toEqual({ need: 700, availableBefore: 5_000, availableAfter: 4_100, availableAfterExit: 5_300, shortfall: 0, suggestedTopUp: 0 });
   });
 
   it('keeps every exit blocker, drops the entry margin blockers, and prefixes both', () => {
@@ -154,7 +154,7 @@ describe('evaluateRollGate', () => {
   it('blocks when the venue could not preview the batch — nothing else can vouch for it', () => {
     const g = evaluateRollGate({ ...rollInput(), venue: null });
     expect(g.blockers.map((b) => b.code)).toEqual(['roll-unpriced']);
-    expect(g.margin).toEqual({ need: null, availableBefore: null, availableAfter: null, availableAfterExit: null, shortfall: 0 });
+    expect(g.margin).toEqual({ need: null, availableBefore: null, availableAfter: null, availableAfterExit: null, shortfall: 0, suggestedTopUp: null });
   });
 
   it('a new market whose book has no price on the open side: its own blocker says why, not "waiting for a quote"', () => {
@@ -396,7 +396,7 @@ describe('evaluateRollGate', () => {
     });
     const g = evaluateRollGate({ ...rollInput(), venue });
     expect(g.blockers[0].message).toBe('The venue refuses this roll:\n• Not enough margin.\nFix: Add margin or roll a smaller size.');
-    expect(g.margin).toEqual({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700, shortfall: 300 });
+    expect(g.margin).toEqual({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700, shortfall: 300, suggestedTopUp: null });
   });
 
   it('has no shortfall figure for a refusal that is not about margin, or from a venue that reports no exit state', () => {

@@ -257,12 +257,14 @@ describe('Exclude from the card, by the DoD', () => {
   const legTables = () => screen.getAllByRole('table').filter((t) => within(t).queryByRole('columnheader', { name: 'Initial margin' }));
   const expectLegTable = (table: HTMLElement, menuColumn: boolean) => {
     const heads = within(table).getAllByRole('columnheader');
-    expect(heads).toHaveLength(menuColumn ? 5 : 4);
-    if (menuColumn) expect(heads[4].textContent).toBe('');
+    // A table holding a Boros position carries a Liq. APR column too.
+    const liq = heads.some((h) => h.textContent === 'Liq. APR') ? 1 : 0;
+    expect(heads).toHaveLength((menuColumn ? 5 : 4) + liq);
+    if (menuColumn) expect(heads[4 + liq].textContent).toBe('');
     for (const row of within(table).getAllByRole('row').slice(1)) {
       const cells = row.querySelectorAll('td');
       expect(cells).toHaveLength(heads.length);
-      expect(cells[3].querySelector('[aria-label="More actions"]')).toBeNull();
+      expect(cells[3 + liq].querySelector('[aria-label="More actions"]')).toBeNull();
     }
   };
 
