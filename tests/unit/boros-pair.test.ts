@@ -10,7 +10,9 @@ import { describe, expect, it } from 'vitest';
 import type { BorosMarket, BorosOrderBook } from '../../src/core/boros/client';
 import {
   acknowledgementCopy,
+  borosSuggestedTopUp,
   evaluatePairGate,
+  maxFillableSize,
   pairEligibility,
   resolveLegSizing,
   simulateBorosPair,
@@ -24,6 +26,8 @@ import {
   type BorosPairLegInput,
   type EvaluatePairInput,
   type SimulateBorosPairInput,
+  type SimulatedLeg,
+  type BorosPairSimulation,
 } from '../../src/core/boros/pair';
 import { SECONDS_IN_YEAR } from '../../src/core/boros/venue';
 import { imInputs } from '../helpers/boros-fixtures';
@@ -624,6 +628,35 @@ describe('simulateBorosPair', () => {
     expect(sim.unhedgedSize).toBe(60_000);
   });
 
+  it('blocks a thin book rather than part-filling it, and names the largest size that fills whole', () => {
+    // Orders are fill-or-kill: 40k of a 100k order is no fill at all.
+    const thin = book(155, 0.09, 0.092, 40_000);
+    const sim = simulateBorosPair(simInput({ legA: leg({ book: thin }) }));
+    const g = evaluatePairGate(gateInput({ simulation: sim }));
+    const blocker = g.blockers.find((b) => b.code === 'insufficient-depth');
+    expect(blocker).toMatchObject({ leg: 0, maxSize: 40_000 });
+    expect(blocker!.message).toBe(`${sim.legs[0].marketName}: not enough liquidity to fill this size whole.`);
+    expect(sim.reasons.join(' ')).not.toMatch(/fill short/);
+  });
+
+  it('states the largest size in the ticket\'s terms: a target adds the fit to what is held', () => {
+    const sim = simulateBorosPair(simInput()) as BorosPairSimulation;
+    const withFit = (fitA: number, fitB: number, intent: BorosPairSimulation['intent'], cur = 0): BorosPairSimulation => ({
+      ...sim,
+      intent,
+      legs: sim.legs.map((l, i) => ({
+        ...l,
+        sizeWithinTolerance: i === 0 ? fitA : fitB,
+        sizing: { ...l.sizing, currentSize: i === 0 ? -cur : cur, deltaSize: i === 0 ? -1 : 1 },
+      })),
+    });
+    // The tighter leg wins: the pair is one size.
+    expect(maxFillableSize(withFit(30, 50, 'open'))).toBe(30);
+    // A target of 100 on 20 held: 30 more fills, so 50 is the most to aim for.
+    expect(maxFillableSize(withFit(30, 50, 'target', 20))).toBe(50);
+    expect(maxFillableSize({ ...withFit(30, 50, 'open'), legs: [{ ...sim.legs[0], sizeWithinTolerance: null }] })).toBeNull();
+  });
+
   it('refuses to quote a spread when the legs do not offset', () => {
     const sim = simulateBorosPair(
       simInput({ legB: leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'short' }) }),
@@ -688,6 +721,54 @@ function gateInput(over: GateOver = {}): EvaluatePairInput {
 }
 
 const codes = (g: { blockers: Array<{ code: string }> }) => g.blockers.map((b) => b.code);
+
+describe('borosSuggestedTopUp', () => {
+  const legOf = (marginRequired: number | null, suggestedMargin: number | null) =>
+    ({ marginRequired, suggestedMargin }) as unknown as SimulatedLeg;
+
+  it('needs the LARGEST leg extra, not the sum, less the free margin left', () => {
+    // Extras 3 and 5: one deposit backs both legs of one account.
+    expect(borosSuggestedTopUp([legOf(1, 4), legOf(2, 7)], 1.5)).toBeCloseTo(3.5, 12);
+  });
+
+  it('is 0 when free margin covers it, and treats a short account as having none', () => {
+    expect(borosSuggestedTopUp([legOf(1, 4)], 10)).toBe(0);
+    expect(borosSuggestedTopUp([legOf(1, 4)], -2)).toBe(3);
+  });
+
+  it('is null without a free-margin figure, and ignores a leg with no suggestion', () => {
+    expect(borosSuggestedTopUp([legOf(1, 4)], null)).toBeNull();
+    expect(borosSuggestedTopUp([legOf(1, null)], 0)).toBe(0);
+  });
+});
+
+describe('evaluatePairGate — funding', () => {
+  it('states the cross account before and after: margin less what is already posted, and fees', () => {
+    const sim = simulateBorosPair(simInput());
+    const g = evaluatePairGate(gateInput({ simulation: sim, account: account({ gasBalanceUsd: 100 }) }));
+    const spent = sim.legs.reduce((sum, l) => sum + (l.marginRequired ?? 0) + l.takerFeeCost, 0);
+    expect(g.funding).toHaveLength(1);
+    expect(g.funding[0].marketId).toBeNull();
+    expect(g.funding[0].availableBefore).toBe(1_000_000);
+    expect(g.funding[0].availableAfter).toBeCloseTo(1_000_000 - spent, 6);
+    expect(g.funding[0].suggestedTopUp).toBe(borosSuggestedTopUp(sim.legs, g.funding[0].availableAfter));
+  });
+
+  it('asks for a top-up only past the free margin left after the trade', () => {
+    const sim = simulateBorosPair(simInput());
+    const extra = Math.max(...sim.legs.map((l) => (l.suggestedMargin ?? 0) - (l.marginRequired ?? 0)));
+    const spent = sim.legs.reduce((sum, l) => sum + (l.marginRequired ?? 0) + l.takerFeeCost, 0);
+    expect(extra).toBeGreaterThan(0);
+    const tight = evaluatePairGate(
+      gateInput({ simulation: sim, account: account({ cross: { available: spent, hasPositionOrOrders: false }, gasBalanceUsd: 100 }) }),
+    );
+    expect(tight.funding[0].suggestedTopUp).toBeCloseTo(extra, 6);
+    const roomy = evaluatePairGate(
+      gateInput({ simulation: sim, account: account({ cross: { available: spent + extra, hasPositionOrOrders: false }, gasBalanceUsd: 100 }) }),
+    );
+    expect(roomy.funding[0].suggestedTopUp).toBe(0);
+  });
+});
 
 describe('evaluatePairGate', () => {
   it('unlocks a clean pair', () => {

@@ -18,6 +18,7 @@ import type {
   BorosPairBlocker,
   BorosPairMarketRow,
   BorosPairResult,
+  BorosPairFunding,
   BorosPairSimulation,
   BorosSimulatedLeg,
 } from '../api/types';
@@ -295,19 +296,29 @@ function Row({
   value,
   title,
   dim,
+  weight = 'normal',
 }: {
   label: ReactNode;
   value: ReactNode;
   title?: string;
   /** A breakdown line under the figure it explains — quieter than the total. */
   dim?: boolean;
+  /** How loud the value reads: `strong` for the figures a trader decides on
+   * (margin), `quiet` for the costs beside them (fee), as the Boros app
+   * weighs them. */
+  weight?: 'strong' | 'normal' | 'quiet';
 }) {
+  const tone = dim
+    ? 'text-[12px] text-ink-300'
+    : weight === 'strong'
+      ? 'text-[12.5px] font-semibold text-ink-50'
+      : weight === 'quiet'
+        ? 'text-[12px] text-ink-300'
+        : 'text-[12.5px] text-ink-50';
   return (
     <div className="flex items-baseline justify-between gap-3" title={title}>
       <span className={`shrink-0 ${dim ? 'pl-3 text-[11.5px] text-ink-400' : 'text-[12px] text-ink-200'}`}>{label}</span>
-      <span className={`num truncate text-right ${dim ? 'text-[12px] text-ink-300' : 'text-[12.5px] text-ink-50'}`}>
-        {value}
-      </span>
+      <span className={`num truncate text-right ${tone}`}>{value}</span>
     </div>
   );
 }
@@ -349,22 +360,21 @@ export function SpreadReadout({
   sim,
   singleLeg,
   between,
-  compact = false,
+  boxed = false,
 }: {
   sim: BorosPairSimulation;
   /** The one leg that trades, when only one does — the readout is then that
    * leg's rate, whichever slot it sits in. */
   singleLeg?: SoloLeg;
-  /** Rendered directly under the headline, before the per-leg rates — the
-   * ticket puts its slippage line here. */
+  /** Rendered directly under the headline. */
   between?: ReactNode;
-  /** Headline and `between` only: the per-venue liquidation rows are left
-   * to the caller (a roll's review keeps them behind "Details"). */
-  compact?: boolean;
+  /** The headline in its own tinted box, label over figure, as the Boros
+   * app sets its summary apart from the figures under it. Off where a hero
+   * above already states the rate (a roll's "You lock"). */
+  boxed?: boolean;
 }) {
   const { t } = useTranslation();
   const solo = soloOf(sim, singleLeg);
-  const lone = loneOf(sim, singleLeg);
   const headline = solo ? solo.execApr : sim.estSpreadApr;
   const negative = headline !== null && headline < 0;
   const legs: Array<[string, BorosSimulatedLeg]> = solo
@@ -372,19 +382,24 @@ export function SpreadReadout({
     // The venue alone names a leg: both share the coin and maturity, and
     // the side chip beside it says which way it faces.
     : sim.legs.map((leg) => [leg.venue, leg]);
-  const liqTitle = t('pairTicket.borosBits.liqTitle');
   return (
     <div className="flex flex-col gap-1.5">
       {/* One leg has no spread to report: the headline becomes the rate that
           leg locks, which is the same question ("what do I get?") answered for
           a trade that has only one side. Net of fees either way; a negative
           figure turns rose so a trade that loses money says so. */}
-      <div className="flex items-baseline justify-between gap-3">
+      <div
+        className={
+          boxed
+            ? 'flex flex-col gap-1 rounded-lg border border-ink-700/80 bg-ink-800/50 px-3 py-2.5'
+            : 'flex items-baseline justify-between gap-3'
+        }
+      >
         {/* The two execution rates the spread is the difference of ride on
             HOVER: the spread is the figure, its parts are detail (his call
             2026-09-18). */}
         <span
-          className={legs.length > 0 ? 'cursor-help text-[12.5px] text-ink-50' : 'text-[12.5px] text-ink-50'}
+          className={`${legs.length > 0 ? 'cursor-help ' : ''}${boxed ? 'self-start text-[12px] text-ink-300' : 'text-[12.5px] text-ink-50'}`}
           title={
             legs.length > 0
               ? t('pairTicket.borosBits.spreadHint', {
@@ -396,43 +411,45 @@ export function SpreadReadout({
           {solo ? t('pairTicket.borosBits.estimatedRate') : t('pairTicket.borosBits.estimatedSpread')}
           {legs.length > 0 && <span className="ml-1 text-ink-400">ⓘ</span>}
         </span>
-        <span className={`num text-lg font-semibold ${negative ? 'text-rose-300' : 'text-emerald-400'}`}>
+        <span
+          className={`num font-semibold ${boxed ? 'text-[22px] leading-none tracking-[-0.02em]' : 'text-lg'} ${negative ? 'text-rose-300' : 'text-emerald-400'}`}
+        >
           {pct(headline)}
         </span>
       </div>
-      {lone && (solo || !compact) && (
-        <Row
-          label={t('pairTicket.borosBits.liquidationApr')}
-          title={liqTitle}
-          value={<LiqValue leg={lone} />}
-        />
-      )}
       {between}
-      {/* The two rates the spread is the difference OF, in the same box as
-          the difference itself — they were a separate table, which made the
-          reader hold one block in their head while reading another. Each
-          carries the rate at which it would be liquidated on its own. */}
-      {!lone && !compact && <LiquidationRows sim={sim} />}
     </div>
   );
 }
 
-
 /** A leg's liquidation rate. "N/A", as the Boros app shows it, when the leg
  * still holds a position but no rate is in range; "—" when it ends flat or
  * has no rate. */
-function LiqValue({ leg, className = '', tone = '' }: { leg: BorosSimulatedLeg; className?: string; tone?: string }) {
+function LiqValue({
+  leg,
+  className = '',
+  tone = '',
+  warn = true,
+}: {
+  leg: BorosSimulatedLeg;
+  className?: string;
+  tone?: string;
+  /** False when the account's free margin already carries the leg to the
+   * suggested rate: the figure here assumes only the required margin. */
+  warn?: boolean;
+}) {
   const { t } = useTranslation();
   if (leg.liquidationApr == null && leg.execApr !== null && leg.sizing.resultingSize !== 0) {
     return <span className={`${className} text-ink-500`} title={t('pairTicket.borosBits.liqNaHint')}>{t('pairTicket.borosBits.na')}</span>;
   }
-  // The suggested rate shows only when the position would liquidate closer
-  // to the mark than it: above it for a long, below it for a short.
+  // Amber, with the suggested rate in the hover, only when the position
+  // would liquidate closer to the mark than it (above it for a long, below
+  // it for a short) and the account's free margin does not cover the gap.
   const long = leg.sizing.resultingSize > 0;
   const suggested = leg.liquidationApr == null ? null : leg.suggestedLiquidationApr;
   const short =
     suggested != null && leg.liquidationApr != null && (long ? leg.liquidationApr > suggested : leg.liquidationApr < suggested);
-  if (suggested == null || !short) {
+  if (suggested == null || !short || !warn) {
     return (
       <span className={`${className} ${leg.liquidationApr == null ? 'text-ink-500' : tone}`}>
         {pct(leg.liquidationApr)}
@@ -441,29 +458,42 @@ function LiqValue({ leg, className = '', tone = '' }: { leg: BorosSimulatedLeg; 
   }
   const bound = `${long ? '≤' : '≥'} ${pct(suggested)}`;
   return (
-    <span className={`${className} cursor-help`} title={t('pairTicket.borosBits.suggestedLiqTitle', { suggested: bound })}>
-      <span className="text-amber-300">{pct(leg.liquidationApr)}</span>
-      <span className="text-ink-500"> · {t('pairTicket.borosBits.suggestedLiq', { bound })}</span>
+    <span className={`${className} cursor-help text-amber-300`} title={t('pairTicket.borosBits.suggestedLiqTitle', { suggested: bound })}>
+      {pct(leg.liquidationApr)}
     </span>
   );
 }
 
-/** One row per venue: two liquidation rates crammed onto a single line read
- * as one fact about the pair, when they are two independent points — Boros
- * liquidates per market (his call 2026-09-18). */
-export function LiquidationRows({ sim }: { sim: BorosPairSimulation }) {
+/** Where the trade's legs liquidate: one "Liquidation APR" line for a
+ * one-leg trade, else one line per venue — two rates on a single line read as
+ * one fact about the pair, when Boros liquidates per market (his call
+ * 2026-09-18). `warn` says which legs still need a top-up to reach the
+ * suggested rate. */
+export function LiquidationLines({
+  sim,
+  singleLeg,
+  warn = () => true,
+}: {
+  sim: BorosPairSimulation;
+  singleLeg?: SoloLeg;
+  warn?: (leg: BorosSimulatedLeg) => boolean;
+}) {
   const { t } = useTranslation();
+  const lone = loneOf(sim, singleLeg);
+  const legs: Array<[string, BorosSimulatedLeg]> = lone
+    ? [[t('pairTicket.borosBits.liquidationApr'), lone]]
+    : sim.legs.map((leg) => [t('pairTicket.borosBits.venueLiquidationApr', { venue: leg.venue }), leg]);
   return (
-    <div className="mt-1 flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-      {sim.legs.map((leg) => [leg.venue, leg] as const).map(([label, leg], i) => (
-        <div key={`${label}-${i}`} className="flex items-baseline justify-between gap-3">
+    <>
+      {legs.map(([label, leg], i) => (
+        <div key={`${leg.marketId}-${i}`} className="flex items-baseline justify-between gap-3">
           <span className="min-w-0 truncate text-[12px] text-ink-200" title={t('pairTicket.borosBits.liqTitle')}>
-            {t('pairTicket.borosBits.venueLiquidationApr', { venue: label })}
+            {label}
           </span>
-          <LiqValue leg={leg} className="num shrink-0 text-[12.5px]" tone="text-ink-50" />
+          <LiqValue leg={leg} className="num shrink-0 text-[12.5px] font-semibold" tone="text-ink-50" warn={warn(leg)} />
         </div>
       ))}
-    </div>
+    </>
   );
 }
 
@@ -482,8 +512,13 @@ export function PositionArithmetic({
   singleLeg,
   spreadVenues,
   base,
+  inline = false,
 }: {
   sim: BorosPairSimulation;
+  /** One "Position  0 → 1,036 ETH" line per market, no heading or venue
+   * icons, for under the size field — as the Boros app states it beside
+   * its own size (his call 2026-11-06). */
+  inline?: boolean;
   /** The coin a spread leg is named for; the collateral when not given. */
   base?: string;
   singleLeg?: SoloLeg;
@@ -504,36 +539,46 @@ export function PositionArithmetic({
   const mag = (n: number) => `${sigGrouped(Math.abs(n))} ${sim.collateral}`;
   const sideOf = (leg: BorosSimulatedLeg): BorosLegDirection =>
     leg.sizing.resultingSize > 0 ? 'long' : leg.sizing.resultingSize < 0 ? 'short' : leg.direction;
+  const figure = (leg: BorosSimulatedLeg) => {
+    const side = sideOf(leg);
+    const flat = leg.sizing.resultingSize === 0;
+    return (
+      <span className="num shrink-0 text-[12px] text-ink-400" title={t('pairTicket.borosBits.positionAfterHint')}>
+        {mag(leg.sizing.currentSize)}
+        <span className="mx-1 text-ink-600">→</span>
+        <span className={`font-semibold ${flat ? 'text-ink-100' : side === 'long' ? 'text-emerald-300' : 'text-rose-300'}`}>
+          {mag(leg.sizing.resultingSize)}
+        </span>
+      </span>
+    );
+  };
+  if (inline) {
+    return (
+      <div className="flex flex-col gap-1">
+        {legs.map((leg) => (
+          <div key={leg.marketId} className="flex items-baseline justify-between gap-3">
+            <span className="text-[11.5px] text-ink-200">
+              {legs.length > 1 ? t('pairTicket.borosBits.positionOf', { venue: leg.venue }) : t('pairTicket.borosBits.position')}
+            </span>
+            {figure(leg)}
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
       <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">{t('pairTicket.borosBits.positionAfter')}</span>
-      {legs.map((leg) => {
-        const side = sideOf(leg);
-        const flat = leg.sizing.resultingSize === 0;
-        return (
-          <div key={leg.marketId} className="flex items-baseline justify-between gap-3">
-            {/* Venue only: the colour of the figure carries the side. */}
-            <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-200">
-              {spread ? <SpreadIcon venues={spread} /> : <VenueIcon venue={leg.venue} size={16} />}
-              {spread ? <SpreadName base={base ?? sim.collateral} venues={spread} /> : <span className="truncate">{leg.venue}</span>}
-            </span>
-            <span
-              className="num shrink-0 text-[12px] text-ink-400"
-              title={t('pairTicket.borosBits.positionAfterHint')}
-            >
-              {mag(leg.sizing.currentSize)}
-              <span className="mx-1 text-ink-600">→</span>
-              <span
-                className={`font-semibold ${
-                  flat ? 'text-ink-100' : side === 'long' ? 'text-emerald-300' : 'text-rose-300'
-                }`}
-              >
-                {mag(leg.sizing.resultingSize)}
-              </span>
-            </span>
-          </div>
-        );
-      })}
+      {legs.map((leg) => (
+        <div key={leg.marketId} className="flex items-baseline justify-between gap-3">
+          {/* Venue only: the colour of the figure carries the side. */}
+          <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-200">
+            {spread ? <SpreadIcon venues={spread} /> : <VenueIcon venue={leg.venue} size={16} />}
+            {spread ? <SpreadName base={base ?? sim.collateral} venues={spread} /> : <span className="truncate">{leg.venue}</span>}
+          </span>
+          {figure(leg)}
+        </div>
+      ))}
     </div>
   );
 }
@@ -547,65 +592,228 @@ export function PairCosts({
    * (his call 2026-09-18).
    */
   freeing = false,
-  compact = false,
+  afterMargin,
 }: {
   sim: BorosPairSimulation;
   /** Only leg A is real; leg B is a borrowed partner sized to zero. */
   singleLeg?: SoloLeg;
   freeing?: boolean;
-  /** Total and fee only — no per-bucket breakdown. */
-  compact?: boolean;
+  /** Rendered between the margin and the fee: the suggested top-up reads as
+   * part of the margin (his call 2026-11-07). */
+  afterMargin?: ReactNode;
 }) {
   const oneLeg = loneOf(sim, singleLeg) !== null;
   const { t } = useTranslation();
+  const fee = `${size(sim.costToCrossSize)} ${sim.collateral}`;
+  if (freeing) {
+    return (
+      <div className="flex flex-col gap-1.5">
+        <Row
+          label={t('pairTicket.borosBits.marginFreed')}
+          title={t('pairTicket.borosBits.marginFreedHint')}
+          value={<CollateralAmount n={sim.marginReleasedTotal ?? null} sim={sim} />}
+        />
+        <Row
+          label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
+          title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
+          value={fee}
+        />
+      </div>
+    );
+  }
+  // Margin leads, the fee sits under it quieter (his call 2026-11-06, after
+  // the Boros app); which leg posts what is the margin's hover.
+  const required = sim.marginRequiredTotal;
   return (
-    <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-      {/* The total LEADS and the legs hang off it as a breakdown: what the
-          trade ties up is the figure being read, and which bucket carries
-          which share is the detail behind it. Summed, never netted — a long
-          and a short on different markets do not offset each other's
-          margin. */}
+    <div className="flex flex-col gap-1.5">
       <Row
-        label={freeing ? t('pairTicket.borosBits.marginFreed') : soloOf(sim, singleLeg) ? t('pairTicket.bits.marginRequired') : oneLeg ? t('common.margin') : t('pairTicket.borosBits.totalMargin')}
-        title={
-          freeing
-            ? t('pairTicket.borosBits.marginFreedHint')
-            : oneLeg
-              ? t('pairTicket.borosBits.marginLegHint')
-              : t('pairTicket.borosBits.totalMarginHint')
-        }
-        value={<CollateralAmount n={freeing ? (sim.marginReleasedTotal ?? null) : sim.marginRequiredTotal} sim={sim} />}
-      />
-      {!oneLeg && !freeing && !compact &&
-        sim.legs.map((leg, i) => (
-          <Row
-            key={`${leg.marketId}-${i}`}
-            label={leg.venue}
-            title={t('pairTicket.borosBits.bucketMarginHint')}
-            value={<CollateralAmount n={leg.marginRequired} sim={sim} bare />}
-            dim
-          />
-        ))}
-      <Row
-        // "Cost to cross" named the ACTION (crossing the spread) rather than
-        // the charge, which reads as jargon to anyone who has not met it.
-        label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
+        label={t('pairTicket.borosBits.marginUsage')}
         title={
           oneLeg
-            ? t('pairTicket.borosBits.tradeFeeHint')
-            : t('pairTicket.borosBits.tradeFeeLegsHint')
+            ? t('pairTicket.borosBits.marginLegHint')
+            : [
+                t('pairTicket.borosBits.totalMarginHint'),
+                ...sim.legs.map(
+                  (leg) => `${leg.venue} ${leg.marginRequired === null ? '—' : `${size(leg.marginRequired)} ${sim.collateral}`}`,
+                ),
+              ].join('\n')
         }
-        value={`${size(sim.costToCrossSize)} ${sim.collateral}`}
+        value={<CollateralAmount n={required} sim={sim} />}
+        weight="strong"
+      />
+      {afterMargin}
+      <Row
+        label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
+        title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
+        value={fee}
+        weight="quiet"
       />
     </div>
   );
 }
+
+/**
+ * Free margin in each account the trade draws on, before → after it — the
+ * line the Boros app sets above its size as "Available to Trade". `name`
+ * labels an account when the trade draws on more than one. Before a quote,
+ * `fallback` is the free margin alone.
+ */
+export function AvailableMarginLines({
+  sim,
+  funding,
+  nameOf,
+  fallback,
+  unit,
+}: {
+  sim: BorosPairSimulation | null;
+  funding: BorosPairFunding[] | undefined;
+  nameOf: (marketId: number | null) => string;
+  fallback: number | null;
+  unit: string;
+}) {
+  const { t } = useTranslation();
+  const lines: Array<{ key: string; label: string; before: number; after: number | null }> =
+    sim && funding && funding.length > 0
+      ? funding.map((f) => ({
+          key: String(f.marketId ?? 'cross'),
+          label:
+            funding.length > 1
+              ? t('pairTicket.borosBits.availableMarginOf', { account: nameOf(f.marketId) })
+              : t('pairTicket.borosBits.availableMargin'),
+          before: f.availableBefore,
+          after: f.availableAfter,
+        }))
+      : fallback !== null
+        ? [{ key: 'cross', label: t('pairTicket.borosBits.availableMargin'), before: fallback, after: null }]
+        : [];
+  return (
+    <>
+      {lines.map((l) => (
+        <div key={l.key} className="flex items-baseline justify-between gap-3" title={t('pairTicket.borosBits.availableMarginHint')}>
+          <span className="text-[11.5px] text-ink-200">{l.label}</span>
+          <span className="num text-[12px] text-ink-400">
+            {size(l.before)}
+            {l.after !== null && (
+              <>
+                <span className="mx-1 text-ink-600">→</span>
+                <span className={`font-semibold ${l.after < 0 ? 'text-rose-300' : 'text-ink-50'}`}>{size(l.after)}</span>
+              </>
+            )}{' '}
+            {unit}
+          </span>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** The deposit each account still needs for the suggested liquidation rate,
+ * once the free margin left after the trade is counted; nothing when that
+ * margin covers it. */
+export function SuggestedTopUpLines({
+  sim,
+  funding,
+  nameOf,
+}: {
+  sim: BorosPairSimulation;
+  funding: BorosPairFunding[];
+  nameOf: (marketId: number | null) => string;
+}) {
+  const { t } = useTranslation();
+  const many = funding.length > 1;
+  return (
+    <>
+      {funding
+        .filter((f) => f.suggestedTopUp !== null && f.suggestedTopUp > 0)
+        .map((f) => (
+          <div
+            key={f.marketId ?? 'cross'}
+            className="flex items-baseline justify-between gap-3"
+            title={t('pairTicket.borosBits.suggestedTopUpHint')}
+          >
+            <span className="shrink-0 cursor-help text-[12px] text-amber-300">
+              {many ? `${t('pairTicket.borosBits.suggestedTopUp')} · ${nameOf(f.marketId)}` : t('pairTicket.borosBits.suggestedTopUp')}
+            </span>
+            <span className="num truncate text-right text-[12.5px] font-semibold text-amber-300">
+              +<CollateralAmount n={f.suggestedTopUp} sim={sim} />
+            </span>
+          </div>
+        ))}
+    </>
+  );
+}
+
 /** Confirm blockers, each with its own remediation where one exists (§6). */
-export function BlockerList({ blockers }: { blockers: BorosPairBlocker[] }) {
+/** Rounded DOWN to four significant figures: a size offered as "fills
+ * whole" must never round up past what does. */
+const floorSig = (n: number): number => {
+  if (!(n > 0)) return 0;
+  const step = 10 ** (Math.floor(Math.log10(n)) - 3);
+  return Math.floor(n / step + 1e-9) * step;
+};
+
+/**
+ * The short reason a blocked ticket's button says instead of Confirm, as the
+ * Boros app does ("Insufficient liquidity"); null when no blocker has one,
+ * so the button stays as it was. Most specific first.
+ */
+const BUTTON_REASONS: Array<[string[], () => string]> = [
+  [['insufficient-depth', 'no-depth'], () => t('pairTicket.borosBits.reason.liquidity')],
+  [['rate-bound-out-of-range'], () => t('pairTicket.borosBits.reason.rateOutOfRange')],
+  [['slippage-exceeds-max'], () => t('pairTicket.borosBits.reason.slippage')],
+  [['cross-short-margin', 'isolated-short-margin'], () => t('pairTicket.borosBits.reason.margin')],
+  [['below-min-order-value'], () => t('pairTicket.borosBits.reason.tooSmall')],
+];
+
+export function blockerButtonReason(blockers: BorosPairBlocker[]): string | null {
+  for (const [codes, label] of BUTTON_REASONS) {
+    if (blockers.some((b) => codes.includes(b.code))) return label();
+  }
+  return null;
+}
+
+export function BlockerList({
+  blockers,
+  onUseSize,
+  unit = '',
+}: {
+  blockers: BorosPairBlocker[];
+  /** Sizes the ticket to a blocker's `maxSize`. Orders are fill-or-kill, so a
+   * size that cannot fill whole is refused. With it, every such blocker folds
+   * into ONE line naming the largest size that fills — the button already
+   * says why (his call 2026-11-07). */
+  onUseSize?: (size: number) => void;
+  unit?: string;
+}) {
+  const { t } = useTranslation();
+  const fold = (b: BorosPairBlocker) => onUseSize !== undefined && b.maxSize !== undefined;
+  const fillable = blockers.filter(fold);
+  const rest = blockers.filter((b) => !fold(b));
   if (blockers.length === 0) return null;
+  // The pair is one size, so every leg's blocker carries the same figure.
+  const max = fillable.length > 0 ? floorSig(Math.min(...fillable.map((b) => b.maxSize ?? 0))) : null;
   return (
     <ul className="flex flex-col gap-1.5">
-      {blockers.map((b, i) => (
+      {max !== null && onUseSize && (
+        <li className="rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200">
+          {max > 0 ? (
+            <>
+              {t('pairTicket.borosBits.maxFillable')}{' '}
+              <button
+                type="button"
+                className="num font-medium text-rose-100 underline underline-offset-2 hover:text-ink-50"
+                title={t('pairTicket.borosBits.useMaxSizeTitle')}
+                onClick={() => onUseSize(max)}
+              >
+                {sigGrouped(max)} {unit}
+              </button>
+            </>
+          ) : (
+            t('pairTicket.borosBits.nothingFills')
+          )}
+        </li>
+      )}
+      {rest.map((b, i) => (
         <li
           key={`${b.code}-${b.leg ?? ''}-${i}`}
           // pre-line: a roll's refusal carries one line per rejected leg.
@@ -639,6 +847,9 @@ export function BlockerList({ blockers }: { blockers: BorosPairBlocker[] }) {
   );
 }
 
+/** A pair whose legs the books fill to different sizes. Orders are now
+ * fill-or-kill and the gate blocks such a size, so the ticket no longer
+ * shows this; kept for a result report's own use. */
 export function UnevenFillWarning({ sim, onUse }: { sim: BorosPairSimulation; onUse?: (size: number) => void }) {
   const { t } = useTranslation();
   if (sim.legs.length !== 2 || !(sim.hedgedSize > 0) || !(sim.unhedgedSize > 0)) return null;

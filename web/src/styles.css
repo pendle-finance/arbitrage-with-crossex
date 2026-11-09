@@ -112,6 +112,26 @@
     accent-color: theme('colors.info.DEFAULT');
   }
 
+  /* The share slider: a native range (keyboard + screen reader for free)
+     with a bare track, so the drawn track, fill and checkpoint dots under it
+     (ShareSlider) show through. The thumb is 14px; the dots are placed on
+     the same 7px-inset travel. */
+  .share-range {
+    @apply relative z-[1] h-4 w-full cursor-pointer appearance-none bg-transparent;
+  }
+  .share-range::-webkit-slider-runnable-track {
+    @apply h-1 bg-transparent;
+  }
+  .share-range::-moz-range-track {
+    @apply h-1 bg-transparent;
+  }
+  .share-range::-webkit-slider-thumb {
+    @apply -mt-[5px] h-3.5 w-3.5 appearance-none rounded-full border-2 border-info bg-ink-50;
+  }
+  .share-range::-moz-range-thumb {
+    @apply h-2.5 w-2.5 rounded-full border-2 border-info bg-ink-50;
+  }
+
   /* PpCard. The mock's card is a hairline over a *translucent white* fill
      (water/5), not an opaque panel — so cards nest without each level going
      darker. A surface that must NOT let the page through (a popover, a menu)

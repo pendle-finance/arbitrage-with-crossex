@@ -154,8 +154,7 @@
     "selectMarket": "选择市场",
     "liqTitle": "仅靠所需保证金时，此仓位被清算的标记利率。更多抵押品会让清算 APR离当前利率更远。",
     "liqNaHint": "仓位风险较低，暂时没有清算 APR。",
-    "suggestedLiq": "建议 {{bound}}",
-    "suggestedLiqTitle": "建议：清算 APR 在 {{suggested}}，距当前利率 5% APR。向 Boros 存入更多抵押品即可达到。永续合约的收益留在 CrossEx，而 Boros 的支付从 Boros 保证金扣除，请在这里保留缓冲。",
+    "suggestedLiqTitle": "建议清算 APR：{{suggested}}。按建议追加即可达到。",
     "na": "N/A",
     "spreadHint": "已扣除结算手续费。此规模下的成交利率：\n{{rates}}",
     "estimatedRate": "预估利率",
@@ -189,7 +188,26 @@
     "leaveIt": "保持现状",
     "ackFlip": "我了解：这会平掉我现有的 {{market}} {{side}}仓位 {{held}} {{unit}} 并实现其盈亏，然后反向开仓 {{opened}} {{unit}}。",
     "ackClose": "我了解：这会全部平掉我现有的 {{market}} {{side}}仓位 {{held}} {{unit}}，并实现其盈亏。",
-    "ackReduce": "我了解：这会把我现有的 {{market}} {{side}}仓位从 {{held}} {{unit}} 减至 {{to}} {{unit}}，并实现部分盈亏。"
+    "ackReduce": "我了解：这会把我现有的 {{market}} {{side}}仓位从 {{held}} {{unit}} 减至 {{to}} {{unit}}，并实现部分盈亏。",
+    "availableMargin": "可用保证金",
+    "availableMarginOf": "可用保证金 · {{account}}",
+    "availableMarginHint": "该 Boros 账户的可用保证金，交易前 → 交易后。",
+    "suggestedTopUp": "建议追加金额",
+    "suggestedTopUpHint": "向 Boros 存入该金额，使仓位的清算 APR 不低于建议水平。已计入交易后剩余的可用保证金。",
+    "crossAccount": "全仓",
+    "position": "仓位",
+    "positionOf": "仓位 · {{venue}}",
+    "reason": {
+      "liquidity": "流动性不足",
+      "rateOutOfRange": "成交利率超出范围",
+      "slippage": "滑点超过上限",
+      "margin": "保证金不足",
+      "tooSmall": "订单金额过小"
+    },
+    "maxFillable": "最大可成交规模：",
+    "useMaxSizeTitle": "将规模设为可完整成交的最大值。",
+    "nothingFills": "在当前滑点下无法完整成交。请提高最大滑点。",
+    "marginUsage": "保证金占用"
   },
   "failure": {
     "label": {
@@ -264,6 +282,7 @@
     "confirmOne": "确认 · 1 笔 Boros 市价单",
     "confirmTwo": "确认 · 2 笔 Boros 市价单",
     "sizePerMarket": "每个市场规模",
-    "sizePerMarketAria": "每个市场规模（{{unit}}）"
+    "sizePerMarketAria": "每个市场规模（{{unit}}）",
+    "shareOfMax": "占最大规模比例"
   }
 }

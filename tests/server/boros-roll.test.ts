@@ -233,7 +233,7 @@ describe('POST /api/boros/roll/simulate', () => {
     expect(previews[0].opens.map((o) => [o.marketId, o.direction])).toEqual([[HL2, 'short'], [BN2, 'long']]);
     // A clean roll — no blockers; the margin is the venue's, not an estimate.
     expect(data.gate.blockers).toEqual([]);
-    expect(data.gate.margin).toEqual({ need: 9_000, availableBefore: 500_000, availableAfter: 480_000, availableAfterExit: 489_000, shortfall: 0 });
+    expect(data.gate.margin).toEqual({ need: 9_000, availableBefore: 500_000, availableAfter: 480_000, availableAfterExit: 489_000, shortfall: 0, suggestedTopUp: 0 });
     expect(data.venue.status).toBe('Succeed');
     // Simulating never sends anything.
     expect(calls).toHaveLength(0);

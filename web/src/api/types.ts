@@ -1135,6 +1135,9 @@ export interface BorosSimulatedLeg {
   liquidationApr?: number | null;
   /** Suggested liquidation rate: 5% APR past the mark. Absent on an older server. */
   suggestedLiquidationApr?: number | null;
+  /** Margin that puts the resulting position's liquidation at the suggested
+   * rate, on its own; never below marginRequired. Absent on an older server. */
+  suggestedMargin?: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
   /** This leg's taker fee at its traded size, collateral units (× the
@@ -1162,6 +1165,8 @@ export interface BorosPairSimulation {
    * SLIPPAGE proper: distance from mid, not unused tolerance. */
   slippageApr?: number | null;
   marginRequiredTotal: number | null;
+  /** Σ of the traded legs' suggestedMargin. Absent on an older server. */
+  suggestedMarginTotal?: number | null;
   /** Σ of the legs' `marginReleased`. Optional only for test fixtures. */
   marginReleasedTotal?: number | null;
   hedgedSize: number;
@@ -1179,6 +1184,9 @@ export interface BorosPairBlocker {
   marketId?: number;
   /** Collateral units still needed — the shortfall, never the total. */
   shortfall?: number;
+  /** A size the book or the bound cannot fill whole: the largest that does,
+   * in the ticket's own terms (orders are fill-or-kill). */
+  maxSize?: number;
 }
 
 export interface BorosPairGate {
@@ -1186,6 +1194,19 @@ export interface BorosPairGate {
   warnings: string[];
   requiresAcknowledgement: boolean;
   opposingLegs: number[];
+  /** Each margin account the traded legs draw on. Absent on older servers. */
+  funding?: BorosPairFunding[];
+}
+
+/** Mirrors src/core/boros/pair.ts PairFunding. Collateral units. */
+export interface BorosPairFunding {
+  /** null for the cross account; the market for an isolated-only leg's own. */
+  marketId: number | null;
+  availableBefore: number;
+  availableAfter: number | null;
+  /** Deposit that puts the account's legs at the suggested liquidation rate;
+   * 0 when the free margin covers it. */
+  suggestedTopUp: number | null;
 }
 
 export interface BorosPairEligibility {
@@ -1374,6 +1395,9 @@ export interface BorosRollMargin {
   /** How far short of the opens' margin the account is (−availableAfter, or
    * need − availableAfterExit on a batch refused for margin); 0 when unknown. */
   shortfall: number;
+  /** Deposit that puts the new legs at the suggested liquidation rate after
+   * the margin left free; null without an after. Absent on older servers. */
+  suggestedTopUp?: number | null;
 }
 
 export interface BorosRollGate {
@@ -1560,6 +1584,11 @@ export interface AssetBorosOpen {
   /** USD of margin that moves the liquidation rate out to the suggested one;
    * 0 when already there. Absent on an older server. */
   toSuggestedUsd?: number | null;
+  /** The same top-up in the collateral token. Absent on an older server. */
+  toSuggestedToken?: number | null;
+  /** The margin account this position draws on; cash added to a cross
+   * account backs every position on it. Absent on an older server. */
+  marginMode?: 'cross' | 'isolated';
   /** Cumulative settlement of the CURRENT position (display only — totals
    * come from borosHistory, which covers the same flows plus closed legs). */
   settleUsd: number;

@@ -488,14 +488,30 @@ export function borosSuggestedLiquidationApr(side: 'long' | 'short', markApr: nu
 }
 
 /**
+ * The availValue a position needs for the contract to liquidate it at rate r.
+ * Every case of borosLiquidationRate solves availValue + size × t × r = MM(r),
+ * so it is MM(r) − size × t × r. Null when the market carries no MM
+ * coefficient, has matured, or is so near maturity that the contract charges
+ * an MM the solve does not cover.
+ */
+function borosAvailNeededAt(m: BorosMarket, size: number, nowSec: number): ((r: number) => number) | null {
+  if (!Number.isFinite(m.kMM) || m.kMM <= 0 || size === 0) return null;
+  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
+  if (!(dtmDays > 0)) return null;
+  const t = dtmDays / DAYS_IN_YEAR;
+  const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
+  if (t < tThresh * m.kMM) return null;
+  const floor = borosAprFloor(m);
+  const mm = Math.abs(size) * m.kMM * Math.max(t, tThresh);
+  return (r) => mm * Math.max(Math.abs(r), floor) - size * t * r;
+}
+
+/**
  * Cash, in collateral units, that moves a HELD position's liquidation rate
- * from `liq` (as the venue reports it) out to `target`. Every case of
- * borosLiquidationRate solves availValue + size × t × r = MM(r), so the
- * availValue a rate needs is MM(r) − size × t × r, and the cash is the
- * difference of the two. Like the venue's own rate, it holds the account's
- * other positions where they are. 0 when `liq` is already past the target;
- * null near maturity, where the contract charges an MM the solve does not
- * cover.
+ * from `liq` (as the venue reports it) out to `target`: the difference of the
+ * availValue each needs (borosAvailNeededAt). Like the venue's own rate, it
+ * holds the account's other positions where they are. 0 when `liq` is already
+ * past the target; null where the solve does not apply.
  */
 export function borosCashToLiquidationRate(
   m: BorosMarket,
@@ -504,16 +520,30 @@ export function borosCashToLiquidationRate(
   target: number,
   nowSec: number,
 ): number | null {
-  if (!Number.isFinite(m.kMM) || m.kMM <= 0 || !Number.isFinite(liq) || !Number.isFinite(target)) return null;
-  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
-  if (!(dtmDays > 0) || size === 0) return null;
-  const t = dtmDays / DAYS_IN_YEAR;
-  const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
-  if (t < tThresh * m.kMM) return null;
-  const floor = borosAprFloor(m);
-  const mm = Math.abs(size) * m.kMM * Math.max(t, tThresh);
-  const needs = (r: number) => mm * Math.max(Math.abs(r), floor) - size * t * r;
-  return Math.max(0, needs(target) - needs(liq));
+  if (!Number.isFinite(liq) || !Number.isFinite(target)) return null;
+  const needs = borosAvailNeededAt(m, size, nowSec);
+  return needs === null ? null : Math.max(0, needs(target) - needs(liq));
+}
+
+/**
+ * Margin, in collateral units, a position opened at `execApr` must have
+ * posted for the contract to liquidate it at `target`, on its own (the same
+ * framing as borosLiquidationApr: the account holds this margin less the
+ * upfront fixed cost, size × execApr × t, and nothing else). Null where the
+ * solve does not apply.
+ */
+export function borosMarginForLiquidationRate(
+  m: BorosMarket,
+  size: number,
+  execApr: number,
+  target: number,
+  nowSec: number,
+): number | null {
+  if (!Number.isFinite(execApr) || !Number.isFinite(target)) return null;
+  const needs = borosAvailNeededAt(m, size, nowSec);
+  if (needs === null) return null;
+  const t = (m.maturity - nowSec) / DAY_SECONDS / DAYS_IN_YEAR;
+  return needs(target) + size * execApr * t;
 }
 
 /**

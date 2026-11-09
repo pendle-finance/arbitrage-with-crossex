@@ -41,11 +41,12 @@ import type {
   BorosPairHedge,
   BorosPairRequest,
   BorosPairResult,
+  BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
-import { AffixedInput, EstimateCard } from './PairTicketBits';
+import { AffixedInput, EstimateCard, ShareSlider } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SpreadIcon } from '../components/AssetIcon';
@@ -60,8 +61,11 @@ import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 import { maxOpenSize } from './borosMaxSize';
 import { FieldLabel, PickChip } from './SymbolCombobox';
 import {
+  AvailableMarginLines,
   BlockerList,
+  blockerButtonReason,
   DirectionToggle,
+  LiquidationLines,
   MarketCard,
   MarketSelect,
   marketLabel,
@@ -70,7 +74,7 @@ import {
   PairResultReport,
   PositionArithmetic,
   SpreadReadout,
-  UnevenFillWarning,
+  SuggestedTopUpLines,
 } from './BorosPairBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -405,6 +409,12 @@ export function BorosPairTicket({
   })();
   /** The collateral behind that size, for the caption's hover. */
   const freeCollateral = availableFor(marketA);
+  /** The typed size as a share of the max, for the slider; capped at 100. */
+  const sizeShare = (() => {
+    const n = Number(sizeStr);
+    if (availableToTrade === null || availableToTrade <= 0 || !Number.isFinite(n) || n <= 0) return 0;
+    return Math.min(100, Math.round((n / availableToTrade) * 100));
+  })();
   /** The tolerance popover — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
   const rowA = marketA !== null ? byId.get(marketA) ?? null : null;
@@ -788,6 +798,18 @@ export function BorosPairTicket({
     return lone.estSlippageApr == null ? null : Math.max(0, lone.estSlippageApr);
   })();
   const gate = sim.data?.gate ?? null;
+  /** The account a leg draws on: an isolated-only leg's own, else cross. */
+  const fundingOf = (leg: BorosSimulatedLeg) =>
+    gate?.funding?.find((f) => f.marketId === leg.marketId) ?? gate?.funding?.find((f) => f.marketId === null);
+  /** A leg's liquidation turns amber only while its account still needs a
+   * top-up; free margin left after the trade may already cover it. Older
+   * servers send no funding, so every short leg warns. */
+  const liqWarn = (leg: BorosSimulatedLeg): boolean => {
+    const f = fundingOf(leg);
+    return f === undefined || f.suggestedTopUp === null || f.suggestedTopUp > 0;
+  };
+  const fundingName = (marketId: number | null): string =>
+    marketId === null ? t('pairTicket.borosBits.crossAccount') : (legName(marketId) ?? '');
 
   // A changed intent is a NEW order — fresh idempotency keys, so a resend of the
   // previous intent can never be mistaken for this one. Slippage is part of the
@@ -886,6 +908,8 @@ export function BorosPairTicket({
   );
   const closeOnlyLeg: number | null = closeOnlyIndex < 0 ? null : closeOnlyIndex;
 
+  /** The short reason a blocked size shows on the button, if any. */
+  const buttonReason = blockerButtonReason(blockers);
   const canConfirm =
     request !== null &&
     simulation !== null &&
@@ -1169,18 +1193,63 @@ export function BorosPairTicket({
       {/* --- Size + intent (§4) -------------------------------------------
           The size box, with what the bucket can fund beside its caption (a
           click sizes to it) and the collateral unit inside the box. What the
-          position becomes is stated once, in the estimate's "Position after". */}
+          position becomes sits right under it, as the Boros app puts it. */}
       <div className="flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <label htmlFor="boros-size" className="text-[11.5px] text-ink-200">
-            {/* "per leg" only means something when there are two. */}
+        {/* What the trade leaves held and what the account keeps free sit
+            above the size, the size box carries its own label, and a slider
+            sizes against the max — as the Boros app lays out its ticket
+            (his call 2026-11-06). */}
+        {simulation && (
+          <PositionArithmetic sim={simulation} singleLeg={activeLeg} spreadVenues={rowA?.spreadVenues} base={rowA?.base} inline />
+        )}
+        <AvailableMarginLines
+          sim={simulation}
+          funding={gate?.funding}
+          nameOf={fundingName}
+          fallback={freeCollateral}
+          unit={simulation?.collateral || rowA?.collateral || ''}
+        />
+        <div className="relative">
+          <label
+            htmlFor="boros-size"
+            className="pointer-events-none absolute inset-y-0 left-3 z-10 flex items-center text-[12px] text-ink-300"
+          >
             {oneMarket ? t('common.size') : t('pairTicket.boros.sizePerMarket')}
           </label>
-          {availableToTrade !== null && (
-            <button
-              type="button"
-              className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-              title={
+          <AffixedInput affix={rowA ? <span>{simulation?.collateral || rowA.collateral || ''}</span> : null}>
+            <input
+              id="boros-size"
+              aria-label={
+                rowA
+                  ? t(oneMarket ? 'pairTicket.boros.sizeAria' : 'pairTicket.boros.sizePerMarketAria', {
+                      unit: simulation?.collateral || rowA.collateral || t('pairTicket.boros.collateralWord'),
+                    })
+                  : oneMarket
+                    ? t('common.size')
+                    : t('pairTicket.boros.sizePerMarket')
+              }
+              className={`input num pl-28 pr-12 text-right ${sizeErr ? '!border-rose-500/60' : ''}`}
+              inputMode="decimal"
+              placeholder="0"
+              aria-invalid={sizeErr ? true : undefined}
+              aria-describedby={sizeErr ? 'boros-size-error' : undefined}
+              value={sizeStr}
+              onChange={(e) => setSizeStr(e.target.value)}
+            />
+          </AffixedInput>
+        </div>
+        {sizeErr && (
+          <p id="boros-size-error" role="alert" className="text-[11px] text-rose-300">
+            {sizeErr}
+          </p>
+        )}
+        {availableToTrade !== null && availableToTrade > 0 && (
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <ShareSlider
+                value={sizeShare}
+                label={t('pairTicket.boros.shareOfMax')}
+                title={`${t('common.max')} ${sigGrouped(availableToTrade)} ${rowA?.collateral ?? ''} — ${
                 intent === 'close'
                   ? t('pairTicket.boros.maxReduceHint')
                   : freeCollateral !== null
@@ -1188,45 +1257,20 @@ export function BorosPairTicket({
                         free: `${sigGrouped(freeCollateral)} ${rowA?.collateral ?? ''}`,
                       })
                     : t(oneMarket ? 'pairTicket.boros.maxOpenHint' : 'pairTicket.boros.maxOpenBothHint')
-              }
-              onClick={() => setSizeStr(fieldValue(availableToTrade))}
-            >
-              {t('common.max')}{' '}
-              <span className="text-link underline decoration-link/40 underline-offset-2">
-                {sigGrouped(availableToTrade)} {rowA?.collateral ?? ''}
-              </span>
-            </button>
-          )}
-        </div>
-        {/* The unit comes off the picked market, not the simulation: there
-            is no simulation until a size is typed, and "(collateral)" is
-            not a unit anyone can size against. The accessible name carries
-            it; the visible caption leaves it to the affix. */}
-        <AffixedInput affix={rowA ? <span>{simulation?.collateral || rowA.collateral || ''}</span> : null}>
-          <input
-            id="boros-size"
-            aria-label={
-              rowA
-                ? t(oneMarket ? 'pairTicket.boros.sizeAria' : 'pairTicket.boros.sizePerMarketAria', {
-                    unit: simulation?.collateral || rowA.collateral || t('pairTicket.boros.collateralWord'),
-                  })
-                : oneMarket
-                  ? t('common.size')
-                  : t('pairTicket.boros.sizePerMarket')
-            }
-            className={`input num pr-16 ${sizeErr ? '!border-rose-500/60' : ''}`}
-            inputMode="decimal"
-            placeholder={oneMarket ? t('common.size') : t('pairTicket.boros.sizePerMarket')}
-            aria-invalid={sizeErr ? true : undefined}
-            aria-describedby={sizeErr ? 'boros-size-error' : undefined}
-            value={sizeStr}
-            onChange={(e) => setSizeStr(e.target.value)}
-          />
-        </AffixedInput>
-        {sizeErr && (
-          <p id="boros-size-error" role="alert" className="text-[11px] text-rose-300">
-            {sizeErr}
-          </p>
+              }`}
+                onChange={(share) =>
+                  setSizeStr(
+                    share >= 100
+                      ? fieldValue(availableToTrade)
+                      : share <= 0
+                        ? ''
+                        : fieldValue(Math.floor(((availableToTrade * share) / 100) * 1e8) / 1e8),
+                  )
+                }
+              />
+            </div>
+            <span className="num w-8 text-right text-[11.5px] text-ink-300">{sizeShare}%</span>
+          </div>
         )}
       </div>
 
@@ -1277,11 +1321,20 @@ export function BorosPairTicket({
           {/* `singleLeg` (not `mode`): a one-leg completion after a half fill
               is single-leg too, and reading it as a pair printed dashes for
               the spread beside an enabled Confirm. */}
-          <SpreadReadout
-            sim={simulation}
-            singleLeg={activeLeg}
-            between={
-              <>
+          {/* In the order a trader reads it (his call 2026-11-06): what the
+              trade locks; where it liquidates; what it takes from the
+              account and what the account keeps, with any suggested top-up;
+              then the slippage. What it leaves held is under the size. */}
+          <SpreadReadout sim={simulation} singleLeg={activeLeg} boxed />
+          {/* One flat list under the box, no section rules: the Boros app's
+              own ticket reads cleaner for it (his call 2026-11-06). */}
+          <div className="flex flex-col gap-1.5">
+            <LiquidationLines sim={simulation} singleLeg={activeLeg} warn={liqWarn} />
+            <PairCosts
+              sim={simulation}
+              singleLeg={activeLeg}
+              afterMargin={gate?.funding && <SuggestedTopUpLines sim={simulation} funding={gate.funding} nameOf={fundingName} />}
+            />
               {/* --- Slippage (§2) ------------------------------------------
                   One line, the way the Boros app states it — what the book is
                   expected to give up, against the bound that caps it. The bound
@@ -1382,12 +1435,7 @@ export function BorosPairTicket({
                   </div>
                 )}
               </div>
-              </>
-            }
-          />
-
-          <PairCosts sim={simulation} singleLeg={activeLeg} />
-          <PositionArithmetic sim={simulation} singleLeg={activeLeg} spreadVenues={rowA?.spreadVenues} base={rowA?.base} />
+          </div>
 
           {simulation.reasons.length ? (
             <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
@@ -1412,10 +1460,13 @@ export function BorosPairTicket({
           {w}
         </p>
       ))}
-      {simulation && !oneMarket && onlyLeg === null && (
-        <UnevenFillWarning sim={simulation} onUse={(size) => setSizeStr(fieldValue(Math.floor(size * 1e8) / 1e8))} />
-      )}
-      <BlockerList blockers={blockers} />
+      {/* Fill-or-kill: a size the book or the bound cannot fill whole is
+          blocked, with the largest that fills one click away. */}
+      <BlockerList
+        blockers={blockers}
+        onUseSize={(size) => setSizeStr(fieldValue(size))}
+        unit={simulation?.collateral || rowA?.collateral || ''}
+      />
 
       {execute.isError && <QueryError title={t('pairTicket.boros.notSent')} error={execute.error} />}
 
@@ -1498,7 +1549,17 @@ export function BorosPairTicket({
               that the footer naming the markets is gone: it is a fact about
               what pressing this does. Acceptance is atomic; a full fill is
               NOT promised, and both halves matter. */}
-          {loginLabel ? (
+          {/* A blocked size says why ON the button, disabled, logged in or
+              not — as the Boros app does; the detail sits above it. */}
+          {buttonReason && !execute.isPending ? (
+            <button
+              type="button"
+              disabled
+              className="inline-flex w-full cursor-not-allowed items-center justify-center rounded-lg border border-ink-700 bg-ink-800 px-4 py-2 text-sm font-semibold text-ink-300"
+            >
+              {buttonReason}
+            </button>
+          ) : loginLabel ? (
             <BorosLogInButton />
           ) : (
           <HoldToConfirmButton

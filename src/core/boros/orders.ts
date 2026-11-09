@@ -357,6 +357,9 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
     try {
       const reqs = submitted.map((x) => x.req);
       const fills = await input.client.placeMarketOrders(reqs, {
+        // Fill-or-kill (his call 2026-11-06): a leg fills whole or the batch
+        // reverts, as the Boros app does; the ticket sizes to what fills.
+        timeInForce: 'fill-or-kill',
         reducing: input.reducing,
         // A close frees margin; a top-up it might need (a negative budget)
         // runs its own strict margin check, so it goes after the closes.

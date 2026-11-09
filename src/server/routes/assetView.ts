@@ -172,6 +172,12 @@ export interface AssetBorosOpenOut {
   /** USD of margin that moves `liquidationApr` out to the suggested rate; 0
    * when it is already there. Null when either rate is unknown. */
   toSuggestedUsd: number | null;
+  /** The same top-up in the collateral token: what the trader deposits. */
+  toSuggestedToken: number | null;
+  /** The margin account this position draws on: the collateral's cross
+   * account, or its own isolated one. Cash added to a cross account backs
+   * every position on it at once. */
+  marginMode: 'cross' | 'isolated';
   /** Cumulative settlement of the CURRENT position, net of settle fees.
    * DISPLAY ONLY — totals come from borosHistory (see the double-count
    * guard in the header). */
@@ -1105,6 +1111,8 @@ export function createAssetViewBuilder(deps: AppDeps) {
             liquidationApr,
             suggestedLiquidationApr,
             toSuggestedUsd: toSuggested === null ? null : toSuggested * px,
+            toSuggestedToken: toSuggested,
+            marginMode: mg === zone.cross ? 'cross' : 'isolated',
             settleUsd: norm18(p.pnl.rateSettlementPnl) * px,
             mtmUsd: norm18(p.pnl.unrealisedPnl) * px,
             imUsd: norm18(p.positionInitialMargin ?? p.initialMargin) * px,

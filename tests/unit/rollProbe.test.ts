@@ -38,6 +38,7 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
   marginReleased: 0,
   liquidationApr: null,
   suggestedLiquidationApr: null,
+  suggestedMargin: null,
   slippageApr: 0.01,
   sizing: {
     currentSize: 0,
@@ -64,6 +65,7 @@ const sim = (over: Partial<BorosPairSimulation> = {}): BorosPairSimulation => ({
   midSpreadApr: 0.09,
   slippageApr: 0,
   marginRequiredTotal: 50,
+  suggestedMarginTotal: null,
   marginReleasedTotal: 0,
   hedgedSize: 100,
   unhedgedSize: 0,

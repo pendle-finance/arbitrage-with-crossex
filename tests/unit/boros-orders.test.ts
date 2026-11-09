@@ -233,6 +233,8 @@ describe('submitBorosPair', () => {
 
     await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0, reducing: true });
     expect(opts[0].reducing).toBe(true);
+    // Fill-or-kill: a leg fills whole or nothing trades, never a part fill.
+    expect((opts[0] as { timeInForce?: string }).timeInForce).toBe('fill-or-kill');
     expect(opts[0].topUpAfter).toBe(2); // both legs submitted → after both
 
     await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });
