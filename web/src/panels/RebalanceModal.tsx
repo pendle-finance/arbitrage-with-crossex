@@ -87,7 +87,7 @@ const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
 /** The shape of the quote the trader accepted: its goal, route and moves.
  * The fee is held beside it, not in it. Not the recommendation: a poll that
  * re-ranks two close routes must not swap the hold for "Refresh route" on a
- * route the trader is still reading (his catch 2026-11-09). */
+ * route the trader is still reading. */
 function stampOf(plan: EvenPlan, name: RouteName | null): string {
   const route = name === null ? null : plan.routes[name];
   return [goalKey(plan.goal), name, movesKey(route?.steps ?? [])].join(':');
@@ -198,7 +198,7 @@ function quoteFactsOf(route: RoutePlan, view: RebalanceView): Fact[] {
       label: <Term label={modalInterest()} text={HOVER.interestMonth} />,
       value: interestValue(route, view.buckets),
     },
-    // Price impact apart from the fee (his call 2026-11-09): summed, a
+    // Price impact apart from the fee: summed, a
     // USDC premium read as Gate charging hundreds for a move.
     { key: 'fee', label: modalFeeLabel(), value: fmtUsd(routeFeeUsd(route)) },
     ...(routeImpactUsd(route) > 0

@@ -581,8 +581,8 @@ export function useRebalance() {
     queryKey: qk.rebalance,
     queryFn: () => fetchJson<RebalanceView>('/rebalance'),
     enabled: (query) => canFetch(shown, query),
-    // 10 s between quotes while idle (was 4 s, his catch 2026-11-09: the
-    // routes moved before he could pick one). The server re-prices at send
+    // 10 s between quotes while idle: at 4 s the routes moved before a
+    // trader could pick one. The server re-prices at send
     // and refuses a fee that rose past its tolerance, so a slower quote
     // cannot send a worse move than the one shown.
     refetchInterval: shown ? (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 10_000) : false,

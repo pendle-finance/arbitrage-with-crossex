@@ -53,6 +53,7 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
     orderSide: 'long',
   },
   takerFeeCost: 0,
+  fillVsMarkCost: 0,
   ...over,
 });
 

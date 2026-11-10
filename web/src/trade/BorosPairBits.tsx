@@ -462,8 +462,8 @@ function LiqValue({
 
 /** Where the trade's legs liquidate: one "Liquidation APR" line for a
  * one-leg trade, else one line per venue — two rates on a single line read as
- * one fact about the pair, when Boros liquidates per market (his call
- * 2026-09-18). `warn` says which legs still need a top-up to reach the
+ * one fact about the pair, when Boros liquidates per market.
+ * `warn` says which legs still need a top-up to reach the
  * suggested rate. */
 export function LiquidationLines({
   sim,
@@ -513,7 +513,7 @@ export function PositionArithmetic({
   sim: BorosPairSimulation;
   /** One "Position  0 → 1,036 ETH" line per market, no heading or venue
    * icons, for under the size field — as the Boros app states it beside
-   * its own size (his call 2026-11-06). */
+   * its own size. */
   inline?: boolean;
   /** The coin a spread leg is named for; the collateral when not given. */
   base?: string;
@@ -595,7 +595,7 @@ export function PairCosts({
   singleLeg?: SoloLeg;
   freeing?: boolean;
   /** Rendered between the margin and the fee: the suggested top-up reads as
-   * part of the margin (his call 2026-11-07). */
+   * part of the margin. */
   afterMargin?: ReactNode;
 }) {
   const oneLeg = loneOf(sim, singleLeg) !== null;
@@ -617,8 +617,8 @@ export function PairCosts({
       </div>
     );
   }
-  // Margin leads, the fee sits under it quieter (his call 2026-11-06, after
-  // the Boros app); which leg posts what is the margin's hover.
+  // Margin leads, the fee sits under it quieter, as in the
+  // Boros app; which leg posts what is the margin's hover.
   const required = sim.marginRequiredTotal;
   return (
     <div className="flex flex-col gap-1.5">
@@ -790,7 +790,7 @@ export function BlockerList({
   /** Sizes the ticket to a blocker's `maxSize`. Orders are fill-or-kill, so a
    * size that cannot fill whole is refused. With it, every such blocker folds
    * into ONE line naming the largest size that fills — the button already
-   * says why (his call 2026-11-07). */
+   * says why. */
   onUseSize?: (size: number) => void;
   unit?: string;
 }) {

@@ -60,6 +60,7 @@ import {
 import {
   chooseGasTopUpZone,
   evaluatePairGate,
+  legMarginNeed,
   pairEligibility,
   reducingOrderSize,
   simulateBorosPair,
@@ -1057,7 +1058,8 @@ export function borosPairRoutes(deps: AppDeps) {
             size: reducing?.size ?? size,
             // The simulation's limit: the user's bound off the book MID (the
             // anchor the ticket's "Est." and "Max" use), clamped inside the
-            // venue's band, which refuses anything past it.
+            // venue's band: Boros refuses a fill whose last matched level
+            // sits past it, and a limit inside it can never match one.
             limitApr: leg.limitApr as number,
             clientOrderId,
             ...(reducing?.sizeWei !== undefined ? { sizeWei: reducing.sizeWei } : {}),
@@ -1095,6 +1097,11 @@ export function borosPairRoutes(deps: AppDeps) {
           // A close only reduces, so the gas top-up stays out of its way unless
           // the budget genuinely cannot pay — an exit is never taxed a dollar.
           reducing: intent === 'close',
+          // The gate lets margin one leg frees back another (the same sum as
+          // its `required`), which holds only when the freeing leg runs first.
+          sendFirst: simulation.legs.flatMap((leg, i) =>
+            (legMarginNeed(leg, pricedLegs[i].committedMargin) ?? 0) < 0 ? [i] : [],
+          ),
           // A close clears its markets' resting orders in the same batch, so
           // none is left to re-open a leg once it is flat.
           cancelOrdersOn:
