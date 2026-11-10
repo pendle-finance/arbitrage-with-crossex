@@ -559,8 +559,8 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     });
     makeApp(ethBook(1_000, usdtNet), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody())).json().data;
-    // Margin plus taker fee: Boros takes the fee from cash before it checks margin.
-    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number }>).reduce((t, l) => t + l.marginRequired + l.takerFeeCost, 0);
+    // Margin, taker fee and the fill's cost against mark: Boros takes the last two from cash before it checks margin.
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number; fillVsMarkCost: number }>).reduce((t, l) => t + (l.marginRequired + (l.takerFeeCost + l.fillVsMarkCost)), 0);
     expect(need).toBeGreaterThan(0);
     await app!.close();
 
@@ -589,13 +589,13 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     };
     makeApp(ethBook(1_000, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody)).json().data;
-    // Margin plus taker fee: Boros takes the fee from cash before it checks margin.
-    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number }>).reduce((t, l) => t + l.marginRequired + l.takerFeeCost, 0);
+    // Margin, taker fee and the fill's cost against mark: Boros takes the last two from cash before it checks margin.
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number; fillVsMarkCost: number }>).reduce((t, l) => t + (l.marginRequired + (l.takerFeeCost + l.fillVsMarkCost)), 0);
     await app!.close();
     makeApp(ethBook(need, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const res = await post('/api/boros/pair/execute', openBody);
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect(JSON.stringify(res.json())).toMatch(/including about \$1\.00 of gas top-up/);
+    expect(JSON.stringify(res.json())).toMatch(/Cross margin is short/);
   });
 
   it('keeps the traded zone, as before, when no zone can pay', async () => {

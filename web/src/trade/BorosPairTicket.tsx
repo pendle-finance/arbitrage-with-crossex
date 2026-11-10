@@ -1183,8 +1183,7 @@ export function BorosPairTicket({
       <div className="flex flex-col gap-1.5">
         {/* What the trade leaves held and what the account keeps free sit
             above the size, the size box carries its own label, and a slider
-            sizes against the max — as the Boros app lays out its ticket
-            (his call 2026-11-06). */}
+            sizes against the max — as the Boros app lays out its ticket. */}
         {simulation && (
           <PositionArithmetic sim={simulation} singleLeg={activeLeg} spreadVenues={rowA?.spreadVenues} base={rowA?.base} inline />
         )}
@@ -1301,13 +1300,13 @@ export function BorosPairTicket({
           {/* `singleLeg` (not `mode`): a one-leg completion after a half fill
               is single-leg too, and reading it as a pair printed dashes for
               the spread beside an enabled Confirm. */}
-          {/* In the order a trader reads it (his call 2026-11-06): what the
+          {/* In the order a trader reads it: what the
               trade locks; where it liquidates; what it takes from the
               account and what the account keeps, with any suggested top-up;
               then the slippage. What it leaves held is under the size. */}
           <SpreadReadout sim={simulation} singleLeg={activeLeg} boxed />
           {/* One flat list under the box, no section rules: the Boros app's
-              own ticket reads cleaner for it (his call 2026-11-06). */}
+              own ticket reads cleaner for it. */}
           <div className="flex flex-col gap-1.5">
             <LiquidationLines sim={simulation} singleLeg={activeLeg} warn={liqWarn} />
             <PairCosts

@@ -2378,7 +2378,7 @@ function BatchSection({
               it moves and its fee, then its tolerance, are the decision;
               where each position ends up and which bucket carries what are
               the detail, folded until asked for — the two cards were a wall
-              of figures (his calls 2026-09-20, 2026-11-06). */}
+              of figures. */}
           {!exitPnl && (
             <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
               <LiquidationLines sim={sim} warn={() => liqWarn} />

@@ -10,8 +10,10 @@ import { describe, expect, it } from 'vitest';
 import type { BorosMarket, BorosOrderBook } from '../../src/core/boros/client';
 import {
   acknowledgementCopy,
+  attachMaxFundedSize,
   borosSuggestedTopUp,
   evaluatePairGate,
+  legMarginNeed,
   maxFillableSize,
   pairEligibility,
   resolveLegSizing,
@@ -405,11 +407,12 @@ describe('simulateBorosPair', () => {
 
   it('charges margin per leg off the RESULTING netted position', () => {
     const sim = simulateBorosPair(simInput());
-    // IM = N × max(|apr|, floor) × max(DTM, tThresh) / 365 × kIM, with the
-    // fixture's floor ≈ 0.08004 dominating leg B's 4.2% rate.
+    // IM = N × max(|mark|, floor) × max(DTM, tThresh) / 365 × kIM, with the
+    // fixture's floor ≈ 0.08004 dominating leg B's 4.6% mark. Leg A fills at
+    // 9% and is charged at its 8.9% mark.
     const floor = 1.00005 ** (770 * 2) - 1;
     const dtmDays = 30;
-    const imA = (SIZE * 0.09 * dtmDays * imInputs.kIM) / 365;
+    const imA = (SIZE * 0.089 * dtmDays * imInputs.kIM) / 365;
     const imB = (SIZE * floor * dtmDays * imInputs.kIM) / 365;
     expect(sim.legs[0].marginRequired).toBeCloseTo(imA, 6);
     expect(sim.legs[1].marginRequired).toBeCloseTo(imB, 6);
@@ -805,7 +808,7 @@ describe('evaluatePairGate', () => {
     const usdt = evaluatePairGate(gateInput({ account: exact }));
     const b = usdt.blockers.find((x) => x.code === 'cross-short-margin')!;
     expect(b.shortfall).toBeCloseTo(1, 6); // $1 of top-up at $1/USDT
-    expect(b.message).toMatch(/including about \$1\.00 of gas top-up/);
+    expect(b.message).toMatch(/^Cross margin is short \S+ \S+ to open both positions\.$/);
 
     // ETH-margined: the same dollar is 1/2500 of a token.
     const ethSim = { ...sim, collateralPriceUsd: 2500 };
@@ -848,7 +851,7 @@ describe('evaluatePairGate', () => {
         account: account({ cross: { available: im, hasPositionOrOrders: false }, gasBalanceUsd: 0, gasFallbackFreeUsd: 0.99 }),
       }),
     );
-    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.message).toMatch(/including about \$1\.00 of gas top-up/);
+    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.message).toMatch(/^Cross margin is short \S+ \S+ to open both positions\.$/);
     expect(g.gasTopUpFromFallback).toBe(false);
   });
 
@@ -866,7 +869,7 @@ describe('evaluatePairGate', () => {
     expect(g.warnings.join(' ')).toMatch(/from this market's cross margin/);
   });
 
-  it('lets margin one leg frees back the other: Boros checks once the batch has run', () => {
+  it('lets margin one leg frees back the other: the freeing leg is sent first', () => {
     const sim = gateInput().simulation;
     const needB = sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost;
     const needA = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost;
@@ -884,6 +887,145 @@ describe('evaluatePairGate', () => {
     );
     expect(short.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(1, 6);
     expect(short.funding[0].availableAfter).toBeCloseTo(-1, 6);
+  });
+
+  it('checks an open\'s gas top-up against the margin free BEFORE the legs: it runs first', () => {
+    const base = gateInput().simulation;
+    const sim = { ...base, collateralPriceUsd: 2500 };
+    const need = base.legs.reduce((t, l) => t + legMarginNeed(l, 0)!, 0);
+    // The legs free 5 on balance, but the $1 top-up (0.0004) is checked alone
+    // before either has run, against 0.0001 free.
+    const legA = leg({ committedMargin: need + 5 });
+    const acct = (gasFallbackFreeUsd: number) =>
+      account({ cross: { available: 0.0001, hasPositionOrOrders: true }, gasBalanceUsd: 0, gasFallbackFreeUsd });
+    const blocked = evaluatePairGate(gateInput({ simulation: sim, legA, account: acct(0) }));
+    expect(blocked.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(0.0003, 9);
+    const elsewhere = evaluatePairGate(gateInput({ simulation: sim, legA, account: acct(100) }));
+    expect(codes(elsewhere)).not.toContain('cross-short-margin');
+    expect(elsewhere.gasTopUpFromFallback).toBe(true);
+  });
+
+  it('charges margin at the mark rate, not the fill rate', () => {
+    // No rate floor, so the rate alone sets the margin. A short that fills
+    // 0.4% of APR under its 8.9% mark posts the margin of 8.9%, and pays the
+    // 0.4% as a cost of its own.
+    const market = { ...hlMarket, imTickThresh: 0 };
+    const short = (bidApr: number) =>
+      simulateBorosPair(simInput({ legA: leg({ market, book: book(155, bidApr, 0.092) }) })).legs[0];
+    const atMark = short(0.089);
+    const below = short(0.085);
+    expect(below.execApr).toBeCloseTo(0.085, 9);
+    expect(below.marginRequired).toBeCloseTo(atMark.marginRequired!, 9);
+    expect(below.fillVsMarkCost).toBeCloseTo(SIZE * 0.004 * T, 9);
+    expect(short(0.085).marginRequired).toBeGreaterThan(
+      simulateBorosPair(simInput({ legA: leg({ market: { ...market, markApr: 0.085 }, book: book(155, 0.085, 0.092) }) })).legs[0].marginRequired!,
+    );
+  });
+
+  it('counts a fill worse than mark: Boros takes the fixed leg at the fill and values it at mark', () => {
+    // The short fills at its mark (8.9%). The long fills at 5.1%, 0.5% of APR
+    // above its 4.6% mark, so its value at mark is that much under what it paid.
+    const legA = leg({ book: book(155, 0.089, 0.092) });
+    const legB = leg({ market: bnMarket, book: book(101, 0.04, 0.051), direction: 'long' });
+    const sim = simulateBorosPair(simInput({ legA, legB }));
+    const cost = SIZE * 0.005 * T;
+    expect(sim.legs[0].fillVsMarkCost).toBe(0);
+    expect(sim.legs[1].fillVsMarkCost).toBeCloseTo(cost, 9);
+    const marginAndFee = sim.legs.reduce((t, l) => t + l.marginRequired! + l.takerFeeCost, 0);
+    const g = evaluatePairGate(
+      gateInput({ simulation: sim, legA, legB, account: account({ cross: { available: marginAndFee, hasPositionOrOrders: false } }) }),
+    );
+    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(cost, 6);
+    expect(g.funding[0].availableAfter).toBeCloseTo(-cost, 6);
+  });
+
+  describe('attachMaxFundedSize', () => {
+    const sized = (input: SimulateBorosPairInput, size: number) =>
+      simulateBorosPair({ ...input, legs: input.legs.map((l) => ({ ...l, size })) });
+    const marginShort = (g: { blockers: Array<{ code: string }> }) => codes(g).includes('cross-short-margin');
+
+    it.each([
+      ['$50', 50],
+      ['$6M', 6_000_000],
+    ])('names a size that is funded, 1%% under the largest that is (%s of margin)', (_label, free) => {
+      // The long's book steps away from its 4.6% mark, so the need per unit
+      // rises with the size and no division gives the answer.
+      const legA = leg({ book: book(155, 0.089, 0.092) });
+      const legB = leg({
+        market: bnMarket,
+        direction: 'long',
+        book: { marketId: 101, bids: [[0.04, 1e12]], asks: [[0.046, free * 20], [0.051, free * 20], [0.056, 1e12]] },
+      });
+      const input = simInput({ legA, legB, size: free * 1_000 });
+      const rest = gateInput({ legA, legB, account: account({ cross: { available: free, hasPositionOrOrders: false } }) });
+      const gate = evaluatePairGate({ ...rest, simulation: simulateBorosPair(input) });
+      expect(marginShort(gate)).toBe(true);
+      attachMaxFundedSize(gate, input, rest);
+      const max = gate.blockers.find((b) => b.code === 'cross-short-margin')!.maxSize!;
+      expect(max).toBeGreaterThan(0);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, max) }))).toBe(false);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, max / 0.99) }))).toBe(false);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, (max / 0.99) * 1.001) }))).toBe(true);
+    });
+
+    it('counts a leg that reduces: the margin it frees funds the other leg', () => {
+      // Leg A sells into a 300-unit long it already holds. On its own, leg B
+      // could fund 200 units; the margin leg A frees carries the pair further.
+      const sim0 = gateInput().simulation;
+      const perUnitB = legMarginNeed(sim0.legs[1], 0)! / SIZE;
+      const legA = leg({ currentSize: 300, committedMargin: (sim0.legs[0].marginRequired! / SIZE) * 300 });
+      const input = simInput({ legA, size: 10_000 });
+      const rest = gateInput({ legA, opposingAcknowledged: true, account: account({ cross: { available: perUnitB * 200, hasPositionOrOrders: true } }) });
+      const gate = evaluatePairGate({ ...rest, simulation: simulateBorosPair(input) });
+      attachMaxFundedSize(gate, input, rest);
+      const max = gate.blockers.find((b) => b.code === 'cross-short-margin')!.maxSize!;
+      expect(max).toBeGreaterThan(200);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, max) }))).toBe(false);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, (max / 0.99) * 1.001) }))).toBe(true);
+    });
+
+    it('offers no size when even the gas top-up does not fit', () => {
+      const input = { ...simInput(), collateralPriceUsd: 2500 };
+      const rest = gateInput({ account: account({ cross: { available: 0.0001, hasPositionOrOrders: false }, gasBalanceUsd: 0, gasFallbackFreeUsd: 0 }) });
+      const gate = evaluatePairGate({ ...rest, simulation: simulateBorosPair(input) });
+      expect(marginShort(gate)).toBe(true);
+      attachMaxFundedSize(gate, input, rest);
+      expect(gate.blockers.find((b) => b.code === 'cross-short-margin')!.maxSize).toBeUndefined();
+    });
+
+    it('offers no size when the one the margin funds is under the minimum order', () => {
+      // 0.00042 ETH free at $2,500, less a $1 top-up, funds about $7 of size.
+      const input = { ...simInput({ size: 1 }), collateralPriceUsd: 2500 };
+      const rest = gateInput({ account: account({ cross: { available: 0.00042, hasPositionOrOrders: false }, gasBalanceUsd: 0, gasFallbackFreeUsd: 0 }) });
+      const gate = evaluatePairGate({ ...rest, simulation: simulateBorosPair(input) });
+      expect(marginShort(gate)).toBe(true);
+      attachMaxFundedSize(gate, input, rest);
+      expect(gate.blockers.find((b) => b.code === 'cross-short-margin')!.maxSize).toBeUndefined();
+    });
+
+    it('leaves a gate with no margin blocker alone', () => {
+      const rest = gateInput();
+      const gate = evaluatePairGate(rest);
+      attachMaxFundedSize(gate, simInput(), rest);
+      expect(gate.blockers.every((b) => b.maxSize === undefined)).toBe(true);
+    });
+  });
+
+  it('uses the venue\'s time to maturity, counted from the last settlement', () => {
+    // 8-hour market, 6 hours after its settlement: the contract still charges
+    // the full 30 days and 6 hours.
+    const late = { ...hlMarket, timeToMaturitySec: 30 * DAY + 6 * 3_600 };
+    const sim = simulateBorosPair(simInput({ legA: leg({ market: late }) }));
+    const base = gateInput().simulation;
+    const more = (30 * DAY + 6 * 3_600) / (30 * DAY);
+    expect(sim.legs[0].marginRequired!).toBeCloseTo(base.legs[0].marginRequired! * more, 9);
+    expect(sim.legs[0].takerFeeCost).toBeCloseTo(base.legs[0].takerFeeCost * more, 12);
+    expect(sim.legs[1].marginRequired).toBe(base.legs[1].marginRequired);
+  });
+
+  it('does not count on a fill better than mark', () => {
+    // The fixture's short fills above its mark and its long below.
+    expect(gateInput().simulation.legs.map((l) => l.fillVsMarkCost)).toEqual([0, 0]);
   });
 
   it('counts the taker fee: margin that covers the position but not the fee is short', () => {
@@ -1063,7 +1205,7 @@ describe('evaluatePairGate', () => {
     const msg = g.warnings.join(' ');
     expect(msg).toMatch(/\$1\.02 worth of \w+ from this market's cross margin/);
     expect(msg).not.toMatch(/comes from the coin/);
-    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.message).toMatch(/including about \$1\.02 of gas top-up/);
+    expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.message).toMatch(/^Cross margin is short \S+ \S+ to open both positions\.$/);
   });
 
   it('says how low a LOW balance is, and still does not block', () => {
@@ -1267,7 +1409,7 @@ describe('pairs over legs: spread opens and mixed closes', () => {
 
   it.each([50, 6_000_000])('counts the gas top-up once on a 1-leg spread open of %s', (size) => {
     const sim = { ...pairOf([{ ...spreadLeg(), size }]), collateralPriceUsd: 2490.3 };
-    const im = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost;
+    const im = legMarginNeed(sim.legs[0], 0)!;
     const g = evaluatePairGate({
       simulation: sim,
       legs: [spreadLeg()],
@@ -1279,7 +1421,7 @@ describe('pairs over legs: spread opens and mixed closes', () => {
     });
     const b = g.blockers.find((x) => x.code === 'cross-short-margin')!;
     expect(b.shortfall).toBeCloseTo(1.46 / 2490.3, 12);
-    expect(b.message).toMatch(/to open this position, including about \$1\.46 of gas top-up\.$/);
+    expect(b.message).toMatch(/to open this position\.$/);
   });
 
   it('quotes a pay-fixed spread as a negative rate and does not ask for a second leg', () => {

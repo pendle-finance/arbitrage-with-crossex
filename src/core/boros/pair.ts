@@ -34,6 +34,7 @@ import {
   borosLiquidationApr,
   borosMarginForLiquidationRate,
   borosSuggestedLiquidationApr,
+  borosTimeToMaturitySec,
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
@@ -352,10 +353,11 @@ export interface SimulatedLeg {
   /**
    * The rate limit the order is SENT with: the nearer to mid of `worstApr`
    * and the venue's band (mark ± max rate deviation, less BAND_USE's
-   * margin). The venue refuses an order reaching past its band ("Executed
-   * Rate Out of Range") however wide the user's tolerance, so a wider one is
-   * clamped here, without telling the user: the part past the band is never
-   * usable anyway (his call 2026-11-09). Null when `worstApr` is.
+   * margin). The venue refuses a fill whose last matched level sits past its
+   * band, however wide the user's tolerance. A limit inside the band can
+   * never match such a level, so a wider tolerance is clamped here, without
+   * telling the user: the part past the band is never usable anyway. Null
+   * when `worstApr` is.
    */
   limitApr: number | null;
   /** Which edge `limitApr` is: the user's tolerance or the venue's band. */
@@ -399,7 +401,7 @@ export interface SimulatedLeg {
   /** Requested − estFillSize. Non-zero means this leg alone will fall short. */
   shortfallSize: number;
   bookStatus: BookStatus;
-  /** Initial margin this leg posts at the rate it locks, collateral units. */
+  /** Initial margin this leg posts, at the market's mark rate, collateral units. */
   marginRequired: number | null;
   /** Initial margin a REDUCING trade stops posting: the margin of the size it
    * closes, at the mark the venue margins a held position at (the fill when
@@ -427,6 +429,25 @@ export interface SimulatedLeg {
    * order cost me", and the pair-level `costToCrossSize` is sized off the
    * SMALLER leg. */
   takerFeeCost: number;
+  /** What this leg's fill costs the account's value at once, collateral
+   * units: |deltaSize| × (fill − mark the wrong way for the order) × years to
+   * maturity. Boros takes the fixed leg from cash at the FILL rate and values
+   * the position at MARK, so a fill worse than mark uses free margin as the
+   * fee does. Never below 0: a fill better than mark is not counted on, since
+   * mark moves before the order lands. 0 without a fill or a mark. */
+  fillVsMarkCost: number;
+}
+
+/** What a trading leg takes out of its margin account, collateral units: the
+ * resulting position's margin less what the position already posts, plus the
+ * taker fee and the fill's cost against mark. Negative when the leg frees
+ * margin. The ONE sum behind the margin blockers, the "after" figure and the
+ * send order. They part in one case: an Open's gas top-up is paid before any
+ * leg frees margin, so it can block while "after" stays positive. Null when
+ * the margin is unpriced. */
+export function legMarginNeed(leg: SimulatedLeg, committedMargin: number | undefined): number | null {
+  if (leg.marginRequired === null) return null;
+  return leg.marginRequired - (committedMargin ?? 0) + (leg.takerFeeCost + leg.fillVsMarkCost);
 }
 
 export interface BorosPairSimulation {
@@ -539,8 +560,8 @@ export function sizeWithinBound(
 /**
  * How much of the room between mid and the venue's band edge an order's
  * limit may use. The band hangs off mark and the limit off mid, and both
- * drift between the quote and the fill: a limit at the band's very edge was
- * refused a moment later (his catch 2026-09-22), so a tenth is kept back.
+ * drift between the quote and the fill: a limit at the band's very edge
+ * matched a level the moved band then refused, so a tenth is kept back.
  * The roll's auto tolerance (web rollSizing BAND_USE) keeps the same tenth.
  */
 const BAND_USE = 0.9;
@@ -606,9 +627,9 @@ function simulateLeg(
   const anchor = mid ?? execApr;
   const worstApr =
     anchor === null ? null : orderSide === 'short' ? anchor - slippageApr : anchor + slippageApr;
-  // The venue refuses an order reaching past mark ± its max rate deviation,
-  // whatever bound it carries — so the order is sent with the NEARER of the
-  // two edges, and what fills whole is the depth inside it.
+  // The venue refuses a fill whose last matched level sits past mark ± its
+  // max rate deviation — so the order is sent with the NEARER of the two
+  // edges, and what fills whole is the depth inside it.
   const cap = leg.market.maxRateDeviationApr;
   const mark = leg.market.markApr;
   const bandEdge =
@@ -631,14 +652,18 @@ function simulateLeg(
   const maxToleranceApr =
     mid !== null && bandEdge !== null ? Math.max(0, orderSide === 'long' ? bandEdge - mid : mid - bandEdge) : null;
 
-  // Margin is charged at the rate the leg actually locks; the IM formula is
-  // linear in notional, so collateral units in gives collateral units out.
-  // Sized off the RESULTING position, not the delta — Boros nets to one
-  // position per (account, market), so that is what the bucket has to carry.
+  // Boros charges margin at the MARK rate, not the rate the leg locks
+  // (MarginViewUtils `_calcIM`); the fill's distance from mark is a cash cost
+  // of its own (`fillVsMarkCost`). The fill rate stands in only on a market
+  // with no mark. The IM formula is linear in notional, so collateral units in
+  // gives collateral units out. Sized off the RESULTING position, not the
+  // delta — Boros nets to one position per (account, market), so that is what
+  // the bucket has to carry.
+  const marginApr = knownRateOf(leg.market, leg.market.markApr) ? leg.market.markApr : execApr;
   const marginRequired =
-    execApr === null
+    execApr === null || marginApr === null
       ? null
-      : borosInitialMarginUsd(leg.market, execApr, Math.abs(sizing.resultingSize), nowSec);
+      : borosInitialMarginUsd(leg.market, marginApr, Math.abs(sizing.resultingSize), nowSec);
   if (marginRequired === null && execApr !== null) {
     reasons.push(
       `${leg.market.name} carries no margin coefficient — its initial margin cannot be modelled.`,
@@ -650,12 +675,11 @@ function simulateLeg(
   const cur = sizing.currentSize;
   const res = sizing.resultingSize;
   const reducing = cur !== 0 && Math.sign(res) !== -Math.sign(cur) && Math.abs(res) < Math.abs(cur);
-  const releaseApr = knownRateOf(leg.market, leg.market.markApr) ? leg.market.markApr : execApr;
   const marginReleased = !reducing
     ? 0
-    : releaseApr === null
+    : marginApr === null
       ? null
-      : borosInitialMarginUsd(leg.market, releaseApr, Math.abs(cur) - Math.abs(res), nowSec);
+      : borosInitialMarginUsd(leg.market, marginApr, Math.abs(cur) - Math.abs(res), nowSec);
 
   // Liquidation is a fact about the position that RESULTS, so its side is the
   // sign of the netted size — not the order's side, and not the side held
@@ -702,7 +726,9 @@ function simulateLeg(
     suggestedMargin,
     slippageApr,
     sizing,
-    takerFeeCost: 0, // priced by the caller, which knows the rate and the term
+    // Both priced by the caller, which knows the rate and the term.
+    takerFeeCost: 0,
+    fillVsMarkCost: 0,
   };
 }
 
@@ -745,7 +771,6 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const [first] = input.legs;
   const maturity = first.market.maturity;
   const secondsToMaturity = Math.max(0, maturity - nowSec);
-  const years = secondsToMaturity / SECONDS_IN_YEAR;
 
   const takerRate = (m: BorosMarket): number =>
     input.takerFeeOverride !== undefined && input.takerFeeOverride >= 0
@@ -785,7 +810,17 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const worstSpreadApr = quotable ? signedSum(legs.map((l) => l.worstApr!)) - feeDragApr : null;
 
   legs.forEach((l, i) => {
-    l.takerFeeCost = takerRate(input.legs[i].market) * tradedSizes[i] * years;
+    const m = input.legs[i].market;
+    // Charged on the venue's own time to maturity, as the margin is.
+    const years = borosTimeToMaturitySec(m, nowSec) / SECONDS_IN_YEAR;
+    l.takerFeeCost = takerRate(m) * tradedSizes[i] * years;
+    const pastMark =
+      l.execApr === null || !knownRateOf(m, m.markApr)
+        ? 0
+        : l.sizing.orderSide === 'long'
+          ? l.execApr - m.markApr
+          : m.markApr - l.execApr;
+    l.fillVsMarkCost = Math.max(0, pastMark) * tradedSizes[i] * years;
   });
   const costToCrossSize = legs.reduce((sum, l) => sum + l.takerFeeCost, 0);
 
@@ -925,9 +960,10 @@ export interface PairBlocker {
   /** The exact top-up a margin blocker needs, collateral units — the SHORTFALL
    * (required − available), never the total required (§6). */
   shortfall?: number;
-  /** For a size the book cannot fill whole inside the order's bound and the
-   * venue's band: the largest size, in the ticket's own terms, that does
-   * (maxFillableSize). Absent when it cannot be worked out. */
+  /** The largest size, in the ticket's own terms, that clears this blocker:
+   * what the book fills whole inside the order's bound and the venue's band
+   * (maxFillableSize), or what the margin funds (attachMaxFundedSize).
+   * Absent when it cannot be worked out. */
   maxSize?: number;
   /** `rate-bound-out-of-range`: the furthest rate the venue fills this
    * market to right now, the order's clamped limit. */
@@ -937,6 +973,46 @@ export interface PairBlocker {
 /** Blockers a smaller size clears: the book or the bound cannot take this
  * one whole, and orders are fill-or-kill. */
 const SIZE_BLOCKERS: ReadonlySet<BlockerCode> = new Set(['insufficient-depth', 'slippage-exceeds-max', 'rate-bound-out-of-range']);
+const MARGIN_BLOCKERS: ReadonlySet<BlockerCode> = new Set(['cross-short-margin', 'isolated-short-margin']);
+/** What makes a size no offer: the margin still refuses it, or it is under
+ * the venue's minimum order. */
+const UNSENDABLE: ReadonlySet<BlockerCode> = new Set([...MARGIN_BLOCKERS, 'below-min-order-value']);
+
+/** The share of the largest funded size a margin blocker offers. The mark
+ * rate moves between the quote and the send, and margin sized to the last
+ * unit is refused when it does. */
+const FUNDED_SIZE_USE = 0.99;
+
+/**
+ * Puts the LARGEST size the margin funds on the gate's margin blockers
+ * (`maxSize`), so the ticket can offer it. The need is not linear in size — a
+ * larger order walks further from mark, a reducing leg frees margin before it
+ * costs any, a gas top-up is a fixed part — so the size is searched with the
+ * gate's own sum instead of solved. Left unset when no size fits, or when the
+ * size that fits cannot be sent.
+ */
+export function attachMaxFundedSize(
+  gate: PairGate,
+  sim: SimulateBorosPairInput,
+  input: Omit<EvaluatePairInput, 'simulation'>,
+): void {
+  if (!gate.blockers.some((b) => MARGIN_BLOCKERS.has(b.code))) return;
+  const blocked = (share: number, codes: ReadonlySet<BlockerCode>): boolean => {
+    const simulation = simulateBorosPair({ ...sim, legs: sim.legs.map((l) => ({ ...l, size: l.size * share })) });
+    return evaluatePairGate({ ...input, simulation }).blockers.some((b) => codes.has(b.code));
+  };
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (blocked(mid, MARGIN_BLOCKERS)) hi = mid;
+    else lo = mid;
+  }
+  const share = lo * FUNDED_SIZE_USE;
+  const maxSize = Math.max(...sim.legs.map((l) => l.size)) * share;
+  if (!(maxSize > 0) || blocked(share, UNSENDABLE)) return;
+  for (const b of gate.blockers) if (MARGIN_BLOCKERS.has(b.code)) b.maxSize = maxSize;
+}
 
 /**
  * The largest size every traded leg fills WHOLE: each leg's
@@ -992,7 +1068,7 @@ export interface PairFunding {
   /** Free margin before the trade. */
   availableBefore: number;
   /** …and after its margin, fees and any gas top-up; null when a leg is
-   * unpriced. Negative exactly when a margin blocker says the account is short. */
+   * unpriced. Negative when the legs leave the account short. */
   availableAfter: number | null;
   /** Deposit that puts the account's legs at the suggested liquidation rate
    * (borosSuggestedTopUp); 0 when the free margin covers it. */
@@ -1181,17 +1257,13 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   let crossKnown = true;
   for (const { index, sim: leg, input: legIn } of legs) {
     if (Math.abs(leg.sizing.deltaSize) === 0) continue;
-    // What this leg still has to FUND: the resulting position's margin less
-    // whatever it already posts (see `committedMargin`), plus its taker fee.
-    // Boros takes the fee out of cash before it checks margin, so margin that
-    // covers the position but not the fee is refused; and it checks once the
-    // whole batch has run, so margin one leg frees DOES back another (Boros
-    // docs, 2026-11-09). Unclamped for that reason, and the same sum as the
-    // funding's `availableAfter` below, so the two never disagree.
-    const required =
-      leg.marginRequired === null
-        ? null
-        : leg.marginRequired - (legIn.committedMargin ?? 0) + leg.takerFeeCost;
+    // What this leg still has to FUND (`legMarginNeed`). Boros takes the fee
+    // and the fixed leg out of cash before it checks margin, so margin that
+    // covers the position alone is refused. It checks after EACH order
+    // (MarketHub.orderAndOtc), so margin one leg frees backs another only
+    // because the batch sends the freeing legs first (submitBorosPair
+    // `sendFirst`). Unclamped for that reason.
+    const required = legMarginNeed(leg, legIn.committedMargin);
     if (legIn.isolatedOnly) {
       const bucket = account.isolatedByMarket.get(leg.marketId);
       const available = bucket?.available ?? 0;
@@ -1234,11 +1306,14 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     autoTopUpUsd > 0 &&
     autoTopUpToken > 0 &&
     crossKnown &&
-    crossRequired + autoTopUpToken > (account.cross?.available ?? 0) &&
+    Math.max(0, crossRequired) + autoTopUpToken > (account.cross?.available ?? 0) &&
     (input.account.gasFallbackFreeUsd ?? 0) >= autoTopUpUsd;
-  if (crossKnown && crossRequired > 0) {
-    // A close's top-up runs after its closes and may come from another coin.
-    if (sim.intent !== 'close' && !openTopUpElsewhere) crossRequired += autoTopUpToken;
+  // A close's top-up runs after its closes and may come from another coin.
+  const topUpHere = sim.intent !== 'close' && !openTopUpElsewhere ? autoTopUpToken : 0;
+  if (crossKnown && (crossRequired > 0 || topUpHere > 0)) {
+    // The top-up is checked alone, before any leg has freed margin, so legs
+    // that free margin on balance do not pay for it.
+    crossRequired = Math.max(0, crossRequired) + topUpHere;
     const available = account.cross?.available ?? 0;
     if (crossRequired > available) {
       blockers.push({
@@ -1249,7 +1324,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         // their order cannot go out.
         message: `Cross margin is short ${fmtSize(crossRequired - available)} ${sim.collateral} to open ${
           tradingLegs > 2 ? 'all positions' : tradingLegs === 2 ? 'both positions' : 'this position'
-        }${autoTopUpToken > 0 && sim.intent !== 'close' && !openTopUpElsewhere ? `, including about $${autoTopUpUsd.toFixed(2)} of gas top-up` : ''}.`,
+        }.`,
       });
     }
   }
@@ -1326,7 +1401,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     const availableAfter = group.some((l) => l.sim.marginRequired === null)
       ? null
       : group.reduce(
-          (left, l) => left - ((l.sim.marginRequired ?? 0) - (l.input.committedMargin ?? 0)) - l.sim.takerFeeCost,
+          (left, l) => left - (legMarginNeed(l.sim, l.input.committedMargin) ?? 0),
           availableBefore - extra,
         );
     return {

@@ -377,11 +377,26 @@ export function borosAprFloor(m: BorosMarket): number {
 }
 
 /**
+ * Seconds to maturity as the Boros contracts count them. Margin, the taker
+ * fee and the upfront fixed cost all run on `maturity − last settlement`
+ * (CoreStateUtils `timeToMat`), not `maturity − now`: on an 8-hour market
+ * that is up to 0.7% more with 45 days left, enough for the venue to refuse
+ * an order sized to the clock. The clock when the venue's figure is missing.
+ */
+export function borosTimeToMaturitySec(m: BorosMarket, nowSec: number): number {
+  const clock = Math.max(0, m.maturity - nowSec);
+  return m.timeToMaturitySec !== undefined && Number.isFinite(m.timeToMaturitySec)
+    ? Math.max(clock, m.timeToMaturitySec)
+    : clock;
+}
+
+/**
  * Initial margin one Boros leg posts, per the whitepaper formula:
  *   IM = N × max(|apr|, floor) × max(DTM_days, tThresh_days) / 365 × kIM
  * It is linear in N, so a USD notional yields IM in USD directly — there is no
- * collateral-price step. `execApr` is the rate that leg actually locks
- * (receive-fixed on the short, pay-fixed on the long).
+ * collateral-price step. `execApr` is the rate to charge at: the venue uses
+ * the market's mark rate, and an estimate made before a mark is known uses
+ * the rate the leg would lock.
  *
  * Null when `kIM` is missing or non-positive, so a market whose config didn't
  * carry the margin inputs degrades visibly instead of reading as free margin.
@@ -395,7 +410,7 @@ export function borosInitialMarginUsd(
   if (!Number.isFinite(m.kIM) || m.kIM <= 0) return null;
   if (!Number.isFinite(execApr) || !Number.isFinite(notionalUsd)) return null;
   const rate = Math.max(Math.abs(execApr), borosAprFloor(m));
-  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
+  const dtmDays = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS;
   const tThreshDays = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS;
   return (notionalUsd * rate * Math.max(dtmDays, tThreshDays) * m.kIM) / DAYS_IN_YEAR;
 }

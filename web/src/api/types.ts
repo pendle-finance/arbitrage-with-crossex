@@ -1154,6 +1154,9 @@ export interface BorosSimulatedLeg {
    * simulation's collateralPriceUsd for dollars). Optional only for an
    * older server. */
   takerFeeCost?: number;
+  /** What the fill costs against mark, collateral units; part of the margin
+   * need with the fee. Absent on an older server. */
+  fillVsMarkCost?: number;
 }
 
 export interface BorosPairSimulation {
@@ -1194,8 +1197,8 @@ export interface BorosPairBlocker {
   marketId?: number;
   /** Collateral units still needed — the shortfall, never the total. */
   shortfall?: number;
-  /** A size the book or the bound cannot fill whole: the largest that does,
-   * in the ticket's own terms (orders are fill-or-kill). */
+  /** The largest size that clears this blocker, in the ticket's own terms:
+   * what fills whole (orders are fill-or-kill), or what the margin funds. */
   maxSize?: number;
   /** `rate-bound-out-of-range`: the furthest rate Boros fills this market to
    * right now. */

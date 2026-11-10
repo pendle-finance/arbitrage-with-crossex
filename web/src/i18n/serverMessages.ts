@@ -177,7 +177,6 @@ const RULES: readonly Rule[] = [
   [/^(.+) is on isolated margin with an open position\/order\. Switch it to cross margin to trade this pair\.$/, 'isolatedBusy', ['market']],
   [/^(.+) has a TP\/SL order set — if it triggers, this pair stops being hedged\.$/, 'tpSl', ['market']],
   [/^(.+) is isolated-only\. You need (\S+) (\S+) in its account to open this position\.$/, 'isolatedShort', ['market', 'size', 'coin']],
-  [/^Cross margin is short (\S+) (\S+) to open (all positions|both positions|this position), including about \$(\S+) of gas top-up\.$/, 'crossShortGas', ['size', 'coin', 'legsWord', 'gas']],
   [/^Cross margin is short (\S+) (\S+) to open (all positions|both positions|this position)\.$/, 'crossShort', ['size', 'coin', 'legsWord']],
   [/^Prepaid gas on this Boros account could not be read, so this order may still be refused for gas\.$/, 'gasUnread'],
   [/^This is gas, not trading collateral: topping up your margin will not fix it\.$/, 'gasNotCollateral'],

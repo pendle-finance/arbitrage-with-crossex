@@ -145,6 +145,56 @@ describe('blocked sizes', () => {
     fireEvent.click(screen.getByRole('button', { name: '58.92 BTC' }));
     expect(onUse).toHaveBeenCalledWith(58.92);
   });
+  it('a margin blocker keeps its own message and adds the size the margin funds', () => {
+    const onUse = vi.fn();
+    render(
+      <BlockerList
+        blockers={[b('cross-short-margin', 259.87), b('insufficient-depth', 8365)]}
+        onUseSize={onUse}
+        unit="ETH"
+      />,
+    );
+    const cross = screen.getByText(/cross-short-margin message/).closest('li')!;
+    expect(cross.textContent).toBe('cross-short-margin message Max size your margin funds: 259.8 ETH');
+    // The book's own limit still has its line.
+    expect(screen.getByText(/Max fillable size/).closest('li')!.textContent).toBe('Max fillable size: 8,365 ETH');
+    fireEvent.click(screen.getByRole('button', { name: '259.8 ETH' }));
+    expect(onUse).toHaveBeenCalledWith(259.8);
+  });
+
+  it('only the smallest size is a button; a larger limit is text', () => {
+    const sizes = (blockers: BorosPairBlocker[]) => {
+      cleanup();
+      render(<BlockerList blockers={blockers} onUseSize={() => {}} unit="ETH" />);
+      return screen.queryAllByRole('button').map((x) => x.textContent);
+    };
+    // The margin funds less than the book fills.
+    expect(sizes([b('insufficient-depth', 8365), b('cross-short-margin', 763)])).toEqual(['763 ETH']);
+    expect(screen.getByText(/Max fillable size/).closest('li')!.textContent).toBe('Max fillable size: 8,365 ETH');
+    // The book fills less than the margin funds.
+    expect(sizes([b('insufficient-depth', 300), b('cross-short-margin', 763)])).toEqual(['300 ETH']);
+    expect(screen.getByText(/cross-short-margin message/).closest('li')!.textContent).toMatch(/funds: 763 ETH$/);
+    // Nothing in the book fills: no size to press.
+    expect(sizes([b('insufficient-depth', 0), b('cross-short-margin', 763)])).toEqual([]);
+  });
+
+  it('a margin blocker with no size, or a ticket that cannot resize, shows the message alone', () => {
+    render(<BlockerList blockers={[b('cross-short-margin')]} onUseSize={() => {}} unit="ETH" />);
+    expect(screen.getByText('cross-short-margin message').closest('li')!.textContent).toBe('cross-short-margin message');
+    cleanup();
+    render(<BlockerList blockers={[b('cross-short-margin', 259.87)]} unit="ETH" />);
+    expect(screen.getByText('cross-short-margin message').closest('li')!.textContent).toBe('cross-short-margin message');
+  });
+
+  it.each([
+    ['insufficient-depth', 'Insufficient liquidity'],
+    ['slippage-exceeds-max', 'Slippage above max'],
+    ['rate-bound-out-of-range', 'Executed rate out of range'],
+  ])('the button names the margin when it funds less than %s allows, and the book when it does not', (code, bookReason) => {
+    expect(blockerButtonReason([b(code, 8365), b('cross-short-margin', 763)])).toBe('Insufficient margin');
+    expect(blockerButtonReason([b(code, 300), b('cross-short-margin', 763)])).toBe(bookReason);
+    expect(blockerButtonReason([b(code, 300), b('cross-short-margin')])).toBe(bookReason);
+  });
   it('says which limit stopped the size: nothing more for a thin book, slippage, or Boros\'s band', () => {
     const line = (blockers: BorosPairBlocker[]) => {
       cleanup();

@@ -295,6 +295,13 @@ export interface SubmitBorosPairInput {
   cancelOrdersOn?: number[];
   gasTopUpMarket?: PlaceOrdersOptions['gasTopUpMarket'];
   venues?: ReadonlyArray<readonly string[]>;
+  /**
+   * Leg indexes that go to the head of the batch: the legs that FREE margin.
+   * Boros checks margin after each order, not once for the batch, so an
+   * opening leg is only backed by margin another leg frees when that leg has
+   * already run. The rest keep the ticket's order.
+   */
+  sendFirst?: readonly number[];
 }
 
 export interface BorosPairResult {
@@ -350,14 +357,16 @@ export async function submitBorosPair(input: SubmitBorosPairInput): Promise<Boro
     failure: null,
   });
 
-  const submitted = input.legs.flatMap((req, index) => (req ? [{ index, req }] : []));
+  const first = new Set(input.sendFirst ?? []);
+  const inTicketOrder = input.legs.flatMap((req, index) => (req ? [{ index, req }] : []));
+  const submitted = [...inTicketOrder.filter((x) => first.has(x.index)), ...inTicketOrder.filter((x) => !first.has(x.index))];
 
   const byIndex = new Map<number, BorosLegFill>();
   if (submitted.length > 0) {
     try {
       const reqs = submitted.map((x) => x.req);
       const fills = await input.client.placeMarketOrders(reqs, {
-        // Fill-or-kill (his call 2026-11-06): a leg fills whole or the batch
+        // Fill-or-kill: a leg fills whole or the batch
         // reverts, as the Boros app does; the ticket sizes to what fills.
         timeInForce: 'fill-or-kill',
         reducing: input.reducing,
