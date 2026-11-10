@@ -398,7 +398,6 @@ const RULES: readonly Rule[] = [
   [/^(.+): the book only supports (\S+) of the (\S+) requested — this order will fill short\.$/, 'quoteFillsShort', ['market', 'filled', 'size']],
   [/^(.+) carries no margin coefficient — its initial margin cannot be modelled\.$/, 'quoteNoCoefficient', ['market']],
   [/^Both markets point the same way, so they do not offset — no spread is quoted\. Flip one to trade a spread\.$/, 'quoteSameWay'],
-  [/^The two markets fill to different sizes at this notional — the difference is left directional\.$/, 'quoteSizesDiffer'],
   [/^Maker leg is post-only \(was (\S+)\)$/, 'makerTifForced', ['tif']],
   [/^Price rounded to the venue's price step: (\S+) → (\S+)$/, 'priceAdjusted', ['from', 'to']],
   [/^No reference price, so no estimates$/, 'noRefPriceEstimates'],

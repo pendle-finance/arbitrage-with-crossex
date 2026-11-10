@@ -536,6 +536,8 @@ describe('simulateBorosPair', () => {
     expect(sim.legs[0].execApr).toBeCloseTo(0.09, 12);
     expect(sim.hedgedSize).toBe(40_000);
     expect(sim.unhedgedSize).toBe(60_000);
+    // No "left directional" note: the order is fill-or-kill, so it does not send.
+    expect(sim.reasons.join(' ')).not.toMatch(/directional/);
   });
 
   it('blocks a thin book rather than part-filling it, and names the largest size that fills whole', () => {

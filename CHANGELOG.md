@@ -40,7 +40,8 @@ pair order fills whole or does not send. Rebalance shows price impact apart from
   cheapest route of 15 minutes or less, which could cost far more than a slightly longer route.
 - **Smaller things.** The route you look at and the row order stay in place when quotes refresh.
   The idle quote refreshes every 10 seconds, not every 4. The uneven-fill warning from 1.7.8 is
-  gone, because an order now fills whole. The liquidation APR and the suggested top-up count time
+  gone, because an order now fills whole. A blocked ticket no longer says that the difference is
+  left directional. The liquidation APR and the suggested top-up count time
   to maturity as the Boros contracts do.
 
 Existing installs get this through the in-app Update.

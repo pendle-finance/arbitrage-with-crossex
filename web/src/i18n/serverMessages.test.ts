@@ -361,7 +361,6 @@ const ENGLISH = [
   "ETHUSDT-31OCT: the book only supports 120,000 of the 200,000 requested — this order will fill short.",
   "ETHUSDT-31OCT carries no margin coefficient — its initial margin cannot be modelled.",
   "Both markets point the same way, so they do not offset — no spread is quoted. Flip one to trade a spread.",
-  "The two markets fill to different sizes at this notional — the difference is left directional.",
   "Maker leg is post-only (was GTC)",
   "Price rounded to the venue's price step: 3000.123 → 3000.12",
   "No reference price, so no estimates",

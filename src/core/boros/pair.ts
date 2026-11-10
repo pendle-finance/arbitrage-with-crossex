@@ -846,11 +846,8 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const rawUnhedged = pairTrades ? Math.abs(legs[0].estFillSize - legs[1].estFillSize) : 0;
   const largestSize = Math.max(...input.legs.map((l) => l.size));
   const unhedgedSize = rawUnhedged > Math.max(1e-12, largestSize * 1e-9) ? rawUnhedged : 0;
-  if (unhedgedSize > 0) {
-    reasons.push(
-      'The two markets fill to different sizes at this notional — the difference is left directional.',
-    );
-  }
+  // No note for it: a leg that cannot fill whole is the `insufficient-depth`
+  // blocker, and that blocker names the size that fills.
 
   return {
     legs,

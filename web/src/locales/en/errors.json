@@ -368,7 +368,6 @@
   "quoteFillsShort": "{{market}}: the book only supports {{filled}} of the {{size}} requested — this order will fill short.",
   "quoteNoCoefficient": "{{market}} carries no margin coefficient — its initial margin cannot be modelled.",
   "quoteSameWay": "Both markets point the same way, so they do not offset — no spread is quoted. Flip one to trade a spread.",
-  "quoteSizesDiffer": "The two markets fill to different sizes at this notional — the difference is left directional.",
   "makerTifForced": "Maker leg is post-only (was {{tif}})",
   "priceAdjusted": "Price rounded to the venue's price step: {{from}} → {{to}}",
   "noRefPriceEstimates": "No reference price, so no estimates",
