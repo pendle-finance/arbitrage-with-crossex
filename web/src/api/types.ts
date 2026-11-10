@@ -1154,6 +1154,9 @@ export interface BorosSimulatedLeg {
    * simulation's collateralPriceUsd for dollars). Optional only for an
    * older server. */
   takerFeeCost?: number;
+  /** What the fill costs against mark, collateral units; part of the margin
+   * need with the fee. Absent on an older server. */
+  fillVsMarkCost?: number;
 }
 
 export interface BorosPairSimulation {

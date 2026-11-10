@@ -813,6 +813,25 @@ export function BlockerList({
   if (blockers.length === 0) return null;
   // The pair is one size, so every leg's blocker carries the same figure.
   const max = fillable.length > 0 ? floorSig(Math.min(...fillable.map((b) => b.maxSize ?? 0))) : null;
+  // Only the smallest size goes through every limit, so only it is a button;
+  // a larger one is shown as text.
+  const sizes = onUseSize ? blockers.filter((b) => b.maxSize !== undefined).map((b) => floorSig(b.maxSize ?? 0)) : [];
+  const smallest = sizes.length > 0 ? Math.min(...sizes) : null;
+  const sizeButton = (size: number, title: string) =>
+    onUseSize && size === smallest ? (
+      <button
+        type="button"
+        className="num font-medium text-rose-100 underline underline-offset-2 hover:text-ink-50"
+        title={title}
+        onClick={() => onUseSize(size)}
+      >
+        {sigGrouped(size)} {unit}
+      </button>
+    ) : (
+      <span className="num">
+        {sigGrouped(size)} {unit}
+      </span>
+    );
   // Which limit stopped the size, so the line says what would help: a book
   // that runs out needs nothing more; past the user's max slippage, widening
   // it helps; past Boros's band, only a smaller size does.
@@ -831,15 +850,7 @@ export function BlockerList({
           {why !== null && <>{why} </>}
           {max > 0 ? (
             <>
-              {t('pairTicket.borosBits.maxFillable')}{' '}
-              <button
-                type="button"
-                className="num font-medium text-rose-100 underline underline-offset-2 hover:text-ink-50"
-                title={t('pairTicket.borosBits.useMaxSizeTitle')}
-                onClick={() => onUseSize(max)}
-              >
-                {sigGrouped(max)} {unit}
-              </button>
+              {t('pairTicket.borosBits.maxFillable')} {sizeButton(max, t('pairTicket.borosBits.useMaxSizeTitle'))}
             </>
           ) : (
             t(band ? 'pairTicket.borosBits.nothingFillsBand' : 'pairTicket.borosBits.nothingFills')
@@ -857,14 +868,7 @@ export function BlockerList({
             <>
               {' '}
               {t('pairTicket.borosBits.maxFunded')}{' '}
-              <button
-                type="button"
-                className="num font-medium text-rose-100 underline underline-offset-2 hover:text-ink-50"
-                title={t('pairTicket.borosBits.useMaxFundedTitle')}
-                onClick={() => onUseSize(floorSig(b.maxSize ?? 0))}
-              >
-                {sigGrouped(floorSig(b.maxSize ?? 0))} {unit}
-              </button>
+              {sizeButton(floorSig(b.maxSize ?? 0), t('pairTicket.borosBits.useMaxFundedTitle'))}
             </>
           )}
           {b.code === 'isolated-must-switch' && b.marketId !== undefined && (

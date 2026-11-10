@@ -718,9 +718,10 @@ export function createPairPricer(deps: AppDeps) {
  * linear in size (IM = N × max(|apr|, floor) × max(DTM, tThresh)/365 × kIM;
  * fee = takerFeeRate × N × years), so the ticket divides the bucket's
  * available by this to state the size it can fund. The rate is the larger of
- * mark and mid — the entry the formula charges is not known before the fill,
- * and the larger one never overstates the size. Null when the market carries
- * no margin inputs.
+ * mark and mid. The book is not read here, so the fill's cost against mark is
+ * not in it: on a thin book the gate funds less than this, and its margin
+ * blocker offers the size that fits. Null when the market carries no margin
+ * inputs.
  */
 function openCostPerSize(m: BorosMarket, nowSec: number): number | null {
   const rate = Math.max(Math.abs(m.markApr), Math.abs(m.midApr));
