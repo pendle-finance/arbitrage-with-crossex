@@ -857,6 +857,53 @@ describe('POST /api/boros/pair/execute', () => {
     expect(res.json().data.result.unhedgedSize).toBe(0);
   });
 
+  it('sends the leg that frees margin first, and reports the fills in ticket order', async () => {
+    // Boros checks margin after each order, so the opening leg is only backed
+    // by the margin the reducing leg frees once that leg has run. Leg 1 opens
+    // HL. Leg 2 buys back 100,000 of a 150,000 BN short whose posted margin is
+    // far more than the 50,000 left needs.
+    const held = account(500_000, [{ marketId: BN, size: -150_000 }]);
+    const infos = held['/apis/v1/accounts/market-acc-infos-by-root'] as {
+      results: Array<{ positions: Array<{ initialMargin: string }> }>;
+    };
+    infos.results[0].positions[0].initialMargin = raw(100_000);
+    const sent: number[][] = [];
+    makeApp(held, undefined, {
+      placeMarketOrders: async (reqs) => {
+        sent.push(reqs.map((r) => r.marketId));
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({ opposingAcknowledged: true, ids: ['coid-free-a', 'coid-free-b'] }),
+    );
+    expect(res.statusCode).toBe(200);
+    // One batch, the reducing leg (ticket leg 2) at its head.
+    expect(sent).toEqual([[BN, HL]]);
+    // The fills come back in the ticket's order, not the batch's.
+    const { result } = res.json().data;
+    expect(result.legs.map((l: { marketId: number }) => l.marketId)).toEqual([HL, BN]);
+    expect(result.legs.map((l: { direction: string }) => l.direction)).toEqual(['short', 'long']);
+  });
+
+  it('keeps the ticket order when no leg frees margin', async () => {
+    const sent: number[][] = [];
+    makeApp({}, undefined, {
+      placeMarketOrders: async (reqs) => {
+        sent.push(reqs.map((r) => r.marketId));
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-keep-a', 'coid-keep-b'] }));
+    expect(res.statusCode).toBe(200);
+    expect(sent).toEqual([[HL, BN]]);
+  });
+
   it('replays a resend of the same order ids instead of trading twice', async () => {
     // Boros has no client-order-id, so nothing at the venue dedupes: without
     // this a lost response plus a Confirm press doubles the position.

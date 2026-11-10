@@ -493,6 +493,41 @@ describe('borosLiquidationApr', () => {
   });
 });
 
+describe('liquidation figures count time as the venue does', () => {
+  // 8-hour market, 3 days left by the clock, last settled 7h50m ago.
+  const SINCE = 7 * 3_600 + 50 * 60;
+  const late: BorosMarket = { ...hlMarket, maturity: NOW + 3 * DAY, timeToMaturitySec: 3 * DAY + SINCE };
+  // The same market with the clock already at the venue's figure.
+  const onVenueTime: BorosMarket = { ...hlMarket, maturity: NOW + 3 * DAY + SINCE };
+  const onClock: BorosMarket = { ...hlMarket, maturity: NOW + 3 * DAY };
+
+  it('liquidation APR', () => {
+    const want = borosLiquidationApr(onVenueTime, 0.09, 'short', NOW)!;
+    expect(borosLiquidationApr(late, 0.09, 'short', NOW)).toBeCloseTo(want, 12);
+    expect(Math.abs(want - borosLiquidationApr(onClock, 0.09, 'short', NOW)!)).toBeGreaterThan(1e-4);
+  });
+
+  it('margin for a liquidation rate', () => {
+    expect(borosMarginForLiquidationRate(late, -2, 0.09, 0.139, NOW)).toBeCloseTo(
+      borosMarginForLiquidationRate(onVenueTime, -2, 0.09, 0.139, NOW)!,
+      12,
+    );
+  });
+
+  it('cash to a liquidation rate', () => {
+    expect(borosCashToLiquidationRate(late, -2, 0.1, 0.139, NOW)).toBeCloseTo(
+      borosCashToLiquidationRate(onVenueTime, -2, 0.1, 0.139, NOW)!,
+      12,
+    );
+  });
+
+  it('stays null once the clock passes maturity, whatever the venue figure says', () => {
+    const matured = { ...late, maturity: NOW };
+    expect(borosLiquidationApr(matured, 0.09, 'short', NOW)).toBeNull();
+    expect(borosMarginForLiquidationRate(matured, -2, 0.09, 0.139, NOW)).toBeNull();
+  });
+});
+
 describe('perpInitialMarginUsd', () => {
   it('sizes the leg at the venue max leverage', () => {
     expect(perpInitialMarginUsd(1_000_000, 10)).toBeCloseTo(100_000, 6);

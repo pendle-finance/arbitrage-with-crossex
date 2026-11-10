@@ -479,8 +479,8 @@ export function borosLiquidationApr(
   if (!Number.isFinite(m.kIM) || m.kIM <= 0) return null;
   if (!Number.isFinite(m.kMM) || m.kMM <= 0 || m.kMM >= m.kIM) return null;
   if (!Number.isFinite(execApr)) return null;
-  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
-  if (!(dtmDays > 0)) return null;
+  if (!(m.maturity > nowSec)) return null;
+  const dtmDays = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS;
   const t = dtmDays / DAYS_IN_YEAR;
   const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
   const floor = borosAprFloor(m);
@@ -511,8 +511,8 @@ export function borosSuggestedLiquidationApr(side: 'long' | 'short', markApr: nu
  */
 function borosAvailNeededAt(m: BorosMarket, size: number, nowSec: number): ((r: number) => number) | null {
   if (!Number.isFinite(m.kMM) || m.kMM <= 0 || size === 0) return null;
-  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
-  if (!(dtmDays > 0)) return null;
+  if (!(m.maturity > nowSec)) return null;
+  const dtmDays = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS;
   const t = dtmDays / DAYS_IN_YEAR;
   const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
   if (t < tThresh * m.kMM) return null;
@@ -557,7 +557,7 @@ export function borosMarginForLiquidationRate(
   if (!Number.isFinite(execApr) || !Number.isFinite(target)) return null;
   const needs = borosAvailNeededAt(m, size, nowSec);
   if (needs === null) return null;
-  const t = (m.maturity - nowSec) / DAY_SECONDS / DAYS_IN_YEAR;
+  const t = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS / DAYS_IN_YEAR;
   return needs(target) + size * execApr * t;
 }
 
