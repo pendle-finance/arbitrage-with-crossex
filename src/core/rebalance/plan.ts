@@ -187,7 +187,7 @@ export interface RoutePlan {
   costUsd: number;
   /** The part of `costUsd` that is price, not fee: USDC bought above $1 or
    * sold below it, and depth walked past the top of the book. Shown apart so
-   * the fee reads as what Gate and the venues charge (his call 2026-11-09). */
+   * the fee reads as what Gate and the venues charge. */
   priceImpactUsd: number;
   seconds: number;
   rounds: number;
@@ -821,8 +821,8 @@ function blockedReason(inputs: PlanInputs, moves: Move[]): string | null {
 
 /**
  * What waiting costs, in dollars: TIME_COST_USD × (e^(seconds / TIME_SCALE) − 1).
- * Exponential so a long route has to save more the longer it runs (his call
- * 2026-11-09): 10 min ≈ $0.18, 20 min ≈ $0.40, 1 h ≈ $1.72, 2 h ≈ $6.39,
+ * Exponential so a long route has to save more the longer it runs:
+ * 10 min ≈ $0.18, 20 min ≈ $0.40, 1 h ≈ $1.72, 2 h ≈ $6.39,
  * 3 h ≈ $19, 5 h ≈ $147. A 5 h route at $0 loses to a 10 min one at $50.
  */
 const TIME_COST_USD = 1;

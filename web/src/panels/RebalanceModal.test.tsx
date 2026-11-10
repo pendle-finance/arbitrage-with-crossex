@@ -423,7 +423,7 @@ describe('RebalanceModal plan state', () => {
 
   it('keeps the hold, the picked route and the row order when a poll only re-ranks the routes', async () => {
     // A poll every few seconds re-ranked two close routes and swapped the
-    // hold for Refresh route before he could pick (his catch 2026-11-09).
+    // hold for Refresh route before the trader could pick.
     const view = rebalanceViews.twoBorrows;
     const { next } = showPolled([view, { ...view, plans: plansOf({ ...view.plans.even, recommended: 'convert' }) }]);
     const order = () => within(routeGroup()).getAllByRole('radio').map((r) => r.getAttribute('aria-labelledby') && document.getElementById(r.getAttribute('aria-labelledby')!)?.textContent);

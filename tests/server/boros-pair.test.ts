@@ -560,7 +560,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     makeApp(ethBook(1_000, usdtNet), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody())).json().data;
     // Margin plus taker fee: Boros takes the fee from cash before it checks margin.
-    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number }>).reduce((t, l) => t + l.marginRequired + l.takerFeeCost, 0);
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number; fillVsMarkCost: number }>).reduce((t, l) => t + (l.marginRequired + (l.takerFeeCost + l.fillVsMarkCost)), 0);
     expect(need).toBeGreaterThan(0);
     await app!.close();
 
@@ -590,7 +590,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     makeApp(ethBook(1_000, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody)).json().data;
     // Margin plus taker fee: Boros takes the fee from cash before it checks margin.
-    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number }>).reduce((t, l) => t + l.marginRequired + l.takerFeeCost, 0);
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number; fillVsMarkCost: number }>).reduce((t, l) => t + (l.marginRequired + (l.takerFeeCost + l.fillVsMarkCost)), 0);
     await app!.close();
     makeApp(ethBook(need, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const res = await post('/api/boros/pair/execute', openBody);

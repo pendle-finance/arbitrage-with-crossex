@@ -136,6 +136,7 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
   slippageApr: 0.01,
   sizing: { currentSize: 0, deltaSize: 100, resultingSize: 100, opposing: false, flips: false, clampedToClose: false, orderSide: 'long' },
   takerFeeCost: 0,
+  fillVsMarkCost: 0,
   ...over,
 });
 
