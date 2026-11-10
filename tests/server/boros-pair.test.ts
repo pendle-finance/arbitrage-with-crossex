@@ -595,7 +595,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     makeApp(ethBook(need, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const res = await post('/api/boros/pair/execute', openBody);
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect(JSON.stringify(res.json())).toMatch(/including about \$1\.00 of gas top-up/);
+    expect(JSON.stringify(res.json())).toMatch(/Cross margin is short/);
   });
 
   it('keeps the traded zone, as before, when no zone can pay', async () => {
