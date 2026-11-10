@@ -149,18 +149,33 @@ describe('blocked sizes', () => {
     const onUse = vi.fn();
     render(
       <BlockerList
-        blockers={[b('cross-short-margin', 259.87), b('isolated-short-margin', 12.345), b('insufficient-depth', 8365)]}
+        blockers={[b('cross-short-margin', 259.87), b('insufficient-depth', 8365)]}
         onUseSize={onUse}
         unit="ETH"
       />,
     );
     const cross = screen.getByText(/cross-short-margin message/).closest('li')!;
     expect(cross.textContent).toBe('cross-short-margin message Max size your margin funds: 259.8 ETH');
-    expect(screen.getByText(/isolated-short-margin message/).closest('li')!.textContent).toMatch(/12\.34 ETH$/);
     // The book's own limit still has its line.
     expect(screen.getByText(/Max fillable size/).closest('li')!.textContent).toBe('Max fillable size: 8,365 ETH');
     fireEvent.click(screen.getByRole('button', { name: '259.8 ETH' }));
     expect(onUse).toHaveBeenCalledWith(259.8);
+  });
+
+  it('only the smallest size is a button; a larger limit is text', () => {
+    const sizes = (blockers: BorosPairBlocker[]) => {
+      cleanup();
+      render(<BlockerList blockers={blockers} onUseSize={() => {}} unit="ETH" />);
+      return screen.queryAllByRole('button').map((x) => x.textContent);
+    };
+    // The margin funds less than the book fills.
+    expect(sizes([b('insufficient-depth', 8365), b('cross-short-margin', 763)])).toEqual(['763 ETH']);
+    expect(screen.getByText(/Max fillable size/).closest('li')!.textContent).toBe('Max fillable size: 8,365 ETH');
+    // The book fills less than the margin funds.
+    expect(sizes([b('insufficient-depth', 300), b('cross-short-margin', 763)])).toEqual(['300 ETH']);
+    expect(screen.getByText(/cross-short-margin message/).closest('li')!.textContent).toMatch(/funds: 763 ETH$/);
+    // Nothing in the book fills: no size to press.
+    expect(sizes([b('insufficient-depth', 0), b('cross-short-margin', 763)])).toEqual([]);
   });
 
   it('a margin blocker with no size, or a ticket that cannot resize, shows the message alone', () => {

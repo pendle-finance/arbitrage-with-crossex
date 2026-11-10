@@ -401,7 +401,7 @@ export interface SimulatedLeg {
   /** Requested − estFillSize. Non-zero means this leg alone will fall short. */
   shortfallSize: number;
   bookStatus: BookStatus;
-  /** Initial margin this leg posts at the rate it locks, collateral units. */
+  /** Initial margin this leg posts, at the market's mark rate, collateral units. */
   marginRequired: number | null;
   /** Initial margin a REDUCING trade stops posting: the margin of the size it
    * closes, at the mark the venue margins a held position at (the fill when
@@ -442,7 +442,9 @@ export interface SimulatedLeg {
  * resulting position's margin less what the position already posts, plus the
  * taker fee and the fill's cost against mark. Negative when the leg frees
  * margin. The ONE sum behind the margin blockers, the "after" figure and the
- * send order, so they never disagree. Null when the margin is unpriced. */
+ * send order. They part in one case: an Open's gas top-up is paid before any
+ * leg frees margin, so it can block while "after" stays positive. Null when
+ * the margin is unpriced. */
 export function legMarginNeed(leg: SimulatedLeg, committedMargin: number | undefined): number | null {
   if (leg.marginRequired === null) return null;
   return leg.marginRequired - (committedMargin ?? 0) + (leg.takerFeeCost + leg.fillVsMarkCost);
@@ -1066,7 +1068,7 @@ export interface PairFunding {
   /** Free margin before the trade. */
   availableBefore: number;
   /** …and after its margin, fees and any gas top-up; null when a leg is
-   * unpriced. Negative exactly when a margin blocker says the account is short. */
+   * unpriced. Negative when the legs leave the account short. */
   availableAfter: number | null;
   /** Deposit that puts the account's legs at the suggested liquidation rate
    * (borosSuggestedTopUp); 0 when the free margin covers it. */

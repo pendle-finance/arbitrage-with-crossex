@@ -394,8 +394,9 @@ export function borosTimeToMaturitySec(m: BorosMarket, nowSec: number): number {
  * Initial margin one Boros leg posts, per the whitepaper formula:
  *   IM = N × max(|apr|, floor) × max(DTM_days, tThresh_days) / 365 × kIM
  * It is linear in N, so a USD notional yields IM in USD directly — there is no
- * collateral-price step. `execApr` is the rate that leg actually locks
- * (receive-fixed on the short, pay-fixed on the long).
+ * collateral-price step. `execApr` is the rate to charge at: the venue uses
+ * the market's mark rate, and an estimate made before a mark is known uses
+ * the rate the leg would lock.
  *
  * Null when `kIM` is missing or non-positive, so a market whose config didn't
  * carry the margin inputs degrades visibly instead of reading as free margin.
