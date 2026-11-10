@@ -788,9 +788,9 @@ export function BlockerList({
 }: {
   blockers: BorosPairBlocker[];
   /** Sizes the ticket to a blocker's `maxSize`. Orders are fill-or-kill, so a
-   * size that cannot fill whole is refused. With it, every such blocker folds
-   * into ONE line naming the largest size that fills — the button already
-   * says why. */
+   * size that cannot fill whole, or that the margin cannot fund, is refused.
+   * With it, every such blocker folds into ONE line naming the largest size
+   * that goes through — the button already says why. */
   onUseSize?: (size: number) => void;
   unit?: string;
 }) {
@@ -805,7 +805,15 @@ export function BlockerList({
   // that runs out needs nothing more; past the user's max slippage, widening
   // it helps; past Boros's band, only a smaller size does.
   const band = fillable.find((b) => b.code === 'rate-bound-out-of-range');
-  const why = fillable.some((b) => b.code === 'insufficient-depth')
+  // The margin names the size only when it is the tighter limit.
+  const byMargin =
+    max !== null &&
+    fillable.some(
+      (b) => (b.code === 'cross-short-margin' || b.code === 'isolated-short-margin') && floorSig(b.maxSize ?? 0) === max,
+    );
+  const why = byMargin
+    ? t('pairTicket.borosBits.marginLimit')
+    : fillable.some((b) => b.code === 'insufficient-depth')
     ? null
     : band
       ? t('pairTicket.borosBits.bandLimit', { apr: fmtPct(band.limitApr ?? 0) })
@@ -819,11 +827,11 @@ export function BlockerList({
           {why !== null && <>{why} </>}
           {max > 0 ? (
             <>
-              {t('pairTicket.borosBits.maxFillable')}{' '}
+              {t(byMargin ? 'pairTicket.borosBits.maxFunded' : 'pairTicket.borosBits.maxFillable')}{' '}
               <button
                 type="button"
                 className="num font-medium text-rose-100 underline underline-offset-2 hover:text-ink-50"
-                title={t('pairTicket.borosBits.useMaxSizeTitle')}
+                title={t(byMargin ? 'pairTicket.borosBits.useMaxFundedTitle' : 'pairTicket.borosBits.useMaxSizeTitle')}
                 onClick={() => onUseSize(max)}
               >
                 {sigGrouped(max)} {unit}

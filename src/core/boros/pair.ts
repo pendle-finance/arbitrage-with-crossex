@@ -34,6 +34,7 @@ import {
   borosLiquidationApr,
   borosMarginForLiquidationRate,
   borosSuggestedLiquidationApr,
+  borosTimeToMaturitySec,
   walkBorosBook,
   type BookStatus,
 } from './opportunities';
@@ -765,7 +766,6 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
   const [first] = input.legs;
   const maturity = first.market.maturity;
   const secondsToMaturity = Math.max(0, maturity - nowSec);
-  const years = secondsToMaturity / SECONDS_IN_YEAR;
 
   const takerRate = (m: BorosMarket): number =>
     input.takerFeeOverride !== undefined && input.takerFeeOverride >= 0
@@ -806,6 +806,8 @@ export function simulateBorosPair(input: SimulateBorosPairInput): BorosPairSimul
 
   legs.forEach((l, i) => {
     const m = input.legs[i].market;
+    // Charged on the venue's own time to maturity, as the margin is.
+    const years = borosTimeToMaturitySec(m, nowSec) / SECONDS_IN_YEAR;
     l.takerFeeCost = takerRate(m) * tradedSizes[i] * years;
     const pastMark =
       l.execApr === null || !knownRateOf(m, m.markApr)
@@ -953,9 +955,10 @@ export interface PairBlocker {
   /** The exact top-up a margin blocker needs, collateral units — the SHORTFALL
    * (required − available), never the total required (§6). */
   shortfall?: number;
-  /** For a size the book cannot fill whole inside the order's bound and the
-   * venue's band: the largest size, in the ticket's own terms, that does
-   * (maxFillableSize). Absent when it cannot be worked out. */
+  /** The largest size, in the ticket's own terms, that clears this blocker:
+   * what the book fills whole inside the order's bound and the venue's band
+   * (maxFillableSize), or what the margin funds (attachMaxFundedSize).
+   * Absent when it cannot be worked out. */
   maxSize?: number;
   /** `rate-bound-out-of-range`: the furthest rate the venue fills this
    * market to right now, the order's clamped limit. */
@@ -965,6 +968,41 @@ export interface PairBlocker {
 /** Blockers a smaller size clears: the book or the bound cannot take this
  * one whole, and orders are fill-or-kill. */
 const SIZE_BLOCKERS: ReadonlySet<BlockerCode> = new Set(['insufficient-depth', 'slippage-exceeds-max', 'rate-bound-out-of-range']);
+const MARGIN_BLOCKERS: ReadonlySet<BlockerCode> = new Set(['cross-short-margin', 'isolated-short-margin']);
+
+/** The share of the largest funded size a margin blocker offers. The mark
+ * rate moves between the quote and the send, and margin sized to the last
+ * unit is refused when it does. */
+const FUNDED_SIZE_USE = 0.99;
+
+/**
+ * Puts the LARGEST size the margin funds on the gate's margin blockers
+ * (`maxSize`), so the ticket can offer it. The need is not linear in size — a
+ * larger order walks further from mark, a reducing leg frees margin before it
+ * costs any, a gas top-up is a fixed part — so the size is searched with the
+ * gate's own sum instead of solved. Left unset when no size fits.
+ */
+export function attachMaxFundedSize(
+  gate: PairGate,
+  sim: SimulateBorosPairInput,
+  input: Omit<EvaluatePairInput, 'simulation'>,
+): void {
+  if (!gate.blockers.some((b) => MARGIN_BLOCKERS.has(b.code))) return;
+  const short = (share: number): boolean => {
+    const simulation = simulateBorosPair({ ...sim, legs: sim.legs.map((l) => ({ ...l, size: l.size * share })) });
+    return evaluatePairGate({ ...input, simulation }).blockers.some((b) => MARGIN_BLOCKERS.has(b.code));
+  };
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (short(mid)) hi = mid;
+    else lo = mid;
+  }
+  const maxSize = Math.max(...sim.legs.map((l) => l.size)) * lo * FUNDED_SIZE_USE;
+  if (!(maxSize > 0)) return;
+  for (const b of gate.blockers) if (MARGIN_BLOCKERS.has(b.code)) b.maxSize = maxSize;
+}
 
 /**
  * The largest size every traded leg fills WHOLE: each leg's

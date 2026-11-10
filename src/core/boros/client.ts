@@ -102,6 +102,10 @@ export interface BorosMarket {
   maturity: number;
   /** Settlement interval, seconds. */
   paymentPeriod: number;
+  /** Seconds to maturity as the venue counts them (data.timeToMaturity): from
+   * the market's LAST SETTLEMENT, not from now, so up to one `paymentPeriod`
+   * more than the clock says. See `borosTimeToMaturitySec`. */
+  timeToMaturitySec?: number;
   /** Settlement fee as APR fraction (extConfig.settleFeeRate / 1e18). */
   settleFeeApr: number;
   markApr: number;
@@ -494,6 +498,9 @@ function normalizeBorosMarket(m: Record<string, unknown>, nowSec: number): Boros
       base,
       maturity,
       paymentPeriod: Number(extConfig.paymentPeriod ?? 0),
+      ...(Number.isFinite(Number(data.timeToMaturity)) && data.timeToMaturity != null
+        ? { timeToMaturitySec: Number(data.timeToMaturity) }
+        : {}),
       settleFeeApr: norm18(extConfig.settleFeeRate as string),
       markApr: Number(data.markApr ?? 0),
       floatingApr: Number(data.floatingApr ?? 0),

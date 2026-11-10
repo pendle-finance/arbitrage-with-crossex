@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { BorosMarket, BorosOrderBook } from '../../src/core/boros/client';
 import {
   acknowledgementCopy,
+  attachMaxFundedSize,
   borosSuggestedTopUp,
   evaluatePairGate,
   legMarginNeed,
@@ -918,6 +919,80 @@ describe('evaluatePairGate', () => {
     );
     expect(g.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(cost, 6);
     expect(g.funding[0].availableAfter).toBeCloseTo(-cost, 6);
+  });
+
+  describe('attachMaxFundedSize', () => {
+    const sized = (input: SimulateBorosPairInput, size: number) =>
+      simulateBorosPair({ ...input, legs: input.legs.map((l) => ({ ...l, size })) });
+    const marginShort = (g: { blockers: Array<{ code: string }> }) => codes(g).includes('cross-short-margin');
+
+    it.each([
+      ['$50', 50],
+      ['$6M', 6_000_000],
+    ])('names a size that is funded, 1%% under the largest that is (%s of margin)', (_label, free) => {
+      // The long's book steps away from its 4.6% mark, so the need per unit
+      // rises with the size and no division gives the answer.
+      const legA = leg({ book: book(155, 0.089, 0.092) });
+      const legB = leg({
+        market: bnMarket,
+        direction: 'long',
+        book: { marketId: 101, bids: [[0.04, 1e12]], asks: [[0.046, free * 20], [0.051, free * 20], [0.056, 1e12]] },
+      });
+      const input = simInput({ legA, legB, size: free * 1_000 });
+      const rest = gateInput({ legA, legB, account: account({ cross: { available: free, hasPositionOrOrders: false } }) });
+      const gate = evaluatePairGate({ ...rest, simulation: simulateBorosPair(input) });
+      expect(marginShort(gate)).toBe(true);
+      attachMaxFundedSize(gate, input, rest);
+      const max = gate.blockers.find((b) => b.code === 'cross-short-margin')!.maxSize!;
+      expect(max).toBeGreaterThan(0);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, max) }))).toBe(false);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, max / 0.99) }))).toBe(false);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, (max / 0.99) * 1.001) }))).toBe(true);
+    });
+
+    it('counts a leg that reduces: the margin it frees funds the other leg', () => {
+      // Leg A sells into a 300-unit long it already holds. On its own, leg B
+      // could fund 200 units; the margin leg A frees carries the pair further.
+      const sim0 = gateInput().simulation;
+      const perUnitB = legMarginNeed(sim0.legs[1], 0)! / SIZE;
+      const legA = leg({ currentSize: 300, committedMargin: (sim0.legs[0].marginRequired! / SIZE) * 300 });
+      const input = simInput({ legA, size: 10_000 });
+      const rest = gateInput({ legA, opposingAcknowledged: true, account: account({ cross: { available: perUnitB * 200, hasPositionOrOrders: true } }) });
+      const gate = evaluatePairGate({ ...rest, simulation: simulateBorosPair(input) });
+      attachMaxFundedSize(gate, input, rest);
+      const max = gate.blockers.find((b) => b.code === 'cross-short-margin')!.maxSize!;
+      expect(max).toBeGreaterThan(200);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, max) }))).toBe(false);
+      expect(marginShort(evaluatePairGate({ ...rest, simulation: sized(input, (max / 0.99) * 1.001) }))).toBe(true);
+    });
+
+    it('offers no size when even the gas top-up does not fit', () => {
+      const input = { ...simInput(), collateralPriceUsd: 2500 };
+      const rest = gateInput({ account: account({ cross: { available: 0.0001, hasPositionOrOrders: false }, gasBalanceUsd: 0, gasFallbackFreeUsd: 0 }) });
+      const gate = evaluatePairGate({ ...rest, simulation: simulateBorosPair(input) });
+      expect(marginShort(gate)).toBe(true);
+      attachMaxFundedSize(gate, input, rest);
+      expect(gate.blockers.find((b) => b.code === 'cross-short-margin')!.maxSize).toBeUndefined();
+    });
+
+    it('leaves a gate with no margin blocker alone', () => {
+      const rest = gateInput();
+      const gate = evaluatePairGate(rest);
+      attachMaxFundedSize(gate, simInput(), rest);
+      expect(gate.blockers.every((b) => b.maxSize === undefined)).toBe(true);
+    });
+  });
+
+  it('uses the venue\'s time to maturity, counted from the last settlement', () => {
+    // 8-hour market, 6 hours after its settlement: the contract still charges
+    // the full 30 days and 6 hours.
+    const late = { ...hlMarket, timeToMaturitySec: 30 * DAY + 6 * 3_600 };
+    const sim = simulateBorosPair(simInput({ legA: leg({ market: late }) }));
+    const base = gateInput().simulation;
+    const more = (30 * DAY + 6 * 3_600) / (30 * DAY);
+    expect(sim.legs[0].marginRequired!).toBeCloseTo(base.legs[0].marginRequired! * more, 9);
+    expect(sim.legs[0].takerFeeCost).toBeCloseTo(base.legs[0].takerFeeCost * more, 12);
+    expect(sim.legs[1].marginRequired).toBe(base.legs[1].marginRequired);
   });
 
   it('does not count on a fill better than mark', () => {

@@ -206,6 +206,9 @@
     "slippageLimit": "请提高最大滑点或减小规模。",
     "maxFillable": "最大可成交规模：",
     "useMaxSizeTitle": "将规模设为可完整成交的最大值。",
+    "marginLimit": "可用保证金不足以支持此规模。",
+    "maxFunded": "保证金可支持的最大规模：",
+    "useMaxFundedTitle": "将规模设为可用保证金能支持的最大值。",
     "nothingFills": "在当前滑点下无法完整成交。请提高最大滑点。",
     "nothingFillsBand": "Boros 目前在此市场无法成交，请稍后再试。",
     "marginUsage": "保证金占用"

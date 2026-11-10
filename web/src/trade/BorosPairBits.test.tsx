@@ -145,6 +145,19 @@ describe('blocked sizes', () => {
     fireEvent.click(screen.getByRole('button', { name: '58.92 BTC' }));
     expect(onUse).toHaveBeenCalledWith(58.92);
   });
+  it('offers the size the margin funds, and the book\'s size when that is the tighter limit', () => {
+    const onUse = vi.fn();
+    const { unmount } = render(<BlockerList blockers={[b('cross-short-margin', 259.87)]} onUseSize={onUse} unit="ETH" />);
+    expect(screen.getByText(/Not enough free margin for this size\./)).toBeInTheDocument();
+    expect(screen.getByText(/Max size your margin funds:/)).toBeInTheDocument();
+    expect(screen.queryByText('cross-short-margin message')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '259.8 ETH' }));
+    expect(onUse).toHaveBeenCalledWith(259.8);
+    unmount();
+    render(<BlockerList blockers={[b('cross-short-margin', 259.87), b('insufficient-depth', 120)]} onUseSize={onUse} unit="ETH" />);
+    expect(screen.queryByText(/Not enough free margin/)).toBeNull();
+    expect(screen.getByRole('button', { name: '120 ETH' })).toBeInTheDocument();
+  });
   it('says which limit stopped the size: nothing more for a thin book, slippage, or Boros\'s band', () => {
     const line = (blockers: BorosPairBlocker[]) => {
       cleanup();
