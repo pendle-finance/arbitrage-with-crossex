@@ -209,6 +209,9 @@
     "slippageLimit": "Raise max slippage or reduce the size.",
     "maxFillable": "Max fillable size:",
     "useMaxSizeTitle": "Set the size to the largest that fills whole.",
+    "marginLimit": "Not enough free margin for this size.",
+    "maxFunded": "Max size your margin funds:",
+    "useMaxFundedTitle": "Set the size to the largest your free margin funds.",
     "nothingFills": "Nothing fills whole at this slippage. Raise the max slippage.",
     "nothingFillsBand": "Boros fills nothing on this market right now. Try again shortly.",
     "marginUsage": "Margin usage"

@@ -1194,8 +1194,8 @@ export interface BorosPairBlocker {
   marketId?: number;
   /** Collateral units still needed — the shortfall, never the total. */
   shortfall?: number;
-  /** A size the book or the bound cannot fill whole: the largest that does,
-   * in the ticket's own terms (orders are fill-or-kill). */
+  /** The largest size that clears this blocker, in the ticket's own terms:
+   * what fills whole (orders are fill-or-kill), or what the margin funds. */
   maxSize?: number;
   /** `rate-bound-out-of-range`: the furthest rate Boros fills this market to
    * right now. */
