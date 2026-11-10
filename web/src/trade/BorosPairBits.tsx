@@ -774,7 +774,18 @@ export const liqWarnOf =
     return f === undefined || f.suggestedTopUp === null || f.suggestedTopUp > 0;
   };
 
+const isMarginBlocker = (b: BorosPairBlocker): boolean =>
+  b.code === 'cross-short-margin' || b.code === 'isolated-short-margin';
+
 export function blockerButtonReason(blockers: BorosPairBlocker[]): string | null {
+  // When the margin funds less than the book fills, the margin is the limit
+  // the trader meets first, so the button names it.
+  const sized = blockers.filter((b) => b.maxSize !== undefined);
+  const tightest = sized.reduce<BorosPairBlocker | null>(
+    (min, b) => (min === null || (b.maxSize ?? 0) < (min.maxSize ?? 0) ? b : min),
+    null,
+  );
+  if (tightest !== null && isMarginBlocker(tightest)) return t('pairTicket.borosBits.reason.margin');
   for (const [codes, label] of BUTTON_REASONS) {
     if (blockers.some((b) => codes.includes(b.code))) return label();
   }
@@ -788,14 +799,15 @@ export function BlockerList({
 }: {
   blockers: BorosPairBlocker[];
   /** Sizes the ticket to a blocker's `maxSize`. Orders are fill-or-kill, so a
-   * size that cannot fill whole, or that the margin cannot fund, is refused.
-   * With it, every such blocker folds into ONE line naming the largest size
-   * that goes through — the button already says why. */
+   * size that cannot fill whole is refused. With it, every such blocker folds
+   * into ONE line naming the largest size that fills — the button already
+   * says why. A margin blocker keeps its own line, which says how much is
+   * short and in which account, and gains the size its margin funds. */
   onUseSize?: (size: number) => void;
   unit?: string;
 }) {
   const { t } = useTranslation();
-  const fold = (b: BorosPairBlocker) => onUseSize !== undefined && b.maxSize !== undefined;
+  const fold = (b: BorosPairBlocker) => onUseSize !== undefined && b.maxSize !== undefined && !isMarginBlocker(b);
   const fillable = blockers.filter(fold);
   const rest = blockers.filter((b) => !fold(b));
   if (blockers.length === 0) return null;
@@ -805,15 +817,7 @@ export function BlockerList({
   // that runs out needs nothing more; past the user's max slippage, widening
   // it helps; past Boros's band, only a smaller size does.
   const band = fillable.find((b) => b.code === 'rate-bound-out-of-range');
-  // The margin names the size only when it is the tighter limit.
-  const byMargin =
-    max !== null &&
-    fillable.some(
-      (b) => (b.code === 'cross-short-margin' || b.code === 'isolated-short-margin') && floorSig(b.maxSize ?? 0) === max,
-    );
-  const why = byMargin
-    ? t('pairTicket.borosBits.marginLimit')
-    : fillable.some((b) => b.code === 'insufficient-depth')
+  const why = fillable.some((b) => b.code === 'insufficient-depth')
     ? null
     : band
       ? t('pairTicket.borosBits.bandLimit', { apr: fmtPct(band.limitApr ?? 0) })
@@ -827,11 +831,11 @@ export function BlockerList({
           {why !== null && <>{why} </>}
           {max > 0 ? (
             <>
-              {t(byMargin ? 'pairTicket.borosBits.maxFunded' : 'pairTicket.borosBits.maxFillable')}{' '}
+              {t('pairTicket.borosBits.maxFillable')}{' '}
               <button
                 type="button"
                 className="num font-medium text-rose-100 underline underline-offset-2 hover:text-ink-50"
-                title={t(byMargin ? 'pairTicket.borosBits.useMaxFundedTitle' : 'pairTicket.borosBits.useMaxSizeTitle')}
+                title={t('pairTicket.borosBits.useMaxSizeTitle')}
                 onClick={() => onUseSize(max)}
               >
                 {sigGrouped(max)} {unit}
@@ -849,6 +853,20 @@ export function BlockerList({
           className="whitespace-pre-line rounded border border-guava/30 bg-guava/10 px-2.5 py-2 text-[11px] leading-relaxed text-rose-200"
         >
           {localizeServerText(b.message)}
+          {onUseSize && isMarginBlocker(b) && floorSig(b.maxSize ?? 0) > 0 && (
+            <>
+              {' '}
+              {t('pairTicket.borosBits.maxFunded')}{' '}
+              <button
+                type="button"
+                className="num font-medium text-rose-100 underline underline-offset-2 hover:text-ink-50"
+                title={t('pairTicket.borosBits.useMaxFundedTitle')}
+                onClick={() => onUseSize(floorSig(b.maxSize ?? 0))}
+              >
+                {sigGrouped(floorSig(b.maxSize ?? 0))} {unit}
+              </button>
+            </>
+          )}
           {b.code === 'isolated-must-switch' && b.marketId !== undefined && (
             // A link, not a button: this app cannot close an isolated
             // position (the close route refuses one), so the button that

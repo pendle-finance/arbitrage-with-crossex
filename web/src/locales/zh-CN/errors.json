@@ -147,7 +147,6 @@
   "isolatedBusy": "{{market}} 使用逐仓保证金且有持仓或挂单。请切换到全仓保证金后再交易此组合。",
   "tpSl": "{{market}} 设有止盈/止损单，一旦触发，此组合将不再对冲。",
   "isolatedShort": "{{market}} 仅支持逐仓。需要在其账户中存入 {{size}} {{coin}} 才能开这个仓位。",
-  "crossShortGas": "全仓保证金还差 {{size}} {{coin}} 才能开{{legsWord}}，其中约 ${{gas}} 为 Gas 充值。",
   "crossShort": "全仓保证金还差 {{size}} {{coin}} 才能开{{legsWord}}。",
   "gasUnread": "无法读取此 Boros 账户的预付 Gas，此订单仍可能因 Gas 不足被拒绝。",
   "gasNotCollateral": "这是 Gas，不是交易抵押品：追加保证金无法解决。",

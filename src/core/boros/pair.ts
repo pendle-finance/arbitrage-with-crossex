@@ -650,14 +650,18 @@ function simulateLeg(
   const maxToleranceApr =
     mid !== null && bandEdge !== null ? Math.max(0, orderSide === 'long' ? bandEdge - mid : mid - bandEdge) : null;
 
-  // Margin is charged at the rate the leg actually locks; the IM formula is
-  // linear in notional, so collateral units in gives collateral units out.
-  // Sized off the RESULTING position, not the delta — Boros nets to one
-  // position per (account, market), so that is what the bucket has to carry.
+  // Boros charges margin at the MARK rate, not the rate the leg locks
+  // (MarginViewUtils `_calcIM`); the fill's distance from mark is a cash cost
+  // of its own (`fillVsMarkCost`). The fill rate stands in only on a market
+  // with no mark. The IM formula is linear in notional, so collateral units in
+  // gives collateral units out. Sized off the RESULTING position, not the
+  // delta — Boros nets to one position per (account, market), so that is what
+  // the bucket has to carry.
+  const marginApr = knownRateOf(leg.market, leg.market.markApr) ? leg.market.markApr : execApr;
   const marginRequired =
-    execApr === null
+    execApr === null || marginApr === null
       ? null
-      : borosInitialMarginUsd(leg.market, execApr, Math.abs(sizing.resultingSize), nowSec);
+      : borosInitialMarginUsd(leg.market, marginApr, Math.abs(sizing.resultingSize), nowSec);
   if (marginRequired === null && execApr !== null) {
     reasons.push(
       `${leg.market.name} carries no margin coefficient — its initial margin cannot be modelled.`,
@@ -669,12 +673,11 @@ function simulateLeg(
   const cur = sizing.currentSize;
   const res = sizing.resultingSize;
   const reducing = cur !== 0 && Math.sign(res) !== -Math.sign(cur) && Math.abs(res) < Math.abs(cur);
-  const releaseApr = knownRateOf(leg.market, leg.market.markApr) ? leg.market.markApr : execApr;
   const marginReleased = !reducing
     ? 0
-    : releaseApr === null
+    : marginApr === null
       ? null
-      : borosInitialMarginUsd(leg.market, releaseApr, Math.abs(cur) - Math.abs(res), nowSec);
+      : borosInitialMarginUsd(leg.market, marginApr, Math.abs(cur) - Math.abs(res), nowSec);
 
   // Liquidation is a fact about the position that RESULTS, so its side is the
   // sign of the netted size — not the order's side, and not the side held
@@ -969,6 +972,9 @@ export interface PairBlocker {
  * one whole, and orders are fill-or-kill. */
 const SIZE_BLOCKERS: ReadonlySet<BlockerCode> = new Set(['insufficient-depth', 'slippage-exceeds-max', 'rate-bound-out-of-range']);
 const MARGIN_BLOCKERS: ReadonlySet<BlockerCode> = new Set(['cross-short-margin', 'isolated-short-margin']);
+/** What makes a size no offer: the margin still refuses it, or it is under
+ * the venue's minimum order. */
+const UNSENDABLE: ReadonlySet<BlockerCode> = new Set([...MARGIN_BLOCKERS, 'below-min-order-value']);
 
 /** The share of the largest funded size a margin blocker offers. The mark
  * rate moves between the quote and the send, and margin sized to the last
@@ -980,7 +986,8 @@ const FUNDED_SIZE_USE = 0.99;
  * (`maxSize`), so the ticket can offer it. The need is not linear in size — a
  * larger order walks further from mark, a reducing leg frees margin before it
  * costs any, a gas top-up is a fixed part — so the size is searched with the
- * gate's own sum instead of solved. Left unset when no size fits.
+ * gate's own sum instead of solved. Left unset when no size fits, or when the
+ * size that fits cannot be sent.
  */
 export function attachMaxFundedSize(
   gate: PairGate,
@@ -988,19 +995,20 @@ export function attachMaxFundedSize(
   input: Omit<EvaluatePairInput, 'simulation'>,
 ): void {
   if (!gate.blockers.some((b) => MARGIN_BLOCKERS.has(b.code))) return;
-  const short = (share: number): boolean => {
+  const blocked = (share: number, codes: ReadonlySet<BlockerCode>): boolean => {
     const simulation = simulateBorosPair({ ...sim, legs: sim.legs.map((l) => ({ ...l, size: l.size * share })) });
-    return evaluatePairGate({ ...input, simulation }).blockers.some((b) => MARGIN_BLOCKERS.has(b.code));
+    return evaluatePairGate({ ...input, simulation }).blockers.some((b) => codes.has(b.code));
   };
   let lo = 0;
   let hi = 1;
   for (let i = 0; i < 24; i++) {
     const mid = (lo + hi) / 2;
-    if (short(mid)) hi = mid;
+    if (blocked(mid, MARGIN_BLOCKERS)) hi = mid;
     else lo = mid;
   }
-  const maxSize = Math.max(...sim.legs.map((l) => l.size)) * lo * FUNDED_SIZE_USE;
-  if (!(maxSize > 0)) return;
+  const share = lo * FUNDED_SIZE_USE;
+  const maxSize = Math.max(...sim.legs.map((l) => l.size)) * share;
+  if (!(maxSize > 0) || blocked(share, UNSENDABLE)) return;
   for (const b of gate.blockers) if (MARGIN_BLOCKERS.has(b.code)) b.maxSize = maxSize;
 }
 
@@ -1314,7 +1322,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
         // their order cannot go out.
         message: `Cross margin is short ${fmtSize(crossRequired - available)} ${sim.collateral} to open ${
           tradingLegs > 2 ? 'all positions' : tradingLegs === 2 ? 'both positions' : 'this position'
-        }${autoTopUpToken > 0 && sim.intent !== 'close' && !openTopUpElsewhere ? `, including about $${autoTopUpUsd.toFixed(2)} of gas top-up` : ''}.`,
+        }.`,
       });
     }
   }
