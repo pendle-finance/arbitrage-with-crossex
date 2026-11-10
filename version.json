@@ -1,11 +1,10 @@
 {
-  "version": "1.7.8",
+  "version": "1.7.9",
   "highlights": [
-    "Fixed Rate Pairs pairs your positions by venue at any Boros date, so a half roll still shows its card",
-    "Exclude part of a Boros position from the ⋯ menu, and a new browser keeps your exclusions",
-    "A Boros send that times out no longer says nothing traded: the terminal checks what filled",
-    "The pair ticket warns when its two markets would fill to different sizes",
-    "Opportunities sizes every card by the capital you put in, $200k by default",
-    "Every screen can show Simplified Chinese: pick 简体中文 in Settings"
+    "Fixed Rate Pairs shows a suggested Boros liquidation APR, and Add Boros margin gives the deposit that reaches it",
+    "A Boros pair order fills whole or does not send, so the two markets stay the same size",
+    "The pair ticket shows Liquidation APR, Margin usage and Available margin before → after",
+    "A blocked size names its reason, and one click sets the largest size that fills",
+    "Rebalance shows price impact apart from the fee and recommends by fee plus time"
   ]
 }
