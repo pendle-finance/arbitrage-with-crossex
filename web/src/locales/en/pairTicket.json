@@ -157,6 +157,7 @@
     "selectMarket": "Select market",
     "liqTitle": "Mark rate that liquidates this position on its required margin alone. More collateral moves it further away.",
     "liqNaHint": "Position risk is low, so there is no liquidation rate for the time being.",
+    "suggestedLiqTitle": "Suggested liquidation APR: {{suggested}}. The suggested top-up gets it there.",
     "na": "N/A",
     "spreadHint": "Net of settlement fees. Execution rates at this size:\n{{rates}}",
     "estimatedRate": "Estimated rate",
@@ -176,8 +177,6 @@
     "tradeFeeHint": "Boros taker fee at this size — charged once, when the order fills",
     "tradeFeeLegsHint": "Boros taker fee on both markets at this size — charged once, when the orders fill",
     "isolatedSwitch": "Cancel its orders and close the position <a>on Boros</a> first.",
-    "uneven": "Only {{hedged}} {{unit}} fills on both markets. {{unhedged}} {{unit}} would be left unhedged.",
-    "useSize": "Use {{size}} {{unit}}",
     "nothingFilled": "Nothing filled",
     "partiallyFilled": "Partly filled",
     "filled": "Filled",
@@ -190,7 +189,31 @@
     "leaveIt": "Leave it",
     "ackFlip": "I understand this closes my existing {{market}} {{side}} position of {{held}} {{unit}}, realizing its PnL, and opens {{opened}} {{unit}} in the opposite direction.",
     "ackClose": "I understand this closes my existing {{market}} {{side}} position of {{held}} {{unit}} in full, realizing its PnL.",
-    "ackReduce": "I understand this reduces my existing {{market}} {{side}} position of {{held}} {{unit}} to {{to}} {{unit}}, realizing part of its PnL."
+    "ackReduce": "I understand this reduces my existing {{market}} {{side}} position of {{held}} {{unit}} to {{to}} {{unit}}, realizing part of its PnL.",
+    "availableMargin": "Available margin",
+    "availableMarginOf": "Available margin · {{account}}",
+    "availableMarginHint": "Free margin in this Boros account, before → after this trade.",
+    "suggestedTopUp": "Suggested top-up amount",
+    "suggestedTopUpHint": "Deposit this to Boros so the position liquidates no closer than the suggested liquidation APR. Free margin left after the trade is already counted.",
+    "crossAccount": "Cross",
+    "position": "Position",
+    "positionOf": "Position · {{venue}}",
+    "reason": {
+      "liquidity": "Insufficient liquidity",
+      "rateOutOfRange": "Executed rate out of range",
+      "slippage": "Slippage above max",
+      "margin": "Insufficient margin",
+      "tooSmall": "Order too small"
+    },
+    "bandLimit": "Boros only fills this market up to {{apr}} right now.",
+    "slippageLimit": "Raise max slippage or reduce the size.",
+    "maxFillable": "Max fillable size:",
+    "useMaxSizeTitle": "Set the size to the largest that fills whole.",
+    "maxFunded": "Max size your margin funds:",
+    "useMaxFundedTitle": "Set the size to the largest your free margin funds.",
+    "nothingFills": "Nothing fills whole at this slippage. Raise the max slippage.",
+    "nothingFillsBand": "Boros fills nothing on this market right now. Try again shortly.",
+    "marginUsage": "Margin usage"
   },
   "failure": {
     "label": {
@@ -265,6 +288,7 @@
     "confirmOne": "Confirm · 1 Boros market order",
     "confirmTwo": "Confirm · 2 Boros market orders",
     "sizePerMarket": "Size per market",
-    "sizePerMarketAria": "Size per market ({{unit}})"
+    "sizePerMarketAria": "Size per market ({{unit}})",
+    "shareOfMax": "Share of max size"
   }
 }

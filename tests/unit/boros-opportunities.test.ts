@@ -11,9 +11,12 @@ import { describe, expect, it } from 'vitest';
 import type { BorosMarket, BorosOrderBook } from '../../src/core/boros/client';
 import {
   borosAprFloor,
+  borosCashToLiquidationRate,
   borosInitialMarginUsd,
   borosLiquidationApr,
   borosLiquidationRate,
+  borosMarginForLiquidationRate,
+  borosSuggestedLiquidationApr,
   buildOpportunities,
   clippedCrossCostUsd,
   crossCostUsd,
@@ -379,6 +382,73 @@ describe('borosLiquidationRate', () => {
   });
 });
 
+describe('borosSuggestedLiquidationApr', () => {
+  it('sits 5% APR past the mark, on the side the position liquidates', () => {
+    expect(borosSuggestedLiquidationApr('long', 0.089)).toBeCloseTo(0.039, 12);
+    expect(borosSuggestedLiquidationApr('short', 0.089)).toBeCloseTo(0.139, 12);
+    expect(borosSuggestedLiquidationApr('long', NaN)).toBeNull();
+  });
+});
+
+describe('borosCashToLiquidationRate', () => {
+  const { kMM } = imInputs;
+  const tThresh = imInputs.tThreshSec / SECONDS_IN_YEAR;
+  const mmPerUnit = kMM * Math.max(T, tThresh);
+
+  it('prices a short above the floor: (target − liq) × (MM per unit + t) per unit', () => {
+    // Both rates above the floor, so MM(r) = |size| × mmPerUnit × r and the
+    // availValue a rate needs is r × |size| × (mmPerUnit + t).
+    const got = borosCashToLiquidationRate(hlMarket, -2, 0.1, 0.139, NOW)!;
+    expect(got).toBeCloseTo(2 * (0.139 - 0.1) * (mmPerUnit + T), 12);
+  });
+
+  it('prices a long inside the floor, where MM is the floor', () => {
+    // 6% → 3%, both inside the ~8% floor: MM is flat, only size × t × r moves.
+    const got = borosCashToLiquidationRate(hlMarket, 5, 0.06, 0.03, NOW)!;
+    expect(got).toBeCloseTo(5 * T * (0.06 - 0.03), 12);
+  });
+
+  it('is what the contract solve needs to land exactly on the target', () => {
+    const avail = 0.004;
+    const liq = borosLiquidationRate(-1, avail, kMM, FLOOR, T, tThresh)!;
+    const cash = borosCashToLiquidationRate(hlMarket, -1, liq, liq + 0.05, NOW)!;
+    expect(borosLiquidationRate(-1, avail + cash, kMM, FLOOR, T, tThresh)).toBeCloseTo(liq + 0.05, 9);
+  });
+
+  it('is 0 once the position is already past the target', () => {
+    expect(borosCashToLiquidationRate(hlMarket, -1, 0.2, 0.139, NOW)).toBe(0);
+    expect(borosCashToLiquidationRate(hlMarket, 1, 0.01, 0.039, NOW)).toBe(0);
+  });
+
+  it('is null at maturity or with no MM coefficient', () => {
+    expect(borosCashToLiquidationRate(hlMarket, 1, 0.06, 0.03, MATURITY)).toBeNull();
+    expect(borosCashToLiquidationRate({ ...hlMarket, kMM: NaN }, 1, 0.06, 0.03, NOW)).toBeNull();
+  });
+});
+
+describe('borosMarginForLiquidationRate', () => {
+  const { kMM, kIM } = imInputs;
+  const tThresh = imInputs.tThreshSec / SECONDS_IN_YEAR;
+  const mmPerUnit = kMM * Math.max(T, tThresh);
+
+  it('prices a new short: the availValue the target needs plus the upfront fixed cost', () => {
+    // availValue = margin − size × execApr × t; at liquidation it equals
+    // MM(r) − size × t × r, and 13.9% is above the floor.
+    const got = borosMarginForLiquidationRate(hlMarket, -2, 0.09, 0.139, NOW)!;
+    expect(got).toBeCloseTo(2 * 0.139 * (mmPerUnit + T) - 2 * 0.09 * T, 12);
+  });
+
+  it('gives back the initial margin at the rate that margin liquidates at', () => {
+    const liq = borosLiquidationApr(hlMarket, 0.09, 'short', NOW)!;
+    const im = Math.max(0.09, FLOOR) * kIM * Math.max(T, tThresh);
+    expect(borosMarginForLiquidationRate(hlMarket, -1, 0.09, liq, NOW)).toBeCloseTo(im, 12);
+  });
+
+  it('is null at maturity', () => {
+    expect(borosMarginForLiquidationRate(hlMarket, -1, 0.09, 0.139, MATURITY)).toBeNull();
+  });
+});
+
 describe('borosLiquidationApr', () => {
   const { kIM, kMM } = imInputs;
 
@@ -420,6 +490,41 @@ describe('borosLiquidationApr', () => {
   it('is null on a matured market or without kMM', () => {
     expect(borosLiquidationApr({ ...hlMarket, maturity: NOW }, 0.09, 'short', NOW)).toBeNull();
     expect(borosLiquidationApr({ ...hlMarket, kMM: 0 }, 0.09, 'short', NOW)).toBeNull();
+  });
+});
+
+describe('liquidation figures count time as the venue does', () => {
+  // 8-hour market, 3 days left by the clock, last settled 7h50m ago.
+  const SINCE = 7 * 3_600 + 50 * 60;
+  const late: BorosMarket = { ...hlMarket, maturity: NOW + 3 * DAY, timeToMaturitySec: 3 * DAY + SINCE };
+  // The same market with the clock already at the venue's figure.
+  const onVenueTime: BorosMarket = { ...hlMarket, maturity: NOW + 3 * DAY + SINCE };
+  const onClock: BorosMarket = { ...hlMarket, maturity: NOW + 3 * DAY };
+
+  it('liquidation APR', () => {
+    const want = borosLiquidationApr(onVenueTime, 0.09, 'short', NOW)!;
+    expect(borosLiquidationApr(late, 0.09, 'short', NOW)).toBeCloseTo(want, 12);
+    expect(Math.abs(want - borosLiquidationApr(onClock, 0.09, 'short', NOW)!)).toBeGreaterThan(1e-4);
+  });
+
+  it('margin for a liquidation rate', () => {
+    expect(borosMarginForLiquidationRate(late, -2, 0.09, 0.139, NOW)).toBeCloseTo(
+      borosMarginForLiquidationRate(onVenueTime, -2, 0.09, 0.139, NOW)!,
+      12,
+    );
+  });
+
+  it('cash to a liquidation rate', () => {
+    expect(borosCashToLiquidationRate(late, -2, 0.1, 0.139, NOW)).toBeCloseTo(
+      borosCashToLiquidationRate(onVenueTime, -2, 0.1, 0.139, NOW)!,
+      12,
+    );
+  });
+
+  it('stays null once the clock passes maturity, whatever the venue figure says', () => {
+    const matured = { ...late, maturity: NOW };
+    expect(borosLiquidationApr(matured, 0.09, 'short', NOW)).toBeNull();
+    expect(borosMarginForLiquidationRate(matured, -2, 0.09, 0.139, NOW)).toBeNull();
   });
 });
 

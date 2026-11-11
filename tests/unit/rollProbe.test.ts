@@ -27,6 +27,9 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
   midApr: 0.1,
   estSlippageApr: 0,
   worstApr: 0.1,
+  limitApr: 0.1,
+  limitBy: 'slippage',
+  bandExceeded: false,
   slippageExceeded: false,
   sizeWithinTolerance: 1_000,
   depth: [[0.001, 1_000]],
@@ -37,6 +40,8 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
   marginRequired: 25,
   marginReleased: 0,
   liquidationApr: null,
+  suggestedLiquidationApr: null,
+  suggestedMargin: null,
   slippageApr: 0.01,
   sizing: {
     currentSize: 0,
@@ -48,6 +53,7 @@ const leg = (over: Partial<SimulatedLeg> = {}): SimulatedLeg => ({
     orderSide: 'long',
   },
   takerFeeCost: 0,
+  fillVsMarkCost: 0,
   ...over,
 });
 
@@ -63,6 +69,7 @@ const sim = (over: Partial<BorosPairSimulation> = {}): BorosPairSimulation => ({
   midSpreadApr: 0.09,
   slippageApr: 0,
   marginRequiredTotal: 50,
+  suggestedMarginTotal: null,
   marginReleasedTotal: 0,
   hedgedSize: 100,
   unhedgedSize: 0,

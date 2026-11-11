@@ -204,7 +204,11 @@ export interface PlannedStep {
 export interface RoutePlan {
   available: boolean;
   reason: string | null;
+  /** Fees plus price impact. */
   costUsd: number;
+  /** The part of costUsd that is price impact (USDC above or below $1, book
+   * depth), not a fee. Absent on older servers. */
+  priceImpactUsd?: number;
   seconds: number;
   rounds: number;
   oneMoreRoundCostUsd: number | null;
@@ -1036,8 +1040,8 @@ export interface BookTouch {
 
 /** 'short' RECEIVES fixed (hits bids); 'long' PAYS fixed (lifts asks). */
 export type BorosLegDirection = 'long' | 'short';
-/** `target` sizes to the end state (the guided wizard); see core PairIntent. */
-export type BorosPairIntent = 'open' | 'close' | 'target';
+/** See core PairIntent. */
+export type BorosPairIntent = 'open' | 'close';
 
 export interface BorosPairMarketRow {
   marketId: number;
@@ -1106,9 +1110,15 @@ export interface BorosSimulatedLeg {
   midApr?: number;
   /** Adverse distance of the fill from mid (positive = worse than mid). */
   estSlippageApr?: number | null;
-  /** The rate bound the order carries: mid ± tolerance. */
+  /** The user's own bound, mid ± tolerance: what the ticket shows as the max. */
   worstApr: number | null;
+  /** The limit the order is sent with: `worstApr`, clamped inside the venue's
+   * band (core SimulatedLeg.limitApr). Optional for an older server. */
+  limitApr?: number | null;
+  /** Past the user's max slippage: widening it would help. */
   slippageExceeded?: boolean;
+  /** Past Boros's band: only a smaller size helps. */
+  bandExceeded?: boolean;
   /** The largest order size (collateral units) this side fills inside the
    * rate bound the order carries — the levels whose own rate sits inside it,
    * which is what the venue fills. A property of the book, not of the size
@@ -1133,12 +1143,20 @@ export interface BorosSimulatedLeg {
    * carries no margin coefficients, or past the range the Boros app shows.
    * Optional only for an older server. */
   liquidationApr?: number | null;
+  /** Suggested liquidation rate: 5% APR past the mark. Absent on an older server. */
+  suggestedLiquidationApr?: number | null;
+  /** Margin that puts the resulting position's liquidation at the suggested
+   * rate, on its own; never below marginRequired. Absent on an older server. */
+  suggestedMargin?: number | null;
   slippageApr: number;
   sizing: BorosLegSizing;
   /** This leg's taker fee at its traded size, collateral units (× the
    * simulation's collateralPriceUsd for dollars). Optional only for an
    * older server. */
   takerFeeCost?: number;
+  /** What the fill costs against mark, collateral units; part of the margin
+   * need with the fee. Absent on an older server. */
+  fillVsMarkCost?: number;
 }
 
 export interface BorosPairSimulation {
@@ -1160,6 +1178,8 @@ export interface BorosPairSimulation {
    * SLIPPAGE proper: distance from mid, not unused tolerance. */
   slippageApr?: number | null;
   marginRequiredTotal: number | null;
+  /** Σ of the traded legs' suggestedMargin. Absent on an older server. */
+  suggestedMarginTotal?: number | null;
   /** Σ of the legs' `marginReleased`. Optional only for test fixtures. */
   marginReleasedTotal?: number | null;
   hedgedSize: number;
@@ -1177,6 +1197,12 @@ export interface BorosPairBlocker {
   marketId?: number;
   /** Collateral units still needed — the shortfall, never the total. */
   shortfall?: number;
+  /** The largest size that clears this blocker, in the ticket's own terms:
+   * what fills whole (orders are fill-or-kill), or what the margin funds. */
+  maxSize?: number;
+  /** `rate-bound-out-of-range`: the furthest rate Boros fills this market to
+   * right now. */
+  limitApr?: number;
 }
 
 export interface BorosPairGate {
@@ -1184,6 +1210,19 @@ export interface BorosPairGate {
   warnings: string[];
   requiresAcknowledgement: boolean;
   opposingLegs: number[];
+  /** Each margin account the traded legs draw on. Absent on older servers. */
+  funding?: BorosPairFunding[];
+}
+
+/** Mirrors src/core/boros/pair.ts PairFunding. Collateral units. */
+export interface BorosPairFunding {
+  /** null for the cross account; the market for an isolated-only leg's own. */
+  marketId: number | null;
+  availableBefore: number;
+  availableAfter: number | null;
+  /** Deposit that puts the account's legs at the suggested liquidation rate;
+   * 0 when the free margin covers it. */
+  suggestedTopUp: number | null;
 }
 
 export interface BorosPairEligibility {
@@ -1372,6 +1411,9 @@ export interface BorosRollMargin {
   /** How far short of the opens' margin the account is (−availableAfter, or
    * need − availableAfterExit on a batch refused for margin); 0 when unknown. */
   shortfall: number;
+  /** Deposit that puts the new legs at the suggested liquidation rate after
+   * the margin left free; null without an after. Absent on older servers. */
+  suggestedTopUp?: number | null;
 }
 
 export interface BorosRollGate {
@@ -1553,6 +1595,16 @@ export interface AssetBorosOpen {
   /** The mark rate at which the venue liquidates this leg, as it reports it
    * (a rate, unscaled). Null when none; absent only on an older server. */
   liquidationApr?: number | null;
+  /** Suggested liquidation rate: 5% APR past the mark. Absent on an older server. */
+  suggestedLiquidationApr?: number | null;
+  /** USD of margin that moves the liquidation rate out to the suggested one;
+   * 0 when already there. Absent on an older server. */
+  toSuggestedUsd?: number | null;
+  /** The same top-up in the collateral token. Absent on an older server. */
+  toSuggestedToken?: number | null;
+  /** The margin account this position draws on; cash added to a cross
+   * account backs every position on it. Absent on an older server. */
+  marginMode?: 'cross' | 'isolated';
   /** Cumulative settlement of the CURRENT position (display only — totals
    * come from borosHistory, which covers the same flows plus closed legs). */
   settleUsd: number;

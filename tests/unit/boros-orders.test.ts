@@ -218,6 +218,19 @@ describe('submitBorosPair', () => {
     expect(place.mock.calls[0][0].map((r) => r.clientOrderId)).toEqual(['coid-a', 'coid-b']);
   });
 
+  it('sends the legs that free margin first, and reports fills in ticket order', async () => {
+    // Boros checks margin after each order: an opening leg placed before the
+    // leg that frees its margin is refused (MMInsufficientIM).
+    const placeMarketOrders = vi.fn(async (reqs: BorosMarketOrderRequest[]) =>
+      reqs.map((r) => fill({ marketId: r.marketId, direction: r.direction })),
+    );
+    const client: BorosOrderClient = { placeMarketOrders, cancelOrders: async () => {}, closePosition: async () => fill() };
+    const res = await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0, sendFirst: [1] });
+
+    expect(placeMarketOrders.mock.calls[0][0].map((r) => r.marketId)).toEqual([101, 155]);
+    expect(res.legs.map((l) => l.marketId)).toEqual([155, 101]);
+  });
+
   it('sends the gas top-up AFTER both legs when reducing, and before them otherwise', async () => {
     // A close frees margin; a top-up it might need runs its own strict margin
     // check, so it goes after the legs that free it — topUpAfter = reqs.length.
@@ -233,6 +246,8 @@ describe('submitBorosPair', () => {
 
     await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0, reducing: true });
     expect(opts[0].reducing).toBe(true);
+    // Fill-or-kill: a leg fills whole or nothing trades, never a part fill.
+    expect((opts[0] as { timeInForce?: string }).timeInForce).toBe('fill-or-kill');
     expect(opts[0].topUpAfter).toBe(2); // both legs submitted → after both
 
     await submitBorosPair({ client, legs: [legA, legB], feeDragApr: FEE_DRAG, receiveLeg: 0 });

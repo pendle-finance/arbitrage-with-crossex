@@ -377,11 +377,26 @@ export function borosAprFloor(m: BorosMarket): number {
 }
 
 /**
+ * Seconds to maturity as the Boros contracts count them. Margin, the taker
+ * fee and the upfront fixed cost all run on `maturity − last settlement`
+ * (CoreStateUtils `timeToMat`), not `maturity − now`: on an 8-hour market
+ * that is up to 0.7% more with 45 days left, enough for the venue to refuse
+ * an order sized to the clock. The clock when the venue's figure is missing.
+ */
+export function borosTimeToMaturitySec(m: BorosMarket, nowSec: number): number {
+  const clock = Math.max(0, m.maturity - nowSec);
+  return m.timeToMaturitySec !== undefined && Number.isFinite(m.timeToMaturitySec)
+    ? Math.max(clock, m.timeToMaturitySec)
+    : clock;
+}
+
+/**
  * Initial margin one Boros leg posts, per the whitepaper formula:
  *   IM = N × max(|apr|, floor) × max(DTM_days, tThresh_days) / 365 × kIM
  * It is linear in N, so a USD notional yields IM in USD directly — there is no
- * collateral-price step. `execApr` is the rate that leg actually locks
- * (receive-fixed on the short, pay-fixed on the long).
+ * collateral-price step. `execApr` is the rate to charge at: the venue uses
+ * the market's mark rate, and an estimate made before a mark is known uses
+ * the rate the leg would lock.
  *
  * Null when `kIM` is missing or non-positive, so a market whose config didn't
  * carry the margin inputs degrades visibly instead of reading as free margin.
@@ -395,7 +410,7 @@ export function borosInitialMarginUsd(
   if (!Number.isFinite(m.kIM) || m.kIM <= 0) return null;
   if (!Number.isFinite(execApr) || !Number.isFinite(notionalUsd)) return null;
   const rate = Math.max(Math.abs(execApr), borosAprFloor(m));
-  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
+  const dtmDays = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS;
   const tThreshDays = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS;
   return (notionalUsd * rate * Math.max(dtmDays, tThreshDays) * m.kIM) / DAYS_IN_YEAR;
 }
@@ -464,8 +479,8 @@ export function borosLiquidationApr(
   if (!Number.isFinite(m.kIM) || m.kIM <= 0) return null;
   if (!Number.isFinite(m.kMM) || m.kMM <= 0 || m.kMM >= m.kIM) return null;
   if (!Number.isFinite(execApr)) return null;
-  const dtmDays = (m.maturity - nowSec) / DAY_SECONDS;
-  if (!(dtmDays > 0)) return null;
+  if (!(m.maturity > nowSec)) return null;
+  const dtmDays = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS;
   const t = dtmDays / DAYS_IN_YEAR;
   const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
   const floor = borosAprFloor(m);
@@ -474,6 +489,76 @@ export function borosLiquidationApr(
   const liq = borosLiquidationRate(size, cash, m.kMM, floor, t, tThresh);
   if (liq === null || Math.abs(liq) > Math.max(2.5, 10 * Math.abs(m.markApr))) return null;
   return liq;
+}
+
+/** How far from the current mark rate the terminal suggests a Boros
+ * position's liquidation rate sit: 5% APR. A suggestion, never enforced. */
+export const SUGGESTED_LIQ_DISTANCE_APR = 0.05;
+
+/** The suggested liquidation rate: the mark less the distance for a long (it
+ * liquidates as the rate falls), plus it for a short. */
+export function borosSuggestedLiquidationApr(side: 'long' | 'short', markApr: number): number | null {
+  if (!Number.isFinite(markApr)) return null;
+  return side === 'long' ? markApr - SUGGESTED_LIQ_DISTANCE_APR : markApr + SUGGESTED_LIQ_DISTANCE_APR;
+}
+
+/**
+ * The availValue a position needs for the contract to liquidate it at rate r.
+ * Every case of borosLiquidationRate solves availValue + size × t × r = MM(r),
+ * so it is MM(r) − size × t × r. Null when the market carries no MM
+ * coefficient, has matured, or is so near maturity that the contract charges
+ * an MM the solve does not cover.
+ */
+function borosAvailNeededAt(m: BorosMarket, size: number, nowSec: number): ((r: number) => number) | null {
+  if (!Number.isFinite(m.kMM) || m.kMM <= 0 || size === 0) return null;
+  if (!(m.maturity > nowSec)) return null;
+  const dtmDays = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS;
+  const t = dtmDays / DAYS_IN_YEAR;
+  const tThresh = (Number.isFinite(m.tThreshSec) ? m.tThreshSec : 0) / DAY_SECONDS / DAYS_IN_YEAR;
+  if (t < tThresh * m.kMM) return null;
+  const floor = borosAprFloor(m);
+  const mm = Math.abs(size) * m.kMM * Math.max(t, tThresh);
+  return (r) => mm * Math.max(Math.abs(r), floor) - size * t * r;
+}
+
+/**
+ * Cash, in collateral units, that moves a HELD position's liquidation rate
+ * from `liq` (as the venue reports it) out to `target`: the difference of the
+ * availValue each needs (borosAvailNeededAt). Like the venue's own rate, it
+ * holds the account's other positions where they are. 0 when `liq` is already
+ * past the target; null where the solve does not apply.
+ */
+export function borosCashToLiquidationRate(
+  m: BorosMarket,
+  size: number,
+  liq: number,
+  target: number,
+  nowSec: number,
+): number | null {
+  if (!Number.isFinite(liq) || !Number.isFinite(target)) return null;
+  const needs = borosAvailNeededAt(m, size, nowSec);
+  return needs === null ? null : Math.max(0, needs(target) - needs(liq));
+}
+
+/**
+ * Margin, in collateral units, a position opened at `execApr` must have
+ * posted for the contract to liquidate it at `target`, on its own (the same
+ * framing as borosLiquidationApr: the account holds this margin less the
+ * upfront fixed cost, size × execApr × t, and nothing else). Null where the
+ * solve does not apply.
+ */
+export function borosMarginForLiquidationRate(
+  m: BorosMarket,
+  size: number,
+  execApr: number,
+  target: number,
+  nowSec: number,
+): number | null {
+  if (!Number.isFinite(execApr) || !Number.isFinite(target)) return null;
+  const needs = borosAvailNeededAt(m, size, nowSec);
+  if (needs === null) return null;
+  const t = borosTimeToMaturitySec(m, nowSec) / DAY_SECONDS / DAYS_IN_YEAR;
+  return needs(target) + size * execApr * t;
 }
 
 /**

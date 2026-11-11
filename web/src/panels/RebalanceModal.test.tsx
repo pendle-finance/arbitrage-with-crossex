@@ -244,6 +244,17 @@ describe('RebalanceModal plan state', () => {
     expect(pickedRow()).toHaveTextContent(time);
   });
 
+  it('states price impact apart from the fee, in the row and the facts', () => {
+    const view = withLoopTime(120);
+    const loop = { ...view.plans.even.routes.loop!, costUsd: 232.2, priceImpactUsd: 232 };
+    show({ ...view, plans: plansOf({ ...view.plans.even, routes: { ...view.plans.even.routes, loop } }) });
+    expect(pickedRow()).toHaveTextContent('Fee $0.20');
+    expect(pickedRow()).toHaveTextContent('+ $232.00 price impact');
+    expect(Object.keys(facts())).toEqual(['Interest', 'Fee', 'Price impact', 'Frees']);
+    expect(facts().Fee).toBe('$0.20');
+    expect(facts()['Price impact']).toBe('$232.00');
+  });
+
   it('says the route once: no summary line above the hold', () => {
     show(withLoopTime(62520));
     expect(within(dialog()).queryByText(/^Spot loop · Fee/)).toBeNull();
@@ -410,16 +421,19 @@ describe('RebalanceModal plan state', () => {
     expect(holdButton()).toBeEnabled();
   });
 
-  it('replaces the hold with Refresh route when the plan went stale on a new recommended route', async () => {
-    const user = userEvent.setup();
+  it('keeps the hold, the picked route and the row order when a poll only re-ranks the routes', async () => {
+    // A poll every few seconds re-ranked two close routes and swapped the
+    // hold for Refresh route before the trader could pick.
     const view = rebalanceViews.twoBorrows;
     const { next } = showPolled([view, { ...view, plans: plansOf({ ...view.plans.even, recommended: 'convert' }) }]);
-    await user.click(screen.getByRole('radio', { name: 'Convert' }));
-    expect(holdButton()).toBeEnabled();
+    const order = () => within(routeGroup()).getAllByRole('radio').map((r) => r.getAttribute('aria-labelledby') && document.getElementById(r.getAttribute('aria-labelledby')!)?.textContent);
+    const before = order();
+    const picked = screen.getAllByRole('radio').find((r) => (r as HTMLInputElement).checked);
     await next();
-    expect(screen.queryByRole('button', { name: 'Hold to rebalance' })).toBeNull();
-    await user.click(screen.getByRole('button', { name: 'Refresh route' }));
     expect(holdButton()).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
+    expect(screen.getAllByRole('radio').find((r) => (r as HTMLInputElement).checked)).toBe(picked);
+    expect(order()).toEqual(before);
   });
 
   it('a fee that rose inside the server band, under a dollar and 5%, keeps the hold live', async () => {
@@ -1375,6 +1389,18 @@ describe('RebalanceModal hovers and facts', () => {
     expect(dialog().textContent).not.toMatch(/\d+ rounds?/);
   });
 
+  it('ranks the rows below Recommended by fee plus time, as the recommendation does', async () => {
+    // Loop $20 over 4 h scores about $74 against Convert's $40 instant: by fee
+    // alone Loop sits above Convert, by fee plus time it sits below.
+    const view = rebalanceViews.twoBorrows;
+    const routes = view.plans.even.routes;
+    const mix = { ...routes.mix!, costUsd: 5, seconds: 600 };
+    const loop = { ...routes.mix!, costUsd: 20, seconds: 4 * 3600 };
+    const convert = { ...routes.convert!, costUsd: 40, seconds: 0 };
+    show({ ...view, plans: plansOf({ ...view.plans.even, recommended: 'mix', routes: { mix, loop, convert } }) });
+    expect(routeNames().slice(1)).toEqual(['Convert', 'Spot loop']);
+  });
+
   it('the step control names the margin the borrow holds', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);
@@ -1384,8 +1410,8 @@ describe('RebalanceModal hovers and facts', () => {
   it('recommended hover', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);
-    expect((await hoverCard(user, 'Recommended')).text).toBe('Cheapest route that takes 15 min or less.');
-    expect((await hoverCard(user, 'Recommended')).text).toBe('Cheapest route that takes 15 min or less.');
+    expect((await hoverCard(user, 'Recommended')).text).toBe('Best balance of fee and time: a longer route has to save more, and each extra hour counts for more than the last.');
+    expect((await hoverCard(user, 'Recommended')).text).toBe('Best balance of fee and time: a longer route has to save more, and each extra hour counts for more than the last.');
   });
 
   it('blocked reason has no hover', async () => {
@@ -1405,7 +1431,7 @@ describe('RebalanceModal hovers and facts', () => {
     await within(dialog()).findByRole('button', { name: 'Transfer' });
     await check([
       ['Route', 'How the money moves. Fee includes Gate fees and the spot spread.'],
-      ['Recommended', 'Cheapest route that takes 15 min or less.'],
+      ['Recommended', 'Best balance of fee and time: a longer route has to save more, and each extra hour counts for more than the last.'],
       ['USDT · CrossEx', 'CrossEx wallet. Margin for Gate, Binance, OKX and Bybit legs.'],
       ['USDC · Hyperliquid', 'CrossEx wallet. Margin for Hyperliquid legs.'],
       ['USDC · Gate', 'CrossEx wallet. USDC left from a spot buy. Still margin. Rebalance empties it.'],
@@ -1676,8 +1702,9 @@ describe('RebalanceModal presets and custom amount', () => {
     await user.type(screen.getByRole('textbox', { name: 'Amount' }), '50');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to move' })).toBeEnabled(), { timeout: 3000 });
     costUsd = 9;
-    expect(await screen.findByRole('button', { name: 'Refresh route' }, { timeout: 6000 })).toBeInTheDocument();
-  });
+    // Quotes poll every 10 s.
+    expect(await screen.findByRole('button', { name: 'Refresh route' }, { timeout: 12_000 })).toBeInTheDocument();
+  }, 20_000);
 
   it('an empty custom amount asks for one, and Use a preset goes back', async () => {
     const user = userEvent.setup();

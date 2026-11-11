@@ -713,3 +713,54 @@ export function PairEstimate({
     </EstimateCard>
   );
 }
+
+const SHARE_STOPS = [0, 25, 50, 75, 100];
+
+/**
+ * A 0–100% slider with checkpoint dots at each quarter, as the Boros app's
+ * size slider has them. Clicking a dot snaps to it. `value` is whole percent.
+ */
+export function ShareSlider({
+  value,
+  onChange,
+  label,
+  title,
+}: {
+  value: number;
+  onChange: (share: number) => void;
+  label: string;
+  title?: string;
+}) {
+  // Centre of the 14px thumb at p%: the travel is the width less one thumb.
+  const at = (p: number) => `calc(7px + (100% - 14px) * ${p / 100})`;
+  return (
+    <div className="relative flex h-4 items-center" title={title}>
+      <div className="absolute inset-x-[7px] h-1 rounded-full bg-ink-700" aria-hidden />
+      <div className="absolute left-[7px] h-1 rounded-full bg-info" style={{ width: `calc((100% - 14px) * ${value / 100})` }} aria-hidden />
+      {SHARE_STOPS.map((p) => (
+        <button
+          key={p}
+          type="button"
+          tabIndex={-1}
+          aria-hidden
+          className={`absolute z-[2] h-2 w-2 -translate-x-1/2 rounded-full border ${
+            p <= value ? 'border-info bg-info' : 'border-ink-600 bg-ink-850'
+          } ${p === value ? 'opacity-0' : ''}`}
+          style={{ left: at(p) }}
+          onClick={() => onChange(p)}
+        />
+      ))}
+      <input
+        type="range"
+        className="share-range"
+        min={0}
+        max={100}
+        step={1}
+        value={value}
+        aria-label={label}
+        title={title}
+        onChange={(e) => onChange(Number(e.target.value))}
+      />
+    </div>
+  );
+}

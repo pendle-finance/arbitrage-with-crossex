@@ -4,14 +4,14 @@
  * side as its own "missing" row; "Open both perps" sizes both sides alike, so
  * it is offered only while the two gaps match.
  */
-import { fireEvent, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
 import { fmtDateLocal } from '../../lib/fmt';
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
-import { AssetCard } from './AssetCard';
+import { AssetCard, PortfolioBorosLegs } from './AssetCard';
 import { deriveAsset } from './assetModel';
 
 const DAY = 86_400;
@@ -63,8 +63,9 @@ const book = (perpOpen: AssetPerpOpen[]): AssetGroup => ({
   borosHistory: [],
 });
 
-const renderCard = (group: AssetGroup) =>
+const renderCard = (group: AssetGroup, portfolio?: Array<{ base: string; leg: AssetBorosOpen }>) =>
   renderWithClient(
+    <PortfolioBorosLegs.Provider value={portfolio ?? null}>
     <AssetCard
       group={group}
       derived={deriveAsset(group, {}, 0, NOW)}
@@ -77,7 +78,8 @@ const renderCard = (group: AssetGroup) =>
       onChangeSince={() => {}}
       exclusions={{}}
       onExclude={() => {}}
-    />,
+    />
+    </PortfolioBorosLegs.Provider>,
   );
 
 /** The expanded card's leg table (the one with a "Leg" header). */
@@ -140,7 +142,14 @@ describe('BorosOnlyPairCard', () => {
     expect(gate?.textContent).toMatch(/2,351 \/ 2,400 ETH/);
   });
 
-  it("shows each rate leg's venue liquidation APR, looked up by market id", () => {
+  /** The Liq. APR column's cell on the row naming this venue. */
+  const liqCell = (table: HTMLElement, venue: RegExp): HTMLElement => {
+    const heads = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+    const row = within(table).getAllByRole('row').find((r) => venue.test(r.textContent ?? '') && /Boros/.test(r.textContent ?? ''))!;
+    return row.querySelectorAll('td')[heads.indexOf('Liq. APR')] as HTMLElement;
+  };
+
+  it("shows each rate leg's venue liquidation APR in a column of its own, looked up by market id", () => {
     const g = book([]);
     g.borosOpen = [
       { ...g.borosOpen[0], liquidationApr: 0.015 },
@@ -148,8 +157,95 @@ describe('BorosOnlyPairCard', () => {
     ];
     renderCard(g);
     const table = legTable();
-    expect(within(table).getByText('Liq. 1.50%')).toBeInTheDocument();
-    expect(within(table).getByText('Liq. 12.30%')).toBeInTheDocument();
+    expect(liqCell(table, /Gate/).textContent).toBe('1.50%');
+    expect(liqCell(table, /Hyperliquid/).textContent).toBe('12.30%');
+  });
+
+  it('shows the market mark APR under each rate leg, the rate liquidation is measured from', () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], markApr: 0.0556 },
+      { ...g.borosOpen[1], markApr: 0.0869 },
+    ];
+    renderCard(g);
+    const table = legTable();
+    expect(within(table).getByText('Mark 5.56%')).toHaveAttribute('title', "The market's current mark APR on Boros.");
+    expect(within(table).getByText('Mark 8.69%')).toBeInTheDocument();
+  });
+
+  it('says what reaching the suggested rate takes only on a leg short of it, and flags the card and the pair', () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], side: 'LONG', liquidationApr: 0.015, suggestedLiquidationApr: 0.03, toSuggestedUsd: 0 },
+      { ...g.borosOpen[1], side: 'SHORT', liquidationApr: 0.1, suggestedLiquidationApr: 0.13, toSuggestedUsd: 62.5, toSuggestedToken: 0.03125 },
+    ];
+    renderCard(g);
+    const table = legTable();
+    // Past the suggestion: the rate alone.
+    expect(liqCell(table, /Gate/).textContent).toBe('1.50%');
+    const short = liqCell(table, /Hyperliquid/);
+    expect(short.textContent).toBe('10.00%Suggested ≥ 13.00%');
+    expect(short.querySelector('[title]')?.getAttribute('title')).toBe(
+      'Add 0.03125 ETH ($63) to Boros margin to reach the suggested liquidation APR (≥ 13.00%).',
+    );
+    // The asset header and the pair row both carry the chip: one deposit.
+    const chips = screen.getAllByText('Add Boros margin');
+    expect(chips).toHaveLength(2);
+    for (const chip of chips) {
+      expect(chip.closest('[title]')?.getAttribute('title')).toBe(
+        'Deposit 0.03125 ETH ($63) to Boros ETH cross margin to reach the suggested liquidation APR.',
+      );
+    }
+  });
+
+  it('asks a shared cross account for the largest top-up, not the sum, and lists each account', () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], side: 'LONG', liquidationApr: 0.04, suggestedLiquidationApr: 0.03, toSuggestedUsd: 40, toSuggestedToken: 0.02, marginMode: 'cross' },
+      { ...g.borosOpen[1], side: 'SHORT', liquidationApr: 0.1, suggestedLiquidationApr: 0.13, toSuggestedUsd: 62.5, toSuggestedToken: 0.03125, marginMode: 'cross' },
+    ];
+    renderCard(g);
+    const header = screen.getAllByText('Add Boros margin')[0];
+    expect(header.closest('[title]')?.getAttribute('title')).toBe(
+      'Deposit 0.03125 ETH ($63) to Boros ETH cross margin to reach the suggested liquidation APR.',
+    );
+
+    g.borosOpen[0] = { ...g.borosOpen[0], marginMode: 'isolated' };
+    cleanup();
+    renderCard(g);
+    const title = screen.getAllByText('Add Boros margin')[0].closest('[title]')?.getAttribute('title') ?? '';
+    expect(title.split('\n')).toEqual([
+      'Deposit to Boros to reach the suggested liquidation APR:',
+      expect.stringMatching(/^Gate Long YU · .* isolated margin\t0\.02 ETH \(\$40\)$/),
+      'ETH cross margin\t0.03125 ETH ($63)',
+    ]);
+  });
+
+  it('prices a cross account across the whole portfolio, in full, and says what it covers', () => {
+    const g = book([]);
+    g.borosOpen = [
+      g.borosOpen[0],
+      { ...g.borosOpen[1], side: 'SHORT', liquidationApr: 0.1, suggestedLiquidationApr: 0.13, toSuggestedUsd: 62.5, toSuggestedToken: 0.03125, marginMode: 'cross' },
+    ];
+    // A BTC position on the same ETH cross account needs more: that is the
+    // one deposit, on this card too, never 0.03125 plus it.
+    const btc: AssetBorosOpen = { ...g.borosOpen[1], marketId: 999, toSuggestedUsd: 2_469_135.6, toSuggestedToken: 1_234.56789 };
+    renderCard(g, [...g.borosOpen.map((leg) => ({ base: 'ETH', leg })), { base: 'BTC', leg: btc }]);
+    for (const chip of screen.getAllByText('Add Boros margin')) {
+      expect(chip.closest('[title]')?.getAttribute('title')).toBe(
+        'Deposit 1,234.57 ETH ($2,469,136) to Boros ETH cross margin to reach the suggested liquidation APR.\nCovers your BTC, ETH positions on it.',
+      );
+    }
+  });
+
+  it('shows no warning when every leg is past the suggestion', () => {
+    const g = book([]);
+    g.borosOpen = [
+      { ...g.borosOpen[0], side: 'LONG', liquidationApr: 0.015, suggestedLiquidationApr: 0.03, toSuggestedUsd: 0 },
+      { ...g.borosOpen[1], side: 'SHORT', liquidationApr: 0.2, suggestedLiquidationApr: 0.13, toSuggestedUsd: 0 },
+    ];
+    renderCard(g);
+    expect(screen.queryByText('Add Boros margin')).toBeNull();
   });
 
   it('shows N/A, as the Boros app does, past max(250%, 10 × |mark|)', () => {
@@ -160,11 +256,10 @@ describe('BorosOnlyPairCard', () => {
     ];
     renderCard(g);
     const table = legTable();
-    expect(within(table).getByText('Liq. N/A')).toHaveAttribute(
-      'title',
-      'Low risk. Boros shows no liquidation rate yet.',
-    );
-    expect(within(table).getByText('Liq. 240.00%')).toBeInTheDocument();
+    const na = liqCell(table, /Gate/);
+    expect(na.textContent).toBe('N/A');
+    expect(na.querySelector('[title]')).toHaveAttribute('title', 'Low risk. Boros shows no liquidation rate yet.');
+    expect(liqCell(table, /Hyperliquid/).textContent).toBe('240.00%');
   });
 
   /** 100 ETH hedged at OLD, and the same venues' rate legs at NEW: what a roll that keeps the old legs leaves. */

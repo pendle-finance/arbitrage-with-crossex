@@ -179,6 +179,7 @@ export const HOVER = {
   get whyMoreThanOne() { return h('whyMoreThanOne'); },
   whyMoreThanOneBorrow: (amountText: string) => t('accounts.rebalance.hover.whyMoreThanOneBorrow', { amount: amountText }),
   get frees() { return h('frees'); },
+  get priceImpact() { return h('priceImpact'); },
   get interestMonth() { return h('interestMonth'); },
   get onTheWay() { return h('onTheWay'); },
   get gateSpot() { return h('gateSpot'); },
@@ -232,6 +233,10 @@ export const MODAL_FEE = (usdText: string) => t('accounts.rebalance.modal.feeUsd
 export const modalFrees = () => t('accounts.rebalance.modal.frees');
 export const modalInterest = () => t('accounts.rebalance.modal.interest');
 export const modalFeeLabel = () => t('accounts.rebalance.modal.fee');
+export const modalImpactLabel = () => t('accounts.rebalance.modal.priceImpact');
+export const MODAL_IMPACT = (usdText: string) => t('accounts.rebalance.modal.priceImpactUsd', { usd: usdText });
+/** "$0.20 + $231.80 price impact": a route's cost with the price part named. */
+export const FEE_PLUS_IMPACT = (fee: string, impact: string) => t('accounts.rebalance.modal.feePlusImpact', { fee, impact });
 export const PER_MONTH = (nowText: string, afterText: string) =>
   t('accounts.rebalance.modal.perMonth', { now: nowText, after: afterText });
 export const modalSteps = () => t('accounts.rebalance.modal.steps');

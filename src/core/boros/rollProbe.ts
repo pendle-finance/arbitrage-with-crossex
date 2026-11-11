@@ -255,7 +255,7 @@ export function rollQuoteIsFillable(
   if (!exitSim || !entrySim || exitSim.legs.length === 0 || entrySim.legs.length === 0) return false;
   if (entrySim.legs.length === 2 && entrySim.receiveLeg === null) return false;
   return [...exitSim.legs, ...entrySim.legs].every(
-    (l) => l.bookStatus === 'ok' && !l.slippageExceeded && !(l.shortfallSize > 0),
+    (l) => l.bookStatus === 'ok' && !l.slippageExceeded && !l.bandExceeded && !(l.shortfallSize > 0),
   );
 }
 

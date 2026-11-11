@@ -17,10 +17,10 @@ import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { useDebounced } from '../lib/useDebounced';
 import { useNow } from '../lib/useNow';
-import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, scaleOf, StepList, VerdictAlert } from './RebalanceBits';
+import { BalanceBars, jobRows, jobSeconds, planRows, ProgressBar, ROUTE_ORDER, routeScore, scaleOf, StepList, VerdictAlert } from './RebalanceBits';
 import type { BarRow, StepRow } from './RebalanceBits';
 import { AFTER_LABEL, gateSpot, GOAL_LABEL, HOLD_ANYWAY_LABEL, HOLD_LABEL, HOVER, modalAbandon, OPTIONAL_MOVE } from './rebalanceCopy';
-import { modalFeeLabel, modalFrees, modalInterest, modalRefreshRoute, modalResume, modalSteps, PER_MONTH } from './rebalanceCopy';
+import { FEE_PLUS_IMPACT, modalFeeLabel, modalFrees, modalImpactLabel, modalInterest, modalRefreshRoute, modalResume, modalSteps, PER_MONTH } from './rebalanceCopy';
 import {
   CARD_LABEL,
   moveFromText,
@@ -37,7 +37,7 @@ import {
 import { rateUnknown, waitsForDeal, waitsForTransfer, WALLET_LABEL } from './rebalanceCopy';
 import { barRowsOf, Facts, hasUnknownRate, isCashLimitedEven, keyOf, MONTH_DAYS, movesKey, movesOf, pickedRoute, stopsPerDayOf, worthLine } from './RebalanceHovers';
 import { defaultGoal, planSteps, receivingBorrow, receivingHeld } from './RebalanceHovers';
-import { ROUTE_LABEL, roundCountOf, roundOf, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import { ROUTE_LABEL, roundCountOf, roundOf, routeFeeUsd, routeImpactUsd, RouteRow, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import type { Fact } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -84,22 +84,40 @@ const parsedAmount = (text: string): number | null => {
 };
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
 
-/** The shape of the quote the trader accepted: its goal, recommendation,
- * route and moves. The fee is held beside it, not in it. */
+/** The shape of the quote the trader accepted: its goal, route and moves.
+ * The fee is held beside it, not in it. Not the recommendation: a poll that
+ * re-ranks two close routes must not swap the hold for "Refresh route" on a
+ * route the trader is still reading. */
 function stampOf(plan: EvenPlan, name: RouteName | null): string {
   const route = name === null ? null : plan.routes[name];
-  return [goalKey(plan.goal), plan.recommended, name, movesKey(route?.steps ?? [])].join(':');
+  return [goalKey(plan.goal), name, movesKey(route?.steps ?? [])].join(':');
 }
 
 interface Accepted {
   stamp: string;
   costUsd: number;
+  /** The route on screen when the quote was accepted. It stays picked across
+   * polls, so a re-ranking cannot move the selection under the trader. */
+  name: RouteName | null;
+  /** The row order on screen then, kept the same way. */
+  order: RouteName[];
 }
 
 const acceptedOf = (plan: EvenPlan, name: RouteName | null): Accepted => ({
   stamp: stampOf(plan, name),
   costUsd: (name === null ? null : plan.routes[name])?.costUsd ?? 0,
+  name,
+  order: routeOrder(plan),
 });
+
+/** The rows in the order the trader accepted, with any route a poll added
+ * at the end and any it dropped left out. */
+function shownOrder(plan: EvenPlan, accepted: Accepted | null): RouteName[] {
+  const fresh = routeOrder(plan);
+  if (accepted === null) return fresh;
+  const kept = accepted.order.filter((name) => fresh.includes(name));
+  return [...kept, ...fresh.filter((name) => !kept.includes(name))];
+}
 
 const cents = (usd: number): number => Math.round(usd * 100);
 
@@ -119,7 +137,7 @@ function isStale(accepted: Accepted | null, plan: EvenPlan, name: RouteName | nu
 function routeOrder(plan: EvenPlan): RouteName[] {
   const { recommended, routes } = plan;
   const rest = ROUTE_ORDER.filter((name) => name !== recommended && routes[name] !== null);
-  rest.sort((a, b) => (routes[a]?.costUsd ?? 0) - (routes[b]?.costUsd ?? 0));
+  rest.sort((a, b) => routeScore(routes[a] ?? { costUsd: 0, seconds: 0 }) - routeScore(routes[b] ?? { costUsd: 0, seconds: 0 }));
   return recommended !== null && routes[recommended] ? [recommended, ...rest] : rest;
 }
 
@@ -180,7 +198,12 @@ function quoteFactsOf(route: RoutePlan, view: RebalanceView): Fact[] {
       label: <Term label={modalInterest()} text={HOVER.interestMonth} />,
       value: interestValue(route, view.buckets),
     },
-    { key: 'fee', label: modalFeeLabel(), value: fmtUsd(route.costUsd) },
+    // Price impact apart from the fee: summed, a
+    // USDC premium read as Gate charging hundreds for a move.
+    { key: 'fee', label: modalFeeLabel(), value: fmtUsd(routeFeeUsd(route)) },
+    ...(routeImpactUsd(route) > 0
+      ? [{ key: 'impact', label: <Term label={modalImpactLabel()} text={HOVER.priceImpact} />, value: fmtUsd(routeImpactUsd(route)) }]
+      : []),
     {
       key: 'frees',
       label: <Term label={modalFrees()} text={HOVER.frees} />,
@@ -319,7 +342,7 @@ export function RebalanceModal({
     else onError(error);
   };
 
-  const { name: chosen, route } = pickedRoute(plan, pick);
+  const { name: chosen, route } = pickedRoute(plan, pick ?? accepted?.name ?? null);
   const choose = (name: RouteName | null) => {
     setPick(name);
     setAccepted(acceptedOf(plan, pickedRoute(plan, name).name));
@@ -352,7 +375,14 @@ export function RebalanceModal({
   const optional = worth !== null && worth.tone !== 'act';
   const worthSub =
     worth?.tone === 'info' && !worth.sub
-      ? OPTIONAL_MOVE(goal, route.costUsd > 0 ? fmtUsd(route.costUsd) : null)
+      ? OPTIONAL_MOVE(
+          goal,
+          route.costUsd <= 0
+            ? null
+            : routeImpactUsd(route) > 0
+              ? FEE_PLUS_IMPACT(fmtUsd(routeFeeUsd(route)), fmtUsd(routeImpactUsd(route)))
+              : fmtUsd(route.costUsd),
+        )
       : (worth?.sub ?? null);
   const scale = scaleOf(nowRows, afterRows);
   const walletPools = POOLS.filter((pool) => buckets.some((bucket) => keyOf(bucket) === poolKey(pool)));
@@ -567,9 +597,10 @@ export function RebalanceModal({
             <Term label={t('accounts.rebalanceModal.route')} text={HOVER.route} />
           </div>
           {/* Every route, always, recommended first (his call 2026-09-19):
-              the time and fee side by side are the choice. */}
+              the time and fee side by side are the choice. The order holds
+              across polls until the trader refreshes the route. */}
           <div role="radiogroup" aria-label={t('accounts.rebalanceModal.route')} className="flex flex-col gap-1.5">
-            {routeOrder(plan).map((name) => (
+            {shownOrder(plan, accepted).map((name) => (
               <RouteRow key={name} route={name} plan={plan} checked={chosen === name} onPick={() => choose(name)} />
             ))}
           </div>

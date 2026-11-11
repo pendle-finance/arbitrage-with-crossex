@@ -454,7 +454,9 @@ describe('POST /api/boros/pair/simulate', () => {
 
 describe('the automatic gas top-up picks a zone that can pay', () => {
   const ETH_MARKET = (id: number, venue: string, apr: number) => ({ ...market(id, venue, apr), tokenId: 2 });
-  const ethBook = (ethNet: number, usdtNet: number, usdtPositions: Array<Record<string, unknown>> = []) => {
+  // `posted`: the margin each held ETH position posts, which a close hands
+  // back and which covers the close's own taker fee. The free ETH stays ethNet.
+  const ethBook = (ethNet: number, usdtNet: number, usdtPositions: Array<Record<string, unknown>> = [], posted = 0) => {
     const eth = marketAcc(ADDRESS, 2);
     const held = [
       { marketId: HL, size: 100_000 },
@@ -467,9 +469,9 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
           { marketAcc: marketAcc(ADDRESS, 3), netBalance: raw(usdtNet), initialMargin: raw(0), positions: usdtPositions },
           {
             marketAcc: eth,
-            netBalance: raw(ethNet),
+            netBalance: raw(ethNet + 2 * posted),
             initialMargin: raw(0),
-            positions: held.map((p) => ({ marketId: p.marketId, signedSize: raw(p.size), initialMargin: raw(0), orders: [] })),
+            positions: held.map((p) => ({ marketId: p.marketId, signedSize: raw(p.size), initialMargin: raw(posted), orders: [] })),
           },
         ],
       },
@@ -488,7 +490,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
   };
   const closeAtGasDebt = async (ethNet: number, usdtNet: number, usdtPositions?: Array<Record<string, unknown>>) => {
     const seen: PlaceOrdersOptions[] = [];
-    makeApp(ethBook(ethNet, usdtNet, usdtPositions), undefined, {
+    makeApp(ethBook(ethNet, usdtNet, usdtPositions, 50), undefined, {
       ...orderClient(),
       getGasBalance: async () => -0.02,
       placeMarketOrders: async (reqs, opts) => {
@@ -545,7 +547,7 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
 
   /** 1.7.5: an open whose ETH cannot spare the top-up after its legs pays it
    * from idle USDT instead of blocking. The ETH free margin is set to exactly
-   * what the legs need, read from a first simulate. */
+   * what the legs need (margin and fees), read from a first simulate. */
   it.each([
     ['$50', 50],
     ['$6M', 6_000_000],
@@ -557,7 +559,8 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     });
     makeApp(ethBook(1_000, usdtNet), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody())).json().data;
-    const need = (probe.simulation.legs as Array<{ marginRequired: number }>).reduce((t, l) => t + l.marginRequired, 0);
+    // Margin, taker fee and the fill's cost against mark: Boros takes the last two from cash before it checks margin.
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number; fillVsMarkCost: number }>).reduce((t, l) => t + (l.marginRequired + (l.takerFeeCost + l.fillVsMarkCost)), 0);
     expect(need).toBeGreaterThan(0);
     await app!.close();
 
@@ -586,12 +589,13 @@ describe('the automatic gas top-up picks a zone that can pay', () => {
     };
     makeApp(ethBook(1_000, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const probe = (await post('/api/boros/pair/simulate', openBody)).json().data;
-    const need = (probe.simulation.legs as Array<{ marginRequired: number }>).reduce((t, l) => t + l.marginRequired, 0);
+    // Margin, taker fee and the fill's cost against mark: Boros takes the last two from cash before it checks margin.
+    const need = (probe.simulation.legs as Array<{ marginRequired: number; takerFeeCost: number; fillVsMarkCost: number }>).reduce((t, l) => t + (l.marginRequired + (l.takerFeeCost + l.fillVsMarkCost)), 0);
     await app!.close();
     makeApp(ethBook(need, 0.5), undefined, { ...orderClient(), getGasBalance: async () => 0 });
     const res = await post('/api/boros/pair/execute', openBody);
     expect(res.statusCode).toBeGreaterThanOrEqual(400);
-    expect(JSON.stringify(res.json())).toMatch(/including about \$1\.00 of gas top-up/);
+    expect(JSON.stringify(res.json())).toMatch(/Cross margin is short/);
   });
 
   it('keeps the traded zone, as before, when no zone can pay', async () => {
@@ -831,61 +835,6 @@ describe('POST /api/boros/pair/execute', () => {
     });
   });
 
-  it('sends a reducing TARGET as a SELL of the delta, not a buy on the side held', async () => {
-    // The wizard re-run at a lower notional. The leg holds 1,000 LONG and the
-    // box now says 500, so §4 reads 1,000 → 500 and the acknowledgement says
-    // "reduces". Reading the side HELD instead of the sign of the delta sent a
-    // BUY of 500 and finished at 1,500 — and the reduce-only wei cap could not
-    // catch it, because 500 is not greater than the 1,000 open.
-    const sent: BorosMarketOrderRequest[] = [];
-    makeApp(
-      {
-        ...account(500_000, [{ marketId: HL, size: 1_000 }]),
-      },
-      undefined,
-      {
-        placeMarketOrders: async (reqs) => {
-          reqs.forEach((r) => sent.push(r));
-          return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction, filledSize: r.size }));
-        },
-        cancelOrders: async () => {},
-        closePosition: async () => okFill(),
-      },
-    );
-
-    const res = await post(
-      '/api/boros/pair/execute',
-      pairBody({
-        legs: [
-          pairLeg(HL, 'long', 0.0025, 500, 'coid-aaaa'),
-          // The Binance fixture's BID sits 0.5% under its mid, so a sell there
-          // needs a tolerance that admits it; the point under test is the SIDE.
-          pairLeg(BN, 'short', 0.01, 500, 'coid-bbbb'),
-        ],
-        intent: 'target',
-        opposingAcknowledged: true,
-      }),
-    );
-    expect(res.statusCode).toBe(200);
-
-    const hl = sent.find((r) => r.marketId === HL)!;
-    expect(hl).toBeDefined();
-    // Declared 'long' in the body; the ORDER is the other way.
-    expect(hl.direction).toBe('short');
-    expect(hl.size).toBeCloseTo(500, 9);
-    // A sell's bound sits BELOW the 0.09 mid. The old read put it above.
-    expect(hl.limitApr).toBeLessThan(0.09);
-    // Nothing to cap: the delta is smaller than the position, so it cannot
-    // cross flat and the wei override must stay off.
-    expect(hl.sizeWei).toBeUndefined();
-
-    // The leg that is only growing towards its target is untouched: its order
-    // side is still the side it declared.
-    const bn = sent.find((r) => r.marketId === BN)!;
-    expect(bn.direction).toBe('short');
-    expect(bn.limitApr).toBeLessThan(0.045);
-  });
-
   it('trades ONE leg when onlyLeg is set, for a completion', async () => {
     const sent: number[][] = [];
     makeApp({}, undefined, {
@@ -906,6 +855,53 @@ describe('POST /api/boros/pair/execute', () => {
     // unhedged residual.
     expect(res.json().data.result.allLegsSubmitted).toBe(false);
     expect(res.json().data.result.unhedgedSize).toBe(0);
+  });
+
+  it('sends the leg that frees margin first, and reports the fills in ticket order', async () => {
+    // Boros checks margin after each order, so the opening leg is only backed
+    // by the margin the reducing leg frees once that leg has run. Leg 1 opens
+    // HL. Leg 2 buys back 100,000 of a 150,000 BN short whose posted margin is
+    // far more than the 50,000 left needs.
+    const held = account(500_000, [{ marketId: BN, size: -150_000 }]);
+    const infos = held['/apis/v1/accounts/market-acc-infos-by-root'] as {
+      results: Array<{ positions: Array<{ initialMargin: string }> }>;
+    };
+    infos.results[0].positions[0].initialMargin = raw(100_000);
+    const sent: number[][] = [];
+    makeApp(held, undefined, {
+      placeMarketOrders: async (reqs) => {
+        sent.push(reqs.map((r) => r.marketId));
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+    const res = await post(
+      '/api/boros/pair/execute',
+      pairBody({ opposingAcknowledged: true, ids: ['coid-free-a', 'coid-free-b'] }),
+    );
+    expect(res.statusCode).toBe(200);
+    // One batch, the reducing leg (ticket leg 2) at its head.
+    expect(sent).toEqual([[BN, HL]]);
+    // The fills come back in the ticket's order, not the batch's.
+    const { result } = res.json().data;
+    expect(result.legs.map((l: { marketId: number }) => l.marketId)).toEqual([HL, BN]);
+    expect(result.legs.map((l: { direction: string }) => l.direction)).toEqual(['short', 'long']);
+  });
+
+  it('keeps the ticket order when no leg frees margin', async () => {
+    const sent: number[][] = [];
+    makeApp({}, undefined, {
+      placeMarketOrders: async (reqs) => {
+        sent.push(reqs.map((r) => r.marketId));
+        return reqs.map((r) => okFill({ marketId: r.marketId, direction: r.direction }));
+      },
+      cancelOrders: async () => {},
+      closePosition: async () => okFill(),
+    });
+    const res = await post('/api/boros/pair/execute', pairBody({ ids: ['coid-keep-a', 'coid-keep-b'] }));
+    expect(res.statusCode).toBe(200);
+    expect(sent).toEqual([[HL, BN]]);
   });
 
   it('replays a resend of the same order ids instead of trading twice', async () => {

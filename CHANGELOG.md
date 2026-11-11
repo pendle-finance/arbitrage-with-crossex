@@ -3,6 +3,49 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.9 — 2026-11-10
+
+TLDR: The terminal suggests a Boros liquidation buffer and says how much margin to add. A Boros
+pair order fills whole or does not send. Rebalance shows price impact apart from the fee.
+
+- **Suggested Boros liquidation buffer.** The terminal suggests that a Boros position liquidates
+  no closer than 5% APR from the mark rate. Fixed Rate Pairs has a new `Liq. APR` column, with the
+  mark rate under the locked rate. A position closer than the suggestion turns amber and shows
+  `Suggested` with the rate. The `Add Boros margin` chip gives the deposit that reaches it, one
+  amount per Boros margin account. This is a suggestion. The terminal blocks nothing.
+- **The pair ticket shows margin before you send.** The ticket lists Liquidation APR, Margin
+  usage, Suggested top-up amount, Trade fee and Slippage. Position and Available margin show
+  before → after above the size box. A slider sets the size as a share of the max size.
+- **A Boros pair order fills whole or does not send.** Before, an order could fill in part and
+  leave the two markets at different sizes. Now the ticket blocks a size that the book cannot
+  fill whole. The button names the reason: Insufficient liquidity, Slippage above max, Executed
+  rate out of range, Insufficient margin or Order too small. `Max fillable size` sets the largest
+  size that fills whole, in one click.
+- **Orders stay inside the rate range Boros accepts.** Before, a wide max slippage could put the
+  order's rate limit outside that range, and Boros refused the order. Now the limit is the nearer
+  of your max slippage and the Boros range.
+- **The margin check matches Boros.** The ticket now counts the taker fee, the margin a close
+  frees, and the cost of a fill that is worse than the mark rate. It counts time to maturity as
+  the Boros contracts do. Before, Boros could refuse a size that the ticket allowed. When margin
+  is short, the ticket says how much and in which account. `Max size your margin funds` sets the
+  largest size your free margin funds.
+- **The pair ticket sends the orders that free margin first.** Boros checks margin after each
+  order. Before, an order that needed margin could go ahead of the close that frees it, and Boros
+  refused the batch.
+- **Rebalance shows price impact apart from the fee.** Each route shows its fee and its price
+  impact as two numbers. Price impact is not a fee. It is USDC bought above $1 or sold below $1
+  on Gate spot, and depth taken past the top of the book.
+- **Rebalance recommends by fee and time.** The recommended route is the best balance of fee and
+  time. Each extra hour counts for more than the last. Before, the terminal recommended the
+  cheapest route of 15 minutes or less, which could cost far more than a slightly longer route.
+- **Smaller things.** The route you look at and the row order stay in place when quotes refresh.
+  The idle quote refreshes every 10 seconds, not every 4. The uneven-fill warning from 1.7.8 is
+  gone, because an order now fills whole. A blocked ticket no longer says that the difference is
+  left directional. The liquidation APR and the suggested top-up count time
+  to maturity as the Boros contracts do.
+
+Existing installs get this through the in-app Update.
+
 ## 1.7.8 — 2026-10-27
 
 TLDR: Fixed Rate Pairs pairs your positions by venue at any Boros date. You can exclude part of a

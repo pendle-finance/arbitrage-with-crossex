@@ -34,7 +34,7 @@ import {
   type BorosOrderBook,
   type FetchLike,
 } from '../../core/boros/client';
-import { borosInitialMarginUsd, normalizeUnderlying } from '../../core/boros/opportunities';
+import { borosInitialMarginUsd, borosTimeToMaturitySec, normalizeUnderlying } from '../../core/boros/opportunities';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { normalizeVenue } from '../../core/boros/venue';
 import { isSpreadMarket, knownRateOf } from '../../core/boros/spread';
@@ -59,7 +59,9 @@ import {
 } from '../../core/boros/rollover';
 import {
   chooseGasTopUpZone,
+  attachMaxFundedSize,
   evaluatePairGate,
+  legMarginNeed,
   pairEligibility,
   reducingOrderSize,
   simulateBorosPair,
@@ -277,10 +279,7 @@ function parseSize(raw: unknown, which: string): number {
 function parseIntent(raw: unknown): PairIntent {
   if (raw === undefined || raw === null || raw === 'open') return 'open';
   if (raw === 'close') return 'close';
-  // `target` sizes to an END STATE rather than an increment — the guided
-  // wizard's form, where a half-filled leg must not be topped up twice.
-  if (raw === 'target') return 'target';
-  throw new CoreError('intent must be "open", "close" or "target"', 'validation');
+  throw new CoreError('intent must be "open" or "close"', 'validation');
 }
 
 function parseClientOrderId(raw: unknown, which: string): string {
@@ -656,14 +655,15 @@ export function createPairPricer(deps: AppDeps) {
     const tokenId = legMarkets[0].tokenId;
     const collateralPriceUsd = resolveCollateralPricesUsd(markets).get(tokenId) ?? null;
 
-    const simulation = simulateBorosPair({
+    const simInput = {
       legs: legs.map((leg, i) => ({ ...leg, size: parsed[i].size })),
       intent,
       onlyLeg,
       collateralPriceUsd,
       nowSec,
       takerFeeOverride,
-    });
+    };
+    const simulation = simulateBorosPair(simInput);
 
     // The best-funded OTHER coin, for an open whose own coin cannot spare the
     // gas top-up after its legs.
@@ -680,15 +680,16 @@ export function createPairPricer(deps: AppDeps) {
       gasFallbackFreeUsd: fallbackZone.ok ? fallbackZone.freeUsd : null,
     };
     const simulatedAtMs = Date.now();
-    const gate = evaluatePairGate({
-      simulation,
+    const gateInput = {
       legs,
       account: accountState,
       eligibility,
       opposingAcknowledged: body.opposingAcknowledged === true,
       simulatedAtMs,
       nowMs: simulatedAtMs,
-    });
+    };
+    const gate = evaluatePairGate({ ...gateInput, simulation });
+    attachMaxFundedSize(gate, simInput, gateInput);
     if (intent === 'open' && hedge) {
       const blocker = await hedgeLimitBlocker(hedge, simulation, collateralPriceUsd, fresh);
       if (blocker) gate.blockers.push(blocker);
@@ -717,15 +718,16 @@ export function createPairPricer(deps: AppDeps) {
  * linear in size (IM = N × max(|apr|, floor) × max(DTM, tThresh)/365 × kIM;
  * fee = takerFeeRate × N × years), so the ticket divides the bucket's
  * available by this to state the size it can fund. The rate is the larger of
- * mark and mid — the entry the formula charges is not known before the fill,
- * and the larger one never overstates the size. Null when the market carries
- * no margin inputs.
+ * mark and mid. The book is not read here, so the fill's cost against mark is
+ * not in it: on a thin book the gate funds less than this, and its margin
+ * blocker offers the size that fits. Null when the market carries no margin
+ * inputs.
  */
 function openCostPerSize(m: BorosMarket, nowSec: number): number | null {
   const rate = Math.max(Math.abs(m.markApr), Math.abs(m.midApr));
   const im = borosInitialMarginUsd(m, rate, 1, nowSec);
   if (im === null) return null;
-  const years = Math.max(0, m.maturity - nowSec) / (365 * 86_400);
+  const years = borosTimeToMaturitySec(m, nowSec) / (365 * 86_400);
   const fee = Number.isFinite(m.takerFeeRate) && m.takerFeeRate > 0 ? m.takerFeeRate * years : 0;
   const cost = im + fee;
   return cost > 0 ? cost : null;
@@ -1049,26 +1051,20 @@ export function borosPairRoutes(deps: AppDeps) {
         ): BorosMarketOrderRequest | null => {
           const size = Math.abs(leg.sizing.deltaSize);
           if (size === 0 || leg.execApr === null) return null;
-          const legMarket = pricedLegs.find((p) => p.market.marketId === leg.marketId)?.market ?? { spreadVenues: null };
           const raw = account.positionRawByMarket.get(leg.marketId);
           const reducing =
             leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? reducingOrderSize(raw, size) : null;
-          /**
-           * ⚠ The side the ORDER takes, never the side the account holds.
-           * They part company on a reducing `target`: the leg stays 'long' and
-           * the delta is negative, so sending `leg.direction` bought MORE of
-           * the position the §4 row promised to reduce. The cancel-and-close
-           * route below already derives its side from the position sign for
-           * the same reason; this is that rule, applied from the delta.
-           */
+          // The side the ORDER takes, from the delta.
           const { orderSide } = leg.sizing;
           return {
             marketId: leg.marketId,
             direction: orderSide,
             size: reducing?.size ?? size,
-            // Bound off the book MID, the same anchor the ticket's "Est." and
-            // "Max" use; a mid-less market falls back to the fill rate.
-            limitApr: limitAprFor(orderSide, knownRateOf(legMarket, leg.midApr) ? leg.midApr : leg.execApr, leg.slippageApr),
+            // The simulation's limit: the user's bound off the book MID (the
+            // anchor the ticket's "Est." and "Max" use), clamped inside the
+            // venue's band: Boros refuses a fill whose last matched level
+            // sits past it, and a limit inside it can never match one.
+            limitApr: leg.limitApr as number,
             clientOrderId,
             ...(reducing?.sizeWei !== undefined ? { sizeWei: reducing.sizeWei } : {}),
           };
@@ -1105,6 +1101,11 @@ export function borosPairRoutes(deps: AppDeps) {
           // A close only reduces, so the gas top-up stays out of its way unless
           // the budget genuinely cannot pay — an exit is never taxed a dollar.
           reducing: intent === 'close',
+          // The gate lets margin one leg frees back another (the same sum as
+          // its `required`), which holds only when the freeing leg runs first.
+          sendFirst: simulation.legs.flatMap((leg, i) =>
+            (legMarginNeed(leg, pricedLegs[i].committedMargin) ?? 0) < 0 ? [i] : [],
+          ),
           // A close clears its markets' resting orders in the same batch, so
           // none is left to re-open a leg once it is flat.
           cancelOrdersOn:

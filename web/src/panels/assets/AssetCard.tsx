@@ -5,7 +5,7 @@
  *
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
-import { cloneElement, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { cloneElement, createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
@@ -58,7 +58,7 @@ import {
   usePositions,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { BlockerList, LegFillLine, legLetter, LiquidationRows, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, UnevenFillWarning } from '../../trade/BorosPairBits';
+import { AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, SuggestedTopUpLines } from '../../trade/BorosPairBits';
 import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
@@ -504,24 +504,183 @@ function SectionTabs<T extends string>({
 /** Hover copy for a Boros leg's venue-reported liquidation rate. NOT the
  * ticket's LIQ_TITLE, which describes the pre-trade IM-floor estimate. */
 
-/** The venue-reported liquidation APR, under a Boros leg's rate. Renders
- * nothing when the venue reports none (flat, unpriced, no coefficients) or on
- * an older server (absent). "N/A" past max(250%, 10 × |mark|), as the Boros
- * app shows it (dapp-nitro isLiquidationAprOutOfRange). */
-function BorosLiqAprLine({ leg }: { leg: Pick<AssetBorosOpen, 'liquidationApr' | 'markApr'> | undefined }) {
+type BorosLiqLeg = Pick<
+  AssetBorosOpen,
+  'liquidationApr' | 'markApr' | 'side' | 'suggestedLiquidationApr' | 'toSuggestedUsd' | 'toSuggestedToken' | 'collateral'
+>;
+
+/** Out of the range the Boros app prices: it shows "N/A" (dapp-nitro
+ * isLiquidationAprOutOfRange). */
+const liqOutOfRange = (leg: Pick<AssetBorosOpen, 'markApr'>, apr: number): boolean =>
+  Math.abs(apr) > Math.max(2.5, 10 * Math.abs(leg.markApr));
+
+/** True when the leg liquidates closer to the mark than the suggested rate:
+ * above it for a long (which liquidates as the rate falls), below it for a
+ * short. An N/A rate is past any suggestion. */
+function belowSuggested(leg: BorosLiqLeg): boolean {
+  const apr = leg.liquidationApr;
+  const suggested = leg.suggestedLiquidationApr;
+  if (apr == null || suggested == null || !Number.isFinite(apr) || liqOutOfRange(leg, apr)) return false;
+  return leg.side === 'LONG' ? apr > suggested : apr < suggested;
+}
+
+const suggestedBound = (leg: BorosLiqLeg): string =>
+  `${leg.side === 'LONG' ? '≤' : '≥'} ${fmtPct(leg.suggestedLiquidationApr ?? 0)}`;
+
+/** The top-up, when the venue's solve could price one. */
+const topUpText = (leg: BorosLiqLeg): string | null => {
+  const qty = topUpQty(leg);
+  return qty === null ? null : depositText(qty, leg.collateral, leg.toSuggestedUsd ?? null);
+};
+
+/** The top-up in the collateral token, or null when the leg needs none (under
+ * a cent is rounding) or the venue's solve could not price one. */
+const topUpQty = (leg: Pick<AssetBorosOpen, 'toSuggestedUsd' | 'toSuggestedToken'>): number | null =>
+  leg.toSuggestedUsd != null && leg.toSuggestedUsd >= 0.01 && leg.toSuggestedToken != null && leg.toSuggestedToken > 0
+    ? leg.toSuggestedToken
+    : null;
+
+/** A deposit amount in full ("1,234.5 USDT", never "1.2k"), rounded UP at
+ * the sixth significant figure: an amount rounded down would leave the
+ * position just short of the suggestion. */
+const depositQty = (qty: number, coin: string): string => {
+  const step = 10 ** (Math.floor(Math.log10(qty)) - 5);
+  return exactQty(Math.ceil(qty / step - 1e-9) * step, coin);
+};
+const depositText = (qty: number, coin: string, usd: number | null): string => {
+  const token = depositQty(qty, coin);
+  return usd === null ? token : `${token} (${fmtUsd(Math.ceil(usd), 0)})`;
+};
+
+/** The market's current mark APR under a Boros leg's locked rate: what the
+ * liquidation rate beside it is measured from. Nothing once the market has
+ * matured (the venue marks it 0) or when the leg is not held. */
+function BorosMark({ leg, nowSec }: { leg: Pick<AssetBorosOpen, 'markApr' | 'maturity'> | undefined; nowSec: number }) {
+  if (!leg || !Number.isFinite(leg.markApr) || leg.maturity <= nowSec) return null;
+  return (
+    <div className="num text-[10px] font-normal text-ink-500" title={t('assetCard.liq.markTitle')}>
+      {t('assetCard.liq.mark', { apr: fmtPct(leg.markApr) })}
+    </div>
+  );
+}
+
+const toSuggestedTitle = (leg: BorosLiqLeg): string => {
+  const amount = topUpText(leg);
+  return amount
+    ? t('assetCard.liq.addTitle', { amount, bound: suggestedBound(leg) })
+    : t('assetCard.liq.suggestedTitle', { bound: suggestedBound(leg) });
+};
+
+/** A Boros leg's venue-reported liquidation APR. Renders nothing when the
+ * venue reports none (flat, unpriced, no coefficients) or on an older server
+ * (absent). "N/A" past max(250%, 10 × |mark|), as the Boros app shows it.
+ * A leg short of the suggested rate turns amber; the hover says what reaching
+ * it takes. `inline` is the one-line form that rides under a rate (bundle
+ * rows), too tight to also name the suggested rate; otherwise it fills a
+ * Liq. APR cell of its own, which names it on a second line. */
+function BorosLiq({ leg, inline = false }: { leg: BorosLiqLeg | undefined; inline?: boolean }) {
   const apr = leg?.liquidationApr;
-  if (!leg || apr == null || !Number.isFinite(apr)) return null;
-  if (Math.abs(apr) > Math.max(2.5, 10 * Math.abs(leg.markApr))) {
+  if (!leg || apr == null || !Number.isFinite(apr)) {
+    return inline ? null : <span className="text-ink-600">—</span>;
+  }
+  const label = (text: string) => (inline ? t('assetCard.liq.apr', { apr: text }) : text);
+  if (liqOutOfRange(leg, apr)) {
     return (
-      <div className="num text-[10px] text-ink-500" title={t('assetCard.liq.lowRiskTitle')}>
-        {t('assetCard.liq.na')}
+      <div className={inline ? 'num text-[10px] text-ink-500' : 'text-ink-500'} title={t('assetCard.liq.lowRiskTitle')}>
+        {label(t('assetCard.liq.naShort'))}
+      </div>
+    );
+  }
+  if (!belowSuggested(leg)) {
+    return (
+      <div className={inline ? 'num text-[10px] text-ink-500' : 'text-ink-100'} title={t('assetCard.liq.borosTitle')}>
+        {label(fmtPct(apr))}
+      </div>
+    );
+  }
+  if (inline) {
+    return (
+      <div className="num cursor-help text-[10px] text-amber-300" title={toSuggestedTitle(leg)}>
+        {label(fmtPct(apr))}
       </div>
     );
   }
   return (
-    <div className="num text-[10px] text-ink-500" title={t('assetCard.liq.borosTitle')}>
-      {t('assetCard.liq.apr', { apr: fmtPct(apr) })}
+    <div className="cursor-help" title={toSuggestedTitle(leg)}>
+      <div className="text-amber-300">{fmtPct(apr)}</div>
+      <div className="text-[10.5px] text-ink-400">{t('assetCard.liq.suggested', { bound: suggestedBound(leg) })}</div>
     </div>
+  );
+}
+
+/** Every Boros leg in the portfolio, with the asset it hedges. A cross
+ * account spans every asset in its coin, so the chip prices each account
+ * across all of them rather than one card's legs. */
+export const PortfolioBorosLegs = createContext<Array<{ base: string; leg: AssetBorosOpen }> | null>(null);
+
+/** The quiet warning chip, beside the hedge chip on the asset header and on
+ * each pair row that holds such a leg, when a Boros leg liquidates closer to
+ * the mark than the suggested rate. The hover is the instruction: what to
+ * deposit, per margin account. Cash added to a cross account backs every
+ * position on it at once, so an account needs the LARGEST of its positions'
+ * top-ups across the whole portfolio, never their sum and never one card's:
+ * every chip on one account then names the same deposit, and it covers all
+ * of them. */
+function AddMarginChip({ legs, sm = false }: { legs: AssetBorosOpen[]; sm?: boolean }) {
+  const portfolio = useContext(PortfolioBorosLegs);
+  const low = legs.filter(belowSuggested);
+  if (low.length === 0) return null;
+  const keyOf = (l: AssetBorosOpen) => (l.marginMode === 'isolated' ? `iso:${l.marketId}` : `cross:${l.collateral}`);
+  const mine = new Set(low.map(keyOf));
+  const accounts = new Map<string, { name: string; coin: string; qty: number | null; usd: number | null; bases: Set<string> }>();
+  // This card's own legs too, in case the portfolio list has not caught up.
+  const pool = [...(portfolio ?? []), ...low.map((leg) => ({ base: '', leg }))];
+  for (const { base, leg: l } of pool) {
+    const key = keyOf(l);
+    if (!mine.has(key) || !belowSuggested(l)) continue;
+    const isolated = l.marginMode === 'isolated';
+    const prev = accounts.get(key) ?? {
+      name: isolated
+        ? t('assetCard.liq.isolatedAccount', { market: borosLegLabel(l) })
+        : t('assetCard.liq.crossAccount', { coin: l.collateral }),
+      coin: l.collateral,
+      qty: null,
+      usd: null,
+      bases: new Set<string>(),
+    };
+    if (base) prev.bases.add(base);
+    const qty = topUpQty(l);
+    // One account, one coin: the leg needing the most tokens needs the most $.
+    if (qty !== null && (prev.qty === null || qty > prev.qty)) {
+      prev.qty = qty;
+      prev.usd = l.toSuggestedUsd ?? null;
+    }
+    accounts.set(key, prev);
+  }
+  const list = [...accounts.values()];
+  const amount = (a: (typeof list)[number]) => (a.qty === null ? null : depositText(a.qty, a.coin, a.usd));
+  // Said only when the deposit backs more than this card: the reason every
+  // card on the account names the same figure.
+  const covers = (a: (typeof list)[number]) =>
+    a.bases.size > 1 ? t('assetCard.liq.covers', { bases: [...a.bases].sort().join(t('assetCard.listSep')) }) : null;
+  const title =
+    list.length === 1
+      ? [
+          amount(list[0]) === null
+            ? t('assetCard.liq.depositNoAmount', { account: list[0].name })
+            : t('assetCard.liq.deposit', { amount: amount(list[0]), account: list[0].name }),
+          covers(list[0]),
+        ]
+          .filter(Boolean)
+          .join('\n')
+      : [
+          t('assetCard.liq.depositMany'),
+          ...list.map((a) => `${a.name}\t${amount(a) ?? '—'}${covers(a) ? ` · ${covers(a)}` : ''}`),
+        ].join('\n');
+  return (
+    <Chip sm={sm} tone="amber" className={sm ? '!font-medium' : HEAD_CHIP} title={title}>
+      {t('assetCard.liq.chip')}
+    </Chip>
   );
 }
 
@@ -827,6 +986,10 @@ function PairCard({
                     {t('assetCard.roll.readyChip')}
                   </Chip>
                 )}
+                <AddMarginChip
+                  sm
+                  legs={borosOpen.filter((b) => pair.legs.some((l) => l.kind === 'yu' && l.marketId === b.marketId))}
+                />
                 </span>
                 {/* One maturity per pair, by construction: a 4-leg unit settles
                     on a single day, and a laddered book is several rows. It
@@ -907,6 +1070,7 @@ function PairCard({
                   <th className="th text-left">{t('common.position')}</th>
                   <th className="th text-right">{t('common.size')}</th>
                   <th className="th text-right">{t('common.locked')}</th>
+                  <th className="th text-right">{t('assetCard.liq.column')}</th>
                   <th className="th text-right">{t('common.initialMargin')}</th>
                   <MenuHead show={hasMenu} />
                 </tr>
@@ -932,8 +1096,13 @@ function PairCard({
                       ) : (
                         <span className="text-ink-600">—</span>
                       )}
-                      {l.kind === 'yu' && (
-                        <BorosLiqAprLine leg={borosOpen.find((b) => b.marketId === l.marketId)} />
+                      {l.kind === 'yu' && <BorosMark leg={borosOpen.find((b) => b.marketId === l.marketId)} nowSec={nowSec} />}
+                    </td>
+                    <td className={`${cell} num whitespace-nowrap text-right`}>
+                      {l.kind === 'yu' ? (
+                        <BorosLiq leg={borosOpen.find((b) => b.marketId === l.marketId)} />
+                      ) : (
+                        <span className="text-ink-600">—</span>
                       )}
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>
@@ -1408,7 +1577,7 @@ function RollProbe({
     quoted2 &&
     legs2.length > 0 &&
     !(entrySim.legs.length === 2 && entrySim.receiveLeg === null) &&
-    legs2.every((l) => l.bookStatus === 'ok' && !l.slippageExceeded && !(l.shortfallSize > 0));
+    legs2.every((l) => l.bookStatus === 'ok' && !l.slippageExceeded && !l.bandExceeded && !(l.shortfallSize > 0));
   const { netRate } = rollFigures({
     entrySim,
     exitSim,
@@ -1432,11 +1601,15 @@ function RollProbe({
 function OpenOnlyNote({ oldMaturity, className }: { oldMaturity: number; className: string }) {
   const old = fmtDateLocal(oldMaturity);
   return (
-    <ul className={`list-disc pl-4 text-[11.5px] leading-relaxed ${className}`}>
-      <li>{t('assetCard.roll.openOnly1', { old })}</li>
-      <li>{t('assetCard.roll.openOnly2', { old })}</li>
-      <li>{t('assetCard.roll.openOnly3', { old })}</li>
-    </ul>
+    // The box (when the caller draws one) wraps the list, so its padding
+    // never fights the list's own indent: the bullets sat on the border.
+    <div className={`text-[11.5px] leading-relaxed ${className}`}>
+      <ul className="list-disc pl-4">
+        <li>{t('assetCard.roll.openOnly1', { old })}</li>
+        <li>{t('assetCard.roll.openOnly2', { old })}</li>
+        <li>{t('assetCard.roll.openOnly3', { old })}</li>
+      </ul>
+    </div>
   );
 }
 
@@ -2003,7 +2176,7 @@ export function RollOverModal({
                 : t('assetCard.roll.tooBigRate', { market: sizeLimit.marketName })}{' '}
               {t(openOnly ? 'assetCard.roll.mostOpens' : 'assetCard.roll.mostRolls', { qty: fmtTokenQty(maxRoll, collateral) })}{' '}
               <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
-                {t(openOnly ? 'assetCard.roll.openInstead' : 'assetCard.roll.rollInstead', { qty: fmtTokenQty(suggestedRollSize(maxRoll, heldSize), collateral) })}
+                {t(openOnly ? 'assetCard.roll.openInstead' : 'assetCard.roll.rollInstead', { qty: exactQty(suggestedRollSize(maxRoll, heldSize), collateral) })}
               </button>
             </p>
           )}
@@ -2131,8 +2304,12 @@ function BatchSection({
   slip,
   step,
   heading,
+  liqWarn = true,
 }: {
   label: string;
+  /** False when the margin left free after the batch already carries the
+   * new legs to the suggested liquidation rate. */
+  liqWarn?: boolean;
   /** What the card's header SAYS, when that differs from the batch's name
    * (`label` still names it in the tolerance box and the blockers). */
   heading?: string;
@@ -2186,7 +2363,7 @@ function BatchSection({
           {exitPnl ? (
             <ExitPnlReadout sim={sim} exitPnl={exitPnl} between={slipLine} />
           ) : (
-            <SpreadReadout sim={sim} between={slipLine} compact />
+            <SpreadReadout sim={sim} />
           )}
           {exceeded.length > 0 && (
             <p
@@ -2197,12 +2374,20 @@ function BatchSection({
               {t('assetCard.batch.slipTooHigh', { venues: exceeded.map((l) => prettyVenue(l.venue)).join(t('assetCard.andSep')) })}
             </p>
           )}
-          {/* The batch's headline, its tolerance, the margin it moves and
-              its fee are the decision; where each position ends up, where
-              each leg liquidates and which bucket carries what are the
-              detail, folded until asked for — the two cards were a wall of
-              figures (his call 2026-09-20). */}
-          <PairCosts sim={sim} freeing={Boolean(exitPnl)} compact />
+          {/* The batch's headline, where the new legs liquidate, the margin
+              it moves and its fee, then its tolerance, are the decision;
+              where each position ends up and which bucket carries what are
+              the detail, folded until asked for — the two cards were a wall
+              of figures. */}
+          {!exitPnl && (
+            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
+              <LiquidationLines sim={sim} warn={() => liqWarn} />
+            </div>
+          )}
+          <div className="border-t border-ink-800/80 pt-2">
+            <PairCosts sim={sim} freeing={Boolean(exitPnl)} />
+          </div>
+          {!exitPnl && <div className="border-t border-ink-800/80 pt-2">{slipLine}</div>}
           <button
             type="button"
             className="self-start text-[11px] text-ink-400 underline decoration-dotted underline-offset-2 hover:text-ink-200"
@@ -2225,7 +2410,6 @@ function BatchSection({
                   ))}
                 </div>
               )}
-              {!exitPnl && <LiquidationRows sim={sim} />}
               <PositionArithmetic sim={sim} />
               {sim.reasons.length > 0 && (
                 <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
@@ -2427,6 +2611,9 @@ function RollReview({
   // between the closes and the opens, which is what the opens were judged on.
   const availableAfterExit = margin?.availableAfterExit ?? null;
   const marginShort = margin?.shortfall ?? 0;
+  /** Deposit the new legs still need for the suggested liquidation rate,
+   * after the margin the roll leaves free; null on an older server. */
+  const suggestedTopUp = margin?.suggestedTopUp ?? null;
   const px = exitSim?.collateralPriceUsd ?? entrySim?.collateralPriceUsd ?? null;
   const usdNote = (tokens: number) =>
     px !== null && px > 0 ? <span className="text-[11px] text-ink-400"> ≈ {fmtUsd(tokens * px)}</span> : null;
@@ -2525,7 +2712,7 @@ function RollReview({
         )}
         {status === 'rolled' && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            {t('assetCard.review.rolled', { qty: fmtTokenQty(result!.rolledSize, collateral), date: fmtDateLocal(target.maturity) })}
+            {t('assetCard.review.rolled', { qty: exactQty(result!.rolledSize, collateral), date: fmtDateLocal(target.maturity) })}
           </p>
         )}
         {status === 'refused' && (
@@ -2591,7 +2778,7 @@ function RollReview({
           <div className="grid grid-cols-3 gap-x-5">
             <div title={t('assetCard.review.sizeTitle')}>
               <div className={statLabel}>{t('common.size')}</div>
-              <div className={`${statValue} font-semibold text-ink-50`}>{fmtTokenQty(size, collateral)}</div>
+              <div className={`${statValue} font-semibold text-ink-50`}>{exactQty(size, collateral)}</div>
             </div>
             <div title={t('assetCard.review.earnTitle')}>
               <div className={statLabel}>{t('assetCard.estEarnings')}</div>
@@ -2652,6 +2839,7 @@ function RollReview({
           error={roll.isError ? roll.error : null}
           onRetry={() => roll.refetch()}
           slip={entrySlip}
+          liqWarn={suggestedTopUp === null || suggestedTopUp > 0}
         />
       </div>
 
@@ -2720,6 +2908,19 @@ function RollReview({
           }
           strong
         />
+        {suggestedTopUp !== null && suggestedTopUp > 0 && (
+          <EstimateRow
+            label={<span className="text-amber-300">{t('pairTicket.borosBits.suggestedTopUp')}</span>}
+            title={t('pairTicket.borosBits.suggestedTopUpHint')}
+            value={
+              <span className="text-amber-300">
+                +{depositQty(suggestedTopUp, collateral)}
+                {usdNote(suggestedTopUp)}
+              </span>
+            }
+            strong
+          />
+        )}
         {marginShort > 0 && (
           <p className="text-[11.5px] leading-relaxed text-amber-100">
             {t('assetCard.review.short', { qty: fmtTokenQty(marginShort, collateral) })}
@@ -2835,6 +3036,11 @@ function OpenOnlyReview({
   const sim = useBorosPairSimulation(req, req !== null && out === null, { refetchInterval: ROLL_POLL_MS });
   const simulation = sim.data?.simulation ?? null;
   const ackShown = sim.data?.gate.requiresAcknowledgement === true;
+  /** Names a margin account when the new legs draw on more than one. */
+  const nameOfAccount = (id: number | null): string =>
+    id === null
+      ? t('pairTicket.borosBits.crossAccount')
+      : (sim.data?.simulation.legs.find((l) => l.marketId === id)?.marketName ?? '');
 
   const now = useNow(1_000);
   const stale = sim.dataUpdatedAt > 0 ? now - sim.dataUpdatedAt > ROLL_QUOTE_MAX_AGE_MS : true;
@@ -2887,12 +3093,12 @@ function OpenOnlyReview({
         {result && <RollLegReport label={t('assetCard.openOnly.newLegs')} legs={result.legs} collateral={collateral} tone={tone} nameOf={(id) => simulation?.legs.find((l) => l.marketId === id)?.marketName ?? ('spreadVenues' in target ? spreadName(base, target.spreadVenues) : null)} />}
         {result && !result.filledNothing && !result.partial && (
           <p className="text-[11.5px] text-ink-300" role="status">
-            {t('assetCard.openOnly.opened', { qty: fmtTokenQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity), old: fmtDateLocal(pair.soonestMaturitySec) })}
+            {t('assetCard.openOnly.opened', { qty: exactQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity), old: fmtDateLocal(pair.soonestMaturitySec) })}
           </p>
         )}
         {result?.partial && !result.filledNothing && (
           <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            {t('assetCard.openOnly.partial', { qty: fmtTokenQty(result.hedgedSize, collateral) })}
+            {t('assetCard.openOnly.partial', { qty: exactQty(result.hedgedSize, collateral) })}
           </p>
         )}
         {result?.filledNothing && (
@@ -2949,7 +3155,7 @@ function OpenOnlyReview({
           <div className="min-w-0">
             <div className={microLabelClass}>{t('assetCard.openOnly.openAt', { date: fmtDateLocal(target.maturity) })}</div>
             <div className="num mt-1 text-[22px] font-semibold leading-none tracking-[-0.02em]">
-              {fmtTokenQty(size, collateral)}
+              {exactQty(size, collateral)}
               <span className="ml-2 text-[13px] font-normal text-ink-300">{t('assetCard.review.days', { days: termDays })}</span>
             </div>
             <div className="mt-1.5 text-[11.5px] text-ink-400">{t('assetCard.openOnly.oldKeep')}</div>
@@ -2970,8 +3176,30 @@ function OpenOnlyReview({
           <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />
         ) : simulation ? (
           <>
-            <SpreadReadout sim={simulation} between={slipLine} compact />
-            <PairCosts sim={simulation} compact />
+            <SpreadReadout sim={simulation} boxed />
+            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
+              <LiquidationLines sim={simulation} warn={liqWarnOf(sim.data?.gate.funding)} />
+            </div>
+            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
+              <PairCosts
+                sim={simulation}
+                afterMargin={
+                  sim.data?.gate.funding && (
+                    <SuggestedTopUpLines sim={simulation} funding={sim.data.gate.funding} nameOf={nameOfAccount} />
+                  )
+                }
+              />
+              {sim.data?.gate.funding && (
+                <AvailableMarginLines
+                  sim={simulation}
+                  funding={sim.data.gate.funding}
+                  nameOf={nameOfAccount}
+                  fallback={null}
+                  unit={simulation.collateral}
+                />
+              )}
+            </div>
+            <div className="border-t border-ink-800/80 pt-2">{slipLine}</div>
           </>
         ) : (
           <>
@@ -2982,7 +3210,6 @@ function OpenOnlyReview({
       </EstimateCard>
 
       {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
-      {simulation && <UnevenFillWarning sim={simulation} />}
       <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))} />
 
       <div className="mt-1 flex items-center justify-between gap-2">
@@ -3622,6 +3849,7 @@ function BorosOnlyPairCard({
         <td className={`${cell} whitespace-nowrap`}>{legName(venue, 'perp', side)}</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{sizeText(sizeIn(perp, perp.unit))}</td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
+        <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(perp.imUsd)}</td>
         <MenuCell show={hasMenu} cell={cell} />
       </tr>
@@ -3637,6 +3865,7 @@ function BorosOnlyPairCard({
         <td className={`${cell} num whitespace-nowrap text-right text-warning`} title={t('assetCard.heldOfTargetTitle')}>
           {ofTarget(perp ? sizeIn(perp, perp.unit) : 0)}
         </td>
+        <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} num text-right text-ink-600`}>—</td>
         <td className={`${cell} whitespace-nowrap text-right`}>
           <button
@@ -3689,6 +3918,7 @@ function BorosOnlyPairCard({
                 >
                   {both ? t('assetCard.borosOnly.perpsMissing') : t('assetCard.borosOnly.perpMissing')}
                 </Chip>
+                <AddMarginChip sm legs={borosOpen.filter((b) => pair.borosLegs.some((y) => y.marketId === b.marketId))} />
                 </span>
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
                   <span title={t('assetCard.borosOnly.maturityTitle')}>
@@ -3731,6 +3961,7 @@ function BorosOnlyPairCard({
                   <th className="th text-left">{t('common.position')}</th>
                   <th className="th text-right">{t('common.size')}</th>
                   <th className="th text-right">{t('common.locked')}</th>
+                  <th className="th text-right">{t('assetCard.liq.column')}</th>
                   <th className="th text-right">{t('common.initialMargin')}</th>
                   <MenuHead show={hasMenu} />
                 </tr>
@@ -3755,7 +3986,10 @@ function BorosOnlyPairCard({
                       ) : (
                         <span className="text-ink-500">{t('assetCard.pending')}</span>
                       )}
-                      <BorosLiqAprLine leg={borosOpen.find((b) => b.marketId === y.marketId)} />
+                      <BorosMark leg={borosOpen.find((b) => b.marketId === y.marketId)} nowSec={nowSec} />
+                    </td>
+                    <td className={`${cell} num whitespace-nowrap text-right`}>
+                      <BorosLiq leg={borosOpen.find((b) => b.marketId === y.marketId)} />
                     </td>
                     <td className={`${cell} num whitespace-nowrap text-right text-ink-100`}>{fmtUsdCompact(y.imUsd)}</td>
                     <MenuCell show={hasMenu} cell={cell}>
@@ -3925,17 +4159,19 @@ function UngroupedCard({
         <div>
           <table className="w-full min-w-[880px] table-fixed border-collapse text-[12.5px] [&_td]:border-b [&_td]:border-ink-800/70 [&_td]:px-3 [&_td]:py-[9px] [&_td:first-child]:pl-4 [&_td:last-child]:pr-4 [&_tr:last-child_td]:border-b-0">
             <colgroup>
-              <col style={{ width: '30%' }} />
-              <col style={{ width: '20%' }} />
+              <col style={{ width: '26%' }} />
+              <col style={{ width: '17%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '13%' }} />
               <col style={{ width: '16%' }} />
-              <col style={{ width: '16%' }} />
-              <col style={{ width: '18%' }} />
             </colgroup>
             <thead>
               <tr className="bg-ink-900/60 [&>th]:px-3 [&>th]:py-2.5 [&>th]:text-[12px] [&>th]:font-normal [&>th]:text-ink-300 [&>th:first-child]:pl-4 [&>th:last-child]:pr-4">
                 <th className="text-left">{t('common.position')}</th>
                 <th className="text-right">{t('common.size')}</th>
                 <th className="text-right">{t('common.locked')}</th>
+                <th className="text-right">{t('assetCard.liq.column')}</th>
                 <th className="text-right">{t('common.initialMargin')}</th>
                 <th />
               </tr>
@@ -3973,6 +4209,7 @@ function UngroupedCard({
                     <td className="num text-right text-ink-600" title={t('assetCard.ungrouped.perpNoRate')}>
                       —
                     </td>
+                    <td className="num text-right text-ink-600">—</td>
                     <td className="num text-right text-ink-100" title={exactUsd(l.imUsd)}>
                       {fmtUsdCompact(l.imUsd)}
                     </td>
@@ -4040,7 +4277,10 @@ function UngroupedCard({
                       ) : (
                         <span className="font-normal text-ink-500">{t('assetCard.pending')}</span>
                       )}
-                      <BorosLiqAprLine leg={leg} />
+                      <BorosMark leg={leg} nowSec={nowSec} />
+                    </td>
+                    <td className="num text-right">
+                      <BorosLiq leg={leg} />
                     </td>
                     <td className="num text-right text-ink-100" title={exactUsd(l.imUsd)}>
                       {fmtUsdCompact(l.imUsd)}
@@ -4677,7 +4917,7 @@ function BorosRow({
         ) : (
           <>
             {slice.entry !== null ? fmtPct(slice.entry) : <span className="text-ink-500">{t('assetCard.pending')}</span>} → {fmtPct(leg.markApr)}
-            <BorosLiqAprLine leg={leg} />
+            <BorosLiq leg={leg} inline />
           </>
         )}
       </td>
@@ -5847,6 +6087,7 @@ export function AssetCard({
             </Chip>
           ))}
         {hasLegs && liquidation && <LiquidationChip line={liquidation} base={group.base} />}
+        {hasLegs && <AddMarginChip legs={group.borosOpen} />}
         <span className="ml-auto" />
         {windowPending && <span className="text-xs text-ink-600">{t('assetCard.head.updatingWindow')}</span>}
         <SinceChip base={group.base} storedSec={storedSinceSec} defaultSec={defaultSinceSec} onChange={onChangeSince} />
