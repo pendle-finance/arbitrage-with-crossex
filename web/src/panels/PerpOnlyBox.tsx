@@ -285,8 +285,8 @@ export function ClosePairForm({
           value={mode}
           onChange={setMode}
           options={[
+            { value: 'maker', label: t('pairTicket.pair.limitHedge') },
             { value: 'market', label: t('pairTicket.pair.twoMarket') },
-            { value: 'maker', label: t('pairTicket.pair.limitHedge'), sub: t('pairTicket.pair.savesFees') },
           ]}
         />
       </div>
