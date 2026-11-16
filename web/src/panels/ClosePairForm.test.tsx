@@ -10,11 +10,11 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
+import type { ActionInput, DealRequest, PreviewResponse, PreviewResult } from '../api/types';
 import { account, baseHandlers, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { ClosePairForm } from './PerpOnlyBox';
+import { ClosePairForm, pickCloseMakerLeg } from './PerpOnlyBox';
 
 const LEGS = [
   { symbol: 'BYBIT_FUTURE_HYPE_USDT', qty: 1.89, venue: 'BYBIT' },
@@ -80,6 +80,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
       }),
     );
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    await pickMarket();
 
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
     const btn = screen.getByRole('button', { name: /Close both/ });
@@ -120,6 +121,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     // book-mid limit band gets price-limit-rejected and would strand it.
     server.use(...baseHandlers(), previewSpy([]));
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    await pickMarket();
     // The full note rides as the tooltip on the footer line under the
     // button, so assert the title rather than visible text.
     const badge = (await screen.findByText(/^Reduce-only$/)).closest('p') as HTMLElement;
@@ -180,6 +182,11 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
   });
 });
 
+/** The close defaults to Limit + hedge; market-mode cases pick it first. */
+async function pickMarket(): Promise<void> {
+  await userEvent.click(await screen.findByRole('radio', { name: /2 market orders/ }));
+}
+
 const qtysOf = (as: ActionInput[] | undefined) => as?.map((a) => (a.kind === 'close-position' ? a.qty : undefined));
 
 describe('ClosePairForm — slippage is part of the close intent', () => {
@@ -224,4 +231,82 @@ describe('ClosePairForm — slippage is part of the close intent', () => {
     // cannot dedupe the 2% close into the 0.5% one.
     expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
   }, 15_000);
+});
+
+describe('ClosePairForm — Limit + hedge close', () => {
+  it('defaults to Limit + hedge and sends a reduce-only maker deal that keeps the slippage cap', async () => {
+    const posted: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', async ({ request }) => {
+        posted.push((await request.json()) as DealRequest);
+        return HttpResponse.json(env({ id: 'd-maker' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+
+    expect(await screen.findByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(posted).toHaveLength(1), { timeout: 4000 });
+    expect(posted[0]).toMatchObject({
+      a: { reduceOnly: true },
+      b: { reduceOnly: true },
+      qty: '1.89',
+      execution: 'maker',
+      pricePolicy: 'touch',
+      price: '80',
+      timeoutSec: 300,
+      clipBandPct: 0.5,
+    });
+    // $100k slices at $80 = 1,250 HYPE per order.
+    expect(Number(posted[0].maxClip)).toBe(1250);
+  });
+
+  it('a market close of the same size gets a different deal id than a maker close', async () => {
+    const dealCalls: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', async ({ request }) => {
+        dealCalls.push((await request.json()) as DealRequest);
+        return HttpResponse.json(
+          { ok: false, error: { category: 'network', message: 'socket hang up', retryable: true } },
+          { status: 500 },
+        );
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
+
+    await pickMarket();
+    const btn2 = screen.getByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn2);
+    await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });
+    expect(dealCalls[0].execution).toBe('maker');
+    expect(dealCalls[1].execution).toBe('taker');
+    expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
+  }, 15_000);
+});
+
+describe('pickCloseMakerLeg', () => {
+  const p = (slip: number, maker = 0.0002, taker = 0.0005): PreviewResult =>
+    previewFor({ kind: 'close-position', symbol: 'X' }, {
+      fees: { makerRate: maker, takerRate: taker, specialOverride: false, quote: 'USDT', est: {} },
+      fillEstimate: { qty: '1', avgPrice: 1, worstPrice: 1, slippagePct: slip, source: 'venue-orderbook', confidence: 'high', venue: 'X' },
+    });
+  it('rests the cheaper fee combo first', () => {
+    expect(pickCloseMakerLeg([p(0.01, 0.0002), p(0.0, 0)])).toBe(1);
+  });
+  it('with equal fees, rests the leg whose market order costs more', () => {
+    expect(pickCloseMakerLeg([p(0.01), p(0.03)])).toBe(1);
+    expect(pickCloseMakerLeg([p(0.03), p(0.01)])).toBe(0);
+    expect(pickCloseMakerLeg([p(0.02), p(0.02)])).toBe(0);
+  });
 });

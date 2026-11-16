@@ -58,6 +58,16 @@ export function dealsRoutes(deps: AppDeps) {
       return transfer.acceptedAt === null || deps.engine!.clock.now() - transfer.acceptedAt < TRANSFER_SETTLE_MS;
     };
 
+    /** The first reduce-only contract of `row` that a live deal is already closing. */
+    const liveCloseOn = (row: PairRow): string | null => {
+      const closing = (p: PairRow): string[] =>
+        [p.a, p.b].filter((l): l is NonNullable<typeof l> => !!l && l.reduceOnly === true).map((l) => l.contract);
+      const mine = closing(row);
+      if (mine.length === 0) return null;
+      const busy = new Set(deps.engine!.store.listPairs({ activeOnly: true }).flatMap(closing));
+      return mine.find((c) => busy.has(c)) ?? null;
+    };
+
     app.post('/deals', async (req, reply) => {
       // First-run gate: no real order until the disclaimer is accepted. Tied to
       // the config-backed credentials service (always present in a real install;
@@ -206,6 +216,19 @@ export function dealsRoutes(deps: AppDeps) {
       if (transferSettling()) {
         await restoreLeverage();
         return conflict(reply, TRANSFER_SETTLING_TEXT);
+      }
+      // Two closes on one contract each pass resolveDeal against the same live
+      // position, then race: the loser's reduce-only orders are refused
+      // mid-deal. A maker close rests for minutes, so this is a real window.
+      const busy = liveCloseOn(row);
+      if (busy) {
+        await restoreLeverage();
+        return refuse(reply, {
+          code: 409,
+          category: 'validation',
+          message: `A close on ${busy} is still running. Wait for it to finish or stop it, then try again.`,
+          retryable: true,
+        });
       }
       deps.engine!.store.createPair(row);
       deps.cache.bust('account');

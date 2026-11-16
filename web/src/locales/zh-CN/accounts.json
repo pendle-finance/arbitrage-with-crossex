@@ -358,7 +358,18 @@
     "slipHint": "规模大或盘口薄时可调高。",
     "closeBoth": "两腿平仓",
     "pairNote": "第一条腿：以中间价 ± 滑点挂限价单。第二条腿：市价单，成交价不超出交易所的价格限制区间。",
-    "mechanics": "<b>只减仓</b>。两条腿都不会增加仓位，也不会挂在盘口。"
+    "mechanics": "<b>只减仓</b>。两条腿都不会增加仓位，也不会挂在盘口。",
+    "execution": "永续平仓",
+    "executionAria": "永续平仓方式",
+    "makerLegHint": "自动：市价成本更高的一条腿挂单",
+    "savingHint": "手续费节省（对比两腿均吃单平仓）",
+    "convertHint": "超过此时间后，未成交部分在两个交易所以市价平仓。",
+    "rests": "挂单",
+    "restsTitle": "只做 Maker，挂在最优价，跟随盘口。",
+    "hedgeTitle": "挂单腿成交后市价对冲。",
+    "slipTitleMaker": "超时后市价单的限价：中间价 ± 此值。",
+    "pairNoteMaker": "一条腿只做 Maker 挂单并跟随盘口，另一条腿在其成交时市价平仓。超时后剩余部分市价平仓。",
+    "mechanicsMaker": "<b>只减仓</b>。每笔成交立即对冲，平仓期间仓位保持对冲。"
   },
   "tracked": {
     "renewLogin": "为 {{address}} 续期登录",

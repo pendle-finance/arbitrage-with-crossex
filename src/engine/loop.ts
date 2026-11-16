@@ -154,12 +154,15 @@ function applySnapshot(deps: LoopDeps, pair: PairRow, o: OrderRow, snap: OrderSn
         // Any A-leg progress clears the failure budget (a long clip series with
         // occasional whiffs must not accumulate into a spurious stop).
         if (pair.pocRejects > 0) deps.store.updatePair(pair.id, { pocRejects: 0 });
-      } else if (reason === 'poc-reject' || o.kind === 'taker') {
-        // Zero-progress A-leg terminal: POC insta-reject (requote budget) or a
-        // taker clip that whiffed/was rejected post-acceptance. All draw from
-        // ONE budget — without it a banded clip on a wide spread spins one new
-        // venue order per tick forever, and a REDUCE_ONLY reject (position
-        // vanished) never terminates the deal.
+      } else if (reason === 'poc-reject' || o.kind === 'taker' || !o.cancelRequested) {
+        // Zero-progress A-leg terminal: POC insta-reject (requote budget), a
+        // taker clip that whiffed/was rejected post-acceptance, or a maker the
+        // venue refused after accepting it (CrossEx answers FAIL after a create
+        // succeeds). All draw from ONE budget — without it a banded clip on a
+        // wide spread spins one new venue order per tick forever, a refused
+        // maker is re-placed every fast tick until its deadline, and a
+        // REDUCE_ONLY reject (position vanished) never terminates the deal.
+        // Our own cancels (re-peg, stop, convert) are not failures.
         bumpClipWall(deps, pair, now);
       }
     }
@@ -445,7 +448,9 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
       deps.store.updatePair(pair.id, {
         mode: action.mode,
         ...(action.haltReason ? { haltReason: action.haltReason } : {}),
+        ...(action.resetClipBudget ? { pocRejects: 0, makerNotBefore: 0 } : {}),
       });
+      if (action.alert) deps.store.alert('warn', pair.id, action.alert, deps.clock.now());
       if (action.mode === 'HALTED') deps.onFinish?.(pair.id);
       return;
     case 'cancel':
@@ -471,7 +476,9 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
       // with 0.999 filled against a hedge leg whose minimum is 1.0 and the user
       // is 99.9% naked. That must not be discoverable only by reading
       // report_json - raise it where the operator actually looks.
-      if (pair.b) {
+      if (action.alert) {
+        deps.store.alert('error', pair.id, action.alert, deps.clock.now());
+      } else if (pair.b) {
         const left = fx(report.unhedged);
         if (left >= fx(pair.b.lot)) {
           deps.store.alert(
@@ -513,8 +520,12 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
   // dragging Stop/Convert. While frozen (an order in doubt) decide() only ever
   // cancels — which needs no price — so skip all fetches then.
   const frozen = proj.anyPending || proj.anyQuarantined;
+  // A resting close order also needs it: decide() re-pegs it toward the market.
   const needTouch =
-    !frozen && pair.mode === 'OPENING' && pair.pricePolicy === 'touch' && proj.makerOrder?.state !== 'OPEN';
+    !frozen &&
+    pair.mode === 'OPENING' &&
+    pair.pricePolicy === 'touch' &&
+    (proj.makerOrder?.state !== 'OPEN' || pair.a.reduceOnly === true);
   // A reference price is needed ONLY for a min-notional sizing check (taker legs
   // are plain MARKET, so no band pricing). Fetch it only when a leg with a
   // min-notional is actually about to submit.
