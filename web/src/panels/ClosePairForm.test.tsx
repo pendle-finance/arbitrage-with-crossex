@@ -265,6 +265,28 @@ describe('ClosePairForm — Limit + hedge close', () => {
     expect(Number(posted[0].maxClip)).toBe(1250);
   });
 
+  it('a refused maker close shows the error alone, not the market preview rows', async () => {
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', () =>
+        HttpResponse.json(
+          { ok: false, error: { category: 'validation', message: 'You must accept the disclaimer before placing any order.', retryable: false } },
+          { status: 403 },
+        ),
+      ),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    const card = await screen.findByRole('tooltip', {}, { timeout: 4000 });
+    await waitFor(() => expect(card).toHaveTextContent('You must accept the disclaimer'));
+    expect(card).not.toHaveTextContent('IOC at');
+    expect(card).not.toHaveTextContent('Review');
+  });
+
   it('a market close of the same size gets a different deal id than a maker close', async () => {
     const dealCalls: DealRequest[] = [];
     server.use(

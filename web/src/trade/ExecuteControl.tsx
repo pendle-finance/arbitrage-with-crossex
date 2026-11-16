@@ -448,6 +448,7 @@ export function ExecuteControl({
           marginExceeds={marginBlocked}
           detail={detail}
           execError={errMsg}
+          errorOnly={!hoverCard}
         />
       )}
     </div>
@@ -468,6 +469,7 @@ function HoverCard({
   marginExceeds,
   detail,
   execError,
+  errorOnly,
 }: {
   anchorRef: React.RefObject<HTMLElement>;
   previews: PreviewResult[] | undefined;
@@ -479,6 +481,10 @@ function HoverCard({
   marginExceeds: boolean;
   detail: ReactNode;
   execError: string | null;
+  /** The caller's own panel reviews the legs. Its rows can differ from the raw
+   * preview (a maker close rests one leg; the preview prices both as IOC), so
+   * an error card must not repeat them. */
+  errorOnly: boolean;
 }) {
   const { t } = useTranslation();
   const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
@@ -514,6 +520,10 @@ function HoverCard({
           {execError}
         </div>
       )}
+      {errorOnly ? (
+        detail && <div className="text-[11px] text-ink-400">{detail}</div>
+      ) : (
+        <>
       <div className="mb-1.5 flex items-center justify-between text-[12px] font-normal text-ink-300">
         <span>{t('trade.execute.review')}</span>
         <span className="num">
@@ -588,6 +598,8 @@ function HoverCard({
       )}
       {detail && <div className="mt-1.5 border-t border-ink-800 pt-1.5 text-[11px] text-ink-400">{detail}</div>}
       <div className="mt-1.5 text-center text-[10px] text-ink-500">{t('trade.execute.pressHold')}</div>
+        </>
+      )}
     </div>,
     document.body,
   );
