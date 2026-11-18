@@ -4,6 +4,7 @@ import { walkBook } from '../../src/core/estimate/fill';
 import { floorToStep } from '../../src/core/numbers';
 import {
   BORROW_INITIAL_MARGIN,
+  bucketsFrom,
   CONVERT_MAX,
   CONVERT_RATE,
   EVEN_GOAL,
@@ -13,6 +14,7 @@ import {
   type WalletAfter,
 } from '../../src/core/rebalance/plan';
 import {
+  convertFor,
   marginPerConvertUsdc,
   planRealize,
   type RealizeInput,
@@ -337,3 +339,193 @@ describe('scale ladder: planRealize', () => {
     expect(job.realize?.legs[0].qty).toBe(leg.qty);
   });
 });
+
+const LADDER = [50, 5_000, 100_000, 1_000_000, 6_000_000];
+
+const evenBook = (mid: number, levels: number, size: number): NormalizedBook => ({
+  bids: Array.from({ length: levels }, (_, i): [number, number] => [mid - 0.05 - i * 0.1, size]),
+  asks: Array.from({ length: levels }, (_, i): [number, number] => [mid + 0.05 + i * 0.1, size]),
+  ts: 0,
+});
+
+const hlShortInput = (need: number, extra: Partial<RealizeInput> = {}, maxLeverage?: string): RealizeInput => {
+  const positionQty = Math.max(1, (need / 200) * 1.5);
+  return {
+    pool: 'HYPERLIQUID',
+    moveUsd: need + 100,
+    cashUsd: 100,
+    borrowUsd: need * 2,
+    availableMargin: 1e9,
+    perps: [
+      {
+        symbol: 'HYPERLIQUID_FUTURE_ETH_USDC',
+        positionQty: String(-positionQty),
+        entryPrice: '3000',
+        markPrice: '2800',
+        initialMargin: String((positionQty * 2800) / 25),
+        maxLeverage,
+      },
+    ],
+    books: { HYPERLIQUID_FUTURE_ETH_USDC: evenBook(2800, 2000, 500) },
+    feeRows: FEE_ROWS,
+    rules: { HYPERLIQUID_FUTURE_ETH_USDC: { lotSize: '0.0001', minSize: '0.0001' } },
+    ...extra,
+  };
+};
+
+describe('realize fix round', () => {
+  it('an order over the market cap is refused', () => {
+    const caps = [
+      ['5', 500_000],
+      ['10', 2_000_000],
+      ['20', 5_000_000],
+      ['25', 30_000_000],
+    ] as const;
+    let refusedCount = 0;
+    for (const need of LADDER) {
+      for (const [leverage, capUsd] of caps) {
+        const plan = planRealize(hlShortInput(need, {}, leverage));
+        const orderUsd = (plan?.legs[0].qty ?? 0) * 2800;
+        if (orderUsd > capUsd) {
+          refusedCount += 1;
+          expect(plan?.refused).toEqual({ reason: 'over-cap', bp: null, maxBp: 25, capUsd });
+        } else expect(plan?.refused?.reason).not.toBe('over-cap');
+      }
+    }
+    expect(refusedCount).toBeGreaterThan(4);
+    expect(planRealize(hlShortInput(5_000, {}, '5'))?.refused).toBeNull();
+    const gate = (maxMarketSize: string): RealizeInput => ({
+      ...hlShortInput(1_000_000),
+      pool: 'CROSSEX',
+      perps: [perp('GATE_FUTURE_ETH_USDT', -7_500, 3_000, 2_800)],
+      books: { GATE_FUTURE_ETH_USDT: evenBook(2800, 2000, 500) },
+      rules: { GATE_FUTURE_ETH_USDT: { lotSize: '0.001', minSize: '0.001', maxMarketSize } },
+    });
+    expect(planRealize(gate('100'))?.refused).toEqual({ reason: 'over-cap', bp: null, maxBp: 25, capUsd: 280_000 });
+    expect(planRealize(gate('100000'))?.refused).toBeNull();
+  });
+
+  it('a refused realize still carries the plain cash move', () => {
+    const book = ownerBook();
+    const refused = { ...book.inputs, books: {} };
+    for (const goal of [EVEN_GOAL, REPAY_GOAL]) {
+      const plan = planFor(book.buckets, book.account, refused, goal);
+      expect(plan.realize?.refused?.reason).toBe('past-book');
+      expect(plan.balanced).toBe(false);
+      expect(plan.moves).toBeGreaterThan(3_000);
+      expect(plan.moves).toBeLessThanOrEqual(3_140);
+    }
+  });
+
+  it('a missing fee row plans no realize leg', () => {
+    for (const need of LADDER) expect(planRealize(hlShortInput(need, { feeRows: [] }))).toBeNull();
+    const book = ownerBook();
+    const plan = planFor(book.buckets, book.account, { ...book.inputs, feeRows: [FEE_ROWS[1]] }, REPAY_GOAL);
+    expect(plan.realize?.legs ?? []).toEqual([]);
+  });
+
+  it('a plan convert under 11 USDC is raised to 11 and still passes the margin test', () => {
+    for (const need of LADDER) {
+      const margin = need / 20;
+      const edge = 0.15 * margin + 20;
+      const convert = convertFor(margin, edge - 0.01);
+      expect(convert).toBe(11);
+      expect(edge - 0.01 + convert * marginPerConvertUsdc).toBeGreaterThanOrEqual(edge);
+      expect(convertFor(margin, edge)).toBe(0);
+      const big = convertFor(margin, 0);
+      expect(big).toBeGreaterThanOrEqual(11);
+      expect(big * marginPerConvertUsdc).toBeGreaterThanOrEqual(edge);
+    }
+  });
+
+  it('clear debt realizes when the paying wallet holds no cash', () => {
+    const gateRealize = planOf(ethUp(), REPAY_GOAL).realize;
+    expect(gateRealize?.refused).toBeNull();
+    expect(gateRealize?.legs[0].pool).toBe('CROSSEX');
+    const owner = ownerBook();
+    const assets = (owner.account.assets ?? []).map((asset) =>
+      asset.coin === 'USDC' && asset.exchangeType === 'HYPERLIQUID'
+        ? { ...asset, balance: '0', availableBalance: '0', equity: asset.upnl }
+        : asset,
+    );
+    const account = { ...owner.account, assets };
+    const buckets = bucketsFrom(account, [{ coin: 'USDT', exchangeType: 'CROSSEX', hourInterestRate: '0.000006' }], {});
+    const plan = planFor(buckets, account, owner.inputs, REPAY_GOAL);
+    expect(plan.realize?.refused).toBeNull();
+    expect(plan.realize?.legs[0].pool).toBe('HYPERLIQUID');
+    expect(sumNet(plan.realize?.legs ?? [])).toBeGreaterThan(29_000);
+    expect(walletIn(pickedAfter({ ...owner, account, buckets }, REPAY_GOAL), 'USDT', 'CROSSEX').cash).toBeGreaterThan(-1);
+  });
+
+  it('clear debt realizes at every rung when the paying wallet holds no cash', () => {
+    for (const debt of LADDER) {
+      const qty = Math.max(1, (debt / 200) * 1.5);
+      const owner = realizeBookOf(debt, qty);
+      const plan = planFor(owner.buckets, owner.account, owner.inputs, REPAY_GOAL);
+      expect(plan.realize?.refused).toBeNull();
+      expect(sumNet(plan.realize?.legs ?? [])).toBeGreaterThanOrEqual(debt - 0.02);
+    }
+  });
+
+  it('a wider Lighter gap keeps the Hyperliquid realize', () => {
+    const owner = realizeBookOf(60_000, 66, 3_140);
+    const lighter = {
+      coin: 'USDC',
+      exchangeType: 'LIGHTER',
+      balance: '0',
+      availableBalance: '0',
+      upnl: '80000',
+      equity: '80000',
+      liability: '0',
+      borrowingInitialMargin: '0',
+      borrowingMaintenanceMargin: '0',
+    };
+    const account = { ...owner.account, assets: [...(owner.account.assets ?? []), lighter] };
+    const buckets = bucketsFrom(account, [{ coin: 'USDT', exchangeType: 'CROSSEX', hourInterestRate: '0.000006' }], {});
+    const inputs = {
+      ...owner.inputs,
+      notional: { 'USDT/CROSSEX': 120_000, 'USDC/HYPERLIQUID': 120_000, 'USDC/LIGHTER': 120_000 },
+    };
+    const plan = planFor(buckets, account, inputs, EVEN_GOAL);
+    expect(plan.realize?.refused).toBeNull();
+    expect(plan.realize?.legs[0].pool).toBe('HYPERLIQUID');
+  });
+});
+
+function sumNet(legs: RealizeLeg[]): number {
+  return legs.reduce((total, leg) => total + realizedNetUsd(leg), 0);
+}
+
+function realizeBookOf(debt: number, qty: number, cash = 0): RealizeBook {
+  const upnl = qty * 200;
+  const owner = ownerBook();
+  const asset = (coin: string, venue: string, balance: number, profit: number) => ({
+    coin,
+    exchangeType: venue,
+    balance: String(balance),
+    availableBalance: String(Math.max(0, balance)),
+    upnl: String(profit),
+    equity: String(balance + profit),
+    liability: String(Math.max(0, -balance)),
+    borrowingInitialMargin: String(Math.max(0, -balance) * BORROW_INITIAL_MARGIN),
+    borrowingMaintenanceMargin: String(Math.max(0, -balance) * 0.1),
+  });
+  const account = {
+    availableMargin: '1000000000',
+    marginBalance: String(cash + upnl - debt + 1e9),
+    initialMargin: '0',
+    assets: [asset('USDT', 'CROSSEX', -debt, 0), asset('USDC', 'HYPERLIQUID', cash, upnl)],
+  };
+  return {
+    spec: owner.spec,
+    account,
+    buckets: bucketsFrom(account, [{ coin: 'USDT', exchangeType: 'CROSSEX', hourInterestRate: '0.000006' }], {}),
+    inputs: {
+      ...owner.inputs,
+      notional: { 'USDT/CROSSEX': qty * 2_800, 'USDC/HYPERLIQUID': qty * 2_800 },
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 3_000, 2_800), perp('GATE_FUTURE_ETH_USDT', qty, 2_800, 2_800)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: evenBook(2800, 2000, 500), GATE_FUTURE_ETH_USDT: evenBook(2800, 2000, 500) },
+      availableMargin: 1e9,
+    },
+  };
+}

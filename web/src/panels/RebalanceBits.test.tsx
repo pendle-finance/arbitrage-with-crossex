@@ -10,7 +10,7 @@ import {
   rebalanceViews,
 } from '../test/fixtures';
 import * as bits from './RebalanceBits';
-import { BalanceBars, RealizeActions, RealizeRow, StepDot, StepList, type BarRow, type StepRow } from './RebalanceBits';
+import { BalanceBars, planActionLeg, RealizeActions, RealizeRow, StepDot, StepList, type BarRow, type StepRow } from './RebalanceBits';
 
 const BAR_CAPTION = 'Equity (cash + unrealized PnL)';
 const HOVER_TARGET = 'Balanced target';
@@ -370,7 +370,7 @@ const actionRows = () =>
 
 function OpenableActions({ realize, tense }: { realize: RealizePlan; tense: 'plan' | 'past' }) {
   const [open, setOpen] = useState(false);
-  return <RealizeActions realize={realize} open={open} onToggle={() => setOpen((was) => !was)} tense={tense} />;
+  return <RealizeActions legs={realize.legs.map(planActionLeg)} open={open} onToggle={() => setOpen((was) => !was)} tense={tense} />;
 }
 
 describe('StepDot', () => {
@@ -412,7 +412,7 @@ describe('StepDot', () => {
 
 describe('RealizeRow', () => {
   it('step 1 row reads the part of the whole perp, plain, with its fee and price impact', () => {
-    const { container } = render(<RealizeRow realize={OWNER_REALIZE} />);
+    const { container } = render(<RealizeRow legs={OWNER_REALIZE.legs.map(planActionLeg)} />);
 
     const row = container.querySelector<HTMLElement>('[data-realize-row]')!;
     expect(row.firstElementChild?.textContent).toBe('Close + reopen 53.8 of 66.0 ETH short');
@@ -423,7 +423,7 @@ describe('RealizeRow', () => {
 
 describe('RealizeActions', () => {
   it('three actions closed', () => {
-    render(<RealizeActions realize={OWNER_REALIZE} open={false} onToggle={() => {}} tense="plan" />);
+    render(<RealizeActions legs={OWNER_REALIZE.legs.map(planActionLeg)} open={false} onToggle={() => {}} tense="plan" />);
 
     const toggle = screen.getByRole('button', { name: '3 actions' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -453,7 +453,7 @@ describe('RealizeActions', () => {
   it('convert split note', () => {
     const realize = realizeOf(rebalanceViews.ownerConvertSplit.plans.repay);
     expect(realize.legs[0].convert?.count).toBe(2);
-    render(<RealizeActions realize={realize} open onToggle={() => {}} tense="plan" />);
+    render(<RealizeActions legs={realize.legs.map(planActionLeg)} open onToggle={() => {}} tense="plan" />);
 
     const [, convert] = actionRows();
     expect(convert.text).toBe('Convert 955,498 USDC → USDT · CrossEx');
@@ -461,13 +461,13 @@ describe('RealizeActions', () => {
   });
 
   it('a single Convert has no split note', () => {
-    render(<RealizeActions realize={OWNER_REALIZE} open onToggle={() => {}} tense="plan" />);
+    render(<RealizeActions legs={OWNER_REALIZE.legs.map(planActionLeg)} open onToggle={() => {}} tense="plan" />);
 
     expect(actionRows()[1].note).not.toContain('Runs as');
   });
 
   it('three actions past tense', () => {
-    render(<RealizeActions realize={OWNER_REALIZE} open onToggle={() => {}} tense="past" />);
+    render(<RealizeActions legs={OWNER_REALIZE.legs.map(planActionLeg)} open onToggle={() => {}} tense="past" />);
 
     expect(actionRows().map((row) => row.text)).toEqual([
       'Closed 53.8 ETH short',
@@ -479,7 +479,7 @@ describe('RealizeActions', () => {
 
   it('a close and reopen with no Convert shows no actions list', () => {
     const { container } = render(
-      <RealizeActions realize={realizeOf(rebalanceViews.ethUp.plans.even)} open={false} onToggle={() => {}} tense="plan" />,
+      <RealizeActions legs={realizeOf(rebalanceViews.ethUp.plans.even).legs.map(planActionLeg)} open={false} onToggle={() => {}} tense="plan" />,
     );
 
     expect(container.innerHTML).toBe('');
@@ -488,7 +488,7 @@ describe('RealizeActions', () => {
   it('a Gate long converts USDT into the Hyperliquid wallet', () => {
     const [leg] = realizeOf(rebalanceViews.ethUp.plans.even).legs;
     const realize: RealizePlan = { legs: [{ ...leg, convert: { amount: 2000, count: 1, feeUsd: 4 } }], refused: null };
-    render(<RealizeActions realize={realize} open onToggle={() => {}} tense="plan" />);
+    render(<RealizeActions legs={realize.legs.map(planActionLeg)} open onToggle={() => {}} tense="plan" />);
 
     expect(actionRows().map((row) => row.text)).toEqual([
       'Close 47.1 ETH long',

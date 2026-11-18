@@ -15,6 +15,7 @@ import { gateVenue } from '../../src/engine/venueGate';
 import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
 import { InterestFile } from '../../src/server/interestLedger';
 import { JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
+import { isShownRealize } from '../../src/server/routes/rebalance';
 import { gate, HOST, makeTestApp, mockGateGet, orderBody, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 import { accountA, asset, waitFor } from './helpers/rebalance';
 
@@ -854,27 +855,58 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(typeof plans.custom.customMaxUsd).toBe('number');
   });
 
-  it('refuses a refused realize', async () => {
+  it('refused realize still runs the plain move', async () => {
     mockOwnerBook(THIN_HL_ETH);
+    refuseSends();
+    refuseQuotes();
     const h = boot();
     const plan = await h.plan();
     expect(plan.realize?.refused).toMatchObject({ reason: 'too-thin' });
 
     const res = await h.post('/api/rebalance', { route: 'convert', costUsd: plan.routes.convert.costUsd, realizeQty: [] });
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error.message).toBe('Price impact too high.');
+    expect(res.statusCode).toBe(202);
+    const names = h.file().steps.map((step) => step.name);
+    expect(names.length).toBeGreaterThan(0);
+    expect(names.filter((name) => name === 'Close' || name === 'Reopen')).toEqual([]);
+    expect(h.file().realize).toBeNull();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
-  it('a refused realize writes no job', async () => {
-    mockOwnerBook(THIN_HL_ETH);
+  it('stores the before snapshot at POST', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
     const h = boot();
-    const plan = await h.plan();
+    const shown = shownOf(await h.plan());
+    const view = (await h.get('/api/rebalance')).json().data;
 
-    const res = await h.post('/api/rebalance', { route: 'convert', costUsd: plan.routes.convert.costUsd, realizeQty: [] });
+    const res = await h.post('/api/rebalance', shown);
 
-    expect(res.statusCode).toBe(409);
-    expect(() => h.file()).toThrow();
+    expect(res.statusCode).toBe(202);
+    const perps = owner.spec.perps.map((perp) => ({
+      symbol: perp.symbol,
+      exchange: perp.symbol!.split('_')[0],
+      side: Number(perp.positionQty) < 0 ? 'SHORT' : 'LONG',
+      qty: Math.abs(Number(perp.positionQty)),
+    }));
+    expect(h.file().before).toEqual({ buckets: view.buckets, perps });
+    expect(h.file().realize?.legs[0].hedge).toBe('GATE');
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('plan check allows a 1% size gap at 6M', () => {
+    const lot = Number(PERP_RULES[HL_ETH].lotSize);
+    const qty = 3_294.6;
+    const fresh = [{ symbol: HL_ETH, qty } as RealizeLeg];
+    const shownAt = (shownQty: number) => isShownRealize(fresh, [{ symbol: HL_ETH, qty: shownQty }], PERP_RULES);
+    expect(shownAt(qty * 1.01)).toBe(true);
+    expect(shownAt(qty * 0.99)).toBe(true);
+    expect(shownAt(qty * 1.0102)).toBe(false);
+    expect(shownAt(qty * 0.9898)).toBe(false);
+    const small = [{ symbol: HL_ETH, qty: 0.01 } as RealizeLeg];
+    expect(isShownRealize(small, [{ symbol: HL_ETH, qty: 0.01 + lot }], PERP_RULES)).toBe(true);
+    expect(isShownRealize(small, [{ symbol: HL_ETH, qty: 0.01 + 2 * lot }], PERP_RULES)).toBe(false);
   });
 
   it('realize cost counts in plan changed', async () => {
@@ -903,8 +935,8 @@ describe('POST /api/rebalance with a close and reopen', () => {
 
     for (const realizeQty of [
       [],
-      [{ symbol: leg.symbol, qty: leg.qty + 2 * lot }],
-      [{ symbol: leg.symbol, qty: leg.qty - 2 * lot }],
+      [{ symbol: leg.symbol, qty: leg.qty * 1.02 }],
+      [{ symbol: leg.symbol, qty: leg.qty * 0.98 }],
       [leg, { symbol: 'GATE_FUTURE_ETH_USDT', qty: 1 }],
     ]) {
       const res = await h.post('/api/rebalance', { ...shown, realizeQty });
@@ -914,7 +946,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
       expect(() => h.file()).toThrow();
     }
 
-    const oneLot = await h.post('/api/rebalance', { ...shown, realizeQty: [{ symbol: leg.symbol, qty: leg.qty + lot }] });
+    const oneLot = await h.post('/api/rebalance', { ...shown, realizeQty: [{ symbol: leg.symbol, qty: leg.qty + 50 * lot }] });
     expect(oneLot.statusCode).toBe(202);
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
@@ -1005,7 +1037,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
     Object.assign(job.steps[0], { status: 'done', qty: 53.8, text: `t-rb${job.id}1`, venueId: 'c1', doneAt: t });
     job.realize!.legs[0].filledQty = 53.8;
     Object.assign(job, { stepIndex: 1, tagCount: 1 });
-    mockView();
+    mockView({ positions: [{ symbol: HL_ETH, position_side: 'NONE', position_qty: '-12.2', mark_price: '1821', initial_margin: '2440' }] });
     const sent: Record<string, unknown>[] = [];
     gate()
       .post(`${API}/crossex/orders`)

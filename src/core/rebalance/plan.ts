@@ -2,7 +2,7 @@ import { type NormalizedBook, parseBinanceBook } from '../estimate/books';
 import type { VenueFeeRow } from '../estimate/fees';
 import { walkBook } from '../estimate/fill';
 import { floorDecimalString, floorToStep, roundToStep } from '../numbers';
-import { type PerpRule, planRealize, type RealizePerp, type RealizePlan, realizedNetUsd } from './realize';
+import { type PerpRule, planRealize, profitPoolOf, type RealizePerp, type RealizePlan, realizedNetUsd } from './realize';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
 export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
@@ -916,7 +916,11 @@ const equityTargets = (wallets: Wallets, pools: Pool[]): Record<Pool, number> =>
 /** Every negative pool to 0. The largest positive pool pays first, up to its
  * cash and its equity (see `sendingCash`); what it cannot cover moves to the
  * next. Debt past that stays, and the solve reports it as the short. */
-function repayTargets(wallets: Wallets & { gateMovable: number }, pools: Pool[]): Record<Pool, number> {
+function repayTargets(
+  wallets: Wallets & { gateMovable: number },
+  pools: Pool[],
+  realizable: ReadonlySet<Pool>,
+): Record<Pool, number> {
   const targets = equityTargets(wallets, pools);
   let debt = 0;
   for (const pool of pools) {
@@ -929,6 +933,12 @@ function repayTargets(wallets: Wallets & { gateMovable: number }, pools: Pool[])
   for (const pool of senders) {
     if (debt <= 0) break;
     const gives = floorCents(Math.min(debt, sendableCash(wallets, pool), targets[pool]));
+    targets[pool] -= gives;
+    debt -= gives;
+  }
+  for (const pool of senders.filter((sender) => realizable.has(sender))) {
+    if (debt <= 0) break;
+    const gives = floorCents(Math.min(debt, targets[pool]));
     targets[pool] -= gives;
     debt -= gives;
   }
@@ -976,8 +986,8 @@ interface Paying {
   cashUsd: number;
 }
 
-function payingOf(book: Book, moves: Move[], start: number[]): Paying | null {
-  const senders = [...new Set(moves.map((move) => move.from))].map((from): Paying & { gap: number } => {
+function payingOf(book: Book, moves: Move[], start: number[], realizable: ReadonlySet<Pool>): Paying | null {
+  const senders = [...new Set(moves.map((move) => move.from))].filter((from) => realizable.has(from)).map((from): Paying & { gap: number } => {
     const moveUsd = sum(moves.flatMap((move, index) => (move.from === from ? [start[index]] : [])));
     const cashUsd = sendableCash(book, from);
     const to = moves.find((move) => move.from === from)?.to ?? from;
@@ -1093,7 +1103,14 @@ function planAfterRealize(
 ): EvenPlan {
   const next = afterStepOne(buckets, account, paying, realize);
   const rest: Goal = goal.kind === 'custom' ? { ...goal, amount: floorCents(goal.amount - next.converted) } : goal;
-  const plan = planMoves(next.buckets, next.account, { ...inputs, perps: [] }, rest);
+  const others = (inputs.perps ?? []).filter((perp) => profitPoolOf(perp) !== paying.from);
+  const plan = planMoves(
+    next.buckets,
+    next.account,
+    { ...inputs, perps: others, availableMargin: num(next.account.availableMargin) },
+    rest,
+  );
+  const nested = plan.realize?.refused === null ? plan.realize.legs : [];
   const restOf = (route: RoutePlan): RoutePlan =>
     restated(plan.balanced ? { ...route, available: true, reason: null, costUsd: 0, steps: [] } : route, buckets);
   const routes = {
@@ -1107,7 +1124,7 @@ function planAfterRealize(
     balanced: false,
     routes,
     recommended: plan.balanced ? recommend(routes) : plan.recommended,
-    realize,
+    realize: { ...realize, legs: [...realize.legs, ...nested] },
   };
 }
 
@@ -1139,7 +1156,8 @@ function realizedPlan(
   for (let pass = 1; pass < REALIZE_PASSES && leftoverOf(plan) >= dustOf(goal); pass += 1) {
     moveUsd += leftoverOf(plan) / (1 - CONVERT_RATE);
     const grown = planRealize(realizeInput(buckets, account, inputs, { ...paying, moveUsd }));
-    const sameSize = grown?.legs.map((leg) => leg.qty).join() === plan.realize?.legs.map((leg) => leg.qty).join();
+    const ownLegs = plan.realize?.legs.filter((leg) => leg.pool === paying.from) ?? [];
+    const sameSize = grown?.legs.map((leg) => leg.qty).join() === ownLegs.map((leg) => leg.qty).join();
     if (!grown || grown.refused !== null || sameSize) return plan;
     plan = planAfterRealize(buckets, account, inputs, goal, paying, grown);
   }
@@ -1207,9 +1225,11 @@ function planMoves(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, 
   const shares = { CROSSEX: shareOf('CROSSEX'), HYPERLIQUID: shareOf('HYPERLIQUID'), LIGHTER: shareOf('LIGHTER') };
   const gateMovable = gateCash >= DUST_USDC ? gateCash : 0;
   const equity = sum(pools.map((pool) => equityOf(wallets, pool)));
+  const mayRealize = goal.kind === 'custom' || hasChargedBorrow(buckets);
+  const realizable = new Set(mayRealize ? (inputs.perps ?? []).flatMap((perp) => profitPoolOf(perp) ?? []) : []);
   const targets: Record<Pool, number> =
     goal.kind === 'repay'
-      ? repayTargets({ ...wallets, gateMovable }, pools)
+      ? repayTargets({ ...wallets, gateMovable }, pools, realizable)
       : goal.kind === 'custom'
         ? customTargets(wallets, pools, goal)
         : { CROSSEX: equity * shares.CROSSEX, HYPERLIQUID: equity * shares.HYPERLIQUID, LIGHTER: equity * shares.LIGHTER };
@@ -1244,9 +1264,8 @@ function planMoves(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, 
 
   const start = moves.map((move) => floorCents(Math.abs(gaps[move.check])));
   const need = sum(moves.map((move) => Math.abs(gaps[move.check])));
-  const paying = (inputs.perps ?? []).length > 0 ? payingOf(book, moves, start) : null;
-  const mayRealize = goal.kind === 'custom' || hasChargedBorrow(buckets);
-  const realize = paying && mayRealize ? planRealize(realizeInput(buckets, account, inputs, paying)) : null;
+  const paying = payingOf(book, moves, start, realizable);
+  const realize = paying ? planRealize(realizeInput(buckets, account, inputs, paying)) : null;
   if (paying && realize && realize.refused === null) {
     return realizedPlan(buckets, account, inputs, goal, paying, realize);
   }

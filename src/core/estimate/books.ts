@@ -233,6 +233,106 @@ export const BOOK_VENUES: ReadonlySet<string> = new Set(Object.keys(BOOK_SOURCES
 const sizeMultCache = new Map<string, number>();
 const marketIdCache = new Map<string, string>();
 
+const HL_INFO_URL = 'https://api.hyperliquid.xyz/info';
+const HL_COARSE_SIG_FIGS = [4, 3];
+const GATE_DEPTH_LEVELS = 300;
+const GATE_COARSE_TICKS = 10;
+const BUCKET_EPSILON = 1e-6;
+
+export const sigFigsWidth =
+  (sigFigs: number) =>
+  (price: number): number =>
+    10 ** (Math.floor(Math.log10(price)) - sigFigs + 1);
+
+function beyondSide(fine: Level[], coarse: Level[], width: (price: number) => number, side: 'bid' | 'ask'): Level[] {
+  const last = fine.at(-1)?.[0];
+  if (last === undefined) return fine;
+  const extra = coarse.flatMap(([price, qty]): Level[] => {
+    const step = width(price);
+    const edge =
+      side === 'ask'
+        ? Math.ceil(price / step - BUCKET_EPSILON) * step
+        : Math.floor(price / step + BUCKET_EPSILON) * step;
+    const clear = side === 'ask' ? edge - step >= last : edge + step <= last;
+    return clear && edge > 0 ? [[edge, qty]] : [];
+  });
+  return [...fine, ...extra];
+}
+
+export function deepenBook(
+  fine: NormalizedBook,
+  coarse: NormalizedBook | null,
+  width: (price: number) => number,
+): NormalizedBook {
+  if (!coarse) return fine;
+  return {
+    bids: beyondSide(fine.bids, coarse.bids, width, 'bid'),
+    asks: beyondSide(fine.asks, coarse.asks, width, 'ask'),
+    ts: fine.ts,
+  };
+}
+
+const orNull = <T>(read: Promise<T>): Promise<T | null> => read.catch(() => null);
+
+const gateContracts = new Map<string, { multiplier: number; tick: number }>();
+
+async function gateContract(contract: string): Promise<{ multiplier: number; tick: number } | null> {
+  const cached = gateContracts.get(contract);
+  if (cached) return cached;
+  const { data } = await axios.get(`https://api.gateio.ws/api/v4/futures/usdt/contracts/${contract}`, {
+    timeout: TIMEOUT_MS,
+  });
+  const spec = data as { quanto_multiplier?: string; order_price_round?: string } | null;
+  const multiplier = Number(spec?.quanto_multiplier);
+  const tick = Number(spec?.order_price_round);
+  if (!(Number.isFinite(multiplier) && multiplier > 0 && Number.isFinite(tick) && tick > 0)) return null;
+  const found = { multiplier, tick };
+  gateContracts.set(contract, found);
+  return found;
+}
+
+async function deepHlBook(base: string): Promise<NormalizedBook | null> {
+  const read = (sigFigs?: number): Promise<NormalizedBook | null> =>
+    orNull(
+      axios
+        .post(HL_INFO_URL, { type: 'l2Book', coin: base, ...(sigFigs ? { nSigFigs: sigFigs } : {}) }, { timeout: TIMEOUT_MS })
+        .then(({ data }) => parseHlBook(data)),
+    );
+  const [fine, ...coarse] = await Promise.all([read(), ...HL_COARSE_SIG_FIGS.map((sigFigs) => read(sigFigs))]);
+  if (!fine) return null;
+  return coarse.reduce<NormalizedBook>(
+    (book, next, index) => deepenBook(book, next, sigFigsWidth(HL_COARSE_SIG_FIGS[index])),
+    fine,
+  );
+}
+
+async function deepGateBook(base: string, quote: string): Promise<NormalizedBook | null> {
+  const contract = nativeSymbol('GATE', base, quote);
+  const spec = contract ? await gateContract(contract) : null;
+  if (!contract || !spec) return null;
+  const url = `https://api.gateio.ws/api/v4/futures/usdt/order_book?contract=${contract}&limit=${GATE_DEPTH_LEVELS}`;
+  const interval = Number((spec.tick * GATE_COARSE_TICKS).toPrecision(12));
+  const read = (address: string): Promise<NormalizedBook | null> =>
+    orNull(axios.get(address, { timeout: TIMEOUT_MS }).then(({ data }) => parseGateBook(data, spec.multiplier)));
+  const [fine, coarse] = await Promise.all([read(url), read(`${url}&interval=${interval}`)]);
+  return fine && deepenBook(fine, coarse, () => interval);
+}
+
+export async function fetchDeepBook(exchange: string, base: string, quote: string): Promise<NormalizedBook | null> {
+  try {
+    switch (exchange.toUpperCase()) {
+      case 'HYPERLIQUID':
+        return await deepHlBook(base);
+      case 'GATE':
+        return await deepGateBook(base, quote);
+      default:
+        return await fetchVenueBook(exchange, base, quote);
+    }
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch + normalize a venue's public book. Unknown venue (e.g. DERIBIT), HTTP error,
  * missing instrument, or an unparseable/empty book all return null — NEVER throws.

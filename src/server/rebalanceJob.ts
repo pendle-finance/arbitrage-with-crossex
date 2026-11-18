@@ -2,8 +2,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fmtSize } from '../core/boros/pair';
 import { classifyGateError, plainErrorFor } from '../core/errors';
+import { parseSymbol } from '../core/numbers';
 import { CONVERT_MAX, CONVERT_RATE, CONVERT_TO, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
-import type { GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
+import type { Bucket, GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
 import type { PerpSide, RealizeLeg, RealizePlan } from '../core/rebalance/realize';
 import { restrictToOwner } from './secretFile';
 
@@ -34,6 +35,24 @@ export interface RealizeJobLeg {
   qty: number;
   filledQty: number;
   realizedUsd: number;
+  hedge?: string | null;
+  closeFeeUsd?: number;
+  reopenFeeUsd?: number;
+  closeImpactUsd?: number;
+  reopenImpactUsd?: number;
+  convert?: { amount: number; feeUsd: number } | null;
+}
+
+export interface JobPerp {
+  symbol: string;
+  exchange: string;
+  side: PerpSide;
+  qty: number;
+}
+
+export interface JobBefore {
+  buckets: Bucket[];
+  perps: JobPerp[];
 }
 
 export interface Step {
@@ -80,6 +99,7 @@ export interface Job {
   createdAt: number;
   updatedAt: number;
   realize: { legs: RealizeJobLeg[]; costUsd: number } | null;
+  before?: JobBefore;
 }
 
 export const TO_VENUE_STEP = { HYPERLIQUID: 'To Hyperliquid', LIGHTER: 'To Lighter' } as const;
@@ -160,17 +180,17 @@ export const HALT_TEXT = {
   notListed: 'Gate does not show the last step after 2 min. Press Resume to check again. If Gate still does not show it, Resume sends it again.',
 } as const;
 
-type OpenLeg = Pick<RealizeJobLeg, 'exchange' | 'side' | 'base'>;
+type OpenLeg = Pick<RealizeJobLeg, 'exchange' | 'side' | 'base' | 'hedge'>;
 
-const VENUE_NAME: Record<string, string> = { HYPERLIQUID: 'Hyperliquid', GATE: 'Gate' };
+const VENUE_NAME: Record<string, string> = { HYPERLIQUID: 'Hyperliquid', GATE: 'Gate', LIGHTER: 'Lighter', BINANCE: 'Binance' };
 const venueName = (exchange: string): string => VENUE_NAME[exchange] ?? exchange;
 const legName = (leg: OpenLeg): string => `${venueName(leg.exchange)} ${leg.side.toLowerCase()}`;
 const otherLegName = (leg: OpenLeg): string =>
-  `${venueName(leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE')} ${leg.side === 'SHORT' ? 'long' : 'short'}`;
+  `${venueName(leg.hedge ?? (leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE'))} ${leg.side === 'SHORT' ? 'long' : 'short'}`;
 const closeOtherText = (leg: OpenLeg, open: number): string =>
   `close ${fmtSize(open)} ${leg.base} of the ${otherLegName(leg)} in Positions`;
 
-const legGapText =(leg: OpenLeg, open: number): string =>
+const legGapText = (leg: OpenLeg, open: number): string =>
   `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than the ${otherLegName(leg)}.`;
 
 export const REOPEN_HALT = {
@@ -180,6 +200,12 @@ export const REOPEN_HALT = {
   noCash: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
   quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>
     `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours, or ${closeOtherText(leg, open)}.`,
+  refused: (leg: OpenLeg, open: number, reason: string): string =>
+    `Gate refused the reopen. ${reason} The ${legGapText(leg, open)} Resume to try again, or ${closeOtherText(leg, open)}.`,
+  underMinimum: (leg: OpenLeg, open: number): string =>
+    `The rest is under Gate's smallest order. The ${legGapText(leg, open)} Abandon, then ${closeOtherText(leg, open)}.`,
+  sizeChanged: (leg: OpenLeg, live: number, expected: number): string =>
+    `The ${legName(leg)} is ${fmtSize(live)} ${leg.base} on Gate, not the ${fmtSize(expected)} ${leg.base} this rebalance left. Abandon it and check Positions.`,
 } as const;
 
 export const LOCK_TEXT = {
@@ -272,7 +298,6 @@ function stepsFor(step: PlannedStep): Step[] {
   ];
 }
 
-
 function perpStep(name: (typeof PERP_STEPS)[number], leg: RealizeLeg, side: StepPerp['side']): Step {
   const at = { from: leg.pool, to: leg.pool, round: null, planned: leg.qty, arrives: null, borrowLeft: null };
   const perp = { symbol: leg.symbol, exchange: leg.exchange, side, reduceOnly: name === 'Close' };
@@ -288,7 +313,14 @@ function realizeSteps(leg: RealizeLeg): Step[] {
   ];
 }
 
-const realizeJobLeg = (leg: RealizeLeg): RealizeJobLeg => ({
+function hedgeOf(leg: RealizeLeg, perps: JobPerp[]): string | null {
+  const hedges = perps.filter(
+    (perp) => perp.symbol !== leg.symbol && perp.side !== leg.side && parseSymbol(perp.symbol).base === leg.base,
+  );
+  return hedges.sort((a, b) => b.qty - a.qty)[0]?.exchange ?? null;
+}
+
+const realizeJobLeg = (leg: RealizeLeg, perps: JobPerp[]): RealizeJobLeg => ({
   symbol: leg.symbol,
   base: leg.base,
   exchange: leg.exchange,
@@ -298,6 +330,12 @@ const realizeJobLeg = (leg: RealizeLeg): RealizeJobLeg => ({
   qty: leg.qty,
   filledQty: 0,
   realizedUsd: 0,
+  hedge: hedgeOf(leg, perps),
+  closeFeeUsd: leg.closeFeeUsd,
+  reopenFeeUsd: leg.reopenFeeUsd,
+  closeImpactUsd: leg.closeImpactUsd,
+  reopenImpactUsd: leg.reopenImpactUsd,
+  convert: leg.convert ? { amount: leg.convert.amount, feeUsd: leg.convert.feeUsd } : null,
 });
 
 export function newJob(
@@ -311,6 +349,7 @@ export function newJob(
     userId: string | null;
     realize?: RealizePlan | null;
     realizeCostUsd?: number;
+    before?: JobBefore;
   },
   now: number,
 ): Job {
@@ -331,7 +370,11 @@ export function newJob(
     tagCount: 0,
     createdAt: now,
     updatedAt: now,
-    realize: legs.length > 0 ? { legs: legs.map(realizeJobLeg), costUsd: input.realizeCostUsd ?? 0 } : null,
+    realize:
+      legs.length > 0
+        ? { legs: legs.map((leg) => realizeJobLeg(leg, input.before?.perps ?? [])), costUsd: input.realizeCostUsd ?? 0 }
+        : null,
+    ...(input.before ? { before: input.before } : {}),
   };
 }
 

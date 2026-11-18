@@ -376,7 +376,7 @@ export function isWorthIt(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBu
 export const isNotWorthIt = (plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): boolean =>
   borrowingBuckets(buckets).length > 0 && !hasUnknownRate(buckets) && !isWorthIt(plan, route, buckets);
 
-const daysText = (days: number): string => {
+export const daysText = (days: number): string => {
   if (days < 1) return t('accounts.rebalanceHovers.lessThanDay');
   const whole = Math.ceil(days);
   return t('accounts.rebalanceHovers.days', { count: whole, n: num(whole, 0) });

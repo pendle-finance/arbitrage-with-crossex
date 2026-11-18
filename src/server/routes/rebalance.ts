@@ -1,9 +1,9 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { classifyPlain, CoreError, describeError } from '../../core/errors';
-import { fetchVenueBook, type NormalizedBook } from '../../core/estimate/books';
+import { fetchDeepBook, type NormalizedBook } from '../../core/estimate/books';
 import { DEFAULT_STEP, parseSymbol } from '../../core/numbers';
 import { computeExposure } from '../../core/positions';
-import { isInProfit, realizeCostUsd, type PerpRule, type RealizeLeg, type RealizePerp, type RealizeRefusalReason } from '../../core/rebalance/realize';
+import { isInProfit, realizeCostUsd, type PerpRule, type PerpSide, type RealizeLeg, type RealizePerp } from '../../core/rebalance/realize';
 import {
   bookLevels,
   bucketsFrom,
@@ -103,12 +103,6 @@ const cents = (usd: number): number => Math.round(usd * 100);
 const costRoseTooMuch = (fresh: number, shown: number): boolean =>
   cents(fresh) - cents(shown) > Math.max(100, cents(shown) / 20);
 
-const REFUSED_TEXT: Record<RealizeRefusalReason, string> = {
-  'too-thin': 'Price impact too high.',
-  'no-margin': 'Not enough margin to reopen.',
-  'past-book': 'Order book too thin to price.',
-};
-
 interface ShownLeg {
   symbol: string;
   qty: number;
@@ -124,12 +118,15 @@ function shownLegsOf(value: unknown): ShownLeg[] | null {
   return value.every(isShownLeg) ? value : null;
 }
 
-function isShownRealize(fresh: RealizeLeg[], shown: ShownLeg[], rules: Record<string, PerpRule>): boolean {
+const SHOWN_SIZE_GAP = 0.01;
+
+export function isShownRealize(fresh: RealizeLeg[], shown: ShownLeg[], rules: Record<string, PerpRule>): boolean {
   if (fresh.length !== shown.length) return false;
   return fresh.every((leg) => {
     const seen = shown.find((candidate) => candidate.symbol === leg.symbol);
     const lot = Number(rules[leg.symbol]?.lotSize) || Number(DEFAULT_STEP);
-    return seen !== undefined && Math.abs(Math.round(seen.qty / lot) - Math.round(leg.qty / lot)) <= 1;
+    const allowedLots = Math.max(1, Math.floor((leg.qty * SHOWN_SIZE_GAP) / lot + 1e-9));
+    return seen !== undefined && Math.abs(Math.round(seen.qty / lot) - Math.round(leg.qty / lot)) <= allowedLots;
   });
 }
 
@@ -220,7 +217,7 @@ export function rebalanceRoutes(deps: AppDeps) {
     const perpBooks = async (symbols: string[]): Promise<Record<string, NormalizedBook | null>> => {
       const read = (symbol: string): Promise<NormalizedBook | null> => {
         const { exchange, base, quote } = parseSymbol(symbol);
-        return deps.cache.get(`book:${symbol}`, TTL.live, () => fetchVenueBook(exchange, base, quote)).then(
+        return deps.cache.get(`book:deep:${symbol}`, TTL.live, () => fetchDeepBook(exchange, base, quote)).then(
           ({ value }) => value,
           () => null,
         );
@@ -258,7 +255,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const books = await perpBooks(perps.filter(isInProfit).flatMap((perp) => (perp.symbol ? [perp.symbol] : [])));
       const perpRules: Record<string, PerpRule> = Object.fromEntries(
         rules.value.flatMap((rule) =>
-          rule.symbol ? [[rule.symbol, { lotSize: rule.lotSize, minSize: rule.minSize, minNotional: rule.minNotional }]] : [],
+          rule.symbol ? [[rule.symbol, { lotSize: rule.lotSize, minSize: rule.minSize, minNotional: rule.minNotional, maxMarketSize: rule.maxMarketSize }]] : [],
         ),
       );
       const gateFees = fees.value.find((f) => f.exchangeType === 'GATE');
@@ -288,7 +285,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plans, stale, userId, perpRules };
+      return { buckets, plans, stale, userId, perpRules, perps };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -374,15 +371,14 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (locked) return conflict(reply, locked);
       const view = await catchRateLimit(loadView(true, custom));
       if (!view) return conflict(reply, STALE_TEXT);
-      const { plans, userId, perpRules } = view;
+      const { plans, userId, perpRules, buckets, perps } = view;
       const plan = plans[goal];
       if (!plan) throw new CoreError(CUSTOM_NEEDS);
-      if (plan.realize?.refused) return conflict(reply, REFUSED_TEXT[plan.realize.refused.reason]);
       if (plan.balanced) return conflict(reply, nothingText(plan));
       const picked = plan.routes[route];
       if (!picked) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (!picked.available) return conflict(reply, picked.reason ?? PLAN_CHANGED_TEXT);
-      const legs = plan.realize?.legs ?? [];
+      const legs = plan.realize && !plan.realize.refused ? plan.realize.legs : [];
       if (picked.steps.length === 0 && legs.length === 0) return conflict(reply, nothingText(plan));
       if (!isShownRealize(legs, shownLegs, perpRules)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const totalUsd = picked.costUsd + realizeCostUsd(legs);
@@ -401,6 +397,15 @@ export function rebalanceRoutes(deps: AppDeps) {
           userId,
           realize: legs.length > 0 ? plan.realize : null,
           realizeCostUsd: realizeCostUsd(legs),
+          before: {
+            buckets,
+            perps: perps.flatMap((perp) => {
+              const qty = Number(perp.positionQty);
+              if (!perp.symbol || !Number.isFinite(qty) || qty === 0) return [];
+              const side: PerpSide = qty < 0 ? 'SHORT' : 'LONG';
+              return [{ symbol: perp.symbol, exchange: parseSymbol(perp.symbol).exchange, side, qty: Math.abs(qty) }];
+            }),
+          },
         },
         now(),
       );

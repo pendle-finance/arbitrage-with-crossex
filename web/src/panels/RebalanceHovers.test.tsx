@@ -398,7 +398,7 @@ describe('total cost counts the profit step', () => {
   it('the card verdict gives the same days as the modal', () => {
     const { plan, route, buckets } = pickedOf(rebalanceViews.ethUp);
     expect(worthLine(plan, route, buckets)).toEqual({
-      text: 'Not worth it yet. The fee is more than 30 days of the interest it saves.',
+      text: 'Not worth it yet.',
       tone: 'warn',
     });
     const owner = pickedOf(rebalanceViews.ownerBook);

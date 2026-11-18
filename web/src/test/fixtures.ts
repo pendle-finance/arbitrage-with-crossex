@@ -2,6 +2,7 @@
 import { http, HttpResponse } from 'msw';
 import type {
   ActionInput,
+  PerpSize,
   AssetBorosHistory,
   AssetBorosOpen,
   AssetGroup,
@@ -2276,17 +2277,19 @@ const REFUSED_LEGS: RealizeLeg[] = [
 
 const REFUSED_BUCKETS: RebalanceBucket[] = [
   bucketOf('USDT', 'CROSSEX', -1500000, 0, 1500000, 250, 0.0596),
-  { ...bucketOf('USDC', 'HYPERLIQUID', 0, 12000000, 0, 0, 0.05), imHeldUsd: 0, mmHeldUsd: 0 },
+  { ...bucketOf('USDC', 'HYPERLIQUID', 1600000, 12000000, 0, 0, 0.05), imHeldUsd: 0, mmHeldUsd: 0 },
+];
+
+const REFUSED_AFTER: WalletAfter[] = [
+  { coin: 'USDT', venue: 'CROSSEX', cash: 0, equity: 0 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 100000, equity: 12100000 },
 ];
 
 function refusedPlan(refused: RealizeRefusal): EvenPlan {
-  const idle: RoutePlan = {
-    available: false, reason: null, costUsd: 0, seconds: 0, rounds: 0, oneMoreRoundCostUsd: null,
-    marginFreedUsd: 0, savesPerDayUsd: 0, after: [], steps: [],
-  };
   return realizeEven(
-    { kind: 'even' }, 11324465, { mix: null, loop: idle, convert: idle }, 'loop',
-    { legs: REFUSED_LEGS, refused }, { recommended: null },
+    { kind: 'even' }, 1500000,
+    { mix: null, loop: null, convert: convertRoute([1500000], 3000, 250, REFUSED_AFTER, [HL_TO_GATE]) }, 'convert',
+    { legs: REFUSED_LEGS, refused },
   );
 }
 
@@ -2444,6 +2447,16 @@ export const REALIZE_DONE_JOB: RebalanceJob = ownerJob({
   status: 'done', stepIndex: OWNER_DONE_STEPS.length - 1, realize: realizeJobLeg(CLOSED_LEG), steps: OWNER_DONE_STEPS,
   createdAt: REBALANCE_NOW - 41 * 60_000, updatedAt: REBALANCE_NOW,
 });
+
+export const OWNER_BEFORE_PERPS: PerpSize[] = [
+  { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SHORT', qty: 66.0 },
+  { symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', qty: 66.0 },
+];
+
+export const REALIZE_DONE_BEFORE_JOB: RebalanceJob = {
+  ...REALIZE_DONE_JOB,
+  before: { buckets: OWNER_BUCKETS, perps: OWNER_BEFORE_PERPS },
+};
 
 const OWNER_DONE_BUCKETS = rebased(OWNER_BUCKETS, {
   'USDT/CROSSEX': { cash: 7687, equity: 7687, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPerDayUsd: 0 },
@@ -2774,6 +2787,472 @@ export const whaleRebalanceViews = {
     buckets: WHALE_DONE_BUCKETS, plans: plansOf(balancedPlan(WHALE_AFTER)), job: whaleJob(REALIZE_DONE_JOB),
   },
 } satisfies Record<string, RebalanceView>;
+
+type StepStatus = RebalanceStep['status'];
+
+const stepTimes = (index: number, status: StepStatus): Partial<RebalanceStep> =>
+  status === 'done'
+    ? { startedAt: OWNER_STARTED + index * 4_000, doneAt: OWNER_STARTED + index * 4_000 + 3_000 }
+    : status === 'running'
+      ? { startedAt: REBALANCE_NOW - 3_000 }
+      : {};
+
+function convertChunks(amount: number): number[] {
+  const cents = Math.round(amount * 100);
+  const count = amount > 500_000 ? Math.ceil(cents / 50_000_000) : 1;
+  if (count === 1) return [amount];
+  const base = Math.floor(cents / count);
+  const extra = cents - base * count;
+  return Array.from({ length: count }, (_, index) => (base + (index < extra ? 1 : 0)) / 100);
+}
+
+function legSteps(
+  leg: RealizeLeg, statuses: StepStatus[], first = 0,
+  over: Partial<Record<'Close' | 'Convert' | 'Reopen', Partial<RebalanceStep>>> = {},
+): RebalanceStep[] {
+  const closeSide = leg.side === 'SHORT' ? 'BUY' : 'SELL';
+  const perp = (side: 'BUY' | 'SELL', reduceOnly: boolean) => ({ symbol: leg.symbol, exchange: leg.exchange, side, reduceOnly });
+  const chunks = leg.convert ? convertChunks(leg.convert.amount) : [];
+  const names: ('Close' | 'Convert' | 'Reopen')[] = ['Close', ...chunks.map((): 'Convert' => 'Convert'), 'Reopen'];
+  return names.map((name, index) => {
+    const status = statuses[index]!;
+    const planned = name === 'Convert' ? chunks[index - 1]! : leg.qty;
+    const step = jobStep({
+      from: leg.pool, to: name === 'Convert' ? (leg.pool === 'CROSSEX' ? 'HYPERLIQUID' : 'CROSSEX') : leg.pool, name,
+      round: null, planned, status, qty: status === 'done' ? planned : null,
+      perp: name === 'Convert' ? null : name === 'Close' ? perp(closeSide, true) : perp(closeSide === 'BUY' ? 'SELL' : 'BUY', false),
+      nextTryAt: null, ...stepTimes(first + index, status),
+    });
+    return { ...step, ...over[name] };
+  });
+}
+
+function routeSteps(rounds: { planned: number; arrives: number }[], doneSteps: number, live = true): RebalanceStep[] {
+  const at = OWNER_STARTED + 12_000;
+  return rounds.flatMap(({ planned, arrives }, round): RebalanceStep[] =>
+    ['From Hyperliquid', 'To Gate', 'Sell USDC'].map((name, offset) => {
+      const index = round * 3 + offset;
+      const status: StepStatus = index < doneSteps ? 'done' : live && index === doneSteps ? 'running' : 'pending';
+      return jobStep({
+        ...HL_TO_GATE, name, round: round + 1, planned: offset === 0 ? planned : arrives, status,
+        qty: status === 'done' ? (offset === 0 ? planned : arrives) : null, borrowLeft: offset === 2 ? 0 : null,
+        startedAt: status === 'pending' ? null : status === 'running' ? REBALANCE_NOW - 3_000 : at + index * 2_000,
+        doneAt: status === 'done' ? at + index * 2_000 + 2_000 : null,
+      });
+    }),
+  );
+}
+
+const jobLegOf = (leg: RealizeLeg, filledQty = 0, realizedUsd = 0): RealizeJobLeg => ({
+  symbol: leg.symbol, base: leg.base, exchange: leg.exchange, pool: leg.pool, side: leg.side,
+  positionQty: leg.positionQty, qty: leg.qty, filledQty, realizedUsd,
+});
+
+function auditJob(
+  legs: { leg: RealizeLeg; filled?: number; usd?: number }[], steps: RebalanceStep[], over: Partial<RebalanceJob> = {},
+): RebalanceJob {
+  return ownerJob({ realize: { legs: legs.map((l) => jobLegOf(l.leg, l.filled, l.usd)) }, steps, ...over });
+}
+
+const AUDIT_ROUND = { planned: 4538, arrives: 4537 };
+const AUDIT_SIX = Array.from({ length: 6 }, () => AUDIT_ROUND);
+const AUDIT_TRIMMED = [AUDIT_ROUND, AUDIT_ROUND, { planned: 2941.6, arrives: 2941 }];
+const AUDIT_CLEAR = Array.from({ length: 5 }, () => ({ planned: 4342.4, arrives: 4341.5 }));
+const AUDIT_CLOSED = { leg: OWNER_ETH_LEG, filled: 53.8, usd: 34386 };
+
+const ownerPlans = (over: Partial<RebalancePlans>): RebalancePlans => ({ ...OWNER_BOOK_PLANS, ...over });
+
+const customPlan = (amount: number): EvenPlan => ({
+  ...OWNER_EVEN, goal: { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount }, customMaxUsd: 45190,
+});
+
+const BTC_HL_LEG: RealizeLeg = {
+  ...OWNER_ETH_LEG, symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', base: 'BTC', positionQty: 2.1, qty: 1.4, realizedUsd: 9200,
+  convert: { amount: 2800, count: 1, feeUsd: 5.6 }, closeFeeUsd: 12.4, reopenFeeUsd: 12.4, closeImpactUsd: 2.1,
+  reopenImpactUsd: 2.1, impactBp: 1.6,
+};
+
+const BTC_GATE_LEG: RealizeLeg = {
+  pool: 'CROSSEX', symbol: 'GATE_FUTURE_BTC_USDT', exchange: 'GATE', base: 'BTC', side: 'LONG', positionQty: 2.1, qty: 1.4,
+  realizedUsd: 16000, convert: null, closeFeeUsd: 18.4, reopenFeeUsd: 18.4, closeImpactUsd: 3.2, reopenImpactUsd: 3.2,
+  impactBp: 1.7,
+};
+
+const TWO_LEGS_AFTER: WalletAfter[] = [
+  { coin: 'USDT', venue: 'CROSSEX', cash: 0, equity: 0 },
+  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 0, equity: 5400 },
+];
+
+const TWO_LEGS_REPAY = realizeEven(
+  { kind: 'repay' }, 29812,
+  {
+    mix: null,
+    loop: loopRoute(5, 18912, 4, 1700, 4.94, TWO_LEGS_AFTER, HL_TO_GATE),
+    convert: convertRoute([18912], 37.8, 4.94, TWO_LEGS_AFTER, [HL_TO_GATE]),
+  },
+  'loop', { legs: [OWNER_CLEAR_LEG, BTC_HL_LEG], refused: null },
+);
+
+const TWO_LEGS_PLANS: RebalancePlans = {
+  even: { ...TWO_LEGS_REPAY, goal: { kind: 'even' } }, repay: TWO_LEGS_REPAY, custom: null,
+};
+
+const TWO_LEGS_JOB = (statuses: StepStatus[][], over: Partial<RebalanceJob> = {}) =>
+  auditJob(
+    [{ leg: OWNER_CLEAR_LEG, filled: statuses[0]![0] === 'done' ? 42.2 : 0, usd: statuses[0]![0] === 'done' ? 26971 : 0 }, { leg: BTC_HL_LEG }],
+    [...legSteps(OWNER_CLEAR_LEG, statuses[0]!, 0), ...legSteps(BTC_HL_LEG, statuses[1]!, 3), ...routeSteps(AUDIT_CLEAR, 0, false)],
+    { goal: 'repay', amount: 18912, ...over },
+  );
+
+const TWO_VENUES_BUCKETS: RebalanceBucket[] = [
+  { ...bucketOf('USDT', 'CROSSEX', -29812, 20000, 29812, 4.9357, 0.0596), imHeldUsd: 5962.4, mmHeldUsd: 2981.2 },
+  { ...bucketOf('USDC', 'HYPERLIQUID', 3140, 42174, 0, 0, 0.05), imHeldUsd: 0, mmHeldUsd: 0 },
+];
+
+const TWO_VENUES_EVEN = realizeEven(
+  { kind: 'even' }, 37526, OWNER_ROUTES, 'loop', { legs: [OWNER_ETH_LEG, BTC_GATE_LEG], refused: null },
+);
+
+const TWO_VENUES_VIEW = { buckets: TWO_VENUES_BUCKETS, plans: ownerPlans({ even: TWO_VENUES_EVEN }) };
+
+const LONG_HL_LEG: RealizeLeg = { ...OWNER_ETH_LEG, side: 'LONG' };
+
+const GATE_CONVERT_LEG: RealizeLeg = { ...ETH_UP_LEG, convert: { amount: 9000, count: 1, feeUsd: 18 } };
+
+const GATE_CONVERT_EVEN = realizeEven(
+  { kind: 'even' }, 30585,
+  {
+    mix: null,
+    loop: loopRoute(7, 21585, 7, 2700, 2.53, ETH_UP_AFTER, GATE_TO_HL),
+    convert: convertRoute([21585], 43.17, 2.53, ETH_UP_AFTER, [GATE_TO_HL]),
+  },
+  'loop', { legs: [GATE_CONVERT_LEG], refused: null },
+);
+
+const GATE_CONVERT_VIEW = { buckets: ETH_UP_BUCKETS, plans: plansOf(GATE_CONVERT_EVEN) };
+
+const DONE_BUCKETS_REPAY = rebased(OWNER_BUCKETS, {
+  'USDT/CROSSEX': { cash: 0, equity: 0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPerDayUsd: 0 },
+  'USDC/HYPERLIQUID': { cash: 0, upnl: 15402, equity: 15402 },
+});
+
+const DRIFTED_LEG: RealizeLeg = {
+  ...OWNER_ETH_LEG, positionQty: 12.2, closeFeeUsd: 41.5, reopenFeeUsd: 41.5, closeImpactUsd: 11, reopenImpactUsd: 11,
+};
+
+const REFUSED_HL_EVEN = realizeEven(
+  { kind: 'even' }, 37526,
+  {
+    mix: null,
+    loop: { ...OWNER_ROUTES.loop!, available: false, steps: [], after: [] },
+    convert: { ...OWNER_ROUTES.convert, available: false, steps: [], after: [] },
+  },
+  'loop', { legs: [OWNER_ETH_LEG], refused: { reason: 'too-thin', bp: 54.5, maxBp: 25 } }, { recommended: null },
+);
+
+const LEG_CLOSED_STATUSES: StepStatus[] = ['done', 'running', 'pending'];
+const CONVERT_INSERTED: RebalanceStep = jobStep({
+  ...HL_TO_GATE, name: 'Convert', round: null, planned: 1500, perp: null, nextTryAt: null,
+});
+const CLOSED_AND_CONVERTED = legSteps(OWNER_ETH_LEG, ['done', 'done', 'pending']);
+const STEP_TIMES_2 = stepTimes(2, 'done');
+
+const WHALE_TWO_CONVERT_LEG: RealizeLeg = {
+  ...WHALE_LEG, convert: { amount: 999999.99, count: 2, feeUsd: 2000 },
+};
+
+const WHALE_TWO_CONVERTS_JOB = ownerJob({
+  id: 'whale0002', amount: 6500000, costUsd: 9120.45, target: WHALE_AFTER, stepIndex: 2,
+  realize: { legs: [jobLegOf(WHALE_TWO_CONVERT_LEG, 11000, 7000000)] },
+  steps: [
+    ...legSteps(WHALE_TWO_CONVERT_LEG, ['done', 'done', 'running', 'pending']),
+    ...routeSteps(Array.from({ length: 6 }, () => ({ planned: 1083333.33, arrives: 1083000 })), 0, false),
+  ],
+});
+
+export const auditRebalanceViews = {
+  ownerCustomOverMax: { buckets: OWNER_BUCKETS, plans: ownerPlans({ custom: customPlan(50000) }), job: null },
+  ownerCustomAtMax: { buckets: OWNER_BUCKETS, plans: ownerPlans({ custom: customPlan(45190) }), job: null },
+  ownerCustomAtCash: {
+    buckets: OWNER_BUCKETS,
+    plans: ownerPlans({
+      custom: realizeEven(
+        { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 3140 }, 3140,
+        {
+          mix: null,
+          loop: loopRoute(1, 3140, 1, 400, 0.5, OWNER_CASH_AFTER, HL_TO_GATE),
+          convert: convertRoute([3140], 6.3, 0.5, OWNER_CASH_AFTER, [HL_TO_GATE]),
+        },
+        'loop', null, { customMaxUsd: 45190 },
+      ),
+    }),
+    job: null,
+  },
+  ownerBookCostUp: {
+    buckets: OWNER_BUCKETS,
+    plans: ownerPlans({
+      even: {
+        ...OWNER_EVEN,
+        realize: {
+          refused: null,
+          legs: [{
+            ...OWNER_ETH_LEG, closeFeeUsd: OWNER_ETH_LEG.closeFeeUsd * 2, reopenFeeUsd: OWNER_ETH_LEG.reopenFeeUsd * 2,
+            convert: { amount: 10298, count: 1, feeUsd: 41.2 },
+          }],
+        },
+      },
+    }),
+    job: null,
+  },
+  ownerBookBorrowUnread: {
+    buckets: [bucketOf('USDT', 'CROSSEX', -29812, 0, 29812, 0, 0.0596), OWNER_BUCKETS[1]!], plans: OWNER_BOOK_PLANS, job: null,
+  },
+  refusedHlProfit: {
+    buckets: OWNER_BUCKETS, plans: ownerPlans({ even: REFUSED_HL_EVEN, repay: REFUSED_HL_EVEN }), job: null,
+  },
+  twoLegs: { buckets: OWNER_BUCKETS, plans: TWO_LEGS_PLANS, job: null },
+  twoLegsRunning: {
+    buckets: OWNER_BUCKETS, plans: TWO_LEGS_PLANS,
+    job: TWO_LEGS_JOB([['done', 'running', 'pending'], ['pending', 'pending', 'pending']], { stepIndex: 1 }),
+  },
+  twoVenues: { ...TWO_VENUES_VIEW, job: null },
+  twoVenuesRunning: {
+    ...TWO_VENUES_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED, { leg: BTC_GATE_LEG }],
+      [
+        ...legSteps(OWNER_ETH_LEG, LEG_CLOSED_STATUSES),
+        ...legSteps(BTC_GATE_LEG, ['pending', 'pending'], 3),
+        ...routeSteps(AUDIT_SIX, 0, false),
+      ],
+      { stepIndex: 1 },
+    ),
+  },
+  longHlLeg: {
+    buckets: OWNER_BUCKETS,
+    plans: ownerPlans({ even: { ...OWNER_EVEN, realize: { legs: [LONG_HL_LEG], refused: null } } }),
+    job: null,
+  },
+  longHlLegRunning: {
+    buckets: OWNER_BUCKETS,
+    plans: ownerPlans({ even: { ...OWNER_EVEN, realize: { legs: [LONG_HL_LEG], refused: null } } }),
+    job: auditJob(
+      [{ leg: LONG_HL_LEG, filled: 53.8, usd: 34386 }],
+      [...legSteps(LONG_HL_LEG, LEG_CLOSED_STATUSES), ...routeSteps(AUDIT_SIX, 0, false)],
+      { stepIndex: 1 },
+    ),
+  },
+  gateLegConvert: { ...GATE_CONVERT_VIEW, job: null },
+  ethUpRetrying: {
+    ...GATE_CONVERT_VIEW,
+    job: auditJob(
+      [{ leg: GATE_CONVERT_LEG, filled: 47.1, usd: 30585 }],
+      [
+        ...legSteps(GATE_CONVERT_LEG, ['done', 'done', 'running'], 0, {
+          Reopen: { attempt: 2, nextTryAt: REBALANCE_NOW + 4_000, retry: { reason: 'margin', convertAmount: 1500 } },
+        }),
+        ...routeSteps(AUDIT_SIX, 0, false).map((step) => ({ ...step, from: 'CROSSEX' as const, to: 'HYPERLIQUID' as const })),
+      ],
+      { stepIndex: 2, route: 'loop', fundsAt: 'CROSSEX' },
+    ),
+  },
+  realizePartFillTrimmed: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [{ leg: OWNER_ETH_LEG, filled: 30, usd: 19173 }],
+      [
+        ...legSteps(OWNER_ETH_LEG, LEG_CLOSED_STATUSES, 0, { Close: { qty: 30 }, Convert: { planned: 5742.2 } }),
+        ...routeSteps(AUDIT_TRIMMED, 0, false),
+      ],
+      { stepIndex: 1, amount: 12017.6 },
+    ),
+  },
+  realizeRetryingNoMargin: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [
+        ...legSteps(OWNER_ETH_LEG, ['done', 'done', 'running'], 0, { Reopen: { attempt: 2, nextTryAt: REBALANCE_NOW + 4_000, retry: null } }),
+        ...routeSteps(AUDIT_SIX, 0, false),
+      ],
+      { stepIndex: 2 },
+    ),
+  },
+  realizeRetryInsertedConvert: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [
+        ...CLOSED_AND_CONVERTED.slice(0, 2),
+        { ...CONVERT_INSERTED, status: 'running', startedAt: REBALANCE_NOW - 2_000, attempt: 1 },
+        CLOSED_AND_CONVERTED[2]!,
+        ...routeSteps(AUDIT_SIX, 0, false),
+      ],
+      { stepIndex: 2 },
+    ),
+  },
+  realizeRetryInsertedReopen: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [
+        ...CLOSED_AND_CONVERTED.slice(0, 2),
+        { ...CONVERT_INSERTED, status: 'done', qty: 1500, attempt: 1, ...STEP_TIMES_2 },
+        {
+          ...CLOSED_AND_CONVERTED[2]!, status: 'running', attempt: 2, startedAt: REBALANCE_NOW - 3_000,
+          nextTryAt: REBALANCE_NOW + 4_000, retry: { reason: 'margin', convertAmount: 1500 },
+        },
+        ...routeSteps(AUDIT_SIX, 0, false),
+      ],
+      { stepIndex: 3 },
+    ),
+  },
+  realizeRouteInTransit: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [...legSteps(OWNER_ETH_LEG, ['done', 'done', 'done']), ...routeSteps(AUDIT_SIX, 1)],
+      { stepIndex: 4, fundsAt: 'SPOT', inTransit: { coin: 'USDC', qty: 4538, at: 'SPOT' } },
+    ),
+  },
+  realizeOnlyRunning: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob([AUDIT_CLOSED], legSteps(OWNER_ETH_LEG, LEG_CLOSED_STATUSES), { stepIndex: 1, amount: 0 }),
+  },
+  realizeHaltedCloseSent: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [{ leg: OWNER_ETH_LEG }],
+      [
+        ...legSteps(OWNER_ETH_LEG, ['running', 'pending', 'pending'], 0, {
+          Close: { text: 'mtzr1c0a-close', sentAt: REBALANCE_NOW - 20_000, venueId: null },
+        }),
+        ...routeSteps(AUDIT_SIX, 0, false),
+      ],
+      { status: 'halted', stepIndex: 0 },
+    ),
+  },
+  realizeHaltedPartReopen: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [
+        ...legSteps(OWNER_ETH_LEG, ['done', 'done', 'running'], 0, { Reopen: { qty: 20.0 } }),
+        ...routeSteps(AUDIT_SIX, 0, false),
+      ],
+      { status: 'halted', stepIndex: 2 },
+    ),
+  },
+  realizeHaltedRoute: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [...legSteps(OWNER_ETH_LEG, ['done', 'done', 'done']), ...routeSteps(AUDIT_SIX, 3)],
+      { status: 'halted', stepIndex: 6, haltReason: 'The app restarted during the run. Nothing failed. Press Resume.' },
+    ),
+  },
+  realizeHaltedRouteNoReason: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [...legSteps(OWNER_ETH_LEG, ['done', 'done', 'done']), ...routeSteps(AUDIT_SIX, 3)],
+      { status: 'halted', stepIndex: 6, haltReason: null },
+    ),
+  },
+  realizeAbandonedLegOpen: {
+    ...OWNER_JOB_VIEW,
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [...legSteps(OWNER_ETH_LEG, ['done', 'done', 'pending']), ...routeSteps(AUDIT_SIX, 0, false)],
+      { status: 'abandoned', stepIndex: 2 },
+    ),
+  },
+  realizeRunningPlanDrifted: {
+    buckets: OWNER_BUCKETS,
+    plans: ownerPlans({ even: { ...OWNER_EVEN, realize: { legs: [DRIFTED_LEG], refused: null } } }),
+    job: REALIZE_LEG_CLOSED_JOB,
+  },
+  realizeDonePartFill: {
+    buckets: OWNER_DONE_BUCKETS, plans: plansOf(balancedPlan(OWNER_AFTER)),
+    job: auditJob(
+      [{ leg: OWNER_ETH_LEG, filled: 30, usd: 19173 }],
+      [
+        ...legSteps(OWNER_ETH_LEG, ['done', 'done', 'done'], 0, { Close: { qty: 30 }, Convert: { planned: 5742.2, qty: 5742.2 } }),
+        ...routeSteps(AUDIT_TRIMMED, 9),
+      ],
+      { status: 'done', stepIndex: 11, amount: 12017.6, createdAt: REBALANCE_NOW - 41 * 60_000, updatedAt: REBALANCE_NOW },
+    ),
+  },
+  realizeDoneRepay: {
+    buckets: DONE_BUCKETS_REPAY, plans: plansOf(balancedPlan(OWNER_CLEAR_AFTER)),
+    job: auditJob(
+      [{ leg: OWNER_CLEAR_LEG, filled: 42.2, usd: 26971 }],
+      [...legSteps(OWNER_CLEAR_LEG, ['done', 'done', 'done']), ...routeSteps(AUDIT_CLEAR, 15)],
+      {
+        goal: 'repay', status: 'done', stepIndex: 17, amount: 21712, target: OWNER_CLEAR_AFTER,
+        createdAt: REBALANCE_NOW - 41 * 60_000, updatedAt: REBALANCE_NOW,
+      },
+    ),
+  },
+  realizeDoneServerShaped: {
+    buckets: OWNER_DONE_BUCKETS, plans: plansOf(balancedPlan(OWNER_AFTER)),
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [...legSteps(OWNER_ETH_LEG, ['done', 'done', 'done']), ...routeSteps(AUDIT_SIX, 18)],
+      { status: 'done', stepIndex: 20, amount: 27228, createdAt: REBALANCE_NOW - 41 * 60_000, updatedAt: REBALANCE_NOW },
+    ),
+  },
+  realizeDoneShortReopen: {
+    buckets: OWNER_DONE_BUCKETS, plans: plansOf(balancedPlan(OWNER_AFTER)),
+    job: auditJob(
+      [AUDIT_CLOSED],
+      [...legSteps(OWNER_ETH_LEG, ['done', 'done', 'done'], 0, { Reopen: { qty: 53.79 } }), ...routeSteps(AUDIT_SIX, 18)],
+      { status: 'done', stepIndex: 20, amount: 27228, createdAt: REBALANCE_NOW - 41 * 60_000, updatedAt: REBALANCE_NOW },
+    ),
+  },
+  realizeWhaleTwoConverts: { ...WHALE_VIEW, job: WHALE_TWO_CONVERTS_JOB },
+} satisfies Record<string, RebalanceView>;
+
+export const auditPositionsBodies = {
+  owner: positionsWithExposure(ownerPerps(66.0, 66.0)),
+  ownerAfterClose: positionsWithExposure(ownerPerps(12.2, 66.0)),
+  whale: positionsWithExposure(ownerPerps(13400.5, 13400.5)),
+  ownerEthBtc: positionsWithExposure([
+    ...ownerPerps(66.0, 66.0),
+    ...perpRows([
+      ['HYPERLIQUID_FUTURE_BTC_USDC', 'SHORT', 2.1, 83000],
+      ['GATE_FUTURE_BTC_USDT', 'LONG', 2.1, 83000],
+    ]),
+  ]),
+  ownerLongHl: positionsWithExposure(
+    perpRows([
+      ['HYPERLIQUID_FUTURE_ETH_USDC', 'LONG', 66.0, 1821],
+      ['GATE_FUTURE_ETH_USDT', 'SHORT', 66.0, 1821],
+    ]),
+  ),
+  ownerLighterHedge: positionsWithExposure(
+    perpRows([
+      ['HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', 66.0, 1821],
+      ['LIGHTER_FUTURE_ETH_USDC', 'LONG', 66.0, 1821],
+    ]),
+  ),
+} satisfies Record<string, PositionsResponse>;
+
+function perpRows(rows: [string, 'LONG' | 'SHORT', number, number][]): CrossexPosition[] {
+  return rows.map(([symbol, side, qty, mark]) =>
+    makeCrossexPosition({
+      symbol, positionSide: side, positionQty: String(side === 'SHORT' ? -qty : qty),
+      positionValue: String(Math.round(qty * mark)), entryPrice: String(mark), markPrice: String(mark), upnl: '0', upnlRate: '0',
+    }),
+  );
+}
+
+function ownerPerps(hlQty: number, gateQty: number): CrossexPosition[] {
+  return perpRows([
+    ['HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', hlQty, 1821],
+    ['GATE_FUTURE_ETH_USDT', 'LONG', gateQty, 1821],
+  ]);
+}
 
 const ACCOUNT_B_SPOT: SpotBalance[] = [
   { coin: 'USDT', available: 318.42, locked: 0 },

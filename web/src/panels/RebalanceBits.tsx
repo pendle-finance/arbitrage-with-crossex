@@ -1,11 +1,11 @@
 import { ArrowRight, Check, ChevronDown, ChevronRight, Info, TriangleAlert } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
 import type {
+  PerpSide,
   PlannedStep,
   Pool,
   RealizeJobLeg,
   RealizeLeg,
-  RealizePlan,
   RebalanceJob,
   RebalanceStep,
   RouteName,
@@ -24,8 +24,6 @@ import {
   hoverTarget,
   hoverUpnl,
   LEG_TEXT,
-  legFeeUsd,
-  legImpactUsd,
   MODAL_FEE,
   MODAL_IMPACT,
   MOVE_TEXT,
@@ -338,13 +336,14 @@ export function StepList({ rows }: { rows: StepRow[] }) {
   return (
     <ol className="flex flex-col gap-5">
       {rows.map((row, index) => (
-        <li key={row.key} aria-current={row.state === 'running' ? 'step' : undefined} className="flex gap-3">
+        <li key={row.key} aria-current={row.state === 'running' ? 'step' : undefined} className="relative flex gap-3">
+          {index < rows.length - 1 && <span aria-hidden data-step-line="" className="absolute -bottom-5 left-2.5 top-6 w-px bg-ink-700" />}
           <StepDot n={index + 1} state={row.state} />
           {row.label && <span className={`w-20 shrink-0 pt-0.5 ${microLabelClass}`}>{row.label}</span>}
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
             <div className="flex items-end justify-between gap-4 text-xs">
-              <div className="flex min-w-0 flex-col">
-                <span className={STEP_TEXT[row.state]}>{row.text}</span>
+              <div className={row.label ? 'flex min-w-0 flex-col' : 'flex min-w-0 flex-wrap items-baseline gap-x-2'}>
+                <span className={`num ${row.label ? '' : 'font-semibold'} ${STEP_TEXT[row.state]}`}>{row.text}</span>
                 <span className="text-ink-400">{row.sub}</span>
               </div>
               <span className={`num shrink-0 ${STEP_RIGHT[row.state]}`}>{row.right}</span>
@@ -358,8 +357,46 @@ export function StepList({ rows }: { rows: StepRow[] }) {
   );
 }
 
-const closeRowText = (leg: Pick<RealizeLeg, 'positionQty' | 'base' | 'side'>, part: number): string =>
+const closeRowText = (leg: { positionQty: number; base: string; side: PerpSide }, part: number): string =>
   t('accounts.rebalanceRealize.closeRow', { part: sizeText(part), total: sizeText(leg.positionQty), base: leg.base, side: sideText(leg.side) });
+
+export interface ActionCost {
+  closeFee: number;
+  closeImpact: number;
+  convertFee: number;
+  reopenFee: number;
+  reopenImpact: number;
+}
+
+export interface ActionLeg {
+  symbol: string;
+  base: string;
+  side: PerpSide;
+  pool: Pool;
+  positionQty: number;
+  closeQty: number;
+  reopenQty: number;
+  convert: { amount: number; count: number } | null;
+  cost: ActionCost | null;
+}
+
+export const planActionLeg = (leg: RealizeLeg): ActionLeg => ({
+  symbol: leg.symbol,
+  base: leg.base,
+  side: leg.side,
+  pool: leg.pool,
+  positionQty: leg.positionQty,
+  closeQty: leg.qty,
+  reopenQty: leg.qty,
+  convert: leg.convert ? { amount: leg.convert.amount, count: leg.convert.count } : null,
+  cost: {
+    closeFee: leg.closeFeeUsd,
+    closeImpact: leg.closeImpactUsd,
+    convertFee: leg.convert?.feeUsd ?? 0,
+    reopenFee: leg.reopenFeeUsd,
+    reopenImpact: leg.reopenImpactUsd,
+  },
+});
 
 export function FeeCell({ feeUsd, impactUsd }: { feeUsd: number; impactUsd: number }) {
   return (
@@ -370,13 +407,18 @@ export function FeeCell({ feeUsd, impactUsd }: { feeUsd: number; impactUsd: numb
   );
 }
 
-export function RealizeRow({ realize }: { realize: RealizePlan }) {
+export function RealizeRow({ legs }: { legs: ActionLeg[] }) {
   return (
     <div className="flex flex-col gap-1.5">
-      {realize.legs.map((leg) => (
+      {legs.map((leg) => (
         <div key={leg.symbol} data-realize-row={leg.symbol} className="flex items-start justify-between gap-4 pr-3 text-xs">
-          <span className="num min-w-0 text-ink-100">{closeRowText(leg, leg.qty)}</span>
-          <FeeCell feeUsd={legFeeUsd(leg)} impactUsd={legImpactUsd(leg)} />
+          <span className="num min-w-0 text-ink-100">{closeRowText(leg, leg.closeQty)}</span>
+          {leg.cost && (
+            <FeeCell
+              feeUsd={leg.cost.closeFee + leg.cost.reopenFee + leg.cost.convertFee}
+              impactUsd={Math.max(0, leg.cost.closeImpact + leg.cost.reopenImpact)}
+            />
+          )}
         </div>
       ))}
     </div>
@@ -400,13 +442,13 @@ const PERP_ACTION = {
   reopen: { plan: 'accounts.rebalanceRealize.reopenAction', past: 'accounts.rebalanceRealize.reopenedDone' },
 } as const;
 
-function perpAction(leg: RealizeLeg, verb: keyof typeof PERP_ACTION, tense: Tense): string {
-  const words = { size: sizeText(leg.qty), base: leg.base, side: sideText(leg.side) };
+function perpAction(leg: ActionLeg, verb: keyof typeof PERP_ACTION, tense: Tense): string {
+  const words = { size: sizeText(verb === 'close' ? leg.closeQty : leg.reopenQty), base: leg.base, side: sideText(leg.side) };
   return t(PERP_ACTION[verb][tense], words);
 }
 
-function convertNote(convert: NonNullable<RealizeLeg['convert']>): string {
-  const note = t('accounts.rebalanceRealize.convertNote', { platform: PLATFORM });
+function convertNote(pool: Pool, convert: NonNullable<ActionLeg['convert']>): string {
+  const note = t('accounts.rebalanceRealize.convertNote', { platform: PLATFORM, coin: poolCoin(CONVERT_TO[pool]) });
   if (convert.count <= 1) return note;
   const split = t('accounts.rebalanceRealize.convertSplit', {
     count: convert.count,
@@ -416,7 +458,7 @@ function convertNote(convert: NonNullable<RealizeLeg['convert']>): string {
   return `${note} ${split}`;
 }
 
-function convertAction(leg: RealizeLeg, convert: NonNullable<RealizeLeg['convert']>, tense: Tense): ActionLine {
+function convertAction(leg: ActionLeg, convert: NonNullable<ActionLeg['convert']>, tense: Tense): ActionLine {
   const words = { amount: num(convert.amount, 0), coin: poolCoin(leg.pool) };
   const lead = t(tense === 'plan' ? 'accounts.rebalanceRealize.convertAction' : 'accounts.rebalanceRealize.convertedDone', words);
   return {
@@ -428,31 +470,32 @@ function convertAction(leg: RealizeLeg, convert: NonNullable<RealizeLeg['convert
         {WALLET_LABEL[poolKey(CONVERT_TO[leg.pool])]}
       </>
     ),
-    note: tense === 'plan' ? convertNote(convert) : null,
-    cost: costText(convert.feeUsd, 0),
+    note: tense === 'plan' ? convertNote(leg.pool, convert) : null,
+    cost: leg.cost ? costText(leg.cost.convertFee, 0) : '',
   };
 }
 
-function legActions(leg: RealizeLeg, tense: Tense): ActionLine[] {
-  const close = { key: `${leg.symbol}:close`, text: perpAction(leg, 'close', tense), note: null, cost: costText(leg.closeFeeUsd, leg.closeImpactUsd) };
-  const reopen = { key: `${leg.symbol}:reopen`, text: perpAction(leg, 'reopen', tense), note: null, cost: costText(leg.reopenFeeUsd, leg.reopenImpactUsd) };
+function legActions(leg: ActionLeg, tense: Tense): ActionLine[] {
+  const cost = leg.cost;
+  const close = { key: `${leg.symbol}:close`, text: perpAction(leg, 'close', tense), note: null, cost: cost ? costText(cost.closeFee, cost.closeImpact) : '' };
+  const reopen = { key: `${leg.symbol}:reopen`, text: perpAction(leg, 'reopen', tense), note: null, cost: cost ? costText(cost.reopenFee, cost.reopenImpact) : '' };
   return leg.convert ? [close, convertAction(leg, leg.convert, tense), reopen] : [close, reopen];
 }
 
 export function RealizeActions({
-  realize,
+  legs,
   open,
   onToggle,
   tense,
 }: {
-  realize: RealizePlan;
+  legs: ActionLeg[];
   open: boolean;
   onToggle: () => void;
   tense: Tense;
 }) {
   const listId = useId();
-  if (!realize.legs.some((leg) => leg.convert !== null)) return null;
-  const actions = realize.legs.flatMap((leg) => legActions(leg, tense));
+  if (!legs.some((leg) => leg.convert !== null)) return null;
+  const actions = legs.flatMap((leg) => legActions(leg, tense));
   return (
     <div className="flex flex-col">
       <button

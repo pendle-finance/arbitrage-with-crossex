@@ -2,7 +2,7 @@ import { type NormalizedBook, touchOf } from '../estimate/books';
 import { resolveFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { walkBook } from '../estimate/fill';
 import { DEFAULT_STEP, parseSymbol, roundToStep } from '../numbers';
-import { ceilCents, CONVERT_MAX, CONVERT_RATE, marginPerConvertUsdc, type Pool } from './plan';
+import { ceilCents, CONVERT_MAX, CONVERT_RATE, HYPERLIQUID_MIN_USDC, marginPerConvertUsdc, type Pool } from './plan';
 
 export { marginPerConvertUsdc };
 
@@ -10,7 +10,12 @@ const REFUSE_IMPACT_BP = 25;
 const REOPEN_MARGIN_SHARE = 0.15;
 const REOPEN_MARGIN_FLOOR_USD = 20;
 const MIN_ORDER_USD = 10;
-const STANDARD_TAKER_RATE = 0.0005;
+const HYPERLIQUID_MARKET_CAPS: readonly { minLeverage: number; capUsd: number }[] = [
+  { minLeverage: 25, capUsd: 30_000_000 },
+  { minLeverage: 20, capUsd: 5_000_000 },
+  { minLeverage: 10, capUsd: 2_000_000 },
+  { minLeverage: 0, capUsd: 500_000 },
+];
 
 export type PerpSide = 'LONG' | 'SHORT';
 
@@ -20,12 +25,14 @@ export interface RealizePerp {
   entryPrice?: string;
   markPrice?: string;
   initialMargin?: string;
+  maxLeverage?: string;
 }
 
 export interface PerpRule {
   lotSize?: string;
   minSize?: string;
   minNotional?: string;
+  maxMarketSize?: string;
 }
 
 export interface RealizeConvert {
@@ -51,12 +58,13 @@ export interface RealizeLeg {
   impactBp: number;
 }
 
-export type RealizeRefusalReason = 'too-thin' | 'no-margin' | 'past-book';
+export type RealizeRefusalReason = 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
 
 export interface RealizeRefusal {
   reason: RealizeRefusalReason;
   bp: number | null;
   maxBp: number;
+  capUsd?: number;
 }
 
 export interface RealizePlan {
@@ -95,6 +103,7 @@ interface Paying {
   minQty: number;
   takerRate: number;
   book: NormalizedBook | null;
+  capUsd: number;
 }
 
 interface Priced {
@@ -108,6 +117,7 @@ interface Priced {
 
 interface Order {
   qty: number;
+  overCapUsd: number | null;
   priced: Priced;
   realizedUsd: number;
   convert: number;
@@ -148,14 +158,30 @@ function minQtyOf(rule: PerpRule, lot: string, mark: number): number {
   return Number(roundToStep(Math.max(positiveOf(rule.minSize), notional), lot, 'up'));
 }
 
+export function profitPoolOf(perp: RealizePerp): Pool | null {
+  if (!isInProfit(perp)) return null;
+  const { exchange, quote } = parseSymbol(perp.symbol ?? '');
+  const pools = Object.keys(PAYING_VENUE) as Pool[];
+  return pools.find((pool) => PAYING_VENUE[pool]?.exchange === exchange && PAYING_VENUE[pool]?.quote === quote) ?? null;
+}
+
+function marketCapUsd(perp: RealizePerp, rule: PerpRule, exchange: string, mark: number): number {
+  const ruleCap = positiveOf(rule.maxMarketSize) * mark;
+  const leverage = positiveOf(perp.maxLeverage);
+  const venueCap =
+    exchange === 'HYPERLIQUID' && leverage > 0
+      ? (HYPERLIQUID_MARKET_CAPS.find((tier) => leverage >= tier.minLeverage)?.capUsd ?? Infinity)
+      : Infinity;
+  return Math.min(ruleCap > 0 ? ruleCap : Infinity, venueCap);
+}
+
 function payingLegs(input: RealizeInput): Paying[] {
-  const venue = PAYING_VENUE[input.pool];
-  if (!venue) return [];
   return input.perps.flatMap((perp): Paying[] => {
+    if (profitPoolOf(perp) !== input.pool) return [];
     const symbol = perp.symbol ?? '';
-    const { exchange, base, quote } = parseSymbol(symbol);
-    if (exchange !== venue.exchange || quote !== venue.quote) return [];
-    if (!isInProfit(perp)) return [];
+    const { exchange, base } = parseSymbol(symbol);
+    const takerRate = resolveFeeRates(input.feeRows, symbol)?.takerRate;
+    if (takerRate === undefined) return [];
     const signed = Number(perp.positionQty);
     const entry = Number(perp.entryPrice);
     const mark = Number(perp.markPrice);
@@ -177,8 +203,9 @@ function payingLegs(input: RealizeInput): Paying[] {
         marginPerCoin: Math.abs(Number(perp.initialMargin) || 0) / positionQty,
         lot,
         minQty: minQtyOf(rule, lot, mark),
-        takerRate: resolveFeeRates(input.feeRows, symbol)?.takerRate ?? STANDARD_TAKER_RATE,
+        takerRate,
         book: input.books[symbol] ?? null,
+        capUsd: marketCapUsd(perp, rule, exchange, mark),
       },
     ];
   });
@@ -208,7 +235,7 @@ function priceOrder(leg: Paying, qty: number): Priced {
 
 export function convertFor(reopenMarginUsd: number, availableMargin: number): number {
   const short = REOPEN_MARGIN_SHARE * reopenMarginUsd + REOPEN_MARGIN_FLOOR_USD - availableMargin;
-  return short > 0 ? ceilCents(short / marginPerConvertUsdc) : 0;
+  return short > 0 ? Math.max(HYPERLIQUID_MIN_USDC, ceilCents(short / marginPerConvertUsdc)) : 0;
 }
 
 function orderOf(leg: Paying, qty: number, state: State): Order {
@@ -216,7 +243,8 @@ function orderOf(leg: Paying, qty: number, state: State): Order {
   const realizedUsd = qty * leg.profitPerCoin;
   const convert = convertFor(qty * leg.marginPerCoin, state.available);
   const cashIn = realizedUsd - priced.closeFeeUsd - priced.reopenFeeUsd - priced.closeImpactUsd;
-  return { qty, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * CONVERT_RATE };
+  const overCapUsd = qty * leg.mark > leg.capUsd ? leg.capUsd : null;
+  return { qty, overCapUsd, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * CONVERT_RATE };
 }
 
 function sizeOrder(leg: Paying, state: State): Order {
@@ -263,6 +291,8 @@ function legOf(pool: Pool, leg: Paying, order: Order): RealizeLeg {
 }
 
 function refusalOf(orders: Order[], unfunded: boolean): RealizeRefusal | null {
+  const capUsd = orders.find((order) => order.overCapUsd !== null)?.overCapUsd;
+  if (capUsd != null) return { reason: 'over-cap', bp: null, maxBp: REFUSE_IMPACT_BP, capUsd };
   if (orders.some((order) => order.priced.pastBook)) return { reason: 'past-book', bp: null, maxBp: REFUSE_IMPACT_BP };
   const worst = Math.max(...orders.map((order) => order.priced.impactBp));
   if (worst > REFUSE_IMPACT_BP) return { reason: 'too-thin', bp: Math.round(worst * 10) / 10, maxBp: REFUSE_IMPACT_BP };

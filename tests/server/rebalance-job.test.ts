@@ -6,6 +6,7 @@ import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import type { EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
+import type { RealizeLeg } from '../../src/core/rebalance/realize';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
 import { HALT_TEXT, inTransitOf, JobFile, newJob, type Job, type Step } from '../../src/server/rebalanceJob';
@@ -292,6 +293,55 @@ describe('1.6.0 job files', () => {
 
     expect(res.ok).toBe(true);
     expect(res.data.job).toMatchObject({ route: 'convert', status: 'done', costUsd: null, target: null, inTransit: null });
+  });
+});
+
+describe('realize leg fees on the job', () => {
+  const leg = (usd: number): RealizeLeg => ({
+    pool: 'HYPERLIQUID',
+    symbol: 'HYPERLIQUID_PERP_ETH_USDC',
+    exchange: 'HYPERLIQUID',
+    base: 'ETH',
+    side: 'SHORT',
+    positionQty: 66 * usd,
+    qty: 53.8 * usd,
+    realizedUsd: 34386 * usd,
+    convert: { amount: 10298 * usd, count: 1, feeUsd: 20.6 * usd },
+    closeFeeUsd: 51.2 * usd,
+    reopenFeeUsd: 51.19 * usd,
+    closeImpactUsd: 9.44 * usd,
+    reopenImpactUsd: 9.44 * usd,
+    impactBp: 1.9,
+  });
+  const jobFor = (realize: RealizeLeg) =>
+    newJob({ route: 'convert', steps: [], amount: 0, costUsd: 0, target: [], userId: '1', realize: { legs: [realize], refused: null } }, t);
+
+  it.each([1 / 4000, 1, 30])('the job keeps the plan fees per leg at %o of the 53.8 ETH leg', (usd) => {
+    const job = jobFor(leg(usd));
+
+    expect(job.realize?.legs[0]).toMatchObject({
+      closeFeeUsd: 51.2 * usd,
+      reopenFeeUsd: 51.19 * usd,
+      closeImpactUsd: 9.44 * usd,
+      reopenImpactUsd: 9.44 * usd,
+      convert: { amount: 10298 * usd, feeUsd: 20.6 * usd },
+    });
+  });
+
+  it('a leg with no convert stores none', () => {
+    expect(jobFor({ ...leg(1), convert: null }).realize?.legs[0].convert).toBeNull();
+  });
+
+  it('an old job file with no leg fees still reads', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'rebalance-job-'));
+    const job = jobFor(leg(1));
+    const legs = job.realize!.legs.map(({ closeFeeUsd, reopenFeeUsd, closeImpactUsd, reopenImpactUsd, convert, ...rest }) => rest);
+    writeFileSync(path.join(dir, 'rebalance.json'), JSON.stringify({ ...job, realize: { ...job.realize, legs } }));
+
+    const read = new JobFile(dir).read();
+
+    expect(read?.realize?.legs[0]).toMatchObject({ qty: 53.8, filledQty: 0 });
+    expect(read?.realize?.legs[0]).not.toHaveProperty('closeFeeUsd');
   });
 });
 

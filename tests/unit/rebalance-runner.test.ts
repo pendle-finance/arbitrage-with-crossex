@@ -5,7 +5,7 @@ import { CrossexOrderRequest } from 'gate-api';
 import { describe, expect, it, vi } from 'vitest';
 import type { Clients } from '../../src/core/clients';
 import { floorToStep } from '../../src/core/numbers';
-import { convertFor, type RealizeLeg, type RealizePlan } from '../../src/core/rebalance/realize';
+import { marginPerConvertUsdc, type RealizeLeg, type RealizePlan } from '../../src/core/rebalance/realize';
 import {
   bookLevels,
   buyableUsdc,
@@ -5493,11 +5493,11 @@ describe('close, convert and reopen', () => {
     }
   });
 
-  it('sizes the retry convert from a fresh read', async () => {
-    const tight = convertFor(53.8 * 200, 500);
+  it('sizes the retry convert from the whole margin need', async () => {
+    const whole = ceilCents(((53.8 * 200) / marginPerConvertUsdc) * 1.05);
     const cases: Array<[number, number]> = [
-      [500, tight],
-      [1_000_000, 11],
+      [500, Math.min(34_386, whole)],
+      [1_000_000, Math.min(34_386, whole)],
     ];
     for (const [availableMargin, expected] of cases) {
       let jobs: JobFile | null = null;
@@ -5524,7 +5524,7 @@ describe('close, convert and reopen', () => {
       expect(retries[2]).toEqual({ reason: 'margin', convertAmount: expected });
       expect(h.sent('createCrossexConvertQuote').map((arg) => Number(arg.crossexConvertQuoteRequest.fromAmount))).toEqual([expected]);
     }
-    expect(tight).toBeGreaterThan(11);
+    expect(whole).toBeGreaterThan(10_760);
   });
 
   it('reopen waits double to 60 s', async () => {
@@ -5588,20 +5588,157 @@ describe('close, convert and reopen', () => {
     });
   });
 
-  it('stops the reopen on a close-only contract', async () => {
+  it('close-only halts on a delist refusal', async () => {
+    const delisted = { body: perpRules().body.map((rule) => ({ ...rule, delistTime: '1763424000000' })) };
+    const cases: Array<[string, Record<string, Handler>]> = [
+      ['delist label', { createCrossexOrder: seq(created('o1'), gateError(400, 'TRADE_DELIST_OPEN_PROHIBITED_ERROR', 'Symbol delisted. Opening positions is prohibited.')) }],
+      ['suspend', { listCrossexRuleSymbols: seq(perpRules(), perpRules('suspend')), createCrossexOrder: seq(created('o1'), gateError(400, 'TRADE_UNSUPPORTED_OPERATION', 'This operation is not currently supported')) }],
+      ['delist time', { listCrossexRuleSymbols: seq(perpRules(), delisted), createCrossexOrder: seq(created('o1'), gateError(400, 'TRADE_UNSUPPORTED_OPERATION', 'This operation is not currently supported')) }],
+    ];
+    for (const [name, over] of cases) {
+      const h = harness(fakeClock(), realizeOnly(noConvert), realizeRun(over));
+      await h.run();
+      expect({ name, job: h.jobs.read() }).toMatchObject({
+        name,
+        job: {
+          status: 'halted',
+          haltReason:
+            'Gate CrossEx takes no new orders on this contract. Resume when it does, or close 53.8 ETH of the Gate long in Positions.',
+        },
+      });
+      expect(perpSent(h)).toHaveLength(2);
+    }
+  });
+
+  it('a non-margin reopen refusal halts', async () => {
+    const risk = gateError(400, 'RISK_LIMIT_EXCEEDED', 'position value would reach to 4000000 while risk limit is 3000000');
+    const sync = harness(fakeClock(), realizeOnly(noConvert), realizeRun({ createCrossexOrder: seq(created('o1'), risk) }));
+    const failed = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        getCrossexOrder: ordersBy({
+          o1: order('FILLED', '53.8', 'o1'),
+          o2: order('FAIL', '0', 'o2', { reason: JSON.stringify({ label: 'TRADE_EXCEED_MAX_NOTIONAL', message: 'Your open position value exceeds the max notional.' }) }),
+        }),
+      }),
+    );
+    for (const [h, label] of [[sync, 'Position value would reach'], [failed, 'exceeds the max notional']] as const) {
+      await h.run();
+      const job = h.jobs.read();
+      expect(job?.status).toBe('halted');
+      expect(job?.haltReason).toMatch(/^Gate refused the reopen\. /);
+      expect(job?.haltReason).toContain(label);
+      expect(job?.haltReason).toContain('The Hyperliquid short is 53.8 ETH smaller than the Gate long. Resume to try again, or close 53.8 ETH of the Gate long in Positions.');
+      expect(perpSent(h)).toHaveLength(2);
+      expect(h.count('createCrossexConvertQuote')).toBe(0);
+    }
+  });
+
+  it('order allowance refusal retries', async () => {
+    const hyperliquid = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        getCrossexOrder: ordersBy({
+          o1: order('FILLED', '53.8', 'o1'),
+          o2: order('FAIL', '0', 'o2', { reason: JSON.stringify({ label: 'TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', message: 'Too many order sent for Hyperliquid.' }) }),
+          o3: order('FILLED', '53.8', 'o3'),
+        }),
+      }),
+    );
+    const lighter = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        createCrossexOrder: seq(created('o1'), gateError(400, 'TRADE_LIGHTER_ORDER_LIMIT_ERROR', 'Too many orders sent for Lighter.'), created('o3')),
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '53.8', 'o1'), o3: order('FILLED', '53.8', 'o3') }),
+      }),
+    );
+    for (const h of [hyperliquid, lighter]) {
+      await h.run();
+      expect(perpSent(h).map((sent) => sent.text)).toEqual([tagFor(h.job.id, 1), tagFor(h.job.id, 2), tagFor(h.job.id, 2, 1)]);
+      expect(h.onHalt).not.toHaveBeenCalled();
+      expect(h.jobs.read()).toMatchObject({ status: 'done', haltReason: null });
+    }
+  });
+
+  it('a free-text margin reject converts, not halts', async () => {
     const h = harness(
       fakeClock(),
       realizeOnly(noConvert),
       realizeRun({
-        listCrossexRuleSymbols: seq(perpRules(), perpRules('close_only')),
-        createCrossexOrder: seq(created('o1'), gateError(400, 'TRADE_CONTRACT_STATE_ERROR', 'Contract does not accept orders')),
+        getCrossexOrder: ordersBy({
+          o1: order('FILLED', '53.8', 'o1'),
+          o2: order('REJECT', '0', 'o2', { reason: 'Insufficient margin to place order. asset=4' }),
+          o3: order('FILLED', '53.8', 'o3'),
+        }),
       }),
     );
     await h.run();
-    expect(h.jobs.read()).toMatchObject({
+    expect(h.count('createCrossexConvertOrder')).toBe(1);
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('resume reads the live position', async () => {
+    const cases: Array<[string, Record<string, unknown> | null]> = [
+      ['-12.2', null],
+      ['-66', { status: 'halted', haltReason: 'The Hyperliquid short is 66 ETH on Gate, not the 12.2 ETH this rebalance left. Abandon it and check Positions.' }],
+    ];
+    for (const [held, halted] of cases) {
+      const clock = fakeClock();
+      const h = harness(
+        clock,
+        realizeOnly(noConvert),
+        realizeRun({
+          listCrossexPositions: seq({ body: [{ symbol: HL_ETH, positionQty: held, initialMargin: '2440' }] }),
+          createCrossexOrder: seq(created('o2')),
+        }),
+        (job) => {
+          doneStep(job, 0, { venueId: 'o1', qty: 53.8, at: clock.now() });
+          job.realize!.legs[0].filledQty = 53.8;
+          job.stepIndex = 1;
+          job.tagCount = 1;
+        },
+      );
+      await h.run();
+      if (halted) {
+        expect(h.jobs.read()).toMatchObject(halted);
+        expect(h.count('createCrossexOrder')).toBe(0);
+      } else {
+        expect(perpSent(h).map((sent) => sent.qty)).toEqual(['53.8']);
+        expect(h.jobs.read()?.status).toBe('done');
+      }
+    }
+  });
+
+  it('a reopen rest goes in whole lots and a rest under the minimum halts', async () => {
+    const whole = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '53.8', 'o1'), o2: order('CANCELLED', '30.1', 'o2'), o3: order('FILLED', '23.7', 'o3') }),
+      }),
+    );
+    await whole.run();
+    expect(perpSent(whole).map((sent) => sent.qty)).toEqual(['53.8', '53.8', '23.7']);
+    expect(whole.jobs.read()?.status).toBe('done');
+
+    const minOne = { body: perpRules().body.map((rule) => ({ ...rule, minSize: '1' })) };
+    const under = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        listCrossexRuleSymbols: seq(minOne),
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '53.8', 'o1'), o2: order('CANCELLED', '53.3', 'o2') }),
+      }),
+    );
+    await under.run();
+    expect(perpSent(under)).toHaveLength(2);
+    expect(under.jobs.read()).toMatchObject({
       status: 'halted',
       haltReason:
-        'Gate CrossEx takes no new orders on this contract. Resume when it does, or close 53.8 ETH of the Gate long in Positions.',
+        "The rest is under Gate's smallest order. The Hyperliquid short is 0.5 ETH smaller than the Gate long. Abandon, then close 0.5 ETH of the Gate long in Positions.",
     });
   });
 
@@ -5808,7 +5945,7 @@ describe('scale ladder: Close', () => {
     const h = harness(
       fakeClock(),
       realizeOnly(realizeOf(realizeLeg({ qty: Number(lotsText(lots)), convert: null }))),
-      realizeRun({ createCrossexOrder: seq(gateError(400, 'TRADE_MAX_MARKET_SIZE_ERROR', 'Order size above max market size')) }),
+      realizeRun({ createCrossexOrder: seq(gateError(400, 'TRADE_ORDER_QUANTITY_MAX_ERROR', 'Order quantity should be less than the max quantity')) }),
     );
     await h.run();
     const job = h.jobs.read();
@@ -5946,7 +6083,7 @@ describe('scale ladder: Reopen', () => {
     jobs = h.jobs;
     await h.run();
     const margin = Number(whole) * (Number(heldMargin) / Number(heldQty));
-    const expected = Math.min(floorCents(rung), Math.max(11, convertFor(margin, 0)));
+    const expected = Math.min(floorCents(rung), Math.max(11, ceilCents((margin / marginPerConvertUsdc) * 1.05)));
     const chunks = splitCents(Math.round(expected * 100));
     expect(retries[2]).toEqual({ reason: 'margin', convertAmount: expected });
     expect(quotedText(h)).toEqual(chunks.map(centsText));

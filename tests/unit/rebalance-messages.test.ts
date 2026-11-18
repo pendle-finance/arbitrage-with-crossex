@@ -328,7 +328,7 @@ describe('close and reopen job', () => {
       retry: null,
     });
     expect(job.realize).toEqual({
-      legs: [{ symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', pool: 'HYPERLIQUID', side: 'SHORT', positionQty: 66, qty: 53.8, filledQty: 0, realizedUsd: 0 }],
+      legs: [{ symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', pool: 'HYPERLIQUID', side: 'SHORT', positionQty: 66, qty: 53.8, filledQty: 0, realizedUsd: 0, hedge: null, closeFeeUsd: 51.2, reopenFeeUsd: 51.19, closeImpactUsd: 9.44, reopenImpactUsd: 9.44, convert: { amount: 10298, feeUsd: 20.6 } }],
       costUsd: 0,
     });
     expect(job).toMatchObject({ status: 'running', stepIndex: 0, fundsAt: 'HYPERLIQUID' });

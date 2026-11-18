@@ -244,9 +244,10 @@ export interface RealizeLeg {
 }
 
 export interface RealizeRefusal {
-  reason: 'too-thin' | 'no-margin' | 'past-book';
+  reason: 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
   bp: number | null;
   maxBp: number;
+  capUsd?: number;
 }
 
 export interface RealizePlan {
@@ -306,6 +307,11 @@ export interface RealizeJobLeg {
   qty: number;
   filledQty: number;
   realizedUsd: number;
+  closeFeeUsd?: number;
+  reopenFeeUsd?: number;
+  closeImpactUsd?: number;
+  reopenImpactUsd?: number;
+  convert?: { amount: number; feeUsd: number } | null;
 }
 
 export interface RebalanceJob {
@@ -324,6 +330,19 @@ export interface RebalanceJob {
   updatedAt: number;
   inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
   realize?: { legs: RealizeJobLeg[]; costUsd?: number } | null;
+  before?: RebalanceBefore | null;
+}
+
+export interface PerpSize {
+  symbol: string;
+  exchange: string;
+  side: PerpSide;
+  qty: number;
+}
+
+export interface RebalanceBefore {
+  buckets: RebalanceBucket[];
+  perps: PerpSize[];
 }
 
 export interface RebalancePlans {

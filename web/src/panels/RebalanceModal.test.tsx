@@ -7,6 +7,7 @@ import { useAccount, usePositions, useRebalance, useTransfer } from '../api/quer
 import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
 import type { RebalanceJob, RouteName } from '../api/types';
 import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased } from '../test/fixtures';
+import { REALIZE_DONE_BEFORE_JOB, REALIZE_ROUTE_JOB } from '../test/fixtures';
 import { transferHandler, transferViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -1558,7 +1559,7 @@ describe('RebalanceModal close and reopen, before the hold', () => {
 
   it('days line says how many days of interest it saves', () => {
     show(rebalanceViews.ownerBook);
-    expect(within(totalCard()).getByText('26 days of the interest it saves · worth it at 30 or less')).toBeInTheDocument();
+    expect(within(totalCard()).getByText('26 days of the interest it saves · worth it at 30 days or less')).toBeInTheDocument();
   });
 
   it('worth it chip is green on Total cost', () => {
@@ -1581,32 +1582,31 @@ describe('RebalanceModal close and reopen, before the hold', () => {
     expect(within(step).getByText('Close + reopen 47.1 of 66.0 ETH long')).toBeInTheDocument();
   });
 
-  it('refused for price impact: the warn alert takes Total cost its place', () => {
+  it('refused for price impact: the warn alert takes step 1 its place and Total cost stays', () => {
     show(rebalanceViews.refusedThin);
-    expect(screen.getByText('Price impact too high.')).toBeInTheDocument();
-    expect(screen.getByText('Closing 11,314.3 ETH at once costs 54.5 bp of price impact. The most is 25 bp. Add USDT to USDT · CrossEx, then pick a smaller Custom amount.')).toBeInTheDocument();
-    expect(screen.queryByText('Total cost')).toBeNull();
+    const title = screen.getByText('Price impact too high.');
+    expect(screen.getByText('Closing 11,314.3 ETH at once costs 54.5 bp of price impact. The most is 25 bp of price impact. Add USDT to USDT · CrossEx, then pick a smaller Custom amount.')).toBeInTheDocument();
+    expect(screen.getByText('How it runs').compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(title.compareDocumentPosition(stepItems()[0] as HTMLElement) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(stepItems()).toHaveLength(1);
+    expect(screen.getByText('Total cost')).toBeInTheDocument();
   });
 
-  it('refused disables the hold', () => {
+  it('refused keeps the hold on for the plain move', () => {
     show(rebalanceViews.refusedThin);
-    expect(screen.getByRole('button', { name: 'Hold to rebalance' })).toBeDisabled();
-  });
-
-  it('refused shows no after card', () => {
-    show(rebalanceViews.refusedThin);
-    expect(within(dialog()).queryByRole('table')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Hold to rebalance/ })).toBeEnabled();
   });
 
   it('refused for margin or book names the fix', () => {
     show(rebalanceViews.refusedMargin);
     expect(screen.getByText('Not enough margin to reopen.')).toBeInTheDocument();
     expect(screen.getByText('Add USDT to USDT · CrossEx, then try again.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Hold to rebalance' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Hold to rebalance/ })).toBeEnabled();
     cleanup();
     show(rebalanceViews.refusedBook);
     expect(screen.getByText('Order book too thin to price.')).toBeInTheDocument();
     expect(screen.getByText('Pick a smaller Custom amount.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to rebalance/ })).toBeEnabled();
   });
 
   it('one step when cash covers, and no impact part without a realize', async () => {
@@ -1709,7 +1709,9 @@ describe('RebalanceModal close and reopen, the run', () => {
     show(rebalanceViews.realizeHaltedLegOpen, { positions: GAP_POSITIONS });
     const box = await screen.findByText('Hyperliquid short is 53.8 ETH smaller than the Gate long.');
     const alert = box.closest('[role="alert"]') as HTMLElement;
-    await waitFor(() => expect(alert.textContent).toContain('$97,970 not hedged. Gate CrossEx takes no new orders on this contract.'));
+    const lines = () => [...alert.querySelectorAll('p')].map((line) => line.textContent);
+    await waitFor(() => expect(lines()).toContain('$97,970 not hedged.'));
+    expect(lines()).toContain('Gate CrossEx takes no new orders on this contract.');
     expect(alert.compareDocumentPosition(screen.getByText('How it runs')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -1738,5 +1740,23 @@ describe('RebalanceModal close and reopen, the run', () => {
     const borrow = within(usdt).getByText('Borrow').closest('[role="row"]') as HTMLElement;
     const [before, now] = cells(borrow).map((text) => Number(text!.replace(/,/g, '')));
     expect(now).toBeLessThan(before!);
+  });
+});
+
+describe('done receipt from the job', () => {
+  it('reopened done modal reads the job', async () => {
+    const live = rebalanceViews.realizeDone;
+    const { next } = showPolled([{ ...live, job: REALIZE_ROUTE_JOB }, { ...live, job: REALIZE_DONE_BEFORE_JOB }]);
+    await next();
+    const usdt = await screen.findByRole('rowgroup', { name: 'USDT · CrossEx' });
+    const cells = (row: HTMLElement) => [...row.querySelectorAll('[role="cell"]')].map((cell) => cell.textContent);
+    expect(cells(within(usdt).getByText('Borrow').closest('[role="row"]') as HTMLElement)).toEqual(['29,812', '0']);
+    const perps = screen.getByRole('rowgroup', { name: 'Perps' });
+    expect(cells(within(perps).getByText('Gate long').closest('[role="row"]') as HTMLElement)).toEqual(['66.0 ETH', '66.0 ETH']);
+    expect(screen.getByText('How it ran')).toBeInTheDocument();
+    expect(screen.getByText('Moved the other 27,228 USDC')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '3 actions' })).toBeInTheDocument();
+    expect(screen.getByText('$127.27')).toBeInTheDocument();
+    expect(screen.queryByText(/^Fee/)).toBeNull();
   });
 });

@@ -1,11 +1,11 @@
 import { ArrowRight } from 'lucide-react';
-import type { EvenPlan, RebalanceBucket, RebalanceJob, RebalanceView, RoutePlan, WalletAfter } from '../api/types';
+import type { EvenPlan, PerpSize, RebalanceBucket, RebalanceJob, RebalanceView, RoutePlan, WalletAfter } from '../api/types';
 import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { borrowingBuckets } from '../lib/borrow';
-import { fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
+import { fmtUsd, parseSymbol, prettyVenue, sigGrouped } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
-import { borrowLeftOf, interestAfterOf, isRateUnknown, keyOf, MONTH_DAYS, Term } from './RebalanceHovers';
+import { borrowLeftOf, interestAfterOf, isRateUnknown, keyOf, MONTH_DAYS, Term, WalletTerm } from './RebalanceHovers';
 import { HOVER, hoverCash, modalFrees, sideText, sizeText, WALLET_LABEL } from './rebalanceCopy';
 
 export interface ChangeRow {
@@ -74,27 +74,48 @@ function changesOf(buckets: RebalanceBucket[], after: WalletAfter[], freedUsd: n
     });
 }
 
-export function walletChanges(view: RebalanceView, plan: EvenPlan, route: RoutePlan): WalletChange[] {
-  if (plan.realize?.refused) return [];
+export function walletChanges(view: RebalanceView, _plan: EvenPlan, route: RoutePlan): WalletChange[] {
   return changesOf(view.buckets, route.after, route.marginFreedUsd);
 }
 
-export function receiptChanges(job: RebalanceJob, view: RebalanceView): WalletChange[] {
-  const wallets = job.target ? changesOf(view.buckets, job.target, null) : [];
+export function receiptChanges(job: RebalanceJob, buckets: RebalanceBucket[], live: PerpSize[] | null): WalletChange[] {
+  const wallets = job.target ? changesOf(job.before?.buckets ?? buckets, job.target, null) : [];
   const legs = job.realize?.legs ?? [];
   if (legs.length === 0) return wallets;
-  const perps: WalletChange = {
-    key: 'perps',
-    label: t('accounts.rebalanceRealize.perps'),
-    rows: legs.map((leg) => ({
-      label: `${prettyVenue(leg.exchange)} ${sideText(leg.side)}`,
-      before: leg.positionQty,
-      after: leg.positionQty,
+  const perps: WalletChange = { key: 'perps', label: t('accounts.rebalanceRealize.perps'), rows: perpRows(job, live ?? []) };
+  return [...wallets, perps];
+}
+
+export const lots = (qty: number): number => Math.round(qty * 1e9) / 1e9;
+
+const perpLabel = (perp: Pick<PerpSize, 'exchange' | 'side'>): string => `${prettyVenue(perp.exchange)} ${sideText(perp.side)}`;
+
+function perpRows(job: RebalanceJob, live: PerpSize[]): ChangeRow[] {
+  const legs = job.realize?.legs ?? [];
+  const before = job.before?.perps ?? [];
+  const of = (list: PerpSize[], symbol: string) => list.find((perp) => perp.symbol === symbol);
+  const paying = legs.map((leg): ChangeRow => {
+    const reopened = job.steps.find((step) => step.name === 'Reopen' && step.perp?.symbol === leg.symbol)?.qty ?? 0;
+    return {
+      label: perpLabel(leg),
+      before: of(before, leg.symbol)?.qty ?? leg.positionQty,
+      after: of(live, leg.symbol)?.qty ?? lots(leg.positionQty - leg.filledQty + reopened),
       unit: 'coin',
       coin: leg.base,
-    })),
-  };
-  return [...wallets, perps];
+    };
+  });
+  const bases = legs.map((leg) => leg.base);
+  const hedges = [...before, ...live]
+    .filter((perp, index, all) => all.findIndex((p) => p.symbol === perp.symbol) === index)
+    .filter((perp) => bases.includes(parseSymbol(perp.symbol).base) && !legs.some((leg) => leg.symbol === perp.symbol))
+    .map((perp): ChangeRow => ({
+      label: perpLabel(perp),
+      before: of(before, perp.symbol)?.qty ?? null,
+      after: of(live, perp.symbol)?.qty ?? perp.qty,
+      unit: 'coin',
+      coin: parseSymbol(perp.symbol).base,
+    }));
+  return [...paying, ...hedges];
 }
 
 const COLUMN = 'w-28 shrink-0 text-right';
@@ -134,7 +155,9 @@ export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mod
       {rows.map((group, index) => (
         <div key={group.key} role="rowgroup" aria-label={group.label} className={`flex flex-col gap-2 ${index > 0 ? 'mt-2' : ''}`}>
           <div role="row" className="flex items-center gap-2">
-            <span role="rowheader" className="min-w-0 flex-1 font-semibold text-ink-400">{group.label}</span>
+            <span role="rowheader" className="min-w-0 flex-1 font-semibold text-ink-400">
+              {WALLET_LABEL[group.key] ? <WalletTerm wallet={group.key} /> : group.label}
+            </span>
             {index === 0 && (
               <>
                 <span role="columnheader" className={`${COLUMN} ${microLabelClass}`}>{t('accounts.rebalanceRealize.before')}</span>

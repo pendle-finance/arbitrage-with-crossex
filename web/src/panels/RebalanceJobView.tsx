@@ -2,22 +2,21 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, ChevronDown, ChevronRight } from 'lucide-react';
 import { usePositions } from '../api/queries';
-import type { EvenPlan, GateAccount, Pool, RealizeJobLeg, RealizeLeg, RebalanceBucket, RebalanceJob, RebalanceStep } from '../api/types';
+import type { CrossexPosition, EvenPlan, GateAccount, PerpSide, PerpSize, Pool, RealizeJobLeg, RealizeLeg, RealizePlan, RebalanceBucket, RebalanceJob, RebalanceStep } from '../api/types';
 import type { RebalanceView, RoutePlan, TransferCoin, TransferView } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
-import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
 import { fmtAbout, fmtAge, fmtUsd, num, parseSymbol, prettyVenue } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { EstimateRow } from '../trade/PairTicketBits';
-import { RebalanceBeforeAfter, receiptChanges } from './RebalanceBeforeAfter';
-import { BalanceBars, jobRows, jobSeconds, markPriceOf, ProgressBar, RealizeActions, RealizeRow, scaleOf, StepList } from './RebalanceBits';
-import type { BarRow, StepRow, StepState } from './RebalanceBits';
+import { lots, RebalanceBeforeAfter, receiptChanges } from './RebalanceBeforeAfter';
+import { BalanceBars, jobRows, jobSeconds, markPriceOf, planActionLeg, ProgressBar, RealizeActions, RealizeRow, scaleOf, StepList } from './RebalanceBits';
+import type { ActionCost, ActionLeg, BarRow, StepRow, StepState } from './RebalanceBits';
 import { CARD_LABEL, CONVERT_TO, gateSpot, HOVER, modalFeeLabel, modalImpactLabel, modalResume, modalSteps, PLATFORM } from './rebalanceCopy';
 import { poolCoin, poolKey, sideText, sizeText, WALLET_LABEL } from './rebalanceCopy';
-import { barRowsOf, Facts, paybackDays, planSteps, totalCostUsd, WORTH_IT_DAYS, worthChip } from './RebalanceHovers';
+import { barRowsOf, daysText, Facts, paybackDays, planSteps, totalCostUsd, WORTH_IT_DAYS, worthChip } from './RebalanceHovers';
 import { realizeFeeUsd, realizeImpactUsd, receivingBorrow, receivingHeld, roundCountOf, roundOf } from './RebalanceHovers';
 import { ROUTE_LABEL, routeFeeUsd, routeImpactUsd, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import { NoSpotReadLine } from './TransferBits';
@@ -43,6 +42,9 @@ export function refusalOf(plan: EvenPlan): { title: string; body: string } | nul
   const wallet = WALLET_LABEL['USDT/CROSSEX'];
   if (refused.reason === 'no-margin') return { title: rk('marginTitle'), body: rk('marginBody', { wallet }) };
   if (refused.reason === 'past-book') return { title: rk('bookTitle'), body: rk('bookBody') };
+  if (refused.reason === 'over-cap') {
+    return { title: rk('capTitle', { cap: fmtUsd(refused.capUsd ?? 0, 0) }), body: rk('capBody') };
+  }
   const legs = plan.realize?.legs ?? [];
   const worst = legs.reduce<RealizeLeg | null>((top, leg) => (top === null || leg.impactBp > top.impactBp ? leg : top), null);
   const bp = refused.bp ?? worst?.impactBp ?? 0;
@@ -65,7 +67,7 @@ export function TotalCost({ plan, route, buckets }: { plan: EvenPlan; route: Rou
         <span className="num font-semibold text-ink-50">{fmtUsd(totalCostUsd(plan, route))}</span>
       </div>
       {chip !== null && days !== null && (
-        <span className="num text-ink-400">{rk('daysLine', { days: num(Math.max(1, Math.ceil(days)), 0), max: num(WORTH_IT_DAYS, 0) })}</span>
+        <span className="num text-ink-400">{rk('daysLine', { days: daysText(days), max: num(WORTH_IT_DAYS, 0) })}</span>
       )}
       <div className="flex flex-col gap-1 pl-3">
         <EstimateRow label={modalFeeLabel()} value={fmtUsd(realizeFeeUsd(plan) + routeFeeUsd(route))} />
@@ -75,22 +77,25 @@ export function TotalCost({ plan, route, buckets }: { plan: EvenPlan; route: Rou
   );
 }
 
-export function HowItRuns({ plan, route, children }: { plan: EvenPlan; route: RoutePlan; children: ReactNode }) {
+const STEPS_HEAD = 'text-xs font-semibold text-ink-50';
+
+export function HowItRuns({ plan, route, lead, children }: { plan: EvenPlan; route: RoutePlan; lead?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
-  const realizeRows = realizePools(plan.realize?.legs ?? []).map(({ pool, legs }): StepRow => {
-    const realize = { legs, refused: null };
+  const realizeLegs = plan.realize?.refused ? [] : (plan.realize?.legs ?? []);
+  const realizeRows = realizePools(realizeLegs).map(({ pool, legs }): StepRow => {
+    const actionLegs = legs.map(planActionLeg);
     const amount = { amount: num(legs.reduce((total, leg) => total + leg.realizedUsd, 0), 0), coin: poolCoin(pool) };
     const body = (
       <div className="mt-1.5 flex flex-col gap-1.5">
-        <RealizeRow realize={realize} />
-        <RealizeActions realize={realize} open={open} onToggle={() => setOpen(!open)} tense="plan" />
+        <RealizeRow legs={actionLegs} />
+        <RealizeActions legs={actionLegs} open={open} onToggle={() => setOpen(!open)} tense="plan" />
       </div>
     );
     return { key: `realize:${pool}`, label: '', text: rk('realizeTitle', amount), sub: walletOf(pool), right: '', state: 'pending', progress: null, body };
   });
   const moves = planSteps(plan);
   const moved = route.steps.reduce((total, step) => total + step.move, 0);
-  const converts = (plan.realize?.legs ?? []).some((leg) => leg.convert !== null);
+  const converts = realizeLegs.some((leg) => leg.convert !== null);
   const moveRows: StepRow[] = moves.length === 0 ? [] : [{
     key: 'move',
     label: '',
@@ -103,7 +108,8 @@ export function HowItRuns({ plan, route, children }: { plan: EvenPlan; route: Ro
   }];
   return (
     <div className="flex flex-col gap-3">
-      <div className={microLabelClass}>{rk('howItRuns')}</div>
+      <div className={STEPS_HEAD}>{rk('howItRuns')}</div>
+      {lead}
       <StepList rows={[...realizeRows, ...moveRows]} />
     </div>
   );
@@ -155,7 +161,7 @@ function soldOf(done: RebalanceStep[]): number {
   }, 0);
 }
 
-const lastRealizeIndex = (job: RebalanceJob): number => job.steps.map((step) => step.name).lastIndexOf('Reopen');
+export const lastRealizeIndex = (job: RebalanceJob): number => job.steps.map((step) => step.name).lastIndexOf('Reopen');
 
 function landedOf(job: RebalanceJob): number {
   const done = job.steps.slice(lastRealizeIndex(job) + 1).filter((step) => step.status === 'done');
@@ -197,26 +203,140 @@ export function StepsFold({ open, onToggle, hover, rows }: { open: boolean; onTo
   );
 }
 
-function stateOf(job: RebalanceJob, start: number, end: number): StepState {
-  const steps = job.steps.slice(start, end);
-  if (steps.every((step) => step.status === 'done')) return 'done';
-  if (job.stepIndex < start || job.stepIndex >= end) return 'pending';
+const legStep = (job: RebalanceJob, leg: RealizeJobLeg, name: string): RebalanceStep | undefined =>
+  job.steps.find((step) => step.name === name && step.perp?.symbol === leg.symbol);
+
+function legSteps(job: RebalanceJob, leg: RealizeJobLeg): RebalanceStep[] {
+  const close = legStep(job, leg, 'Close');
+  const reopen = legStep(job, leg, 'Reopen');
+  if (!close || !reopen) return [];
+  return job.steps.slice(job.steps.indexOf(close), job.steps.indexOf(reopen) + 1);
+}
+
+const convertsOf = (job: RebalanceJob, leg: RealizeJobLeg): RebalanceStep[] =>
+  legSteps(job, leg).filter((step) => step.name.startsWith('Convert'));
+
+const restOf = (job: RebalanceJob, leg: RealizeJobLeg): number => lots(leg.filledQty - (legStep(job, leg, 'Reopen')?.qty ?? 0));
+
+const hasRest = (job: RebalanceJob): boolean => (job.realize?.legs ?? []).some((leg) => restOf(job, leg) > 0);
+
+function stateOf(job: RebalanceJob, steps: RebalanceStep[]): StepState {
+  if (steps.length > 0 && steps.every((step) => step.status === 'done')) return 'done';
+  const current = job.steps[job.stepIndex];
+  if (!current || !steps.includes(current)) return 'pending';
   return job.status === 'running' ? 'running' : 'stopped';
 }
 
-interface Gap {
+export interface Gap {
   leg: RealizeJobLeg;
   qty: number;
 }
 
-function gapsOf(job: RebalanceJob): Gap[] {
+export function gapsOf(job: RebalanceJob): Gap[] {
   return (job.realize?.legs ?? []).flatMap((leg) => {
-    const ofLeg = (name: string) => job.steps.find((step) => step.name === name && step.perp?.symbol === leg.symbol);
-    const close = ofLeg('Close');
-    const reopen = ofLeg('Reopen');
-    if (close?.status !== 'done' || reopen?.status === 'done' || leg.filledQty <= 0) return [];
-    return [{ leg, qty: leg.filledQty }];
+    const reopen = legStep(job, leg, 'Reopen');
+    if (!reopen || reopen.status === 'done') return [];
+    const qty = restOf(job, leg);
+    return qty > 0 ? [{ leg, qty }] : [];
   });
+}
+
+function legSizes(job: RebalanceJob, leg: RealizeJobLeg): { closeQty: number; reopenQty: number } {
+  const reopen = legStep(job, leg, 'Reopen');
+  const closeQty = leg.filledQty > 0 ? leg.filledQty : leg.qty;
+  return { closeQty, reopenQty: reopen?.status === 'done' ? (reopen.qty ?? closeQty) : closeQty };
+}
+
+const plannedOf = (plan: RealizePlan | null, leg: RealizeJobLeg): RealizeLeg | undefined => plan?.legs.find((p) => p.symbol === leg.symbol);
+
+function sameSize(job: RebalanceJob, leg: RealizeJobLeg, planned: RealizeLeg | undefined): planned is RealizeLeg {
+  const { closeQty, reopenQty } = legSizes(job, leg);
+  return planned !== undefined && lots(closeQty) === lots(planned.qty) && lots(reopenQty) === lots(planned.qty);
+}
+
+function jobCost(leg: RealizeJobLeg, closeQty: number, reopenQty: number, convertAmount: number): ActionCost | null {
+  const { closeFeeUsd, reopenFeeUsd, closeImpactUsd, reopenImpactUsd, convert } = leg;
+  if (closeFeeUsd === undefined || reopenFeeUsd === undefined || closeImpactUsd === undefined || reopenImpactUsd === undefined) return null;
+  const close = leg.qty > 0 ? closeQty / leg.qty : 0;
+  const reopen = leg.qty > 0 ? reopenQty / leg.qty : 0;
+  return {
+    closeFee: closeFeeUsd * close,
+    closeImpact: closeImpactUsd * close,
+    convertFee: convert && convert.amount > 0 ? (convert.feeUsd * convertAmount) / convert.amount : 0,
+    reopenFee: reopenFeeUsd * reopen,
+    reopenImpact: reopenImpactUsd * reopen,
+  };
+}
+
+function jobActionLegs(job: RebalanceJob, legs: RealizeJobLeg[], plan: RealizePlan | null): ActionLeg[] {
+  return legs.map((leg) => {
+    const planned = plannedOf(plan, leg);
+    const converts = convertsOf(job, leg);
+    const convertAmount = converts.reduce((total, step) => total + (step.planned ?? 0), 0);
+    const { closeQty, reopenQty } = legSizes(job, leg);
+    return {
+      symbol: leg.symbol,
+      base: leg.base,
+      side: leg.side,
+      pool: leg.pool,
+      positionQty: leg.positionQty,
+      closeQty,
+      reopenQty,
+      convert: converts.length > 0 ? { amount: convertAmount, count: converts.length } : null,
+      cost: jobCost(leg, closeQty, reopenQty, convertAmount) ?? (sameSize(job, leg, planned) ? planActionLeg(planned).cost : null),
+    };
+  });
+}
+
+const ROUTE_MOVES: readonly string[] = ['To spot', 'From Hyperliquid', 'From Lighter', 'Convert', 'Convert to USDT'];
+
+const routeMoveOf = (steps: RebalanceStep[]): number =>
+  steps.filter((step) => ROUTE_MOVES.includes(step.name)).reduce((total, step) => total + (step.planned ?? 0), 0);
+
+export function perpsOf(positions: readonly CrossexPosition[]): PerpSize[] {
+  return positions.flatMap((position) => {
+    const signed = Number(position.positionQty);
+    const qty = Math.abs(signed);
+    if (!(qty > 0)) return [];
+    const side = position.positionSide === 'LONG' || position.positionSide === 'SHORT' ? position.positionSide : signed < 0 ? 'SHORT' : 'LONG';
+    return [{ symbol: position.symbol, exchange: parseSymbol(position.symbol).exchange, side, qty }];
+  });
+}
+
+type PerpRow = Pick<PerpSize, 'symbol' | 'side' | 'qty'>;
+
+export const isOtherLeg = (row: PerpRow, leg: RealizeJobLeg): boolean =>
+  row.symbol !== leg.symbol && row.side !== leg.side && parseSymbol(row.symbol).base === leg.base;
+
+export function otherLegText(leg: RealizeJobLeg, rows: readonly PerpRow[]): string {
+  const side: PerpSide = leg.side === 'SHORT' ? 'LONG' : 'SHORT';
+  const other = rows.find((row) => isOtherLeg(row, leg));
+  return other ? `${prettyVenue(parseSymbol(other.symbol).exchange)} ${sideText(side)}` : sideText(side);
+}
+
+const haltLine = (reason: string | null): string[] => (reason ? [localizeServerText(reason)] : []);
+
+const haltLines = (reason: string | null): string[] =>
+  reason ? localizeServerText(reason).split(/(?<=\.)\s+(?=[A-Z])|(?<=。)(?=\S)/) : [];
+
+function stopTitle(job: RebalanceJob): string {
+  const round = roundOf(job);
+  return round === null
+    ? t('accounts.rebalanceModal.stoppedAtConvert')
+    : t('accounts.rebalanceModal.stoppedInRound', { round: num(round, 0), rounds: num(roundCountOf(job), 0) });
+}
+
+function StopBox({ title, lines }: { title: string; lines: string[] }) {
+  return (
+    <div role="alert" className="alert-red">
+      <p className="num text-xs font-semibold text-guava">{title}</p>
+      {lines.map((line) => (
+        <p key={line} className="num text-xs text-ink-300">
+          {line}
+        </p>
+      ))}
+    </div>
+  );
 }
 
 interface Props {
@@ -239,7 +359,7 @@ function Actions({ onResume, onAbandon, holdMs, busy, resuming, note }: Props & 
     <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
       <span className="num text-xs text-ink-400">{note}</span>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={onResume}>
+        <button type="button" className="btn btn-primary px-4 py-2 text-sm" disabled={busy} onClick={onResume}>
           {resuming ? t('accounts.rebalanceModal.resuming') : modalResume()}
         </button>
         <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={busy} onConfirm={onAbandon}>
@@ -336,14 +456,7 @@ function MoveJobView(props: Props) {
   }
   return (
     <>
-      <div role="alert" className="alert-red">
-        <p className="num text-xs font-semibold text-guava">
-          {round === null
-            ? t('accounts.rebalanceModal.stoppedAtConvert')
-            : t('accounts.rebalanceModal.stoppedInRound', { round: num(round, 0), rounds: num(rounds, 0) })}
-        </p>
-        {job.haltReason && <p className="text-xs text-ink-300">{localizeServerText(job.haltReason)}</p>}
-      </div>
+      <StopBox title={stopTitle(job)} lines={haltLine(job.haltReason)} />
       <BalanceBars caption={t('accounts.rebalanceModal.whereCaption')} rows={rows} scale={scaleOf(rows)} />
       {transfer?.spot === null && <NoSpotReadLine />}
       <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
@@ -355,101 +468,108 @@ function MoveJobView(props: Props) {
 function RealizeJobView(props: Props) {
   const { job, view, now, pressed, transfer, onTransfer, onClose } = props;
   const [actionsOpen, setActionsOpen] = useState(false);
-  const positions = usePositions().data?.positions ?? [];
-  const plan = pressed?.plan ?? view.plans[job.goal] ?? null;
-  const route = pressed?.route ?? plan?.routes[job.route] ?? null;
+  const positionsRead = usePositions().data;
+  const positions = positionsRead?.positions ?? [];
+  const livePerps = positionsRead ? perpsOf(positions) : null;
+  const pressedRealize = pressed?.plan.realize ?? null;
   const legs = job.realize?.legs ?? [];
   const split = lastRealizeIndex(job) + 1;
-  const realizeState = stateOf(job, 0, split);
-  const routeState = stateOf(job, split, job.steps.length);
+  const routeSteps = job.steps.slice(split);
+  const routeState = stateOf(job, routeSteps);
   const gaps = gapsOf(job);
-  const planned = (leg: RealizeJobLeg): RealizeLeg | undefined => plan?.realize?.legs.find((p) => p.symbol === leg.symbol);
-  const realizedOf = (leg: RealizeJobLeg): number => (leg.filledQty > 0 ? leg.realizedUsd : (planned(leg)?.realizedUsd ?? 0));
-  const shownQty = (leg: RealizeJobLeg): number => (leg.filledQty > 0 ? leg.filledQty : leg.qty);
-  const markOf = (leg: RealizeJobLeg): number | null => markPriceOf(positions, leg.symbol);
-  const usdOf = (gap: Gap): string => {
-    const mark = markOf(gap.leg);
-    return mark === null ? '—' : fmtUsd(gap.qty * mark, 0);
+  const running = job.status === 'running';
+  const done = job.status === 'done';
+  const preClose = (pressed?.plan ?? view.plans[job.goal] ?? null)?.realize?.legs ?? [];
+  const realizedOf = (leg: RealizeJobLeg): number =>
+    leg.filledQty > 0 ? leg.realizedUsd : (preClose.find((p) => p.symbol === leg.symbol)?.realizedUsd ?? 0);
+  const usdOf = (gap: Gap): string | null => {
+    const mark = markPriceOf(positions, gap.leg.symbol);
+    return mark === null ? null : fmtUsd(gap.qty * mark, 0);
   };
-  const otherLeg = (leg: RealizeJobLeg): string => {
-    const base = parseSymbol(leg.symbol).base;
-    const other = positions.find((p) => p.symbol !== leg.symbol && parseSymbol(p.symbol).base === base);
-    const side = sideText(leg.side === 'LONG' ? 'SHORT' : 'LONG');
-    return other ? `${prettyVenue(parseSymbol(other.symbol).exchange)} ${side}` : side;
-  };
+  const otherLeg = (leg: RealizeJobLeg): string => otherLegText(leg, [...(livePerps ?? []), ...(job.before?.perps ?? [])]);
   const gapWords = (gap: Gap) => ({ venue: prettyVenue(gap.leg.exchange), side: sideText(gap.leg.side), size: sizeText(gap.qty), base: gap.leg.base });
-  const convertDone = job.steps.slice(0, split).find((step) => step.name === 'Convert' && step.status === 'done');
+  const sameAsPressed = pressed !== null && pressed !== undefined && legs.every((leg) => sameSize(job, leg, plannedOf(pressedRealize, leg)));
 
   const realizeRows = realizePools(legs).map(({ pool, legs: poolLegs }, index): StepRow => {
-    const amount = { amount: num(poolLegs.reduce((total, leg) => total + realizedOf(leg), 0), 0), coin: poolCoin(pool) };
-    const closed = poolLegs.some((leg) => leg.filledQty > 0);
+    const state = stateOf(job, poolLegs.flatMap((leg) => legSteps(job, leg)));
+    const total = poolLegs.reduce((sum, leg) => sum + realizedOf(leg), 0);
+    const amount = { amount: num(total, 0), coin: poolCoin(pool) };
+    const closed = poolLegs.filter((leg) => leg.filledQty > 0);
     const gap = gaps.find((g) => poolLegs.includes(g.leg));
-    let text = rk(realizeState === 'done' ? 'realizedTitle' : realizeState === 'running' ? 'realizingTitle' : 'realizeTitle', amount);
-    if (realizeState === 'stopped') text = gap ? rk('stoppedTitle', { size: sizeText(gap.qty), base: gap.leg.base }) : rk('stoppedBeforeClose');
-    const plannedLegs = poolLegs.flatMap((leg) => {
-      const p = planned(leg);
-      return p ? [{ ...p, qty: shownQty(leg) }] : [];
+    const unconfirmed = poolLegs.find((leg) => {
+      const close = legStep(job, leg, 'Close');
+      return leg.filledQty <= 0 && close !== undefined && close.status !== 'done' && (close.venueId !== null || close.text !== null);
     });
-    const realize = plannedLegs.length === poolLegs.length ? { legs: plannedLegs, refused: null } : null;
-    const retry = job.steps[job.stepIndex]?.name === 'Reopen' ? job.steps[job.stepIndex] : undefined;
+    const actionLegs = jobActionLegs(job, poolLegs, pressedRealize);
+    const reason = job.haltReason ? <p key="why" className="text-xs text-ink-400">{localizeServerText(job.haltReason)}</p> : null;
+    let text = rk(state === 'done' ? 'realizedTitle' : state === 'running' ? 'realizingTitle' : 'realizeTitle', amount);
     const body: ReactNode[] = [];
-    if (realizeState === 'stopped' && !closed) {
+    if (state === 'stopped' && gap) {
+      text = rk('stoppedTitle', { size: sizeText(gap.qty), base: gap.leg.base });
+      const converts = convertsOf(job, gap.leg).filter((step) => step.status === 'done');
+      if (converts.length > 0) {
+        const landed = converts.reduce((sum, step) => sum + (step.qty ?? 0), 0);
+        const sent = converts.reduce((sum, step) => sum + (step.planned ?? step.qty ?? 0), 0);
+        const profit = realizedOf(gap.leg);
+        body.push(
+          <p key="cash" className="num text-xs text-ink-300">
+            {rk('receiptCash', {
+              profit: num(profit, 0), coin: poolCoin(pool), first: num(landed, 0), firstWallet: walletOf(CONVERT_TO[pool]),
+              second: num(Math.max(0, profit - sent), 0), secondWallet: walletOf(pool),
+            })}
+          </p>,
+        );
+      }
+    } else if (state === 'stopped' && unconfirmed) {
+      text = rk('closeUnconfirmedTitle');
+      const words = { platform: PLATFORM, side: sideText(unconfirmed.side), size: sizeText(unconfirmed.qty), base: unconfirmed.base };
+      body.push(<p key="unconfirmed" className="num text-xs text-ink-300">{rk('closeUnconfirmedBody', words)}</p>, reason);
+    } else if (state === 'stopped' && closed.length > 0) {
+      text = rk('stoppedAfter', { done: num(closed.reduce((sum, leg) => sum + leg.realizedUsd, 0), 0), total: num(total, 0) });
+      body.push(<RealizeRow key="row" legs={actionLegs} />, reason);
+    } else if (state === 'stopped') {
+      text = rk('stoppedBeforeClose');
       const leg = poolLegs[0]!;
       body.push(
         <p key="same" className="num text-xs text-ink-300">
           {rk('stoppedBeforeCloseBody', { venue: prettyVenue(leg.exchange), side: sideText(leg.side), size: sizeText(leg.positionQty), base: leg.base })}
         </p>,
+        reason,
       );
-      if (job.haltReason) body.push(<p key="why" className="text-xs text-ink-400">{localizeServerText(job.haltReason)}</p>);
-    } else if (realizeState === 'stopped' && gap) {
-      if (convertDone) {
-        const total = realizedOf(gap.leg);
-        const first = convertDone.qty ?? 0;
+    } else {
+      if (gap) {
+        const usd = usdOf(gap);
         body.push(
-          <p key="cash" className="num text-xs text-ink-300">
-            {rk('receiptCash', {
-              profit: num(total, 0), coin: poolCoin(pool), first: num(first, 0), firstWallet: walletOf(CONVERT_TO[pool]),
-              second: num(Math.max(0, total - (convertDone.planned ?? first)), 0), secondWallet: walletOf(pool),
-            })}
+          <p key="gap" className="num text-xs text-gold">
+            {usd === null ? rk('gapLineNoUsd', gapWords(gap)) : rk('gapLine', { ...gapWords(gap), usd })}
           </p>,
         );
       }
-    } else {
-      if (gap) body.push(<p key="gap" className="num text-xs text-gold">{rk('gapLine', { ...gapWords(gap), usd: usdOf(gap) })}</p>);
-      body.push(
-        realize ? (
-          <RealizeRow key="row" realize={realize} />
-        ) : (
-          <span key="row" className="num text-xs text-ink-100">{jobRows(job, now, null).find((row) => row.key.startsWith('realize:'))?.text}</span>
-        ),
-      );
+      body.push(<RealizeRow key="row" legs={actionLegs} />);
     }
-    if (retry?.retry && retry.nextTryAt && job.status === 'running') {
+    const retry = poolLegs.map((leg) => legStep(job, leg, 'Reopen')).find((step) => step?.retry && step.status !== 'done');
+    if (retry?.retry && running) {
+      const seconds = retry.nextTryAt ? Math.max(0, Math.ceil((retry.nextTryAt - now) / 1000)) : 0;
       body.push(
         <p key="retry" className="num text-xs text-gold">
-          {rk('retryLine', {
-            platform: PLATFORM, amount: num(retry.retry.convertAmount, 0), coin: poolCoin(pool), try: retry.attempt + 1,
-            seconds: Math.max(0, Math.ceil((retry.nextTryAt - now) / 1000)),
-          })}
+          {rk('retryLine', { platform: PLATFORM, amount: num(retry.retry.convertAmount, 0), coin: poolCoin(pool), try: retry.attempt + 1, seconds })}
         </p>,
       );
     }
-    if (realize && realizeState !== 'stopped' && !gap) {
+    if (state !== 'stopped' && !gap) {
       body.push(
-        <RealizeActions key="actions" realize={realize} open={actionsOpen} onToggle={() => setActionsOpen(!actionsOpen)} tense={realizeState === 'done' ? 'past' : 'plan'} />,
+        <RealizeActions key="actions" legs={actionLegs} open={actionsOpen} onToggle={() => setActionsOpen(!actionsOpen)} tense={state === 'done' ? 'past' : 'plan'} />,
       );
     }
-    return { key: `realize:${pool}:${index}`, label: '', text, sub: walletOf(pool), right: '', state: realizeState, progress: null, body: <div className="mt-1.5 flex flex-col gap-1.5">{body}</div> };
+    return { key: `realize:${pool}:${index}`, label: '', text, sub: walletOf(pool), right: '', state, progress: null, body: <div className="mt-1.5 flex flex-col gap-1.5">{body}</div> };
   });
 
-  const routeSteps = job.steps.slice(split);
-  const converts = legs.some((leg) => planned(leg)?.convert) || job.steps.slice(0, split).some((step) => step.name === 'Convert');
-  const moveAmount = route ? route.steps.reduce((total, step) => total + step.move, 0) : job.amount;
+  const converts = legs.some((leg) => convertsOf(job, leg).length > 0);
   const coin = poolCoin(routeSteps[0]?.from ?? 'HYPERLIQUID');
   const routeRow: StepRow[] = routeSteps.length === 0 ? [] : [{
     key: 'route',
     label: '',
-    text: moveTitle(converts, routeState === 'running' ? 'running' : routeState === 'done' ? 'done' : 'plan', moveAmount, coin),
+    text: moveTitle(converts, routeState === 'running' ? 'running' : routeState === 'done' ? 'done' : 'plan', routeMoveOf(routeSteps), coin),
     sub: <MovePath {...routePools(routeSteps)} />,
     right: '',
     state: routeState,
@@ -457,34 +577,29 @@ function RealizeJobView(props: Props) {
     body: <RouteBody job={job} now={now} state={routeState} />,
   }];
 
-  const running = job.status === 'running';
-  const elapsed = Math.max(0, (running ? now : job.updatedAt) - job.createdAt);
   const took = (job.steps.at(-1)?.doneAt ?? job.updatedAt) - job.createdAt;
-  const feeUsd = plan && route ? realizeFeeUsd(plan) + routeFeeUsd(route) : null;
-  const impactUsd = plan && route ? realizeImpactUsd(plan) + routeImpactUsd(route) : 0;
+  const parts = sameAsPressed && pressed
+    ? { fee: realizeFeeUsd(pressed.plan) + routeFeeUsd(pressed.route), impact: realizeImpactUsd(pressed.plan) + routeImpactUsd(pressed.route) }
+    : null;
   const gap = job.status === 'halted' ? gaps[0] : undefined;
+  const gapUsd = gap ? usdOf(gap) : null;
   const routeStopped = routeState === 'stopped';
-  const rows = barRowsOf(view.buckets, shownKeys(view, routeSteps, plan ?? view.plans.even), targetsOf(view, plan ?? view.plans.even));
+  const plan = pressed?.plan ?? view.plans[job.goal] ?? view.plans.even;
+  const rows = barRowsOf(view.buckets, shownKeys(view, routeSteps, plan), targetsOf(view, plan));
 
   return (
     <>
-      {running && <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.started', { age: fmtAge(elapsed) })}</p>}
-      {job.status === 'done' && <RebalanceBeforeAfter rows={receiptChanges(job, pressed?.view ?? view)} mode="now" />}
+      {running && <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.started', { age: fmtAge(Math.max(0, now - job.createdAt)) })}</p>}
+      {done && <RebalanceBeforeAfter rows={receiptChanges(job, pressed?.view.buckets ?? view.buckets, livePerps)} mode="now" />}
       {gap && (
-        <div role="alert" className="alert-red">
-          <p className="num text-xs font-semibold text-guava">{rk('gapBox', { ...gapWords(gap), leg: otherLeg(gap.leg) })}</p>
-          <p className="num text-xs text-ink-300">
-            {rk('notHedged', { usd: usdOf(gap) })} {job.haltReason ? localizeServerText(job.haltReason) : ''}
-          </p>
-        </div>
+        <StopBox
+          title={rk('gapBox', { ...gapWords(gap), leg: otherLeg(gap.leg) })}
+          lines={[...(gapUsd === null ? [] : [rk('notHedged', { usd: gapUsd })]), ...haltLines(job.haltReason)]}
+        />
       )}
-      {routeStopped && (
-        <div role="alert" className="alert-red">
-          {job.haltReason && <p className="text-xs text-ink-300">{localizeServerText(job.haltReason)}</p>}
-        </div>
-      )}
+      {routeStopped && <StopBox title={stopTitle(job)} lines={haltLine(job.haltReason)} />}
       <div className="flex flex-col gap-3">
-        <div className={microLabelClass}>{rk('howItRuns')}</div>
+        <div className={STEPS_HEAD}>{rk(done ? 'howItRan' : 'howItRuns')}</div>
         <StepList rows={[...realizeRows, ...routeRow]} />
       </div>
       {routeStopped && <BalanceBars caption={t('accounts.rebalanceModal.whereCaption')} rows={rows} scale={scaleOf(rows)} />}
@@ -492,12 +607,12 @@ function RealizeJobView(props: Props) {
         <div className="card flex flex-col gap-1.5 p-3 text-xs">
           <EstimateRow
             label={rk('totalCost')}
-            sub={running ? t('accounts.rebalanceModal.passed', { age: fmtAge(elapsed) }) : job.status === 'done' ? `${t('accounts.rebalanceModal.took')} ${fmtAge(took)}` : null}
+            sub={done ? `${t('accounts.rebalanceModal.took')} ${fmtAge(took)}` : null}
             value={fmtUsd(job.costUsd)}
             strong
           />
-          {feeUsd !== null && <EstimateRow label={modalFeeLabel()} value={fmtUsd(feeUsd)} />}
-          {impactUsd > 0 && <EstimateRow label={modalImpactLabel()} value={fmtUsd(impactUsd)} />}
+          {parts && <EstimateRow label={modalFeeLabel()} value={fmtUsd(parts.fee)} />}
+          {parts && parts.impact > 0 && <EstimateRow label={modalImpactLabel()} value={fmtUsd(parts.impact)} />}
         </div>
       )}
       {running && <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.waitsLine')}</p>}
@@ -511,7 +626,7 @@ function RealizeJobView(props: Props) {
           />
         </>
       )}
-      {job.status === 'done' && <CloseButton onClose={onClose} />}
+      {done && <CloseButton onClose={onClose} />}
     </>
   );
 }
@@ -540,6 +655,6 @@ function RouteBody({ job, now, state }: { job: RebalanceJob; now: number; state:
 export function JobChip({ job }: { job: RebalanceJob }) {
   if (job.status === 'running') return <Chip tone="info">{t('common.running')}</Chip>;
   if (job.status === 'halted') return <Chip tone="red">{t('common.stopped')}</Chip>;
-  if (isShortDone(job) || job.goal !== 'even') return <Chip>{t('common.done')}</Chip>;
+  if (isShortDone(job) || job.goal !== 'even' || hasRest(job)) return <Chip>{t('common.done')}</Chip>;
   return <Chip tone="green">{t('accounts.rebalanceModal.balanced')}</Chip>;
 }
