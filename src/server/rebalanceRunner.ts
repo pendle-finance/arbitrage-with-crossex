@@ -10,6 +10,7 @@ import {
   buyCostUsdt,
   ceilCents,
   CONVERT_MAX,
+  CONVERT_RATE,
   DUST_USDC,
   fit,
   floorCents,
@@ -27,10 +28,12 @@ import {
   SPOT_SYMBOL,
   spotOrderMax,
   USDT_WALLET,
+  CONVERT_TO,
   type GateAccount,
   type SpotDepth,
   type TransferCoin,
 } from '../core/rebalance/plan';
+import { convertFor, positiveOf } from '../core/rebalance/realize';
 import { decodeStatus } from '../engine/loop';
 import { TTL, type TtlCache } from './cache';
 import {
@@ -38,6 +41,7 @@ import {
   HALT_TEXT,
   haltReasonFor,
   pendingStep,
+  REOPEN_HALT,
   roundStepNames,
   spotShortfallFailText,
   TO_VENUE_STEP,
@@ -45,8 +49,11 @@ import {
   type FundsAt,
   type Job,
   type JobFile,
+  type RealizeJobLeg,
   type Step,
   type StepName,
+  type StepPerp,
+  type StepRetry,
   type TransferFile,
 } from './rebalanceJob';
 
@@ -91,6 +98,8 @@ const LIGHTER_ACCOUNT: GateAccount = 'CROSSEX_LIGHTER';
 const MOVES_OUT: readonly string[] = ['To spot', 'From Hyperliquid', 'From Lighter'];
 const ROUND_ARRIVALS: readonly string[] = ['To Gate', 'Sell USDC'];
 const INTO_VENUE: readonly string[] = Object.values(TO_VENUE_STEP);
+export const REOPEN_FIRST_WAIT_MS = 2_000;
+export const REOPEN_MAX_WAIT_MS = 60_000;
 
 const NOT_FOUND = /NOT_FOUND/i;
 const TRANSFER_DEAD = /FAIL|CANCEL|REJECT|EXPIRE/i;
@@ -104,7 +113,10 @@ type AskDepth = Pick<SpotDepth, 'ask' | 'asks'>;
 type StepSpec =
   | { kind: 'order'; side: CrossexOrderRequest.Side; dest: FundsAt }
   | { kind: 'transfer'; coin: TransferCoin; from: GateAccount; to: GateAccount; dest: FundsAt }
-  | { kind: 'convert'; dest: FundsAt };
+  | { kind: 'convert'; dest: FundsAt }
+  | { kind: 'perp' };
+
+type MoneySpec = Exclude<StepSpec, { kind: 'perp' }>;
 
 export interface SpotTicker {
   ask: number;
@@ -131,6 +143,8 @@ export const STEPS: Record<StepName, StepSpec> = {
   'From Lighter': { kind: 'transfer', coin: 'USDC', from: LIGHTER_ACCOUNT, to: 'SPOT', dest: 'SPOT' },
   'To Gate': { kind: 'transfer', coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', dest: 'GATE' },
   'Sell USDC': { kind: 'order', side: CrossexOrderRequest.Side.SELL, dest: 'CROSSEX' },
+  Close: { kind: 'perp' },
+  Reopen: { kind: 'perp' },
 };
 
 const SLOW_ACCOUNTS: readonly GateAccount[] = [HYPERLIQUID_ACCOUNT, LIGHTER_ACCOUNT];
@@ -159,9 +173,15 @@ const isSpotShortfall = (from: string, c: ClassifiedError): boolean =>
 
 async function readAccount(
   crossEx: CrossEx,
-): Promise<{ margins: Margins; cash: (wallet: WalletRef) => number; equity: (wallet: WalletRef) => number }> {
+): Promise<{
+  margins: Margins;
+  available: number;
+  cash: (wallet: WalletRef) => number;
+  equity: (wallet: WalletRef) => number;
+}> {
   const { body } = await crossEx.getCrossexAccount();
   const margins = { marginBalance: Number(body.marginBalance), initialMargin: Number(body.initialMargin) };
+  const available = Number(body.availableMargin);
   if (!Number.isFinite(margins.marginBalance) || !Number.isFinite(margins.initialMargin)) {
     throw new Error('account read has no margin balance');
   }
@@ -173,7 +193,24 @@ async function readAccount(
     const floored = Number(floorDecimalString(raw ?? '', TRANSFER_STEP));
     return Number.isFinite(floored) ? floored : 0;
   };
-  return { margins, cash, equity: (wallet) => bucketOf(wallet)?.equity ?? 0 };
+  return {
+    margins,
+    available: Number.isFinite(available) ? available : 0,
+    cash,
+    equity: (wallet) => bucketOf(wallet)?.equity ?? 0,
+  };
+}
+
+type Account = Awaited<ReturnType<typeof readAccount>>;
+
+function errorFromReason(reason: string): unknown {
+  let label: string | undefined;
+  try {
+    label = (JSON.parse(reason) as { label?: string }).label;
+  } catch {
+    label = reason.match(/label:\s*([A-Z0-9_]+)/i)?.[1] ?? reason.match(/[A-Z][A-Z0-9_]{3,}/)?.[0];
+  }
+  return { response: { status: 400, data: { label, message: reason } } };
 }
 
 export async function transferRow(
@@ -221,9 +258,38 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   if (!job) return;
   const crossEx = () => deps.clients().crossEx;
 
+  const reopenOf = (index: number): Step | null => {
+    if (!job.steps[index]?.name.startsWith('Convert')) return null;
+    const next = job.steps.slice(index + 1).find((later) => !later.name.startsWith('Convert'));
+    return next?.name === 'Reopen' ? next : null;
+  };
+
+  const legOf = (step: Step): RealizeJobLeg | undefined =>
+    job.realize?.legs.find((leg) => leg.symbol === step.perp?.symbol);
+
+  const openOf = (leg: RealizeJobLeg, reopen: Step): number => leg.filledQty - (reopen.qty ?? 0);
+
+  const skipToReopen = (reopen: Step): void => {
+    const at = job.steps.indexOf(reopen);
+    for (const step of job.steps.slice(job.stepIndex, at)) {
+      step.status = 'done';
+      step.qty ??= 0;
+      step.doneAt = deps.now();
+      delete step.sentAt;
+    }
+    job.stepIndex = at;
+    deps.jobs.write(job);
+  };
+
   const halt = (reason: string): void => {
+    const reopen = reopenOf(job.stepIndex);
+    const leg = reopen ? legOf(reopen) : undefined;
+    if (reopen && leg && !(reopen.retry && reason === HALT_TEXT.quotesUsed)) {
+      skipToReopen(reopen);
+      return;
+    }
     job.status = 'halted';
-    job.haltReason = reason;
+    job.haltReason = reopen && leg ? REOPEN_HALT.quotesUsedLegOpen(leg, openOf(leg, reopen)) : reason;
     deps.jobs.write(job);
     deps.onHalt(job);
     deps.onDone?.();
@@ -486,7 +552,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const prepareConvert = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
     const gateCash = account.cash(GATE_WALLET);
-    if (step.name === 'Convert' && gateCash >= DUST_USDC) {
+    if (step.name === 'Convert' && gateCash >= DUST_USDC && !reopenOf(job.stepIndex)) {
       const { bid } = await spotTicker();
       if (gateCash * bid >= SPOT_MIN_QUOTE_USDT) {
         const planned = floorCents(gateCash);
@@ -591,7 +657,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
-  const poll = async (step: Step, spec: StepSpec, venueId: string): Promise<void> => {
+  const poll = async (step: Step, spec: MoneySpec, venueId: string): Promise<void> => {
     if (spec.kind !== 'transfer') {
       const { body } = await crossEx().getCrossexOrder(venueId);
       const state = String(body.state ?? '');
@@ -647,7 +713,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const sweep = async (step: Step, spec: StepSpec, tag: string): Promise<string | null | undefined> => {
     if (spec.kind === 'transfer') return null;
-    const symbol = spec.kind === 'convert' ? convertSpec(step).symbol : SPOT_SYMBOL;
+    const symbol = spec.kind === 'convert' ? convertSpec(step).symbol : (step.perp?.symbol ?? SPOT_SYMBOL);
     const idOf = (rows: CrossexOrder[]): string | null | undefined => {
       const hit = rows.find((row) => String(row.text ?? '') === tag);
       if (!hit) return null;
@@ -727,7 +793,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     finish(step, toAmount, spec.dest);
   };
 
-  const send = async (step: Step, spec: StepSpec, tag: string, amount: number): Promise<void> => {
+  const send = async (step: Step, spec: MoneySpec, tag: string, amount: number): Promise<void> => {
     if (spec.kind === 'convert') return sendConvert(step, amount);
     step.sentAt = deps.now();
     deps.jobs.write(job);
@@ -753,22 +819,286 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
   };
 
+  const perpRule = async (symbol: string): Promise<{ lot: string; minSize: number }> => {
+    const rules = await staticRead('rules:all', async () => (await crossEx().listCrossexRuleSymbols()).body);
+    const rule = rules?.find((candidate) => candidate.symbol === symbol);
+    if (!rule || !(positiveOf(rule.lotSize) > 0)) throw new Error(`Gate has no order rules for ${symbol}`);
+    return { lot: rule.lotSize, minSize: positiveOf(rule.minSize) };
+  };
+
+  const isCloseOnly = async (symbol: string): Promise<boolean> => {
+    try {
+      const { body } = await crossEx().listCrossexRuleSymbols({ symbols: symbol });
+      const rule = (body ?? []).find((candidate) => candidate.symbol === symbol);
+      return rule !== undefined && rule.state !== 'live';
+    } catch {
+      return false;
+    }
+  };
+
+  const findSent = async (step: Step, tag: string): Promise<string | null | undefined> =>
+    (await lookUpInWindow(deps, () => lookup(STEPS.Close, tag))) ?? (await sweep(step, STEPS.Close, tag));
+
+  const sendPerp = async (step: Step, perp: StepPerp, tag: string, qty: string): Promise<void> => {
+    const { body } = await crossEx().createCrossexOrder({
+      crossexOrderRequest: {
+        symbol: perp.symbol,
+        side: perp.side === 'BUY' ? CrossexOrderRequest.Side.BUY : CrossexOrderRequest.Side.SELL,
+        type: CrossexOrderRequest.Type.MARKET,
+        timeInForce: CrossexOrderRequest.TimeInForce.IOC,
+        qty,
+        text: tag,
+        ...(perp.reduceOnly ? { reduceOnly: CrossexOrderRequest.ReduceOnly.True } : {}),
+      },
+    });
+    if (!body.orderId) throw new Error('order response has no orderId');
+    step.venueId = String(body.orderId);
+    deps.jobs.write(job);
+  };
+
+  const checkQuote = async (account: Account): Promise<boolean> => {
+    if (job.steps.findIndex((step) => step.name === 'Close') !== job.stepIndex) return true;
+    const first = job.steps.find((_, index) => reopenOf(index) !== null);
+    if (!first) return true;
+    const spec = convertSpec(first);
+    const wallet = spec.fromCoin === 'USDT' ? USDT_WALLET : poolWallet(spec.venue);
+    const amount = Math.min(floorCents(first.planned ?? 0), floorCents(Math.max(0, account.cash(wallet))));
+    if (amount < HYPERLIQUID_MIN_USDC) return true;
+    const wait = lastQuoteAt + CONVERT_GAP_MS - deps.now();
+    if (wait > 0) await deps.sleep(wait);
+    lastQuoteAt = deps.now();
+    try {
+      await crossEx().createCrossexConvertQuote({
+        crossexConvertQuoteRequest: {
+          exchangeType: spec.venue,
+          fromCoin: spec.fromCoin,
+          toCoin: spec.toCoin,
+          fromAmount: stripZeros(floorToStep(amount, CENT_STEP)),
+        },
+      });
+      return true;
+    } catch (err) {
+      const c = classifyGateError(err);
+      if (c.category === 'insufficient-margin') return true;
+      if (c.category !== 'rate-limited') throw err;
+      halt(HALT_TEXT.quotesUsed);
+      return false;
+    }
+  };
+
+  const trimRoute = async (missing: number): Promise<void> => {
+    const start = job.steps.map((step) => step.name).lastIndexOf('Reopen') + 1;
+    const groups: Step[][] = [];
+    for (const step of job.steps.slice(start)) {
+      const last = groups.at(-1);
+      const joins = last !== undefined && (step.name === 'Convert to USDC' || (step.round !== null && step.round === last[0].round));
+      if (last && joins) last.push(step);
+      else groups.push([step]);
+    }
+    let left = missing;
+    for (const group of groups.reverse()) {
+      if (left < DUST_USDC) break;
+      const head = group[0];
+      const move = group.find((step) => MOVES_OUT.includes(step.name) || step.round === null)?.planned ?? 0;
+      const size = floorCents(move - Math.min(left, move));
+      const minimum = head.round === null ? DUST_USDC : roundMinimum(head.from, head.to, await usdcMinimum());
+      if (size < minimum) {
+        job.steps = job.steps.filter((step) => !group.includes(step));
+        left = nearestCents(left - move);
+        continue;
+      }
+      left = nearestCents(left - (move - size));
+      if (head.round !== null) {
+        for (const step of group) setRoundFigures(step, size);
+        continue;
+      }
+      head.planned = size;
+      if (group[1]) group[1].planned = floorCents(size * (1 - CONVERT_RATE));
+    }
+    renumberRounds();
+  };
+
+  const pollClose = async (step: Step, leg: RealizeJobLeg, venueId: string): Promise<void> => {
+    const { body } = await crossEx().getCrossexOrder(venueId);
+    if (decodeStatus(String(body.state ?? '')) !== 'closed') return;
+    const filled = Number(body.executedQty ?? 0);
+    if (!(filled > 0)) return haltDead(step, HALT_TEXT.nothingFilled);
+    const account = await readAccount(crossEx());
+    const arrived = Math.max(0, account.cash(poolWallet(step.from)) - (step.cashBefore ?? 0));
+    leg.filledQty = filled;
+    leg.realizedUsd = nearestCents(arrived);
+    if (filled < leg.qty) await trimRoute(nearestCents((arrived * (leg.qty - filled)) / filled));
+    finish(step, filled, step.from);
+  };
+
+  const runClose = async (step: Step, perp: StepPerp, leg: RealizeJobLeg): Promise<void> => {
+    let phase: 'poll' | 'lookup' | 'read' | 'send' = 'poll';
+    try {
+      if (step.venueId !== null) {
+        await pollClose(step, leg, step.venueId);
+        if (job.status === 'running' && step.status !== 'done') await deps.sleep(POLL_MS);
+        return;
+      }
+      if (step.text !== null) {
+        phase = 'lookup';
+        const found = await findSent(step, step.text);
+        if (found === undefined) return halt(HALT_TEXT.unconfirmed);
+        if (found !== null) {
+          step.venueId = found;
+          deps.jobs.write(job);
+          return;
+        }
+        if (step.sentAt !== undefined) {
+          delete step.sentAt;
+          return halt(HALT_TEXT.notListed);
+        }
+      }
+      if (deps.pollOnly) return halt(HALT_TEXT.restart);
+      phase = 'read';
+      const { lot } = await perpRule(perp.symbol);
+      const account = await readAccount(crossEx());
+      step.cashBefore = account.cash(poolWallet(step.from));
+      if (!(await checkQuote(account))) return;
+      if (step.text === null) {
+        job.tagCount += 1;
+        step.text = tagFor(job.id, job.tagCount);
+      }
+      step.sentAt = deps.now();
+      deps.jobs.write(job);
+      phase = 'send';
+      await sendPerp(step, perp, step.text, stripZeros(floorToStep(leg.qty, lot)));
+    } catch (err) {
+      const c = classifyGateError(err);
+      if (phase === 'poll') return deps.sleep(POLL_MS);
+      if (phase === 'send' && (isRefusal(c) || c.category === 'rate-limited')) {
+        delete step.sentAt;
+        deps.jobs.write(job);
+      }
+      if (phase === 'send' && c.category === 'rate-limited') return halt(HALT_TEXT.rateLimited);
+      if (c.retryable) return deps.sleep(POLL_MS);
+      if (phase !== 'send' || isRefusal(c)) return halt(haltReasonFor(err));
+      await deps.sleep(POLL_MS);
+    }
+  };
+
+  const nextTry = (step: Step, retry: StepRetry | null): void => {
+    const n = Number((step.text ?? '').slice(`t-rb${job.id}`.length).split('x')[0]);
+    step.attempt += 1;
+    step.text = tagFor(job.id, n, step.attempt);
+    step.nextTryAt = deps.now() + Math.min(REOPEN_FIRST_WAIT_MS * 2 ** (step.attempt - 1), REOPEN_MAX_WAIT_MS);
+    step.retry = retry;
+    step.venueId = null;
+    delete step.sentAt;
+    deps.jobs.write(job);
+  };
+
+  const restQty = async (step: Step, leg: RealizeJobLeg): Promise<string | null> => {
+    const { lot, minSize } = await perpRule(leg.symbol);
+    const rest = floorToStep(Math.max(0, openOf(leg, step)), lot);
+    return Number(rest) > 0 && Number(rest) >= minSize ? stripZeros(rest) : null;
+  };
+
+  const marginPerCoin = async (leg: RealizeJobLeg): Promise<number> => {
+    const held = ((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === leg.symbol);
+    const qty = Math.abs(Number(held?.positionQty));
+    const margin = Math.abs(Number(held?.initialMargin));
+    if (qty > 0 && margin > 0) return margin / qty;
+    const close = job.steps.find((step) => step.name === 'Close' && step.perp?.symbol === leg.symbol);
+    if (!close?.venueId) return 0;
+    const { body } = await crossEx().getCrossexOrder(close.venueId);
+    const leverage = positiveOf(body.leverage);
+    return leverage > 0 ? positiveOf(body.executedAvgPrice) / leverage : 0;
+  };
+
+  const retryConvert = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
+    const account = await readAccount(crossEx());
+    const cash = floorCents(Math.max(0, account.cash(poolWallet(leg.pool))));
+    if (cash < HYPERLIQUID_MIN_USDC) return halt(REOPEN_HALT.noCash);
+    const margin = openOf(leg, step) * (await marginPerCoin(leg));
+    const convertAmount = Math.min(cash, Math.max(HYPERLIQUID_MIN_USDC, convertFor(margin, account.available)));
+    step.retry = { reason: 'margin', convertAmount };
+    job.steps.splice(job.steps.indexOf(step), 0, ...convertSteps(leg.pool, CONVERT_TO[leg.pool], convertAmount));
+    deps.jobs.write(job);
+  };
+
+  const afterTry = async (step: Step, leg: RealizeJobLeg, c: ClassifiedError | null): Promise<void> => {
+    if (c === null || c.category === 'rate-limited') return;
+    if (c.category === 'auth') return halt(REOPEN_HALT.tradePermission);
+    if (c.category === 'insufficient-margin') return retryConvert(step, leg);
+    if (c.category === 'size-too-small') return finish(step, step.qty ?? 0, step.from);
+    if (isRefusal(c) && (await isCloseOnly(leg.symbol))) return halt(REOPEN_HALT.closeOnly(leg, openOf(leg, step)));
+  };
+
+  const pollReopen = async (step: Step, leg: RealizeJobLeg, venueId: string): Promise<void> => {
+    const { body } = await crossEx().getCrossexOrder(venueId);
+    const state = String(body.state ?? '');
+    if (decodeStatus(state) !== 'closed') return deps.sleep(POLL_MS);
+    const filled = Number(body.executedQty ?? 0);
+    step.qty = (step.qty ?? 0) + (filled > 0 ? filled : 0);
+    nextTry(step, null);
+    if ((await restQty(step, leg)) === null) return finish(step, step.qty, step.from);
+    const failed = /REJECT|FAIL/i.test(state) && body.reason ? classifyGateError(errorFromReason(body.reason)) : null;
+    await afterTry(step, leg, failed);
+  };
+
+  const runReopen = async (step: Step, perp: StepPerp, leg: RealizeJobLeg): Promise<void> => {
+    let phase: 'poll' | 'send' = 'poll';
+    try {
+      if (step.venueId !== null) return await pollReopen(step, leg, step.venueId);
+      if (step.text !== null && step.sentAt !== undefined) {
+        const found = await findSent(step, step.text);
+        if (found === undefined) return await deps.sleep(POLL_MS);
+        if (found === null) return nextTry(step, null);
+        step.venueId = found;
+        deps.jobs.write(job);
+        return;
+      }
+      const wait = (step.nextTryAt ?? 0) - deps.now();
+      if (wait > 0) await deps.sleep(wait);
+      const qty = await restQty(step, leg);
+      if (qty === null) return finish(step, step.qty ?? 0, step.from);
+      if (step.text === null) {
+        job.tagCount += 1;
+        step.text = tagFor(job.id, job.tagCount);
+      }
+      step.sentAt = deps.now();
+      deps.jobs.write(job);
+      phase = 'send';
+      await sendPerp(step, perp, step.text, qty);
+    } catch (err) {
+      const c = classifyGateError(err);
+      if (phase === 'send' && (isRefusal(c) || c.category === 'rate-limited' || c.category === 'auth')) {
+        nextTry(step, null);
+        return afterTry(step, leg, c);
+      }
+      if (c.category === 'auth') return halt(REOPEN_HALT.tradePermission);
+      await deps.sleep(POLL_MS);
+    }
+  };
+
   try {
     while (job.status === 'running') {
       const step = job.steps[job.stepIndex];
       const spec: StepSpec | undefined = STEPS[step.name as StepName];
       if (!spec) {
         halt(`unknown step ${step.name}`);
-        return;
+        continue;
       }
       if (step.startedAt === null) {
         step.startedAt = deps.now();
         step.status = 'running';
         deps.jobs.write(job);
       }
-      if (deps.now() - step.startedAt > timeoutFor(spec)) {
+      if (step.name !== 'Reopen' && deps.now() - step.startedAt > timeoutFor(spec)) {
         halt(HALT_TEXT.timeout);
-        return;
+        continue;
+      }
+      if (spec.kind === 'perp') {
+        const leg = legOf(step);
+        if (!step.perp || !leg) halt(`unknown step ${step.name}`);
+        else if (step.name === 'Close') await runClose(step, step.perp, leg);
+        else await runReopen(step, step.perp, leg);
+        continue;
       }
       let phase: 'poll' | 'lookup' | 'read' | 'send' = 'poll';
       let amount: number | null = null;
@@ -785,7 +1115,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           const found = (await lookUpInWindow(deps, () => lookup(spec, key))) ?? (await sweep(step, spec, key));
           if (found === undefined) {
             halt(HALT_TEXT.unconfirmed);
-            return;
+            continue;
           }
           if (found !== null) {
             step.venueId = found;
@@ -795,19 +1125,19 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           if (step.sentAt !== undefined) {
             delete step.sentAt;
             halt(HALT_TEXT.notListed);
-            return;
+            continue;
           }
         }
-        if (deps.pollOnly) {
+        if (deps.pollOnly && !reopenOf(job.stepIndex)) {
           halt(HALT_TEXT.restart);
-          return;
+          continue;
         }
         phase = 'read';
         amount = await prepare(step);
         if (amount === null) continue;
         if (spec.kind === 'transfer' && !isSendable(amount)) {
           halt(HALT_TEXT.cashTooLow);
-          return;
+          continue;
         }
         if (step.text === null) {
           job.tagCount += 1;

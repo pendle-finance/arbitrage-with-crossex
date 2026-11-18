@@ -218,6 +218,42 @@ export interface RoutePlan {
   steps: PlannedStep[];
 }
 
+export type PerpSide = 'LONG' | 'SHORT';
+
+export interface RealizeConvert {
+  amount: number;
+  count: number;
+  feeUsd: number;
+}
+
+export interface RealizeLeg {
+  pool: Pool;
+  symbol: string;
+  exchange: string;
+  base: string;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  realizedUsd: number;
+  convert: RealizeConvert | null;
+  closeFeeUsd: number;
+  reopenFeeUsd: number;
+  closeImpactUsd: number;
+  reopenImpactUsd: number;
+  impactBp: number;
+}
+
+export interface RealizeRefusal {
+  reason: 'too-thin' | 'no-margin' | 'past-book';
+  bp: number | null;
+  maxBp: number;
+}
+
+export interface RealizePlan {
+  legs: RealizeLeg[];
+  refused: RealizeRefusal | null;
+}
+
 export interface EvenPlan {
   goal: Goal;
   /** Nothing to do for this goal. */
@@ -233,6 +269,8 @@ export interface EvenPlan {
   targets: WalletTarget[];
   routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
+  realize?: RealizePlan | null;
+  customMaxUsd?: number | null;
 }
 
 export interface RebalanceStep {
@@ -253,6 +291,21 @@ export interface RebalanceStep {
   to: Pool;
   cashBefore?: number;
   sentAt?: number;
+  perp?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; reduceOnly: boolean } | null;
+  nextTryAt?: number | null;
+  retry?: { reason: 'margin'; convertAmount: number } | null;
+}
+
+export interface RealizeJobLeg {
+  symbol: string;
+  base: string;
+  exchange: string;
+  pool: Pool;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  filledQty: number;
+  realizedUsd: number;
 }
 
 export interface RebalanceJob {
@@ -270,6 +323,7 @@ export interface RebalanceJob {
   createdAt: number;
   updatedAt: number;
   inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
+  realize?: { legs: RealizeJobLeg[]; costUsd?: number } | null;
 }
 
 export interface RebalancePlans {

@@ -1,9 +1,11 @@
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
+import { CrossexOrderRequest } from 'gate-api';
 import { describe, expect, it, vi } from 'vitest';
 import type { Clients } from '../../src/core/clients';
 import { floorToStep } from '../../src/core/numbers';
+import { convertFor, type RealizeLeg, type RealizePlan } from '../../src/core/rebalance/realize';
 import {
   bookLevels,
   buyableUsdc,
@@ -22,6 +24,7 @@ import {
   HALT_TEXT,
   JobFile,
   newJob,
+  REOPEN_HALT,
   TO_USDC_STEPS,
   type Job,
   type RouteName,
@@ -132,6 +135,7 @@ const account = (
     hyperliquid?: number;
     hyperliquidEquity?: number;
     lighter?: number;
+    availableMargin?: number;
   } = {},
 ) => {
   const wallet = (coin: string, exchangeType: string, balance: number, equity = balance) => ({
@@ -142,7 +146,7 @@ const account = (
   });
   return {
     body: {
-      availableMargin: '0',
+      availableMargin: String(over.availableMargin ?? 0),
       marginBalance: String(over.marginBalance ?? 10_000),
       initialMargin: String(over.initialMargin ?? 0),
       assets: [
@@ -195,6 +199,7 @@ interface PlanInput {
   direction?: Direction;
   route: RouteName;
   steps: (Planned | PlannedStep)[];
+  realize?: RealizePlan;
 }
 
 const between = (from: PlannedStep['from'], to: PlannedStep['to'], step: Planned): PlannedStep => ({ ...step, from, to });
@@ -251,6 +256,7 @@ function harness(
       costUsd: 0,
       target: [],
       userId: null,
+      realize: plan.realize ?? null,
     },
     clock.now(),
   );
@@ -5191,4 +5197,769 @@ describe('runJob Convert over the 500,000 cap', () => {
       expect(book.cash()).toMatchObject({ usdt: 2 * amount, hyperliquid: 2 * amount });
     },
   );
+});
+
+const HL_ETH = 'HYPERLIQUID_FUTURE_ETH_USDC';
+const GATE_ETH = 'GATE_FUTURE_ETH_USDT';
+
+const realizeLeg = (over: Partial<RealizeLeg> = {}): RealizeLeg => ({
+  pool: 'HYPERLIQUID',
+  symbol: HL_ETH,
+  exchange: 'HYPERLIQUID',
+  base: 'ETH',
+  side: 'SHORT',
+  positionQty: 66,
+  qty: 53.8,
+  realizedUsd: 34_386,
+  convert: { amount: 10_298, count: 1, feeUsd: 20.6 },
+  closeFeeUsd: 51.2,
+  reopenFeeUsd: 51.19,
+  closeImpactUsd: 9.44,
+  reopenImpactUsd: 9.44,
+  impactBp: 1,
+  ...over,
+});
+const realizeOf = (...legs: RealizeLeg[]): RealizePlan => ({ legs, refused: null });
+const noConvert = realizeOf(realizeLeg({ convert: null }));
+
+const perpRules = (state = 'live') => ({
+  body: [HL_ETH, GATE_ETH].map((symbol) => ({ symbol, state, lotSize: '0.0001', minSize: '0.0001', businessType: 'FUTURE' })),
+});
+
+function ordersBy(map: Record<string, unknown>): Handler {
+  return async (key: string) => {
+    const item = map[key];
+    if (item === undefined) return gateError(404, 'ORDER_NOT_FOUND', 'Order not found')();
+    return typeof item === 'function' ? item() : item;
+  };
+}
+
+function createdInTurn(): Handler {
+  let count = 0;
+  return async () => {
+    count += 1;
+    return created(`o${count}`);
+  };
+}
+
+const MARGIN_LABEL = 'TRADE_INSUFFICIENT_AVAILABLE_MARGIN_ERROR';
+const heldShort = seq({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440' }] });
+
+function realizeRun(over: Record<string, Handler> = {}): Record<string, Handler> {
+  return {
+    getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: 34_386 })),
+    listCrossexRuleSymbols: seq(perpRules()),
+    listCrossexPositions: heldShort,
+    createCrossexOrder: createdInTurn(),
+    getCrossexOrder: ordersBy({ o1: order('FILLED', '53.8', 'o1'), o2: order('FILLED', '53.8', 'o2') }),
+    createCrossexConvertQuote: quotesAt((from) => from * 0.998),
+    createCrossexConvertOrder: ordersInTurn(),
+    ...over,
+  };
+}
+
+const perpSent = (h: ReturnType<typeof harness>) => h.sent('createCrossexOrder').map((arg) => arg.crossexOrderRequest);
+const realizeOnly = (realize: RealizePlan): PlanInput => ({ direction: 'toUsdt', route: 'convert', steps: [], realize });
+
+describe('close, convert and reopen', () => {
+  it('checks a quote is left before the close', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(realizeOf(realizeLeg())),
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 5_000.129 })),
+        createCrossexConvertQuote: seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too many requests')),
+      }),
+    );
+    await h.run();
+    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest).toMatchObject({
+      exchangeType: 'HYPERLIQUID',
+      fromCoin: 'USDC',
+      toCoin: 'USDT',
+      fromAmount: '5000.12',
+    });
+    expect(h.count('createCrossexOrder')).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.quotesUsed });
+  });
+
+  it('a check quote above the cash does not stop the close', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(realizeOf(realizeLeg())),
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 600 }), account({ hyperliquid: 34_986 })),
+        createCrossexConvertQuote: seq(
+          gateError(422, 'TRADE_INSUFFICIENT_AVAILABLE_ERROR', 'Insufficient available balance'),
+          quote('q2', '10280'),
+        ),
+      }),
+    );
+    await h.run();
+    expect(h.count('createCrossexOrder')).toBe(2);
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('skips the check quote under 11 USDC of cash', async () => {
+    const h = harness(fakeClock(), realizeOnly(realizeOf(realizeLeg())), realizeRun({
+      getCrossexAccount: seq(account({ hyperliquid: 10.99 }), account({ hyperliquid: 34_396.99 })),
+    }));
+    await h.run();
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['10298']);
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('never sends the check quote', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(realizeOf(realizeLeg())),
+      realizeRun({ getCrossexAccount: seq(account({ hyperliquid: 600 }), account({ hyperliquid: 34_986 })) }),
+    );
+    await h.run();
+    expect(h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount)).toEqual(['600', '10298']);
+    expect(h.sent('createCrossexConvertOrder').map((arg) => arg.crossexConvertOrderRequest.quoteId)).toEqual(['q2']);
+    const money = ['createCrossexConvertQuote', 'createCrossexOrder', 'createCrossexConvertOrder'];
+    expect(h.sequence.filter((name) => money.includes(name))).toEqual([
+      'createCrossexConvertQuote',
+      'createCrossexOrder',
+      'createCrossexConvertQuote',
+      'createCrossexConvertOrder',
+      'createCrossexOrder',
+    ]);
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('quotes again when the check quote expired', async () => {
+    const clock = fakeClock();
+    const quotedAt: number[] = [];
+    const quotes = quotesAt((from) => from * 0.998);
+    const h = harness(
+      clock,
+      realizeOnly(realizeOf(realizeLeg())),
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 600 }), account({ hyperliquid: 34_986 })),
+        getCrossexOrder: ordersBy({
+          o1: seq(...Array.from({ length: 7 }, () => order('OPEN', '0', 'o1')), order('FILLED', '53.8', 'o1')),
+          o2: order('FILLED', '53.8', 'o2'),
+        }),
+        createCrossexConvertQuote: async (arg: never) => {
+          quotedAt.push(clock.now());
+          return quotes(arg);
+        },
+      }),
+    );
+    await h.run();
+    expect(quotedAt).toHaveLength(2);
+    expect(quotedAt[1] - quotedAt[0]).toBeGreaterThan(5_000);
+    expect(h.sent('createCrossexConvertOrder').map((arg) => arg.crossexConvertOrderRequest.quoteId)).toEqual(['q2']);
+  });
+
+  it('closes with one market reduce-only order', async () => {
+    const h = harness(fakeClock(), realizeOnly(realizeOf(realizeLeg())), realizeRun());
+    await h.run();
+    expect(perpSent(h)[0]).toEqual({
+      symbol: HL_ETH,
+      side: CrossexOrderRequest.Side.BUY,
+      type: CrossexOrderRequest.Type.MARKET,
+      timeInForce: CrossexOrderRequest.TimeInForce.IOC,
+      qty: '53.8',
+      text: tagFor(h.job.id, 1),
+      reduceOnly: CrossexOrderRequest.ReduceOnly.True,
+    });
+    expect(perpSent(h).filter((sent) => sent.reduceOnly !== undefined)).toHaveLength(1);
+  });
+
+  it('closes a long with a sell', async () => {
+    const leg = realizeLeg({ pool: 'CROSSEX', symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', convert: null });
+    const h = harness(fakeClock(), realizeOnly(realizeOf(leg)), realizeRun({ getCrossexAccount: seq(account()) }));
+    await h.run();
+    const [close, reopen] = perpSent(h);
+    expect(close).toMatchObject({ symbol: GATE_ETH, side: CrossexOrderRequest.Side.SELL, reduceOnly: CrossexOrderRequest.ReduceOnly.True });
+    expect(reopen).toMatchObject({ symbol: GATE_ETH, side: CrossexOrderRequest.Side.BUY, qty: '53.8' });
+    expect(reopen.reduceOnly).toBeUndefined();
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('reopens what the close filled', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(realizeOf(realizeLeg())),
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: 19_174.5 })),
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '30', 'o1'), o2: order('FILLED', '30', 'o2') }),
+      }),
+    );
+    await h.run();
+    const reopen = perpSent(h)[1];
+    expect(reopen).toMatchObject({ symbol: HL_ETH, side: CrossexOrderRequest.Side.SELL, qty: '30' });
+    expect(reopen.reduceOnly).toBeUndefined();
+    expect(h.jobs.read()?.realize?.legs[0].filledQty).toBe(30);
+  });
+
+  it('a part-filled close re-sizes the move', async () => {
+    const h = harness(
+      fakeClock(),
+      { direction: 'toUsdt', route: 'convert', steps: [convert(27_228)], realize: realizeOf(realizeLeg()) },
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: 19_174.5 })),
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '30', 'o1'), o2: order('FILLED', '30', 'o2') }),
+      }),
+    );
+    await h.run();
+    const resized = floorCents(27_228 - nearestCents((19_174.5 * 23.8) / 30));
+    const job = h.jobs.read();
+    expect(job?.realize?.legs[0]).toMatchObject({ filledQty: 30, realizedUsd: 19_174.5 });
+    expect(job?.steps.at(-1)).toMatchObject({ name: 'Convert', planned: resized, status: 'done' });
+    expect(h.sent('createCrossexConvertQuote').map((arg) => Number(arg.crossexConvertQuoteRequest.fromAmount))).toEqual([10_298, resized]);
+  });
+
+  it('a part-filled close drops a round the cash no longer covers', async () => {
+    const h = harness(
+      fakeClock(),
+      { direction: 'toUsdt', route: 'loop', steps: [round(1, 30), round(2, 20)], realize: noConvert },
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: 500 })),
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '50', 'o1') }),
+        createCrossexOrder: seq(created('o1'), gateError(403, 'FORBIDDEN', 'Forbidden')),
+      }),
+    );
+    await h.run();
+    const route = h.jobs.read()!.steps.slice(2);
+    expect(route.map((step) => [step.name, step.round])).toEqual([
+      ['From Hyperliquid', 1],
+      ['To Gate', 1],
+      ['Sell USDC', 1],
+    ]);
+    expect(route[0].planned).toBe(12);
+  });
+
+  it('no convert, no quote', async () => {
+    const h = harness(fakeClock(), realizeOnly(noConvert), realizeRun());
+    await h.run();
+    expect(h.count('createCrossexConvertQuote')).toBe(0);
+    expect(h.count('createCrossexConvertOrder')).toBe(0);
+    expect(perpSent(h).map((sent) => sent.qty)).toEqual(['53.8', '53.8']);
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('a failed convert still reopens', async () => {
+    const failures: Record<string, Record<string, Handler>> = {
+      poorQuote: { createCrossexConvertQuote: seq(quote('q1', '1')) },
+      noPrice: { listTickers: seq({ body: [{}] }) },
+      refused: { createCrossexConvertQuote: seq(gateError(400, 'CONVERT_TRADE_QUOTE_FROM_AMOUNT_INVALID_ERROR', 'Invalid fromAmount')) },
+      quotesUsed: { createCrossexConvertQuote: seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too many requests')) },
+    };
+    for (const [name, over] of Object.entries(failures)) {
+      const h = harness(fakeClock(), realizeOnly(realizeOf(realizeLeg())), realizeRun(over));
+      await h.run();
+      const job = h.jobs.read();
+      expect({ name, sent: perpSent(h).length, status: job?.status }).toEqual({ name, sent: 2, status: 'done' });
+      expect(perpSent(h)[1].reduceOnly).toBeUndefined();
+      expect(h.count('createCrossexConvertOrder')).toBe(0);
+      expect(h.onHalt).not.toHaveBeenCalled();
+    }
+  });
+
+  it('retries a margin-refused reopen', async () => {
+    const syncRefusal = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        createCrossexOrder: seq(created('o1'), gateError(400, MARGIN_LABEL, 'Insufficient availableMargin'), created('o3')),
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '53.8', 'o1'), o3: order('FILLED', '53.8', 'o3') }),
+      }),
+    );
+    const closedAsFail = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        getCrossexOrder: ordersBy({
+          o1: order('FILLED', '53.8', 'o1'),
+          o2: order('FAIL', '0', 'o2', { reason: JSON.stringify({ label: MARGIN_LABEL, message: 'Insufficient availableMargin' }) }),
+          o3: order('FILLED', '53.8', 'o3'),
+        }),
+      }),
+    );
+    for (const h of [syncRefusal, closedAsFail]) {
+      await h.run();
+      expect(perpSent(h).map((sent) => sent.text)).toEqual([tagFor(h.job.id, 1), tagFor(h.job.id, 2), tagFor(h.job.id, 2, 1)]);
+      expect(h.count('createCrossexConvertOrder')).toBe(1);
+      expect(h.sequence.filter((name) => name === 'createCrossexOrder' || name === 'createCrossexConvertOrder')).toEqual([
+        'createCrossexOrder',
+        'createCrossexOrder',
+        'createCrossexConvertOrder',
+        'createCrossexOrder',
+      ]);
+      expect(h.jobs.read()?.status).toBe('done');
+    }
+  });
+
+  it('sizes the retry convert from a fresh read', async () => {
+    const tight = convertFor(53.8 * 200, 500);
+    const cases: Array<[number, number]> = [
+      [500, tight],
+      [1_000_000, 11],
+    ];
+    for (const [availableMargin, expected] of cases) {
+      let jobs: JobFile | null = null;
+      const retries: unknown[] = [];
+      const orders = seq(created('o1'), gateError(400, MARGIN_LABEL, 'Insufficient availableMargin'), created('o3'));
+      const h = harness(
+        fakeClock(),
+        realizeOnly(noConvert),
+        realizeRun({
+          getCrossexAccount: seq(
+            account({ hyperliquid: 0 }),
+            account({ hyperliquid: 34_386 }),
+            account({ hyperliquid: 34_386, availableMargin }),
+          ),
+          createCrossexOrder: async (arg: never) => {
+            retries.push(jobs?.read()?.steps.find((step) => step.name === 'Reopen')?.retry);
+            return orders(arg);
+          },
+          getCrossexOrder: ordersBy({ o1: order('FILLED', '53.8', 'o1'), o3: order('FILLED', '53.8', 'o3') }),
+        }),
+      );
+      jobs = h.jobs;
+      await h.run();
+      expect(retries[2]).toEqual({ reason: 'margin', convertAmount: expected });
+      expect(h.sent('createCrossexConvertQuote').map((arg) => Number(arg.crossexConvertQuoteRequest.fromAmount))).toEqual([expected]);
+    }
+    expect(tight).toBeGreaterThan(11);
+  });
+
+  it('reopen waits double to 60 s', async () => {
+    const clock = fakeClock();
+    const sentAt: number[] = [];
+    const nextTries: (number | null | undefined)[] = [];
+    let jobs: JobFile | null = null;
+    let count = 0;
+    const h = harness(
+      clock,
+      realizeOnly(noConvert),
+      realizeRun({
+        createCrossexOrder: async () => {
+          count += 1;
+          sentAt.push(clock.now());
+          nextTries.push(jobs?.read()?.steps.find((step) => step.name === 'Reopen')?.nextTryAt);
+          return created(`o${count}`);
+        },
+        getCrossexOrder: async (id: string) =>
+          id === 'o1' || id === 'o9' ? order('FILLED', '53.8', id) : order('CANCELLED', '0', id),
+      }),
+    );
+    jobs = h.jobs;
+    await h.run();
+    const waits = sentAt.slice(2).map((at, index) => at - sentAt[index + 1]);
+    expect(waits).toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000]);
+    expect(nextTries.slice(2)).toEqual(sentAt.slice(2));
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('a short reopen sends the rest', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        getCrossexOrder: ordersBy({
+          o1: order('FILLED', '53.8', 'o1'),
+          o2: order('CANCELLED', '0', 'o2'),
+          o3: order('CANCELLED', '20', 'o3'),
+          o4: order('FILLED', '33.8', 'o4'),
+        }),
+      }),
+    );
+    await h.run();
+    expect(perpSent(h).map((sent) => sent.qty)).toEqual(['53.8', '53.8', '53.8', '33.8']);
+    expect(h.onHalt).not.toHaveBeenCalled();
+    expect(h.jobs.read()).toMatchObject({ status: 'done', haltReason: null });
+    expect(h.jobs.read()?.steps.find((step) => step.name === 'Reopen')?.qty).toBeCloseTo(53.8, 9);
+  });
+
+  it('stops the reopen on lost trade permission', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({ createCrossexOrder: seq(created('o1'), gateError(403, 'FORBIDDEN', 'Forbidden')) }),
+    );
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({
+      status: 'halted',
+      haltReason: 'The API key cannot trade. Fix it in Settings, then Resume.',
+    });
+  });
+
+  it('stops the reopen on a close-only contract', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        listCrossexRuleSymbols: seq(perpRules(), perpRules('close_only')),
+        createCrossexOrder: seq(created('o1'), gateError(400, 'TRADE_CONTRACT_STATE_ERROR', 'Contract does not accept orders')),
+      }),
+    );
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({
+      status: 'halted',
+      haltReason:
+        'Gate CrossEx takes no new orders on this contract. Resume when it does, or close 53.8 ETH of the Gate long in Positions.',
+    });
+  });
+
+  it('stops the reopen when no cash is left', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: 34_386 }), account({ hyperliquid: 10.99 })),
+        createCrossexOrder: seq(created('o1'), gateError(400, MARGIN_LABEL, 'Insufficient availableMargin')),
+      }),
+    );
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({
+      status: 'halted',
+      haltReason: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
+    });
+    expect(h.count('createCrossexConvertQuote')).toBe(0);
+  });
+
+  it('stops on the quote limit with the leg open', async () => {
+    const h = harness(
+      fakeClock(),
+      realizeOnly(noConvert),
+      realizeRun({
+        createCrossexOrder: seq(created('o1'), gateError(400, MARGIN_LABEL, 'Insufficient availableMargin')),
+        createCrossexConvertQuote: seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too many requests')),
+      }),
+    );
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({
+      status: 'halted',
+      haltReason:
+        "Gate's 100 Convert quotes for today are used up. The Hyperliquid short is 53.8 ETH smaller than the Gate long. Resume after Gate's count clears, within 24 hours, or close 53.8 ETH of the Gate long in Positions.",
+    });
+    expect(h.count('createCrossexOrder')).toBe(2);
+  });
+
+  it('boot sends no second close', async () => {
+    const clock = fakeClock();
+    const tag = tagFor(clock.now().toString(36), 1);
+    const h = harness(
+      clock,
+      realizeOnly(noConvert),
+      realizeRun({
+        createCrossexOrder: seq(created('o2')),
+        getCrossexOrder: ordersBy({ [tag]: order('FILLED', '53.8', 'o1'), o1: order('FILLED', '53.8', 'o1'), o2: order('FILLED', '53.8', 'o2') }),
+      }),
+      (job) => {
+        job.tagCount = 1;
+        Object.assign(job.steps[0], { text: tag, sentAt: clock.now(), status: 'running', startedAt: clock.now() });
+      },
+    );
+    await runJob({ ...h.deps, pollOnly: true });
+    expect(perpSent(h)).toHaveLength(1);
+    expect(perpSent(h)[0].reduceOnly).toBeUndefined();
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+
+  it('finds a sent reopen by any try tag', async () => {
+    const clock = fakeClock();
+    const id = clock.now().toString(36);
+    const thirdTry = tagFor(id, 2, 2);
+    const h = harness(
+      clock,
+      realizeOnly(noConvert),
+      realizeRun({
+        getCrossexOrder: ordersBy({ o7: order('FILLED', '53.8', 'o7') }),
+        listCrossexOpenOrders: seq({ body: [] }),
+        listCrossexHistoryOrders: seq({ body: [{ orderId: 'o7', text: thirdTry, symbol: HL_ETH, state: 'FILLED' }] }),
+      }),
+      (job) => {
+        doneStep(job, 0, { venueId: 'o1', qty: 53.8, at: clock.now() });
+        job.realize!.legs[0].filledQty = 53.8;
+        job.stepIndex = 1;
+        job.tagCount = 2;
+        Object.assign(job.steps[1], { text: thirdTry, attempt: 2, sentAt: clock.now(), status: 'running', startedAt: clock.now() });
+      },
+    );
+    await runJob({ ...h.deps, pollOnly: true });
+    expect(h.count('createCrossexOrder')).toBe(0);
+    expect(h.sent('listCrossexHistoryOrders')[0]).toMatchObject({ symbol: HL_ETH });
+    expect(h.jobs.read()).toMatchObject({ status: 'done' });
+    expect(h.jobs.read()?.steps[1].qty).toBe(53.8);
+  });
+
+  it('runs the route after the reopen', async () => {
+    const h = harness(
+      fakeClock(),
+      { direction: 'toUsdt', route: 'convert', steps: [convert(1_000)], realize: noConvert },
+      realizeRun(),
+    );
+    await h.run();
+    const money = ['createCrossexOrder', 'createCrossexConvertQuote', 'createCrossexConvertOrder'];
+    expect(h.sequence.filter((name) => money.includes(name))).toEqual([
+      'createCrossexOrder',
+      'createCrossexOrder',
+      'createCrossexConvertQuote',
+      'createCrossexConvertOrder',
+    ]);
+    const job = h.jobs.read();
+    expect(job?.steps.map((step) => [step.name, step.status])).toEqual([
+      ['Close', 'done'],
+      ['Reopen', 'done'],
+      ['Convert', 'done'],
+    ]);
+    expect(job?.status).toBe('done');
+  });
+
+  it('perp order qty string at size', async () => {
+    const sizes: Array<[number, string, string]> = [
+      [3_000, '2999.9999', '2999.9999'],
+      [0.0153, '0.0153', '0.0153'],
+    ];
+    for (const [qty, filled, reopened] of sizes) {
+      const h = harness(
+        fakeClock(),
+        realizeOnly(realizeOf(realizeLeg({ qty, positionQty: qty * 1.2, convert: null }))),
+        realizeRun({
+          getCrossexOrder: ordersBy({ o1: order('FILLED', filled, 'o1'), o2: order('FILLED', reopened, 'o2') }),
+        }),
+      );
+      await h.run();
+      expect(perpSent(h).map((sent) => sent.qty)).toEqual([String(qty), reopened]);
+      expect(h.jobs.read()?.status).toBe('done');
+    }
+  });
+});
+
+const PROFIT_PER_ETH = 639;
+const CAP_CENTS = CONVERT_MAX * 100;
+
+const decimalText = (units: number, places: number): string => {
+  const scale = 10 ** places;
+  const fraction = String(units % scale).padStart(places, '0').replace(/0+$/, '');
+  return fraction ? `${Math.floor(units / scale)}.${fraction}` : String(Math.floor(units / scale));
+};
+const lotsText = (lots: number): string => decimalText(lots, 4);
+const centsText = (cents: number): string => decimalText(cents, 2);
+const lotsAt = (rung: number): number => Math.floor((0.5 * rung) / PROFIT_PER_ETH / 0.0001);
+
+function splitCents(cents: number): number[] {
+  const count = cents > CAP_CENTS ? Math.ceil(cents / CAP_CENTS) : 1;
+  const base = Math.floor(cents / count);
+  return Array.from({ length: count }, (_, index) => base + (index < cents - base * count ? 1 : 0));
+}
+
+function trimCents(chunks: number[], missing: number): number[] {
+  const out = [...chunks];
+  let left = missing;
+  for (let index = out.length - 1; index >= 0 && left >= 100; index -= 1) {
+    const size = out[index] - Math.min(left, out[index]);
+    if (size < 100) {
+      left -= out[index];
+      out.splice(index, 1);
+    } else {
+      left -= out[index] - size;
+      out[index] = size;
+    }
+  }
+  return out;
+}
+
+const quotedCents = (h: ReturnType<typeof harness>): number[] =>
+  h.sent('createCrossexConvertQuote').map((arg) => Math.round(Number(arg.crossexConvertQuoteRequest.fromAmount) * 100));
+const quotedText = (h: ReturnType<typeof harness>): string[] =>
+  h.sent('createCrossexConvertQuote').map((arg) => arg.crossexConvertQuoteRequest.fromAmount);
+
+function partClose(rung: number, steps: Planned[]) {
+  const lots = lotsAt(rung);
+  const filledLots = Math.floor(lots * 0.6);
+  const qty = Number(lotsText(lots));
+  const filled = lotsText(filledLots);
+  const arrived = nearestCents(Number(filled) * PROFIT_PER_ETH);
+  const leg = realizeLeg({ qty, positionQty: Number(lotsText(Math.ceil(lots * 1.25))), realizedUsd: 0.5 * rung, convert: null });
+  const h = harness(
+    fakeClock(),
+    { direction: 'toUsdt', route: 'convert', steps, realize: realizeOf(leg) },
+    realizeRun({
+      getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: arrived })),
+      getCrossexOrder: ordersBy({ o1: order('FILLED', filled, 'o1'), o2: order('FILLED', filled, 'o2') }),
+    }),
+  );
+  return { h, lots, qty, filled, arrived };
+}
+
+describe('scale ladder: Close', () => {
+  it.each(LADDER)('a $%d close sends the lot-exact qty reduce-only, and a 60% fill reopens only what filled', async (rung) => {
+    const { h, lots, filled, arrived } = partClose(rung, []);
+    await h.run();
+    const [close, reopen] = perpSent(h);
+    expect(perpSent(h)).toHaveLength(2);
+    expect(close).toMatchObject({ qty: lotsText(lots), side: CrossexOrderRequest.Side.BUY, reduceOnly: CrossexOrderRequest.ReduceOnly.True });
+    expect(reopen).toMatchObject({ qty: filled, side: CrossexOrderRequest.Side.SELL });
+    expect(reopen.reduceOnly).toBeUndefined();
+    const job = h.jobs.read();
+    expect(job?.realize?.legs[0]).toMatchObject({ filledQty: Number(filled), realizedUsd: arrived });
+    expect(job?.steps.find((step) => step.name === 'Reopen')?.qty).toBeCloseTo(Number(filled), 9);
+    expect(job?.status).toBe('done');
+  });
+
+  it.each(LADDER)('a $%d close Gate refuses as above its largest order size stops with nothing closed or reopened', async (rung) => {
+    const lots = lotsAt(rung);
+    const h = harness(
+      fakeClock(),
+      realizeOnly(realizeOf(realizeLeg({ qty: Number(lotsText(lots)), convert: null }))),
+      realizeRun({ createCrossexOrder: seq(gateError(400, 'TRADE_MAX_MARKET_SIZE_ERROR', 'Order size above max market size')) }),
+    );
+    await h.run();
+    const job = h.jobs.read();
+    expect(perpSent(h).map((sent) => sent.qty)).toEqual([lotsText(lots)]);
+    expect(h.count('createCrossexConvertQuote')).toBe(0);
+    expect(job?.status).toBe('halted');
+    expect(job?.stepIndex).toBe(0);
+    expect(job?.steps[0]).toMatchObject({ venueId: null, status: 'running' });
+    expect(job?.steps[0].sentAt).toBeUndefined();
+    expect(job?.realize?.legs[0].filledQty).toBe(0);
+  });
+});
+
+describe('scale ladder: route', () => {
+  it.each(LADDER)('a $%d part-filled close trims the Convert route by the cash it did not realize, last chunk first', async (rung) => {
+    const move = 0.4 * rung;
+    const { h, qty, filled, arrived } = partClose(rung, [convert(move)]);
+    await h.run();
+    const missing = Math.round(nearestCents((arrived * (qty - Number(filled))) / Number(filled)) * 100);
+    const chunks = splitCents(Math.round(move * 100));
+    const trimmed = trimCents(chunks, missing);
+    const job = h.jobs.read();
+    const route = job?.steps.slice(job.steps.findIndex((step) => step.name === 'Reopen') + 1) ?? [];
+    expect(route.map((step) => Math.round((step.planned ?? 0) * 100))).toEqual(trimmed);
+    expect(quotedText(h)).toEqual(trimmed.map(centsText));
+    expect(quotedCents(h).every((cents) => cents <= CAP_CENTS)).toBe(true);
+    expect(sum(trimmed)).toBe(Math.round(move * 100) - missing);
+    expect(h.count('createCrossexConvertOrder')).toBe(trimmed.length);
+    expect(job?.status).toBe('done');
+    if (rung === 6_000_000) {
+      expect(chunks).toEqual([48_000_000, 48_000_000, 48_000_000, 48_000_000, 48_000_000]);
+      expect(trimmed.length).toBeLessThan(chunks.length);
+    }
+  });
+});
+
+function realizeConvert(amount: number) {
+  const chunks = splitCents(Math.round(amount * 100));
+  const leg = realizeLeg({ convert: { amount, count: chunks.length, feeUsd: amount * 0.002 } });
+  const h = harness(
+    fakeClock(),
+    realizeOnly(realizeOf(leg)),
+    realizeRun({
+      getCrossexAccount: seq(account({ hyperliquid: chunks[0] / 100 + 0.009 }), account({ hyperliquid: amount + 34_386 })),
+    }),
+  );
+  return { h, chunks };
+}
+
+const CONVERT_LADDER: Array<[number, number]> = [
+  [50, 11.37],
+  [5_000, 1_000.01],
+  [100_000, 20_000.03],
+  [1_000_000, 200_000.07],
+  [6_000_000, 1_200_000.07],
+];
+
+describe('scale ladder: check quote', () => {
+  it.each(CONVERT_LADDER)('a $%d book checks one quote of the first Convert, %d split, before the close and never sends it', async (_rung, amount) => {
+    const { h, chunks } = realizeConvert(amount);
+    await h.run();
+    expect(quotedText(h)[0]).toBe(centsText(chunks[0]));
+    const money = ['createCrossexConvertQuote', 'createCrossexOrder', 'createCrossexConvertOrder'];
+    expect(h.sequence.filter((name) => money.includes(name)).slice(0, 2)).toEqual(['createCrossexConvertQuote', 'createCrossexOrder']);
+    expect(h.sent('createCrossexConvertOrder').map((arg) => arg.crossexConvertOrderRequest.quoteId)).not.toContain('q1');
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+});
+
+describe('scale ladder: Convert', () => {
+  it.each([...CONVERT_LADDER, [500_000, 500_000] as [number, number], [500_000, 500_000.01] as [number, number]])(
+    'a $%d book converts %d of realized cash in chunks of at most 500,000 that sum to the cent',
+    async (_rung, amount) => {
+      const { h, chunks } = realizeConvert(amount);
+      await h.run();
+      const cents = Math.round(amount * 100);
+      expect(chunks).toHaveLength(cents > CAP_CENTS ? Math.ceil(cents / CAP_CENTS) : 1);
+      expect(quotedText(h).slice(1)).toEqual(chunks.map(centsText));
+      expect(sum(quotedCents(h).slice(1))).toBe(cents);
+      expect(quotedCents(h).every((quoted) => quoted <= CAP_CENTS)).toBe(true);
+      expect(Math.max(...chunks) - Math.min(...chunks)).toBeLessThanOrEqual(1);
+      expect(h.count('createCrossexConvertOrder')).toBe(chunks.length);
+      const job = h.jobs.read();
+      expect(job?.steps.filter((step) => step.name === 'Convert').map((step) => Math.round((step.planned ?? 0) * 100))).toEqual(chunks);
+      expect(job?.status).toBe('done');
+      if (amount === 500_000.01) expect(chunks).toEqual([25_000_001, 25_000_000]);
+      if (amount === 1_200_000.07) expect(chunks).toEqual([40_000_003, 40_000_002, 40_000_002]);
+    },
+  );
+});
+
+describe('scale ladder: Reopen', () => {
+  it.each(LADDER)('a $%d reopen that fills 60% sends the lot-exact rest and ends whole', async (rung) => {
+    const lots = lotsAt(rung);
+    const partLots = Math.floor(lots * 0.6);
+    const whole = lotsText(lots);
+    const h = harness(
+      fakeClock(),
+      realizeOnly(realizeOf(realizeLeg({ qty: Number(whole), convert: null }))),
+      realizeRun({
+        getCrossexOrder: ordersBy({
+          o1: order('FILLED', whole, 'o1'),
+          o2: order('CANCELLED', lotsText(partLots), 'o2'),
+          o3: order('FILLED', lotsText(lots - partLots), 'o3'),
+        }),
+      }),
+    );
+    await h.run();
+    expect(perpSent(h).map((sent) => sent.qty)).toEqual([whole, whole, lotsText(lots - partLots)]);
+    expect(h.jobs.read()?.steps.find((step) => step.name === 'Reopen')?.qty).toBeCloseTo(Number(whole), 9);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', haltReason: null });
+  });
+
+  it.each(LADDER)('a $%d margin-refused reopen converts what the fresh read needs, split at 500,000, then reopens', async (rung) => {
+    const lots = lotsAt(rung);
+    const whole = lotsText(lots);
+    const heldQty = lotsText(Math.ceil(lots / 4));
+    const heldMargin = String(nearestCents(Number(heldQty) * 364.2));
+    let jobs: JobFile | null = null;
+    const retries: unknown[] = [];
+    const orders = seq(created('o1'), gateError(400, MARGIN_LABEL, 'Insufficient availableMargin'), created('o3'));
+    const h = harness(
+      fakeClock(),
+      realizeOnly(realizeOf(realizeLeg({ qty: Number(whole), convert: null }))),
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: rung, availableMargin: 0 })),
+        listCrossexPositions: seq({ body: [{ symbol: HL_ETH, positionQty: `-${heldQty}`, initialMargin: heldMargin }] }),
+        createCrossexOrder: async (arg: never) => {
+          retries.push(jobs?.read()?.steps.find((step) => step.name === 'Reopen')?.retry);
+          return orders(arg);
+        },
+        getCrossexOrder: ordersBy({ o1: order('FILLED', whole, 'o1'), o3: order('FILLED', whole, 'o3') }),
+      }),
+    );
+    jobs = h.jobs;
+    await h.run();
+    const margin = Number(whole) * (Number(heldMargin) / Number(heldQty));
+    const expected = Math.min(floorCents(rung), Math.max(11, convertFor(margin, 0)));
+    const chunks = splitCents(Math.round(expected * 100));
+    expect(retries[2]).toEqual({ reason: 'margin', convertAmount: expected });
+    expect(quotedText(h)).toEqual(chunks.map(centsText));
+    expect(sum(quotedCents(h))).toBe(Math.round(expected * 100));
+    expect(quotedCents(h).every((cents) => cents <= CAP_CENTS)).toBe(true);
+    expect(h.count('createCrossexConvertOrder')).toBe(chunks.length);
+    expect(perpSent(h).map((sent) => [sent.qty, sent.text])).toEqual([
+      [whole, tagFor(h.job.id, 1)],
+      [whole, tagFor(h.job.id, 2)],
+      [whole, tagFor(h.job.id, 2, 1)],
+    ]);
+    expect(h.jobs.read()?.status).toBe('done');
+    if (rung === 6_000_000) expect(chunks.length).toBeGreaterThan(1);
+    if (rung === 50) expect(expected).toBe(50);
+  });
 });

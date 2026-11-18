@@ -1,16 +1,16 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useRebalance, useTransfer } from '../api/queries';
-import type { RebalanceJob } from '../api/types';
+import { usePositions, useRebalance, useTransfer } from '../api/queries';
+import type { RealizeJobLeg, RebalanceJob } from '../api/types';
 import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { t } from '../i18n';
 import { borrowingBuckets } from '../lib/borrow';
-import { fmtAbout, fmtUsd, num } from '../lib/fmt';
+import { fmtAbout, fmtUsd, num, prettyVenue, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
-import { jobSeconds, VerdictAlert } from './RebalanceBits';
-import { CARD_LABEL, noLegs, shortOfCash, verdictBalanced, verdictNoBorrow, verdictNoCashToMove } from './rebalanceCopy';
+import { jobSeconds, markPriceOf, VerdictAlert } from './RebalanceBits';
+import { CARD_LABEL, noLegs, PLATFORM, shortOfCash, sideText, verdictBalanced, verdictNoBorrow, verdictNoCashToMove } from './rebalanceCopy';
 import { waitsForDeal, waitsForTransfer } from './rebalanceCopy';
 import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
@@ -35,8 +35,63 @@ function jobVerdict(job: RebalanceJob, now: number): string {
   return total > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.running', { what });
 }
 
+const REALIZE_STEPS = ['Close', 'Convert', 'Reopen'];
+
+const isRealizeStep = (job: RebalanceJob): boolean => REALIZE_STEPS.includes(job.steps[job.stepIndex]?.name ?? '');
+
+interface OpenLeg {
+  leg: RealizeJobLeg;
+  open: number;
+}
+
+function openLegOf(job: RebalanceJob): OpenLeg | null {
+  for (const leg of job.realize?.legs ?? []) {
+    const reopen = job.steps.find((step) => step.name === 'Reopen' && step.perp?.symbol === leg.symbol);
+    if (!reopen || reopen.status === 'done') continue;
+    const open = leg.filledQty - (reopen.qty ?? 0);
+    if (open > 0) return { leg, open };
+  }
+  return null;
+}
+
+function gapVerdict(job: RebalanceJob, mark: number | null, now: number): { text: string; sub: string | null; tone: VerdictTone } | null {
+  const found = openLegOf(job);
+  if (!found) return null;
+  const { leg, open } = found;
+  const size = sigGrouped(open);
+  const usd = mark === null ? null : fmtUsd(open * mark, 0);
+  if (job.status === 'halted') {
+    const otherVenue = leg.exchange === 'GATE' ? 'Hyperliquid' : 'Gate';
+    return {
+      text: t('accounts.rebalanceRealize.gapBox', {
+        venue: prettyVenue(leg.exchange),
+        side: sideText(leg.side),
+        size,
+        base: leg.base,
+        leg: `${otherVenue} ${sideText(leg.side === 'SHORT' ? 'LONG' : 'SHORT')}`,
+      }),
+      sub: usd === null ? null : t('accounts.rebalanceRealize.notHedged', { usd }),
+      tone: 'act',
+    };
+  }
+  const step = job.steps[job.stepIndex];
+  if (usd === null || step?.name !== 'Reopen' || !step.nextTryAt || !step.retry) return null;
+  return {
+    text: t('accounts.rebalanceRealize.cardGap', { venue: prettyVenue(leg.exchange), side: sideText(leg.side), size, base: leg.base, usd }),
+    sub: t('accounts.rebalanceRealize.retryLine', {
+      platform: PLATFORM,
+      amount: num(step.retry.convertAmount, 0),
+      coin: 'USDC',
+      try: num(step.attempt + 1, 0),
+      seconds: num(Math.max(0, Math.ceil((step.nextTryAt - now) / 1000)), 0),
+    }),
+    tone: 'warn',
+  };
+}
+
 function jobButton(job: RebalanceJob): string {
   if (job.status === 'halted') return t('accounts.rebalanceSection.stoppedOpen');
+  if (job.realize) return t('accounts.rebalanceRealize.cardStep', { step: isRealizeStep(job) ? 1 : 2, steps: 2 });
   const round = roundOf(job);
   return round === null
     ? t('accounts.rebalanceSection.runningConvert')
@@ -62,6 +117,12 @@ export function RebalanceSection({
   const [openedWith] = useState(query.dataUpdatedAt);
   const loadError = useSettledError(query.status, query.error);
   const view = query.data;
+  const openJob = view?.job && view.job.status !== 'done' && view.job.status !== 'abandoned' ? view.job : null;
+  const positions = usePositions(openJob !== null && openLegOf(openJob) !== null).data;
+  const markOf = (job: RebalanceJob): number | null => {
+    const symbol = openLegOf(job)?.leg.symbol;
+    return symbol === undefined ? null : markPriceOf(positions?.positions ?? [], symbol);
+  };
   const title = (
     <h2 className="text-[14px] font-semibold text-ink-50">
       <RebalanceInfo />
@@ -106,7 +167,7 @@ export function RebalanceSection({
     const picked = pickedRoute(plan, null);
     const hasBorrow = borrowingBuckets(buckets).length > 0;
     // With every route blocked, the window cannot run, so the card gives no verdict.
-    const worth = hasBorrow && picked.name !== null ? worthLine(picked.route, buckets, goal, plan.noLegs) : null;
+    const worth = hasBorrow && picked.name !== null ? worthLine(plan, picked.route, buckets) : null;
     const moving = transfer?.transfer?.status === 'moving';
     const dealWorking = transfer?.lock === 'deal';
 
@@ -126,7 +187,12 @@ export function RebalanceSection({
     let verdict: ReactNode = null;
     let verdictSub: string | null = null;
     let tone: VerdictTone = 'info';
-    if (job) verdict = jobVerdict(job, now);
+    const gap = job ? gapVerdict(job, markOf(job), now) : null;
+    if (gap) {
+      verdict = gap.text;
+      verdictSub = gap.sub;
+      tone = gap.tone;
+    } else if (job) verdict = jobVerdict(job, now);
     // What caps a move is cash when there are no positions, and position
     // margin when there are — the goal on screen does not decide it.
     else if (isCashLimitedEven(plan) && plan.noLegs) verdict = `${fmtUsd(plan.shortOfEven)} ${shortOfCash()}`;
@@ -177,7 +243,9 @@ export function RebalanceSection({
       </div>
     );
     facts = <Facts items={borrowFacts(buckets)} />;
-    if (verdict !== null) line = <VerdictAlert tone={tone} text={verdict} sub={verdictSub} />;
+    if (verdict !== null) {
+      line = <VerdictAlert tone={!job && tone === 'act' ? 'good' : tone} text={verdict} sub={verdictSub} />;
+    }
     main = (
       <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => setOpen(true)}>
         {label}

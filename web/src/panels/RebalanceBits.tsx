@@ -1,12 +1,41 @@
-import { Info, TriangleAlert } from 'lucide-react';
+import { ArrowRight, Check, ChevronDown, ChevronRight, Info, TriangleAlert } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
-import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RouteName, RoutePlan } from '../api/types';
+import type {
+  PlannedStep,
+  Pool,
+  RealizeJobLeg,
+  RealizeLeg,
+  RealizePlan,
+  RebalanceJob,
+  RebalanceStep,
+  RouteName,
+  RoutePlan,
+} from '../api/types';
 import { ChartTooltip } from '../components/ChartTooltip';
 import { SignedNumber } from '../components/SignedNumber';
+import { Spinner } from '../components/Spinner';
 import { microLabelClass } from '../components/Th';
-import { fmtAbout, fmtAge, num } from '../lib/fmt';
+import { fmtAbout, fmtAge, fmtUsd, num, parseSymbol } from '../lib/fmt';
 import { t } from '../i18n';
-import { hoverCash, hoverTarget, hoverUpnl, LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
+import {
+  CONVERT_MAX,
+  CONVERT_TO,
+  hoverCash,
+  hoverTarget,
+  hoverUpnl,
+  LEG_TEXT,
+  legFeeUsd,
+  legImpactUsd,
+  MODAL_FEE,
+  MODAL_IMPACT,
+  MOVE_TEXT,
+  PLATFORM,
+  poolCoin,
+  poolKey,
+  sideText,
+  sizeText,
+  WALLET_LABEL,
+} from './rebalanceCopy';
 
 const HOVER_WIDTH_PX = 268;
 
@@ -17,6 +46,7 @@ const VERDICT_STYLE = {
   // reader as a word instead. `info` needs none: a neutral note reads fine
   // without a prefix, and "Note:" on every quiet line is just noise.
   warn: { box: 'alert-amber', text: 'text-gold', icon: <TriangleAlert size={14} aria-hidden className="block" />, sr: 'Warning:' },
+  good: { box: 'flex rounded border border-grass/45 bg-grass/10 px-3 py-2.5', text: 'text-grass', icon: <Check size={14} aria-hidden className="block" />, sr: null },
   act: { box: 'alert-red', text: 'text-guava', icon: <TriangleAlert size={14} aria-hidden className="block" />, sr: 'Action needed:' },
 } as const;
 
@@ -32,7 +62,7 @@ export function VerdictAlert({
   text,
   sub,
 }: {
-  tone: 'info' | 'warn' | 'act';
+  tone: 'info' | 'warn' | 'act' | 'good';
   text: ReactNode;
   sub?: string | null;
 }) {
@@ -251,14 +281,36 @@ export function ProgressBar({ ratio, tone }: { ratio: number; tone: ProgressTone
   );
 }
 
+export type StepState = 'pending' | 'running' | 'done' | 'stopped';
+
 export interface StepRow {
   key: string;
   label: string;
-  text: string;
-  sub: string;
+  text: ReactNode;
+  sub: ReactNode;
   right: string;
-  state: 'pending' | 'running' | 'done' | 'stopped';
-  progress: number;
+  state: StepState;
+  progress: number | null;
+  body?: ReactNode;
+}
+
+const STEP_DOT: Record<StepState, string> = {
+  pending: 'border-ink-600 text-ink-300',
+  running: 'border-info text-info',
+  done: 'border-grass text-grass',
+  stopped: 'border-guava text-guava',
+};
+
+export function StepDot({ n, state }: { n: number; state: StepState }) {
+  return (
+    <div
+      aria-hidden
+      data-step-dot={state}
+      className={`num flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] ${STEP_DOT[state]}`}
+    >
+      {state === 'running' ? <Spinner className="h-2.5 w-2.5" /> : state === 'done' ? <Check size={12} strokeWidth={2.5} /> : num(n, 0)}
+    </div>
+  );
 }
 
 const STEP_TEXT: Record<StepRow['state'], string> = {
@@ -285,9 +337,10 @@ const STEP_BAR: Record<StepRow['state'], ProgressTone> = {
 export function StepList({ rows }: { rows: StepRow[] }) {
   return (
     <ol className="flex flex-col gap-5">
-      {rows.map((row) => (
+      {rows.map((row, index) => (
         <li key={row.key} aria-current={row.state === 'running' ? 'step' : undefined} className="flex gap-3">
-          <span className={`w-20 shrink-0 pt-0.5 ${microLabelClass}`}>{row.label}</span>
+          <StepDot n={index + 1} state={row.state} />
+          {row.label && <span className={`w-20 shrink-0 pt-0.5 ${microLabelClass}`}>{row.label}</span>}
           <div className="flex min-w-0 flex-1 flex-col gap-1.5">
             <div className="flex items-end justify-between gap-4 text-xs">
               <div className="flex min-w-0 flex-col">
@@ -296,11 +349,143 @@ export function StepList({ rows }: { rows: StepRow[] }) {
               </div>
               <span className={`num shrink-0 ${STEP_RIGHT[row.state]}`}>{row.right}</span>
             </div>
-            <ProgressBar ratio={row.progress} tone={STEP_BAR[row.state]} />
+            {row.progress !== null && <ProgressBar ratio={row.progress} tone={STEP_BAR[row.state]} />}
+            {row.body}
           </div>
         </li>
       ))}
     </ol>
+  );
+}
+
+const closeRowText = (leg: Pick<RealizeLeg, 'positionQty' | 'base' | 'side'>, part: number): string =>
+  t('accounts.rebalanceRealize.closeRow', { part: sizeText(part), total: sizeText(leg.positionQty), base: leg.base, side: sideText(leg.side) });
+
+export function FeeCell({ feeUsd, impactUsd }: { feeUsd: number; impactUsd: number }) {
+  return (
+    <span className="num text-right text-ink-100">
+      {MODAL_FEE(fmtUsd(feeUsd))}
+      {impactUsd > 0 && <span className="block text-[11px] text-ink-400">{MODAL_IMPACT(fmtUsd(impactUsd))}</span>}
+    </span>
+  );
+}
+
+export function RealizeRow({ realize }: { realize: RealizePlan }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {realize.legs.map((leg) => (
+        <div key={leg.symbol} data-realize-row={leg.symbol} className="flex items-start justify-between gap-4 pr-3 text-xs">
+          <span className="num min-w-0 text-ink-100">{closeRowText(leg, leg.qty)}</span>
+          <FeeCell feeUsd={legFeeUsd(leg)} impactUsd={legImpactUsd(leg)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type Tense = 'plan' | 'past';
+
+interface ActionLine {
+  key: string;
+  text: ReactNode;
+  note: string | null;
+  cost: string;
+}
+
+const costText = (feeUsd: number, impactUsd: number): string =>
+  impactUsd > 0 ? `${fmtUsd(feeUsd)} + ${fmtUsd(impactUsd)}` : fmtUsd(feeUsd);
+
+const PERP_ACTION = {
+  close: { plan: 'accounts.rebalanceRealize.closeAction', past: 'accounts.rebalanceRealize.closedDone' },
+  reopen: { plan: 'accounts.rebalanceRealize.reopenAction', past: 'accounts.rebalanceRealize.reopenedDone' },
+} as const;
+
+function perpAction(leg: RealizeLeg, verb: keyof typeof PERP_ACTION, tense: Tense): string {
+  const words = { size: sizeText(leg.qty), base: leg.base, side: sideText(leg.side) };
+  return t(PERP_ACTION[verb][tense], words);
+}
+
+function convertNote(convert: NonNullable<RealizeLeg['convert']>): string {
+  const note = t('accounts.rebalanceRealize.convertNote', { platform: PLATFORM });
+  if (convert.count <= 1) return note;
+  const split = t('accounts.rebalanceRealize.convertSplit', {
+    count: convert.count,
+    amount: num(convert.amount / convert.count, 0),
+    max: num(CONVERT_MAX, 0),
+  });
+  return `${note} ${split}`;
+}
+
+function convertAction(leg: RealizeLeg, convert: NonNullable<RealizeLeg['convert']>, tense: Tense): ActionLine {
+  const words = { amount: num(convert.amount, 0), coin: poolCoin(leg.pool) };
+  const lead = t(tense === 'plan' ? 'accounts.rebalanceRealize.convertAction' : 'accounts.rebalanceRealize.convertedDone', words);
+  return {
+    key: `${leg.symbol}:convert`,
+    text: (
+      <>
+        {lead}
+        <ArrowRight size={12} aria-hidden className="shrink-0 text-ink-500" />
+        {WALLET_LABEL[poolKey(CONVERT_TO[leg.pool])]}
+      </>
+    ),
+    note: tense === 'plan' ? convertNote(convert) : null,
+    cost: costText(convert.feeUsd, 0),
+  };
+}
+
+function legActions(leg: RealizeLeg, tense: Tense): ActionLine[] {
+  const close = { key: `${leg.symbol}:close`, text: perpAction(leg, 'close', tense), note: null, cost: costText(leg.closeFeeUsd, leg.closeImpactUsd) };
+  const reopen = { key: `${leg.symbol}:reopen`, text: perpAction(leg, 'reopen', tense), note: null, cost: costText(leg.reopenFeeUsd, leg.reopenImpactUsd) };
+  return leg.convert ? [close, convertAction(leg, leg.convert, tense), reopen] : [close, reopen];
+}
+
+export function RealizeActions({
+  realize,
+  open,
+  onToggle,
+  tense,
+}: {
+  realize: RealizePlan;
+  open: boolean;
+  onToggle: () => void;
+  tense: Tense;
+}) {
+  const listId = useId();
+  if (!realize.legs.some((leg) => leg.convert !== null)) return null;
+  const actions = realize.legs.flatMap((leg) => legActions(leg, tense));
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        className="btn-link inline-flex items-center gap-1 self-start"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={onToggle}
+      >
+        {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
+        {t('accounts.rebalanceRealize.actionsToggle', { count: actions.length })}
+      </button>
+      {open && (
+        <ol id={listId} className="mt-1.5 flex flex-col gap-1 border-l border-ink-700 pl-2.5 text-[11px] leading-4 text-ink-300">
+          {actions.map((action, index) => (
+            <li key={action.key} data-action={action.key} className="flex gap-2.5">
+              <span className="num w-2 shrink-0">{num(index + 1, 0)}</span>
+              <span className="flex min-w-0 flex-1 flex-col gap-1">
+                <span data-action-text="" className="num inline-flex flex-wrap items-center gap-1">
+                  {action.text}
+                </span>
+                {action.note && (
+                  <span data-action-note="" className="num text-ink-400">
+                    {action.note}
+                  </span>
+                )}
+              </span>
+              <span className="num shrink-0 text-right">{action.cost}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
   );
 }
 
@@ -369,23 +554,56 @@ function jobStepText(steps: RebalanceStep[], round: number | null) {
   return { text, sub: input.arrives === null ? '' : sub };
 }
 
+interface StepGroup {
+  round: number | null;
+  steps: RebalanceStep[];
+  realize: boolean;
+}
+
+function groupSteps(steps: RebalanceStep[]): StepGroup[] {
+  const groups: StepGroup[] = [];
+  let open: StepGroup | null = null;
+  for (const step of steps) {
+    if (step.name === 'Close') {
+      open = { round: null, steps: [step], realize: true };
+      groups.push(open);
+      continue;
+    }
+    if (open) {
+      open.steps.push(step);
+      if (step.name === 'Reopen') open = null;
+      continue;
+    }
+    const last = groups.at(-1);
+    const head = last?.steps[0];
+    if (last && head && !last.realize && last.round === step.round && head.from === step.from && head.to === step.to) last.steps.push(step);
+    else groups.push({ round: step.round, steps: [step], realize: false });
+  }
+  return groups;
+}
+
+function realizeText(job: RebalanceJob, close: RebalanceStep): string {
+  const leg: RealizeJobLeg | undefined = job.realize?.legs.find((l) => l.symbol === close.perp?.symbol);
+  if (!leg) return close.perp?.symbol ?? close.name;
+  return closeRowText(leg, leg.filledQty > 0 ? leg.filledQty : leg.qty);
+}
+
+function groupBase(job: RebalanceJob, { round, steps, realize }: StepGroup, index: number) {
+  if (realize) return { key: `realize:${index}`, label: '', text: realizeText(job, steps[0]), sub: '' };
+  const label = round === null ? t('accounts.rebalance.hover.title.convert') : t('accounts.rebalanceBits.round', { n: num(round, 0) });
+  return { key: `${round ?? 'convert'}:${index}`, label, ...jobStepText(steps, round) };
+}
+
 export function jobRows(job: RebalanceJob, now: number, borrow: number | null): StepRow[] {
   const hasBorrow = borrow !== null || job.steps.some((step) => (step.borrowLeft ?? 0) > 0);
   const jobSteps = hasBorrow ? job.steps : job.steps.map((step) => ({ ...step, borrowLeft: null }));
-  const groups: { round: number | null; steps: RebalanceStep[] }[] = [];
-  for (const step of jobSteps) {
-    const last = groups.at(-1);
-    const head = last?.steps[0];
-    if (last && head && last.round === step.round && head.from === step.from && head.to === step.to) last.steps.push(step);
-    else groups.push({ round: step.round, steps: [step] });
-  }
   const current = jobSteps[job.stepIndex];
-  return groups.map(({ round, steps }, index): StepRow => {
+  return groupSteps(jobSteps).map((group, index): StepRow => {
+    const { round, steps, realize } = group;
     const { from, to } = steps[0];
     const expected = round === null ? 0 : roundSeconds(from, to);
     const started = steps.find((step) => step.startedAt !== null)?.startedAt ?? null;
-    const label = round === null ? t('accounts.rebalance.hover.title.convert') : t('accounts.rebalanceBits.round', { n: num(round, 0) });
-    const base = { key: `${round ?? 'convert'}:${index}`, label, ...jobStepText(steps, round) };
+    const base = groupBase(job, group, index);
     const doneAt = steps.at(-1)?.doneAt ?? null;
     if (steps.every((step) => step.status === 'done')) {
       const took = started === null || doneAt === null ? '' : fmtAge(doneAt - started);
@@ -395,11 +613,12 @@ export function jobRows(job: RebalanceJob, now: number, borrow: number | null): 
       return { ...base, state: 'pending', progress: 0, right: expected > 0 ? fmtAbout(expected) : t('accounts.rebalance.hover.title.time.instant') };
     }
     const elapsed = started === null ? 0 : Math.max(0, (job.status === 'running' ? now : job.updatedAt) - started);
-    const progress = expected > 0 ? elapsed / 1000 / expected : 0;
+    const doneShare = steps.filter((step) => step.status === 'done').length / steps.length;
+    const progress = expected > 0 ? elapsed / 1000 / expected : realize ? doneShare : 0;
     if (job.status !== 'running') return { ...base, state: 'stopped', progress, right: t('accounts.rebalanceBits.stopped') };
     const right =
       expected > 0 ? t('accounts.rebalanceBits.elapsedOf', { elapsed: fmtAge(elapsed), expected: fmtAbout(expected) }) : fmtAge(elapsed);
-    return { ...base, sub: LEG_TEXT[current.name] ?? base.sub, state: 'running', progress, right };
+    return { ...base, sub: realize ? base.sub : (LEG_TEXT[current.name] ?? base.sub), state: 'running', progress, right };
   });
 }
 
@@ -410,4 +629,11 @@ export function planRows(route: RoutePlan, borrow: number | null): StepRow[] {
     const text = stepText({ ...step, borrowLeft: borrow === null ? null : step.borrowLeft });
     return { key: String(index), label, ...text, right, state: 'pending', progress: 0 };
   });
+}
+
+export function markPriceOf(positions: readonly { symbol: string; markPrice?: string }[], symbol: string): number | null {
+  const base = parseSymbol(symbol).base;
+  const own = positions.find((p) => p.symbol === symbol) ?? positions.find((p) => parseSymbol(p.symbol).base === base);
+  const mark = Number(own?.markPrice);
+  return Number.isFinite(mark) && mark > 0 ? mark : null;
 }

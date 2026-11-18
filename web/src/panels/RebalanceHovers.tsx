@@ -1,7 +1,7 @@
 import { ChevronRight } from 'lucide-react';
 import { Fragment, useId, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { EvenPlan, GateAccount, PlannedStep, Pool, RealizeLeg, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
@@ -11,20 +11,19 @@ import { t } from '../i18n';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
-import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
+import { ALWAYS_SHOWN, FeeCell, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
 import {
   factBorrowing,
   factInterestNow,
   factInterestPaid,
   gateSpot,
   HOVER,
-  MODAL_FEE,
-  MODAL_IMPACT,
   MOVE_TEXT,
   PAYS_BACK,
   poolKey,
   RATE_PER_YEAR,
   INTEREST_PER_HOUR,
+  legFeeUsd,
   rateUnknown,
   verdictNoBorrow,
   verdictNoInterest,
@@ -231,14 +230,21 @@ export interface Repay {
   charged: { bucket: RebalanceBucket; before: number; after: number }[];
 }
 
+export const borrowLeftOf = (bucket: RebalanceBucket, wallet: WalletAfter): number =>
+  Math.max(0, bucket.borrow - Math.max(0, wallet.equity - bucket.equity));
+
+export function interestAfterOf(bucket: RebalanceBucket, left: number): number {
+  const chargedBefore = chargedBorrow(bucket, bucket.borrow);
+  return chargedBefore > 0 ? (bucket.interestPerDayUsd * chargedBorrow(bucket, left)) / chargedBefore : 0;
+}
+
 export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
   const parts = borrowingBuckets(buckets).flatMap((bucket) => {
     const after = route.after.find((w) => keyOf(w) === keyOf(bucket));
     // Gate's borrow follows cash, not equity: a wallet in profit can owe more
     // than minus its equity. So, like the server, count what the move sends in
     // against the borrow, not the equity after it.
-    const received = after ? Math.max(0, after.equity - bucket.equity) : 0;
-    const left = Math.max(0, bucket.borrow - received);
+    const left = after ? borrowLeftOf(bucket, after) : bucket.borrow;
     const amount = Math.max(0, bucket.borrow - left);
     return floorCents(amount) > 0 ? [{ bucket, amount, left }] : [];
   });
@@ -334,6 +340,15 @@ const cents = (usd: number): number => Math.round(usd * 100);
 export const routeImpactUsd = (route: RoutePlan): number => Math.max(0, route.priceImpactUsd ?? 0);
 export const routeFeeUsd = (route: RoutePlan): number => Math.max(0, route.costUsd - routeImpactUsd(route));
 
+const realizeLegs = (plan: EvenPlan): RealizeLeg[] => plan.realize?.legs ?? [];
+
+export const realizeFeeUsd = (plan: EvenPlan): number => realizeLegs(plan).reduce((total, leg) => total + legFeeUsd(leg), 0);
+
+export const realizeImpactUsd = (plan: EvenPlan): number =>
+  Math.max(0, realizeLegs(plan).reduce((total, leg) => total + leg.closeImpactUsd + leg.reopenImpactUsd, 0));
+
+export const totalCostUsd = (plan: EvenPlan, route: RoutePlan): number => realizeFeeUsd(plan) + realizeImpactUsd(plan) + route.costUsd;
+
 export const hasUnknownRate = (buckets: RebalanceBucket[]): boolean => borrowingBuckets(buckets).some(isRateUnknown);
 
 /** The interest a day the route stops, from the wallets it repays. The
@@ -343,23 +358,23 @@ export const stopsPerDayOf = (route: RoutePlan, buckets: RebalanceBucket[]): num
 
 /** The fee as days of stopped interest, before rounding up. Null when the
  * route stops no interest. */
-function paybackDays(route: RoutePlan, buckets: RebalanceBucket[]): number | null {
+export function paybackDays(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): number | null {
   const stops = stopsPerDayOf(route, buckets);
-  return stops > 0 ? Number((route.costUsd / stops).toFixed(6)) : null;
+  return stops > 0 ? Math.round((totalCostUsd(plan, route) / stops) * 1e6) / 1e6 : null;
 }
 
 /** Worth it when the fee is at most 30 whole days of the interest it stops,
  * rounded up, the same figure the line shows. A free route is always worth it. */
-export function isWorthIt(route: RoutePlan, buckets: RebalanceBucket[]): boolean {
-  if (cents(route.costUsd) <= 0) return true;
-  const days = paybackDays(route, buckets);
+export function isWorthIt(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): boolean {
+  if (cents(totalCostUsd(plan, route)) <= 0) return true;
+  const days = paybackDays(plan, route, buckets);
   return days !== null && Math.ceil(days) <= WORTH_IT_DAYS;
 }
 
 /** A borrow whose interest is known, and a route whose fee is more than 30
  * days of the interest it stops. */
-export const isNotWorthIt = (route: RoutePlan, buckets: RebalanceBucket[]): boolean =>
-  borrowingBuckets(buckets).length > 0 && !hasUnknownRate(buckets) && !isWorthIt(route, buckets);
+export const isNotWorthIt = (plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): boolean =>
+  borrowingBuckets(buckets).length > 0 && !hasUnknownRate(buckets) && !isWorthIt(plan, route, buckets);
 
 const daysText = (days: number): string => {
   if (days < 1) return t('accounts.rebalanceHovers.lessThanDay');
@@ -398,9 +413,9 @@ export interface Verdict {
  * and that is as true of a custom move that clears the borrow as of the
  * preset. With legs the fee-versus-interest arithmetic applies to all three.
  */
-export function worthLine(route: RoutePlan, buckets: RebalanceBucket[], goal: GoalKind = 'even', noLegs = false): Verdict | null {
+export function worthLine(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): Verdict | null {
   if (borrowingBuckets(buckets).length === 0) return { text: verdictNoBorrow(), tone: 'info' };
-  if (noLegs) return { text: verdictRepayWorthIt(), tone: 'act', sub: verdictRepayNoLegsSub() };
+  if (plan.noLegs) return { text: verdictRepayWorthIt(), tone: 'act', sub: verdictRepayNoLegsSub() };
   // Before any fee-vs-interest test: with no interest there is nothing to weigh,
   // and weighing against zero is what made this print "not worth it" beside a
   // "$0.00 an hour" reading.
@@ -408,10 +423,15 @@ export function worthLine(route: RoutePlan, buckets: RebalanceBucket[], goal: Go
   // A rate we could not read is an ERROR, not a quiet "nothing to do": the
   // dialog still prices a fee, so a silent card contradicted it.
   if (hasUnknownRate(buckets)) return { text: verdictRateUnknown(), tone: 'warn' };
-  if (isNotWorthIt(route, buckets)) return { text: verdictNotWorthIt(), tone: 'warn' };
-  const days = paybackDays(route, buckets);
-  if (cents(route.costUsd) <= 0 || days === null) return null;
-  return { text: goal === 'repay' ? verdictRepayWorthIt() : verdictWorthIt(), tone: 'act', sub: PAYS_BACK(daysText(days)) };
+  if (isNotWorthIt(plan, route, buckets)) return { text: verdictNotWorthIt(), tone: 'warn' };
+  const days = paybackDays(plan, route, buckets);
+  if (cents(totalCostUsd(plan, route)) <= 0 || days === null) return null;
+  return { text: plan.goal.kind === 'repay' ? verdictRepayWorthIt() : verdictWorthIt(), tone: 'act', sub: PAYS_BACK(daysText(days)) };
+}
+
+export function worthChip(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): 'worth' | 'notYet' | null {
+  if (borrowingBuckets(buckets).length === 0 || isFreeBorrow(buckets) || hasUnknownRate(buckets)) return null;
+  return plan.noLegs || isWorthIt(plan, route, buckets) ? 'worth' : 'notYet';
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;
@@ -433,7 +453,7 @@ export function defaultGoal(view: RebalanceView): 'even' | 'repay' {
   // worth its fee never leads over one that is.
   const verdictOf = (goal: 'even' | 'repay') => {
     const { name, route } = pickedRoute(view.plans[goal], null);
-    return name === null ? null : worthLine(route, view.buckets, goal, view.plans[goal].noLegs);
+    return name === null ? null : worthLine(view.plans[goal], route, view.buckets);
   };
   return verdictOf('even')?.tone === 'act' || verdictOf('repay')?.tone !== 'act' ? 'even' : 'repay';
 }
@@ -513,14 +533,7 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
         {plan.recommended === route && <Term label={<Chip tone="green" sm>{t('common.recommended')}</Chip>} text={HOVER.recommended} />}
       </span>
       <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason && localizeServerText(routePlan.reason) : time}</span>
-      {!blocked && (
-        <span className="num text-right text-ink-100">
-          {MODAL_FEE(fmtUsd(routeFeeUsd(routePlan)))}
-          {routeImpactUsd(routePlan) > 0 && (
-            <span className="block text-[11px] text-ink-400">{MODAL_IMPACT(fmtUsd(routeImpactUsd(routePlan)))}</span>
-          )}
-        </span>
-      )}
+      {!blocked && <FeeCell feeUsd={routeFeeUsd(routePlan)} impactUsd={routeImpactUsd(routePlan)} />}
     </RadioRow>
   );
 }

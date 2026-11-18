@@ -1,14 +1,40 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fmtSize } from '../core/boros/pair';
 import { classifyGateError, plainErrorFor } from '../core/errors';
-import { CONVERT_MAX, CONVERT_RATE, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
+import { CONVERT_MAX, CONVERT_RATE, CONVERT_TO, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
 import type { GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
+import type { PerpSide, RealizeLeg, RealizePlan } from '../core/rebalance/realize';
 import { restrictToOwner } from './secretFile';
 
 export type { Pool, RouteName };
 export type JobStatus = 'running' | 'halted' | 'done' | 'abandoned';
 export type StepStatus = 'pending' | 'running' | 'done';
 export type FundsAt = 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID' | 'LIGHTER';
+
+export interface StepPerp {
+  symbol: string;
+  exchange: string;
+  side: 'BUY' | 'SELL';
+  reduceOnly: boolean;
+}
+
+export interface StepRetry {
+  reason: 'margin';
+  convertAmount: number;
+}
+
+export interface RealizeJobLeg {
+  symbol: string;
+  base: string;
+  exchange: string;
+  pool: Pool;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  filledQty: number;
+  realizedUsd: number;
+}
 
 export interface Step {
   name: string;
@@ -28,6 +54,9 @@ export interface Step {
   to: Pool;
   cashBefore?: number;
   sentAt?: number;
+  perp?: StepPerp | null;
+  nextTryAt?: number | null;
+  retry?: StepRetry | null;
 }
 
 export interface Job {
@@ -50,6 +79,7 @@ export interface Job {
   tagCount: number;
   createdAt: number;
   updatedAt: number;
+  realize: { legs: RealizeJobLeg[]; costUsd: number } | null;
 }
 
 export const TO_VENUE_STEP = { HYPERLIQUID: 'To Hyperliquid', LIGHTER: 'To Lighter' } as const;
@@ -57,6 +87,7 @@ export const FROM_VENUE_STEP = { HYPERLIQUID: 'From Hyperliquid', LIGHTER: 'From
 export const TO_USDC_STEPS = ['Buy USDC', 'To spot', TO_VENUE_STEP.HYPERLIQUID] as const;
 export const TO_USDT_STEPS = [FROM_VENUE_STEP.HYPERLIQUID, 'To Gate', 'Sell USDC'] as const;
 export const CONVERT_STEPS = ['Convert', 'Convert to USDT', 'Convert to USDC'] as const;
+export const PERP_STEPS = ['Close', 'Reopen'] as const;
 export type StepName =
   | 'Buy USDC'
   | 'To spot'
@@ -64,7 +95,8 @@ export type StepName =
   | 'Sell USDC'
   | (typeof TO_VENUE_STEP)[Venue]
   | (typeof FROM_VENUE_STEP)[Venue]
-  | (typeof CONVERT_STEPS)[number];
+  | (typeof CONVERT_STEPS)[number]
+  | (typeof PERP_STEPS)[number];
 export const STEP_NAMES: readonly string[] = [
   'Buy USDC',
   'To spot',
@@ -73,7 +105,9 @@ export const STEP_NAMES: readonly string[] = [
   ...Object.values(TO_VENUE_STEP),
   ...Object.values(FROM_VENUE_STEP),
   ...CONVERT_STEPS,
+  ...PERP_STEPS,
 ];
+const PERP_STEP_NAMES: readonly string[] = PERP_STEPS;
 
 export function roundStepNames(from: Pool, to: Pool): StepName[] {
   if (from === 'CROSSEX') return ['Buy USDC', 'To spot', TO_VENUE_STEP[to as Venue]];
@@ -124,6 +158,28 @@ export const HALT_TEXT = {
   sellStuck: 'Gate did not sell all the USDC in USDC · Gate. Press Resume to sell the rest.',
   noPrice: 'Could not read the Gate spot price to check the Convert quote. Press Resume to try again.',
   notListed: 'Gate does not show the last step after 2 min. Press Resume to check again. If Gate still does not show it, Resume sends it again.',
+} as const;
+
+type OpenLeg = Pick<RealizeJobLeg, 'exchange' | 'side' | 'base'>;
+
+const VENUE_NAME: Record<string, string> = { HYPERLIQUID: 'Hyperliquid', GATE: 'Gate' };
+const venueName = (exchange: string): string => VENUE_NAME[exchange] ?? exchange;
+const legName = (leg: OpenLeg): string => `${venueName(leg.exchange)} ${leg.side.toLowerCase()}`;
+const otherLegName = (leg: OpenLeg): string =>
+  `${venueName(leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE')} ${leg.side === 'SHORT' ? 'long' : 'short'}`;
+const closeOtherText = (leg: OpenLeg, open: number): string =>
+  `close ${fmtSize(open)} ${leg.base} of the ${otherLegName(leg)} in Positions`;
+
+const legGapText =(leg: OpenLeg, open: number): string =>
+  `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than the ${otherLegName(leg)}.`;
+
+export const REOPEN_HALT = {
+  tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',
+  closeOnly: (leg: OpenLeg, open: number): string =>
+    `Gate CrossEx takes no new orders on this contract. Resume when it does, or ${closeOtherText(leg, open)}.`,
+  noCash: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
+  quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>
+    `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours, or ${closeOtherText(leg, open)}.`,
 } as const;
 
 export const LOCK_TEXT = {
@@ -216,6 +272,34 @@ function stepsFor(step: PlannedStep): Step[] {
   ];
 }
 
+
+function perpStep(name: (typeof PERP_STEPS)[number], leg: RealizeLeg, side: StepPerp['side']): Step {
+  const at = { from: leg.pool, to: leg.pool, round: null, planned: leg.qty, arrives: null, borrowLeft: null };
+  const perp = { symbol: leg.symbol, exchange: leg.exchange, side, reduceOnly: name === 'Close' };
+  return { ...pendingStep(name, at), perp, nextTryAt: null, retry: null };
+}
+
+function realizeSteps(leg: RealizeLeg): Step[] {
+  const closeSide = leg.side === 'SHORT' ? 'BUY' : 'SELL';
+  return [
+    perpStep('Close', leg, closeSide),
+    ...(leg.convert ? convertSteps(leg.pool, CONVERT_TO[leg.pool], leg.convert.amount) : []),
+    perpStep('Reopen', leg, closeSide === 'BUY' ? 'SELL' : 'BUY'),
+  ];
+}
+
+const realizeJobLeg = (leg: RealizeLeg): RealizeJobLeg => ({
+  symbol: leg.symbol,
+  base: leg.base,
+  exchange: leg.exchange,
+  pool: leg.pool,
+  side: leg.side,
+  positionQty: leg.positionQty,
+  qty: leg.qty,
+  filledQty: 0,
+  realizedUsd: 0,
+});
+
 export function newJob(
   input: {
     goal?: GoalKind;
@@ -225,9 +309,12 @@ export function newJob(
     costUsd: number;
     target: WalletAfter[];
     userId: string | null;
+    realize?: RealizePlan | null;
+    realizeCostUsd?: number;
   },
   now: number,
 ): Job {
+  const legs = input.realize?.legs ?? [];
   return {
     id: now.toString(36),
     userId: input.userId,
@@ -238,12 +325,13 @@ export function newJob(
     target: input.target,
     status: 'running',
     stepIndex: 0,
-    steps: input.steps.flatMap(stepsFor),
-    fundsAt: input.steps[0]?.from ?? 'CROSSEX',
+    steps: [...legs.flatMap(realizeSteps), ...input.steps.flatMap(stepsFor)],
+    fundsAt: legs[0]?.pool ?? input.steps[0]?.from ?? 'CROSSEX',
     haltReason: null,
     tagCount: 0,
     createdAt: now,
     updatedAt: now,
+    realize: legs.length > 0 ? { legs: legs.map(realizeJobLeg), costUsd: input.realizeCostUsd ?? 0 } : null,
   };
 }
 
@@ -316,9 +404,22 @@ export function inTransitOf(job: Job): { coin: 'USDC'; qty: number; at: 'SPOT' |
 export const formatMoney = (value: number): string =>
   value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+function openLegOf(job: Job): { leg: RealizeJobLeg; open: number } | null {
+  for (const leg of job.realize?.legs ?? []) {
+    const reopen = job.steps.find((step) => step.name === 'Reopen' && step.perp?.symbol === leg.symbol);
+    if (!reopen || reopen.status === 'done') continue;
+    const open = leg.filledQty - (reopen.qty ?? 0);
+    if (open > 0) return { leg, open };
+  }
+  return null;
+}
+
 export function bannerFor(job: Job): string {
   const step = job.steps[job.stepIndex];
   if (!step) return 'Rebalance stopped.';
+  const openLeg = openLegOf(job);
+  if (openLeg) return `Rebalance stopped. ${legGapText(openLeg.leg, openLeg.open)}`;
+  if (step.name === 'Close' && step.venueId === null && step.text === null) return 'Rebalance stopped before the close.';
   const { round } = step;
   if (round === null) return `Rebalance stopped at ${step.name}.`;
   const stopped = `Rebalance stopped in round ${round}.`;
@@ -359,6 +460,9 @@ function parseJob(value: unknown): Job | null {
   if (job.goal === undefined) job.goal = 'even';
   if (job.costUsd === undefined) job.costUsd = null;
   if (job.target === undefined) job.target = null;
+  if (job.realize === undefined) job.realize = null;
+  if (job.realize !== null && (typeof job.realize !== 'object' || !Array.isArray(job.realize.legs))) return null;
+  if (job.realize !== null && job.realize.costUsd === undefined) job.realize.costUsd = 0;
   if (!JOB_STATUSES.includes(String(job.status))) return null;
   if (!Array.isArray(job.steps) || job.steps.length === 0) return null;
   for (const step of job.steps as (Partial<Step> | null)[]) {
@@ -370,8 +474,13 @@ function parseJob(value: unknown): Job | null {
     if (step.borrowLeft === undefined) step.borrowLeft = null;
     if (step.cashBefore !== undefined && !Number.isFinite(step.cashBefore)) delete step.cashBefore;
     if (step.sentAt !== undefined && !Number.isFinite(step.sentAt)) delete step.sentAt;
+    if (step.perp === undefined) step.perp = null;
+    if (step.nextTryAt === undefined) step.nextTryAt = null;
+    if (step.retry === undefined) step.retry = null;
     if (step.from === undefined && step.to === undefined && legacy) Object.assign(step, legacy);
-    if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool) || step.from === step.to) return null;
+    if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool)) return null;
+    const isPerp = PERP_STEP_NAMES.includes(String(step.name));
+    if (isPerp ? step.perp === null || job.realize === null : step.from === step.to) return null;
   }
   const index = job.stepIndex;
   if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= job.steps.length) return null;

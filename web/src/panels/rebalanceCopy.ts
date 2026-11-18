@@ -1,6 +1,6 @@
-import type { GoalKind, Pool } from '../api/types';
+import type { GoalKind, PerpSide, Pool, RealizeLeg } from '../api/types';
 import { t } from '../i18n';
-import { num, WALLET_SHORT } from '../lib/fmt';
+import { num, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 
 export const roundCount = (n: number) => t('accounts.rebalance.rounds', { count: n, n: num(n, 0) });
 
@@ -56,13 +56,6 @@ export const HOLD_LABEL: Readonly<Record<GoalKind, string>> = {
   get even() { return t('accounts.rebalance.hold.even'); },
   get repay() { return t('accounts.rebalance.hold.repay'); },
   get custom() { return t('accounts.rebalance.hold.custom'); },
-};
-/** The confirm when the verdict does not ask for the move: the trader may
- * still run it, but the button no longer reads as the recommended step. */
-export const HOLD_ANYWAY_LABEL: Readonly<Record<GoalKind, string>> = {
-  get even() { return t('accounts.rebalance.holdAnyway.even'); },
-  get repay() { return t('accounts.rebalance.holdAnyway.repay'); },
-  get custom() { return t('accounts.rebalance.holdAnyway.custom'); },
 };
 /** Under a "nothing to save" verdict in the dialog, where a fee is priced
  * right below it: the move is a choice, and this is what it costs. */
@@ -256,3 +249,22 @@ export const transferCta = () => t('accounts.rebalance.transferCta');
 export const rateUnknown = () => t('accounts.rebalance.rateUnknown');
 export const INTEREST_PER_HOUR = (usdText: string) => t('accounts.rebalance.interestPerHour', { usd: usdText });
 export const RATE_PER_YEAR = (pctText: string) => t('accounts.rebalance.ratePerYear', { pct: pctText });
+
+export const PLATFORM = 'Gate CrossEx';
+
+export const CONVERT_MAX = 500_000;
+
+export const CONVERT_TO: Record<Pool, Pool> = { CROSSEX: 'HYPERLIQUID', HYPERLIQUID: 'CROSSEX', LIGHTER: 'CROSSEX' };
+
+export const poolCoin = (pool: Pool): string => (pool === 'CROSSEX' ? 'USDT' : 'USDC');
+
+export const sizeText = (qty: number): string => {
+  const size = sigGrouped(qty);
+  return size.includes('.') ? size : `${size}.0`;
+};
+
+export const sideText = (side: PerpSide): string => t(side === 'LONG' ? 'errors.word.long' : 'errors.word.short');
+
+export const legFeeUsd = (leg: RealizeLeg): number => leg.closeFeeUsd + leg.reopenFeeUsd + (leg.convert?.feeUsd ?? 0);
+
+export const legImpactUsd = (leg: RealizeLeg): number => Math.max(0, leg.closeImpactUsd + leg.reopenImpactUsd);

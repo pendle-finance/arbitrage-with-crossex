@@ -6,13 +6,16 @@ import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import { roundToStep } from '../../src/core/numbers';
-import type { EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
+import type { NormalizedBook } from '../../src/core/estimate/books';
+import type { AccountLike, EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
+import type { RealizeLeg, RealizePerp } from '../../src/core/rebalance/realize';
+import { FEE_ROWS, OWNER_HL_ETH, ownerBook, PERP_RULES } from '../unit/fixtures/realize-books';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
 import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
 import { InterestFile } from '../../src/server/interestLedger';
 import { JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
-import { gate, HOST, makeTestApp, mockGateGet, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
+import { gate, HOST, makeTestApp, mockGateGet, orderBody, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 import { accountA, asset, waitFor } from './helpers/rebalance';
 
 const planEdit = vi.hoisted(() => ({ dropConvertSteps: false, convertCost: null as number | null }));
@@ -122,7 +125,27 @@ const HEDGED_POSITIONS = [
   { symbol: 'GATE_FUTURE_ETH_USDT', position_side: 'NONE', position_qty: '0.1', position_value: '250', mark_price: '2500' },
 ];
 
-function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?: number; positions?: unknown[] } = {}): void {
+const PERP_RULE_ROWS = Object.entries(PERP_RULES).map(([symbol, rule]) => ({
+  symbol,
+  exchange_type: symbol.split('_')[0],
+  business_type: 'FUTURE',
+  state: 'live',
+  lot_size: rule.lotSize,
+  min_size: rule.minSize,
+  min_notional: rule.minNotional,
+}));
+
+const FEE_WIRE_ROWS = FEE_ROWS.map((row) => ({
+  exchange_type: row.exchangeType,
+  future_maker_fee: row.futureMakerFee,
+  future_taker_fee: row.futureTakerFee,
+  ...(row.exchangeType === 'GATE' ? { spot_maker_fee: '0', spot_taker_fee: '0' } : {}),
+  special_fee_list: [],
+}));
+
+function mockView(
+  opts: { account?: unknown; disabled?: string; accountDelayMs?: number; positions?: unknown[]; rates?: unknown[] } = {},
+): void {
   const accounts = gate().persist().get(`${API}/crossex/accounts`).query(true);
   if (opts.accountDelayMs) accounts.delay(opts.accountDelayMs);
   accounts.reply(200, opts.account ?? accountA);
@@ -130,7 +153,7 @@ function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?:
     .persist()
     .get(`${API}/crossex/interest_rate`)
     .query(true)
-    .reply(200, [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }]);
+    .reply(200, opts.rates ?? [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }]);
   gate().persist().get(`${API}/crossex/history_margin_interests`).query(true).reply(200, []);
   gate().persist().get(`${API}/crossex/positions`).query(true).reply(200, opts.positions ?? HEDGED_POSITIONS);
   gate()
@@ -142,12 +165,8 @@ function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?:
     .persist()
     .get(`${API}/crossex/rule/symbols`)
     .query(true)
-    .reply(200, [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }]);
-  gate()
-    .persist()
-    .get(`${API}/crossex/fee`)
-    .query(true)
-    .reply(200, [{ exchange_type: 'GATE', spot_maker_fee: '0', spot_taker_fee: '0', special_fee_list: [] }]);
+    .reply(200, [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }, ...PERP_RULE_ROWS]);
+  gate().persist().get(`${API}/crossex/fee`).query(true).reply(200, FEE_WIRE_ROWS);
   gate()
     .persist()
     .get(`${API}/spot/tickers`)
@@ -746,5 +765,267 @@ describe('GET /api/rebalance prices a $6,000,000 Spot loop from the order book',
     } finally {
       clock.mockRestore();
     }
+  });
+});
+
+describe('POST /api/rebalance with a close and reopen', () => {
+  const HL_ETH = 'HYPERLIQUID_FUTURE_ETH_USDC';
+  const owner = ownerBook();
+
+  const wireAccount = (account: AccountLike) => ({
+    user_id: '1',
+    available_margin: account.availableMargin,
+    margin_balance: account.marginBalance,
+    initial_margin: account.initialMargin,
+    account_mode: 'CROSS_EXCHANGE',
+    assets: (account.assets ?? []).map((a) =>
+      asset(a.coin ?? '', a.exchangeType ?? '', {
+        balance: a.balance ?? '0',
+        available_balance: a.availableBalance ?? '0',
+        upnl: a.upnl ?? '0',
+        equity: a.equity ?? '0',
+        liability: a.liability ?? '0',
+        borrowing_initial_margin: a.borrowingInitialMargin,
+        borrowing_maintenance_margin: a.borrowingMaintenanceMargin,
+      }),
+    ),
+  });
+
+  const wirePosition = (perp: RealizePerp) => ({
+    symbol: perp.symbol,
+    position_side: 'NONE',
+    position_qty: perp.positionQty,
+    position_value: String(Math.abs(Number(perp.positionQty)) * Number(perp.markPrice)),
+    entry_price: perp.entryPrice,
+    mark_price: perp.markPrice,
+    initial_margin: perp.initialMargin,
+    upnl: String(Number(perp.positionQty) * (Number(perp.markPrice) - Number(perp.entryPrice))),
+  });
+
+  const OWNER_RATES = [
+    { coin: 'USDT', exchange_type: 'CROSSEX', hour_interest_rate: String(0.0596 / 8760), time: String(Date.now()) },
+    { coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: String(0.05 / 8760), time: String(Date.now()) },
+  ];
+
+  const THIN_HL_ETH: NormalizedBook = { bids: [[1811, 1000]], asks: [[1831, 1000]], ts: 0 };
+
+  function mockOwnerBook(book: NormalizedBook = OWNER_HL_ETH, view: { accountDelayMs?: number } = {}): void {
+    mockView({
+      account: wireAccount(owner.account),
+      positions: owner.spec.perps.map(wirePosition),
+      rates: OWNER_RATES,
+      ...view,
+    });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(book.bids), levels(book.asks)] });
+  }
+
+  function refuseQuotes(): void {
+    gate().persist().post(`${API}/crossex/convert/quote`).query(true).reply(400, REFUSAL);
+  }
+
+  const shownOf = (plan: EvenPlan) => {
+    const route = plan.routes[plan.recommended ?? 'convert']!;
+    const legs = plan.realize?.legs ?? [];
+    const fees = legs.reduce((total, leg) => total + leg.closeFeeUsd + leg.reopenFeeUsd + (leg.convert?.feeUsd ?? 0), 0);
+    const impact = legs.reduce((total, leg) => total + leg.closeImpactUsd + leg.reopenImpactUsd, 0);
+    return {
+      route: plan.recommended ?? 'convert',
+      costUsd: route.costUsd + fees + Math.max(0, impact),
+      realizeQty: legs.map((leg) => ({ symbol: leg.symbol, qty: leg.qty })),
+    };
+  };
+
+  it('the view carries the realize plan', async () => {
+    mockOwnerBook();
+    const h = boot();
+
+    const res = await h.get('/api/rebalance?from=HYPERLIQUID&to=CROSSEX&amount=20000');
+
+    expect(res.statusCode).toBe(200);
+    const { plans } = res.json().data;
+    for (const plan of [plans.even, plans.repay, plans.custom] as EvenPlan[]) {
+      expect(plan.realize).toMatchObject({ legs: expect.any(Array), refused: null });
+      expect(plan.realize!.legs[0]).toMatchObject({ symbol: HL_ETH, side: 'SHORT', positionQty: 66 });
+    }
+    expect(typeof plans.custom.customMaxUsd).toBe('number');
+  });
+
+  it('refuses a refused realize', async () => {
+    mockOwnerBook(THIN_HL_ETH);
+    const h = boot();
+    const plan = await h.plan();
+    expect(plan.realize?.refused).toMatchObject({ reason: 'too-thin' });
+
+    const res = await h.post('/api/rebalance', { route: 'convert', costUsd: plan.routes.convert.costUsd, realizeQty: [] });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe('Price impact too high.');
+  });
+
+  it('a refused realize writes no job', async () => {
+    mockOwnerBook(THIN_HL_ETH);
+    const h = boot();
+    const plan = await h.plan();
+
+    const res = await h.post('/api/rebalance', { route: 'convert', costUsd: plan.routes.convert.costUsd, realizeQty: [] });
+
+    expect(res.statusCode).toBe(409);
+    expect(() => h.file()).toThrow();
+  });
+
+  it('realize cost counts in plan changed', async () => {
+    mockOwnerBook();
+    const h = boot();
+    const plan = await h.plan();
+    const shown = shownOf(plan);
+    const routeOnly = plan.routes[shown.route]!.costUsd;
+    expect(shown.costUsd - routeOnly).toBeGreaterThan(Math.max(1, routeOnly / 20));
+
+    const res = await h.post('/api/rebalance', { ...shown, costUsd: routeOnly });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+    expect(() => h.file()).toThrow();
+  });
+
+  it('refuses a realize the trader was not shown', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const shown = shownOf(await h.plan());
+    const [leg] = shown.realizeQty;
+    const lot = Number(PERP_RULES[HL_ETH].lotSize);
+
+    for (const realizeQty of [
+      [],
+      [{ symbol: leg.symbol, qty: leg.qty + 2 * lot }],
+      [{ symbol: leg.symbol, qty: leg.qty - 2 * lot }],
+      [leg, { symbol: 'GATE_FUTURE_ETH_USDT', qty: 1 }],
+    ]) {
+      const res = await h.post('/api/rebalance', { ...shown, realizeQty });
+
+      expect(res.statusCode, JSON.stringify(realizeQty)).toBe(409);
+      expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+      expect(() => h.file()).toThrow();
+    }
+
+    const oneLot = await h.post('/api/rebalance', { ...shown, realizeQty: [{ symbol: leg.symbol, qty: leg.qty + lot }] });
+    expect(oneLot.statusCode).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('writes close, convert, reopen before the route', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const plan = await h.plan();
+    const shown = shownOf(plan);
+    const route = plan.routes[shown.route]!;
+
+    const res = await h.post('/api/rebalance', shown);
+
+    expect(res.statusCode).toBe(202);
+    const file = h.file();
+    const names = file.steps.map((step) => step.name);
+    const reopenAt = names.indexOf('Reopen');
+    expect(names[0]).toBe('Close');
+    expect(reopenAt).toBeGreaterThan(1);
+    expect(names.slice(1, reopenAt).every((name) => name === 'Convert')).toBe(true);
+    const routeNames = newJob({ route: shown.route, steps: route.steps, amount: 0, costUsd: 0, target: [], userId: null }, t).steps.map(
+      (step) => step.name,
+    );
+    expect(names.slice(reopenAt + 1)).toEqual(routeNames);
+    expect(file.realize?.legs).toEqual([expect.objectContaining({ symbol: HL_ETH, qty: plan.realize!.legs[0].qty, filledQty: 0 })]);
+    expect(file.costUsd).toBeCloseTo(shown.costUsd, 6);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    expect(h.file().steps[0]).toMatchObject({ name: 'Close', status: 'running', venueId: null });
+  });
+
+  it('job stores the realize cost apart', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const plan = await h.plan();
+    const shown = shownOf(plan);
+    const routeCost = plan.routes[shown.route]!.costUsd;
+
+    const res = await h.post('/api/rebalance', shown);
+
+    expect(res.statusCode).toBe(202);
+    const file = h.file();
+    expect(file.realize!.costUsd).toBeGreaterThan(0);
+    expect(file.realize!.costUsd).toBeCloseTo(shown.costUsd - routeCost, 6);
+    expect(file.costUsd! - file.realize!.costUsd).toBeCloseTo(routeCost, 6);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a second post while the realize runs is refused', async () => {
+    mockOwnerBook(OWNER_HL_ETH, { accountDelayMs: 50 });
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const shown = shownOf(await h.plan());
+
+    const [first, second] = await Promise.all([h.post('/api/rebalance', shown), h.post('/api/rebalance', shown)]);
+
+    expect([first.statusCode, second.statusCode].sort()).toEqual([202, 409]);
+    const refused = first.statusCode === 409 ? first : second;
+    expect(refused.json().error.message).toMatch(new RegExp(`^rebalance ${h.file().id} is (running|halted)$`));
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('boot resumes a closed leg\'s reopen', async () => {
+    const leg: RealizeLeg = {
+      pool: 'HYPERLIQUID',
+      symbol: HL_ETH,
+      exchange: 'HYPERLIQUID',
+      base: 'ETH',
+      side: 'SHORT',
+      positionQty: 66,
+      qty: 53.8,
+      realizedUsd: 34_386,
+      convert: null,
+      closeFeeUsd: 41.15,
+      reopenFeeUsd: 41.15,
+      closeImpactUsd: 9.44,
+      reopenImpactUsd: 9.44,
+      impactBp: 1.9,
+    };
+    const job = newJob(
+      { route: 'convert', steps: [], amount: 0, costUsd: 101.18, target: [], userId: '1', realize: { legs: [leg], refused: null } },
+      t,
+    );
+    Object.assign(job.steps[0], { status: 'done', qty: 53.8, text: `t-rb${job.id}1`, venueId: 'c1', doneAt: t });
+    job.realize!.legs[0].filledQty = 53.8;
+    Object.assign(job, { stepIndex: 1, tagCount: 1 });
+    mockView();
+    const sent: Record<string, unknown>[] = [];
+    gate()
+      .post(`${API}/crossex/orders`)
+      .query(true)
+      .reply(200, (_uri, body) => {
+        sent.push(body as Record<string, unknown>);
+        return { order_id: 'r1' };
+      });
+    mockGateGet('/orders/r1', {
+      body: orderBody({ order_id: 'r1', symbol: HL_ETH, side: 'SELL', type: 'MARKET', state: 'FILLED', executed_qty: '53.8' }),
+    });
+    const h = boot({ job });
+
+    await h.ready();
+
+    await waitFor(() => h.file().status !== 'running', 'the reopen');
+    expect(h.file()).toMatchObject({ status: 'done', haltReason: null });
+    expect(h.file().steps[1]).toMatchObject({ name: 'Reopen', status: 'done', qty: 53.8 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ symbol: HL_ETH, side: 'SELL', type: 'MARKET', qty: '53.8', text: `t-rb${job.id}2` });
+    expect(sent[0].reduce_only).toBeUndefined();
   });
 });
