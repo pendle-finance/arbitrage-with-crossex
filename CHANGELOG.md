@@ -3,6 +3,32 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.8.0 — 2026-11-19
+
+TLDR: Rebalance can turn a perp's open profit into cash. A perp pair can close with Limit + hedge
+for lower fees. The roll-over signal compares against what holding still earns.
+
+- **Rebalance realizes profit.** When the paying wallet is short of cash, step 1 closes part of
+  the profitable perp, converts the cash and reopens the same size at once. Step 2 moves the rest.
+  A realize the plan refuses (price impact over 25 bp, no margin to reopen, past the book, over
+  the market-order cap) says why in one line, and the plain move still runs. The reopen retries
+  until it is whole and stops only for a reason it names. Resume checks both legs before it
+  reopens.
+- **Close a perp pair with Limit + hedge.** The Close perps dialog has a `Perp exit` toggle. One
+  leg rests a reduce-only post-only order that follows the book; each fill closes on the other
+  leg at once with a market order. On Gate CrossEx that is 2 bp + 5 bp instead of 5 bp + 5 bp.
+  Limit + hedge is now the default on the open ticket and the close dialog.
+- **Roll-over compares against what holding still earns.** The banner, the card and the Telegram
+  roll alert used to charge the fees already paid to open the pair against "now". A lower later
+  rate could then read as better. They now compare against the locked rate less the settlement
+  fee.
+- **Telegram alerts set up only for the logged-in wallet.** When the browser shows a wallet other
+  than the one logged in, the Telegram row asks you to log in first. Before, the terminal linked
+  the logged-in wallet while the bot page signed in with the browser's.
+- **Aster perps.** Gate CrossEx now lists Aster BTC, ETH and HYPE perps. Fill estimates read
+  Aster's own order book. Aster margin and fees use the shared USDT · CrossEx wallet, so
+  Rebalance and Transfer need no change.
+
 ## 1.7.9 — 2026-11-10
 
 TLDR: The terminal suggests a Boros liquidation buffer and says how much margin to add. A Boros
