@@ -196,14 +196,21 @@ function RouteBody({ job, now, state }: { job: RebalanceJob; now: number; state:
   const started = job.steps.slice(lastRealizeIndex(job) + 1).find((step) => step.startedAt !== null)?.startedAt ?? now;
   const elapsed = Math.max(0, now - started) / 1000;
   const left = Math.max(0, total - elapsed);
+  const loop = { round: num(round ?? 0, 0), rounds: num(rounds, 0) };
   const line =
-    job.route === 'loop' && round !== null
-      ? rk('spotLoopRound', { round: num(round, 0), rounds: num(rounds, 0), minutes: num(Math.ceil(left / 60), 0) })
-      : ROUTE_LABEL[job.route];
+    job.route !== 'loop' || round === null
+      ? ROUTE_LABEL[job.route]
+      : left > 0
+        ? rk('spotLoopRound', { ...loop, minutes: num(Math.ceil(left / 60), 0) })
+        : rk('spotLoopLong', { ...loop, minutes: num(Math.ceil(total / 60), 0) });
   return (
     <div className="mt-1.5 flex flex-col gap-1.5 text-xs text-ink-300">
       <span className="num">{line}</span>
-      {job.inTransit && <span className="num">{rk('spotLoopWay', { amount: num(job.inTransit.qty, 0), coin: job.inTransit.coin })}</span>}
+      {job.inTransit && (
+        <span className="num">
+          {rk(job.inTransit.at === 'MOVING' ? 'spotLoopWay' : 'spotLoopSpot', { amount: num(job.inTransit.qty, 0), coin: job.inTransit.coin })}
+        </span>
+      )}
       <ProgressBar ratio={total > 0 ? elapsed / total : 0} tone="running" />
     </div>
   );

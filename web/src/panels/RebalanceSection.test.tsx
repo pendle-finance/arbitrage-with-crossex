@@ -519,6 +519,12 @@ describe('RebalanceSection run states', () => {
     expect(verdictLine()).toBe('Rebalance running, about 1 hour left.');
   });
 
+  it('a run past its usual time says longer than usual, never about 0s left', async () => {
+    const running = rebalanceViews.accountARunning;
+    await show({ ...running, job: { ...running.job, createdAt: REBALANCE_NOW - 3 * 3_600_000 } });
+    expect(verdictLine()).toBe('Rebalance running, longer than usual.');
+  });
+
   it('halted chip and button', async () => {
     await show(rebalanceViews.accountAHalted);
     expect(within(region()).getByText('Stopped')).toBeInTheDocument();
@@ -710,9 +716,11 @@ describe('RebalanceSection presets', () => {
   });
 
   it('a running repay says so on the card', async () => {
+    vi.setSystemTime(REBALANCE_NOW);
     const running = rebalanceViews.accountARunning;
     await show({ ...running, job: { ...running.job, goal: 'repay' } });
     expect(within(region()).getByText(/^Clear debt running, about .+ left\.$/)).toBeInTheDocument();
+    vi.useRealTimers();
   });
 });
 

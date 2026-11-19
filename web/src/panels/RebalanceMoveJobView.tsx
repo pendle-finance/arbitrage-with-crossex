@@ -69,7 +69,7 @@ export function MoveJobView(props: JobViewProps) {
             {
               key: 'time',
               label: total > 0 ? t('accounts.rebalanceModal.timeLeft') : t('accounts.rebalanceModal.time'),
-              value: total > 0 ? fmtAbout(left) : fmtAge(elapsed),
+              value: total <= 0 ? fmtAge(elapsed) : left > 0 ? fmtAbout(left) : t('accounts.rebalanceModal.longerThanUsual'),
               sub: total > 0 ? [t('accounts.rebalanceModal.passed', { age: fmtAge(elapsed) })] : [],
             },
           ]}

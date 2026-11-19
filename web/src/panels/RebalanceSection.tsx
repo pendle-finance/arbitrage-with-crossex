@@ -41,7 +41,8 @@ function jobVerdict(job: RebalanceJob, now: number): string {
   }
   const total = jobSeconds(job);
   const left = Math.max(0, total - Math.max(0, now - job.createdAt) / 1000);
-  return total > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.running', { what });
+  if (total <= 0) return t('accounts.rebalanceSection.running', { what });
+  return left > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.runningLong', { what });
 }
 
 function notWorthDays(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): string | null {

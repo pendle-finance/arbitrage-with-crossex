@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAccount, usePositions, useRebalance, useTransfer } from '../api/queries';
 import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
 import type { RebalanceJob, RouteName } from '../api/types';
-import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased } from '../test/fixtures';
+import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased, whaleRebalanceViews } from '../test/fixtures';
 import { REALIZE_DONE_BEFORE_JOB, REALIZE_ROUTE_JOB } from '../test/fixtures';
 import { transferHandler, transferViews } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -432,6 +432,12 @@ describe('RebalanceModal run states', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('a move past its usual time reads Longer than usual, never about 0s', async () => {
+    const running = rebalanceViews.accountARunning;
+    show({ ...running, job: { ...running.job, createdAt: REBALANCE_NOW - 3 * 3_600_000 } });
+    expect(facts()['Time left']).toBe('Longer than usual');
   });
 
   it('shows the running state: route, round, time left, progress, wallets and the money on the way', async () => {
@@ -1647,6 +1653,17 @@ describe('RebalanceModal close and reopen, before the hold', () => {
     expect(screen.queryByText('Total cost')).toBeNull();
   });
 
+  it('above the most on a $6,000,000 book names the whole 10,500,000 cap', async () => {
+    const user = userEvent.setup();
+    const custom = whaleRebalanceViews.realizeWhale.plans.custom!;
+    customPlans({ 12000000: { ...custom, goal: { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 12000000 } } });
+    show(whaleRebalanceViews.realizeWhale);
+    await user.click(screen.getByRole('button', { name: 'Custom amount' }));
+    await typeCustom(user, '12000000');
+    expect(await screen.findByText('Up to 10,500,000 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to move' })).toBeDisabled();
+  });
+
   it('the hold posts realizeQty and the total cost', async () => {
     const sent = starts();
     show(rebalanceViews.ownerBook, { holdMs: 50 });
@@ -1679,6 +1696,25 @@ describe('RebalanceModal close and reopen, the run', () => {
   it('running step 2 reads Moving the other', () => {
     show(rebalanceViews.realizeRoute);
     expect(screen.getByText('Moving the other 27,228 USDC')).toBeInTheDocument();
+  });
+
+  it('a route inside its usual time counts the minutes left and names cash already in Gate spot', () => {
+    serve({});
+    const view = rebalanceViews.realizeRoute;
+    const job = { ...view.job, inTransit: { coin: 'USDC' as const, qty: 4538, at: 'SPOT' as const } };
+    renderWithClient(<RebalanceJobView job={job} view={view} now={REBALANCE_NOW} onResume={vi.fn()} onAbandon={vi.fn()} />);
+    expect(screen.getByText('Spot loop, round 1 of 6 · about 40 min left')).toBeInTheDocument();
+    expect(screen.getByText('4,538 USDC in Gate spot')).toBeInTheDocument();
+  });
+
+  it('a route past its usual time says so, never 0 min left, and a transfer still moving is on the way', () => {
+    serve({});
+    const view = rebalanceViews.realizeRoute;
+    const job = { ...view.job, inTransit: { coin: 'USDC' as const, qty: 4538, at: 'MOVING' as const } };
+    renderWithClient(<RebalanceJobView job={job} view={view} now={REBALANCE_NOW + 3_600_000} onResume={vi.fn()} onAbandon={vi.fn()} />);
+    expect(screen.getByText('Spot loop, round 1 of 6 · longer than the usual 40 min')).toBeInTheDocument();
+    expect(screen.getByText('4,538 USDC on the way through Gate spot')).toBeInTheDocument();
+    expect(screen.queryByText(/min left|in Gate spot$/)).toBeNull();
   });
 
   it('reopen retrying counts the seconds from nextTryAt', () => {
