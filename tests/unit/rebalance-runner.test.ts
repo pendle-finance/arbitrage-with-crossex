@@ -6266,6 +6266,32 @@ describe('close, convert and reopen', () => {
     expect(h.jobs.read()?.steps[1].qty).toBe(53.8);
   });
 
+  it('a failed rules read after a reopen part fill counts the fill once and sends the rest', async () => {
+    const clock = fakeClock();
+    const id = clock.now().toString(36);
+    const h = harness(
+      clock,
+      realizeOnly(noConvert),
+      realizeRun({
+        listCrossexRuleSymbols: seq(gateError(503, 'SERVICE_UNAVAILABLE', 'Service unavailable'), perpRules()),
+        getCrossexOrder: ordersBy({ o7: order('CANCELLED', '30', 'o7'), o8: order('FILLED', '23.8', 'o8') }),
+        createCrossexOrder: seq(created('o8')),
+        listCrossexPositions: seq({ body: [{ symbol: HL_ETH, positionQty: '-42.2', initialMargin: '2440' }] }),
+      }),
+      (job) => {
+        doneStep(job, 0, { venueId: 'o1', qty: 53.8, at: clock.now() });
+        job.realize!.legs[0].filledQty = 53.8;
+        job.stepIndex = 1;
+        job.tagCount = 2;
+        Object.assign(job.steps[1], { text: tagFor(id, 2), venueId: 'o7', sentAt: clock.now(), status: 'running', startedAt: clock.now() });
+      },
+    );
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({ status: 'done' });
+    expect(h.jobs.read()?.steps[1].qty).toBe(53.8);
+    expect(perpSent(h).map((sent) => sent.qty)).toEqual(['23.8']);
+  });
+
   it('runs the route after the reopen', async () => {
     const h = harness(
       fakeClock(),
