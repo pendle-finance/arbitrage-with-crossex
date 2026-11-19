@@ -64,7 +64,7 @@ const LABEL_RULES: Array<{ match: RegExp; category: ErrorCategory; plain: string
   { match: /LEVERAGE|RISK_LIMIT/, category: 'leverage', plain: "Gate refused the leverage or position limit. Lower the size, then try again." },
   // Gate's one-step close (POST /crossex/position) takes dust only; the terminal closes with reduce-only orders.
   { match: /CAN_NOT_DELETE_LARGE_POSITION/, category: 'venue-rejected', plain: "Gate's one-step close takes only tiny positions. Use the Close button instead." },
-  { match: /MIN_NOTIONAL|SIZE_TOO_SMALL|MIN_SIZE|TOO_SMALL/, category: 'size-too-small', plain: "The order is below Gate's minimum size or value. Increase the size." },
+  { match: /MIN_NOTIONAL|SIZE_TOO_SMALL|MIN_SIZE|TOO_SMALL|ORDER_QUANTITY_MIN|ORDER_AMOUNT_MIN/, category: 'size-too-small', plain: "The order is below Gate's minimum size or value. Increase the size." },
   { match: /MAX_MARKET_SIZE|MAX_LIMIT_SIZE|SIZE_TOO_LARGE|TOO_LARGE/, category: 'size-too-large', plain: "The order is above Gate's largest order size. Lower the size." },
   { match: /SIGNIFICANT_FIGURES|PRICE/, category: 'price-limit', plain: 'The price is outside what Gate accepts. Refresh the price and try again.' },
   // Anchor INSUFFICIENT to a funds word so INSUFFICIENT_PERMISSION (handled above) can't reach here.
