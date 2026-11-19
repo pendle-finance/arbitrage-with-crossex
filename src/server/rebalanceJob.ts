@@ -36,6 +36,7 @@ export interface RealizeJobLeg {
   qty: number;
   filledQty: number;
   realizedUsd: number;
+  closePrice?: number;
   hedge?: string | null;
   closeFeeUsd?: number;
   reopenFeeUsd?: number;

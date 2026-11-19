@@ -2,9 +2,10 @@ import { cleanup, screen, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import type { RealizeJobLeg, RebalanceJob, RebalanceStep } from '../api/types';
-import { accountBodies, accountHandler, REBALANCE_NOW, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
+import { accountBodies, accountHandler, auditRebalanceViews, REBALANCE_NOW, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
+import { openGapOf } from './rebalanceCardGap';
 import { convertsOf, lastRealizeIndex } from './rebalanceJobSteps';
 import { RebalanceJobView } from './RebalanceJobView';
 
@@ -74,6 +75,14 @@ describe('RebalanceJobView', () => {
     render(job);
     expect(screen.getByText('Fee $68.58')).toBeInTheDocument();
     expect(screen.getByText('+ $10.53 price impact')).toBeInTheDocument();
+  });
+
+  it('a done reopen short by a dust rest shows the rest on the receipt', async () => {
+    const job = auditRebalanceViews.realizeDoneShortReopen.job!;
+    render(job);
+    const line = await screen.findByText('Hyperliquid short 0.01 ETH smaller');
+    expect(line.className).toContain('text-gold');
+    expect(openGapOf(job)).toBeNull();
   });
 
   it('receipt fees come from the job, and an old job file shows none', () => {

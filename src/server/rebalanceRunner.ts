@@ -33,7 +33,7 @@ import {
   type SpotDepth,
   type TransferCoin,
 } from '../core/rebalance/plan';
-import { marginPerConvertUsdc, positiveOf } from '../core/rebalance/realize';
+import { marginPerConvertUsdc, minQtyOf, positiveOf, type PerpRule } from '../core/rebalance/realize';
 import { decodeStatus } from '../engine/loop';
 import { TTL, type TtlCache } from './cache';
 import {
@@ -581,7 +581,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const prepareConvert = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
     const gateCash = account.cash(GATE_WALLET);
-    if (step.name === 'Convert' && gateCash >= DUST_USDC && !reopenOf(job.stepIndex)) {
+    if (step.name === 'Convert' && step.phase !== 'realize' && gateCash >= DUST_USDC && !reopenOf(job.stepIndex)) {
       const { bid } = await spotTicker();
       if (gateCash * bid >= SPOT_MIN_QUOTE_USDT) {
         const planned = floorCents(gateCash);
@@ -702,11 +702,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       }
       const sell = spec.kind === 'order' && spec.side === CrossexOrderRequest.Side.SELL;
       if (filled > 0) {
-        if (spec.kind === 'convert') await trimAfterRetry(Number(body.executedQty) || (step.planned ?? 0));
+        if (spec.kind === 'convert') await trimAfterRetry(step, Number(body.executedQty) || (step.planned ?? 0));
         const stuck = sell && (await sellRest(step, Number(body.executedQty)));
         finish(step, filled, spec.kind === 'convert' ? convertSpec(step).dest : spec.dest);
         if (stuck) halt(HALT_TEXT.sellStuck);
-      } else if (sell && sellChain(step).length > 1) haltDead(step, HALT_TEXT.sellStuck);
+      } else if (spec.kind === 'convert' && retryPastReopen(step)) finish(step, 0, job.fundsAt);
+      else if (sell && sellChain(step).length > 1) haltDead(step, HALT_TEXT.sellStuck);
       else haltDead(step, HALT_TEXT.nothingFilled);
       return;
     }
@@ -820,7 +821,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     });
     if (!body.orderId) throw new Error('convert order response has no orderId');
     step.venueId = String(body.orderId);
-    await trimAfterRetry(amount);
+    await trimAfterRetry(step, amount);
     finish(step, toAmount, spec.dest);
   };
 
@@ -850,11 +851,11 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
   };
 
-  const perpRule = async (symbol: string): Promise<{ lot: string; minSize: number }> => {
+  const perpRule = async (symbol: string): Promise<{ lot: string; limits: PerpRule }> => {
     const rules = await staticRead('rules:all', async () => (await crossEx().listCrossexRuleSymbols()).body);
     const rule = rules?.find((candidate) => candidate.symbol === symbol);
     if (!rule || !(positiveOf(rule.lotSize) > 0)) throw new Error(`Gate has no order rules for ${symbol}`);
-    return { lot: rule.lotSize, minSize: positiveOf(rule.minSize) };
+    return { lot: rule.lotSize, limits: rule };
   };
 
   const isCloseOnly = async (symbol: string): Promise<boolean> => {
@@ -961,9 +962,11 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     renumberRounds();
   };
 
-  const trimAfterRetry = async (given: number): Promise<void> => {
-    if (reopenOf(job.stepIndex)?.retry) await trimRoute(nearestCents(given));
+  const trimAfterRetry = async (step: Step, given: number): Promise<void> => {
+    if (step.retry) await trimRoute(nearestCents(given));
   };
+
+  const retryPastReopen = (step: Step): boolean => Boolean(step.retry) && !reopenOf(job.stepIndex);
 
   const pollClose = async (step: Step, leg: RealizeJobLeg, venueId: string): Promise<void> => {
     const { body } = await crossEx().getCrossexOrder(venueId);
@@ -974,6 +977,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const arrived = Math.max(0, account.cash(poolWallet(step.from)) - (step.cashBefore ?? 0));
     leg.filledQty = filled;
     leg.realizedUsd = nearestCents(arrived);
+    if (positiveOf(body.executedAvgPrice) > 0) leg.closePrice = positiveOf(body.executedAvgPrice);
     if (filled < leg.qty) await trimRoute(nearestCents((arrived * (leg.qty - filled)) / filled));
     finish(step, filled, step.from);
   };
@@ -1040,10 +1044,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const restOf = async (step: Step, leg: RealizeJobLeg): Promise<{ lots: number; qty: string; under: boolean }> => {
-    const { lot, minSize } = await perpRule(leg.symbol);
+    const { lot, limits } = await perpRule(leg.symbol);
     const lots = Math.max(0, lotsOf(leg.filledQty, lot) - lotsOf(step.qty ?? 0, lot));
     const qty = stripZeros(roundToStep(lots * Number(lot), lot, 'nearest'));
-    return { lots, qty, under: lots > 0 && Number(qty) < minSize };
+    const mark = leg.closePrice ?? 0;
+    const minimum = mark > 0 ? minQtyOf(limits, lot, mark) : positiveOf(limits.minSize);
+    return { lots, qty, under: lots > 0 && Number(qty) < minimum };
   };
 
   const leftLots = (held: RealizeJobLeg, lot: string): number => {
@@ -1094,7 +1100,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const whole = ceilCents((need / marginPerConvertUsdc) * RETRY_CONVERT_HEADROOM);
     const convertAmount = Math.min(cash, Math.max(HYPERLIQUID_MIN_USDC, whole));
     step.retry = { reason: 'margin', convertAmount };
-    job.steps.splice(job.steps.indexOf(step), 0, ...asRealize(convertSteps(leg.pool, CONVERT_TO[leg.pool], convertAmount)));
+    const converts = asRealize(convertSteps(leg.pool, CONVERT_TO[leg.pool], convertAmount)).map((convert) => ({ ...convert, retry: step.retry }));
+    job.steps.splice(job.steps.indexOf(step), 0, ...converts);
     deps.jobs.write(job);
   };
 
@@ -1210,6 +1217,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           if (found !== null) {
             step.venueId = found;
             deps.jobs.write(job);
+            continue;
+          }
+          if (retryPastReopen(step)) {
+            finish(step, 0, job.fundsAt);
             continue;
           }
           if (step.sentAt !== undefined) {

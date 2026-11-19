@@ -12,7 +12,7 @@ import { markPriceOf, ProgressBar, StepList, type StepRow, type StepState } from
 import { CONVERT_TO, modalFeeLabel, PLATFORM, poolCoin, sideText, sizeText } from './rebalanceCopy';
 import { barRowsOf, roundCountOf, roundOf, ROUTE_LABEL, shownKeys, SpotLines, targetsOf } from './RebalanceHovers';
 import { abandonNote, Actions, CloseButton, gapBoxLines, haltLine, StopBox, stopTitle, type JobViewProps } from './RebalanceJobBits';
-import { convertsOf, gapsOf, hasRest, isCloseSent, isShortDone, jobActionLegs, jobCostParts, lastRealizeIndex, legStep, legSteps } from './rebalanceJobSteps';
+import { convertsOf, dustRestsOf, gapsOf, hasRest, isCloseSent, isShortDone, jobActionLegs, jobCostParts, lastRealizeIndex, legStep, legSteps } from './rebalanceJobSteps';
 import { otherLegText, perpsOf, routeMoveOf, stateOf, type Gap } from './rebalanceJobSteps';
 import { MoveJobView } from './RebalanceMoveJobView';
 import { ImpactLabel, MovePath, moveTitle, realizePools, realizeText, routePools, STEPS_HEAD, walletOf } from './RebalancePlanBits';
@@ -40,6 +40,7 @@ function RealizeJobView(props: JobViewProps) {
   const gaps = gapsOf(job);
   const running = job.status === 'running';
   const done = job.status === 'done';
+  const rests = done ? dustRestsOf(job) : [];
   const preClose = (pressed?.plan ?? view.plans[job.goal] ?? null)?.realize?.legs ?? [];
   const realizedOf = (leg: RealizeJobLeg): number =>
     leg.filledQty > 0 ? leg.realizedUsd : (preClose.find((p) => p.symbol === leg.symbol)?.realizedUsd ?? 0);
@@ -94,11 +95,12 @@ function RealizeJobView(props: JobViewProps) {
         reason,
       );
     } else {
-      if (gap) {
-        const usd = usdOf(gap);
+      const open = gap ?? rests.find((rest) => poolLegs.includes(rest.leg));
+      if (open) {
+        const usd = usdOf(open);
         body.push(
           <p key="gap" className="num text-xs text-gold">
-            {usd === null ? rk('gapLineNoUsd', gapWords(gap)) : rk('gapLine', { ...gapWords(gap), usd })}
+            {usd === null ? rk('gapLineNoUsd', gapWords(open)) : rk('gapLine', { ...gapWords(open), usd })}
           </p>,
         );
       }

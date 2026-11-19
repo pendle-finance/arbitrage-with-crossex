@@ -107,14 +107,17 @@ export interface Gap {
   qty: number;
 }
 
-export function gapsOf(job: RebalanceJob): Gap[] {
-  return (job.realize?.legs ?? []).flatMap((leg) => {
+const gapsWhere = (job: RebalanceJob, keep: (reopen: RebalanceStep) => boolean): Gap[] =>
+  (job.realize?.legs ?? []).flatMap((leg) => {
     const reopen = legStep(job, leg, 'Reopen');
-    if (!reopen || reopen.status === 'done') return [];
+    if (!reopen || !keep(reopen)) return [];
     const qty = restOf(job, leg);
     return qty > 0 ? [{ leg, qty }] : [];
   });
-}
+
+export const gapsOf = (job: RebalanceJob): Gap[] => gapsWhere(job, (reopen) => reopen.status !== 'done');
+
+export const dustRestsOf = (job: RebalanceJob): Gap[] => gapsWhere(job, (reopen) => reopen.status === 'done');
 
 function legSizes(job: RebalanceJob, leg: RealizeJobLeg): { closeQty: number; reopenQty: number } {
   const reopen = legStep(job, leg, 'Reopen');

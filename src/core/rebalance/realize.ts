@@ -153,7 +153,7 @@ export const realizeCostUsd = (legs: RealizeLeg[]): number => {
   return fees + Math.max(0, impact);
 };
 
-function minQtyOf(rule: PerpRule, lot: string, mark: number): number {
+export function minQtyOf(rule: PerpRule, lot: string, mark: number): number {
   const notional = Math.max(MIN_ORDER_USD, positiveOf(rule.minNotional)) / mark;
   return Number(roundToStep(Math.max(positiveOf(rule.minSize), notional), lot, 'up'));
 }
