@@ -9,6 +9,7 @@
  *  - two open-markets          → taker pair (A clips, B hedges)
  *  - one open-market / -limit  → single-leg deal (taker / resting maker)
  *  - close-position(s)         → reduce-only taker deal(s), banded clips
+ *  - close pair with roles     → reduce-only maker deal (A rests, B hedges)
  * Returns null for shapes the engine does not model (confirm stays disabled).
  */
 import type { ActionInput, DealRequest, PreviewResult } from '../api/types';
@@ -37,6 +38,32 @@ export function dealFromActions(
 ): DealRequest | null {
   const legs = zip(actions, previews);
   if (!legs || legs.length === 0 || legs.length > 2) return null;
+
+  // --- maker+hedge close: both legs reduce-only, one rests at the touch ---
+  // Checked before the open branch below, which also keys on pairRole.
+  const closeMaker = legs.find((l) => l.action.kind === 'close-position' && l.action.pairRole === 'maker');
+  if (closeMaker) {
+    const hedge = legs.find((l) => l !== closeMaker);
+    const m = closeMaker.action;
+    if (!hedge || legs.length !== 2 || m.kind !== 'close-position') return null;
+    if (hedge.action.kind !== 'close-position' || hedge.action.pairRole !== 'hedge') return null;
+    if (!closeMaker.preview.qty || Number(hedge.preview.qty) !== Number(closeMaker.preview.qty)) return null;
+    if (!m.makerPrice || !(Number(m.makerPrice) > 0)) return null;
+    return {
+      id,
+      a: { symbol: closeMaker.preview.symbol, side: closeMaker.preview.side, reduceOnly: true },
+      b: { symbol: hedge.preview.symbol, side: hedge.preview.side, reduceOnly: true },
+      qty: closeMaker.preview.qty,
+      execution: 'maker',
+      price: m.makerPrice,
+      pricePolicy: 'touch',
+      timeoutSec: m.makerTimeoutSec,
+      // The timeout's market clips keep the trader's slippage cap, as the
+      // market close does.
+      clipBandPct: m.slippagePct ?? 0.5,
+      ...(m.maxClip ? { maxClip: m.maxClip } : {}),
+    };
+  }
 
   // --- maker+hedge pair: exactly one leg carries pairRole 'maker' ---
   const maker = legs.find((l) => 'pairRole' in l.action && l.action.pairRole === 'maker');

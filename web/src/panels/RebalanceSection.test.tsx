@@ -4,17 +4,25 @@ import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useRebalance } from '../api/queries';
-import type { PositionsResponse, RebalanceJob, RebalanceView, RoutePlan, TransferView } from '../api/types';
+import type { CrossexPosition, PositionsResponse, RebalanceJob, RebalanceView, RoutePlan, TransferView } from '../api/types';
 import {
+  makeCrossexPosition,
   plansOf,
   accountBodies,
   accountHandler,
+  auditRebalanceViews,
   REBALANCE_NOW,
   rebalanceHandler,
   rebalanceViews,
   rebased,
+  OWNER_BEFORE_PERPS,
+  REALIZE_HALTED_LEG_OPEN_JOB,
+  REALIZE_ROUTE_JOB,
+  REALIZE_RETRYING_JOB,
+  REALIZE_RUNNING_JOB,
   transferHandler,
   transferViews,
+  whaleRebalanceViews,
 } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -301,7 +309,7 @@ describe('RebalanceSection verdict', () => {
     // The regression this guards: a wholly-free borrow used to fall through to
     // isNotWorthIt and print "the fee is more than 30 days of the interest it
     // saves" directly beneath a "$0.00 an hour" reading.
-    expect(line('Not worth it yet. The fee is more than 30 days of the interest it saves.')).toBeNull();
+    expect(line('Not worth it yet.')).toBeNull();
     expect(line('No interest yet. Nothing to move.')).toHaveClass('text-pastel-blue');
     const [button] = cardButtons();
     expect(button.className).not.toContain('btn-primary');
@@ -319,7 +327,7 @@ describe('RebalanceSection verdict', () => {
     ] as const) {
       await show(view);
       expect(sub()).toBe(`The fee equals ${days} of the interest it saves.`);
-      expect(line('Rebalance recommended.')).toHaveClass('text-guava');
+      expect(line('Rebalance recommended.')).toHaveClass('text-grass');
       expect(within(region()).queryByText(/Repays|Stops|No borrow|This borrow is free today|would move|worth/)).toBeNull();
       expect(cardButtons()[0].className).toContain('btn-primary');
       cleanup();
@@ -336,7 +344,7 @@ describe('RebalanceSection verdict', () => {
   ])('%s says it is not worth it yet, and the button is not primary but still opens', async (_, view, name) => {
     const user = userEvent.setup();
     await show(view);
-    expect(line('Not worth it yet. The fee is more than 30 days of the interest it saves.')).toHaveClass('text-gold');
+    expect(line('Not worth it yet.')).toHaveClass('text-gold');
     const [button] = cardButtons();
     if (name !== null) expect(button.textContent).toBe(name);
     expect(button.className).not.toContain('btn-primary');
@@ -509,6 +517,12 @@ describe('RebalanceSection run states', () => {
     const running = rebalanceViews.accountARunning;
     await show({ ...running, job: slowJob(running.job, 9) });
     expect(verdictLine()).toBe('Rebalance running, about 1 hour left.');
+  });
+
+  it('a run past its usual time says longer than usual, never about 0s left', async () => {
+    const running = rebalanceViews.accountARunning;
+    await show({ ...running, job: { ...running.job, createdAt: REBALANCE_NOW - 3 * 3_600_000 } });
+    expect(verdictLine()).toBe('Rebalance running, longer than usual.');
   });
 
   it('halted chip and button', async () => {
@@ -702,8 +716,199 @@ describe('RebalanceSection presets', () => {
   });
 
   it('a running repay says so on the card', async () => {
+    vi.setSystemTime(REBALANCE_NOW);
     const running = rebalanceViews.accountARunning;
     await show({ ...running, job: { ...running.job, goal: 'repay' } });
     expect(within(region()).getByText(/^Clear debt running, about .+ left\.$/)).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+});
+
+const HL_ETH = 'HYPERLIQUID_FUTURE_ETH_USDC';
+
+const GATE_ETH = 'GATE_FUTURE_ETH_USDT';
+
+function servePositions(view: RebalanceView, positions: CrossexPosition[]) {
+  serve(view);
+  server.use(http.get('/api/positions', () => HttpResponse.json(env({ positions, exposure: [] }))));
+}
+
+function serveMark(view: RebalanceView) {
+  servePositions(view, [makeCrossexPosition({ symbol: HL_ETH, markPrice: '1821' })]);
+}
+
+describe('RebalanceSection profit step', () => {
+  beforeEach(() => {
+    vi.setSystemTime(REBALANCE_NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('card verdict counts the realize', async () => {
+    await show(rebalanceViews.ethUp);
+    expect(line('Not worth it yet.')).toHaveClass('text-gold');
+    expect(sub()).toBe('The fee equals 57 days of the interest it saves.');
+    cleanup();
+    const even = rebalanceViews.ethUp.plans.even;
+    await show({ ...rebalanceViews.ethUp, plans: plansOf({ ...even, realize: null }) });
+    expect(line('Not worth it yet.')).toBeNull();
+    expect(line('Rebalance recommended.')).toBeInTheDocument();
+  });
+
+  it('worth-it verdict is green with no warning icon', async () => {
+    await show(rebalanceViews.twoBorrows);
+    const verdict = line('Rebalance recommended.')!;
+    expect(verdict).toHaveClass('text-grass');
+    expect(verdict.className).not.toContain('text-guava');
+    expect(region().querySelector('.lucide-triangle-alert')).toBeNull();
+    expect(region().querySelector('.lucide-check')).not.toBeNull();
+    expect(region().querySelector('.alert-red')).toBeNull();
+  });
+
+  it('card names step 1', async () => {
+    await show({ ...rebalanceViews.realizeRunning });
+    expect(within(region()).getByRole('button', { name: 'Running · step 1 of 2' })).toBeEnabled();
+    expect(REALIZE_RUNNING_JOB.steps[REALIZE_RUNNING_JOB.stepIndex]?.name).toBe('Close');
+    cleanup();
+    await show(rebalanceViews.realizeRoute);
+    expect(within(region()).getByRole('button', { name: 'Running · step 2 of 2' })).toBeEnabled();
+  });
+
+  it('card while a reopen retries', async () => {
+    serveMark(rebalanceViews.realizeRetrying);
+    renderWithClient(<RebalanceSection />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    const gap = await waitFor(() => {
+      const hit = line('Hyperliquid short 53.8 ETH smaller · $97,970 not hedged · reopening.');
+      expect(hit).not.toBeNull();
+      return hit!;
+    });
+    expect(gap).toHaveClass('text-gold');
+    expect(sub()).toBeNull();
+    expect(REALIZE_RETRYING_JOB.steps[REALIZE_RETRYING_JOB.stepIndex]?.retry?.convertAmount).toBe(1500);
+  });
+
+  it('card stop with the leg open', async () => {
+    servePositions(rebalanceViews.realizeHaltedLegOpen, [
+      makeCrossexPosition({ symbol: HL_ETH, positionSide: 'SHORT', positionQty: '12.2', markPrice: '1821' }),
+      makeCrossexPosition({ symbol: GATE_ETH, positionSide: 'LONG', positionQty: '66', markPrice: '1821' }),
+    ]);
+    renderWithClient(<RebalanceSection />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    const box = await waitFor(() => {
+      const hit = line('Hyperliquid short is 53.8 ETH smaller than the Gate long.');
+      expect(hit).not.toBeNull();
+      return hit!;
+    });
+    expect(box).toHaveClass('text-guava');
+    expect(sub()).toBe('$97,970 not hedged.');
+    expect(cardButtons()[0]).toHaveTextContent(/^Rebalance$/);
+    expect(cardButtons()[0]).toBeEnabled();
+    expect(REALIZE_HALTED_LEG_OPEN_JOB.status).toBe('halted');
+  });
+
+  it('abandoned run names the open gap', async () => {
+    const abandoned = auditRebalanceViews.realizeAbandonedLegOpen;
+    const gateLong = (qty: string) => makeCrossexPosition({ symbol: GATE_ETH, positionSide: 'LONG', positionQty: qty, markPrice: '1821' });
+    const hlShort = (qty: string) => makeCrossexPosition({ symbol: HL_ETH, positionSide: 'SHORT', positionQty: qty, markPrice: '1821' });
+    const text = '53.8 ETH short not reopened, $97,970 not hedged';
+    servePositions(abandoned, [hlShort('-12.2'), gateLong('66')]);
+    renderWithClient(<RebalanceSection />);
+    const gap = await within(await screen.findByRole('region', { name: 'Rebalance' })).findByText(text);
+    expect(gap).toHaveClass('text-guava');
+    expect(gap.compareDocumentPosition(cardButtons()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    cleanup();
+    servePositions(abandoned, [hlShort('-66'), gateLong('66')]);
+    renderWithClient(<RebalanceSection />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    await waitFor(() => expect(within(region()).queryByText(/not reopened/)).toBeNull());
+    expect(cardButtons()[0]).toHaveTextContent('Rebalance');
+    cleanup();
+    const before = { ...abandoned, job: { ...abandoned.job!, before: { buckets: abandoned.buckets, perps: OWNER_BEFORE_PERPS } } };
+    servePositions(before, [hlShort('-12.2'), gateLong('12.2')]);
+    renderWithClient(<RebalanceSection />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    await waitFor(() => expect(within(region()).queryByText(/not reopened/)).toBeNull());
+    cleanup();
+    servePositions(before, [hlShort('-12.2'), gateLong('66')]);
+    renderWithClient(<RebalanceSection />);
+    expect(await within(await screen.findByRole('region', { name: 'Rebalance' })).findByText(text)).toBeInTheDocument();
+  });
+
+  it('a new job keeps the abandoned gap line until positions are whole', async () => {
+    const done = rebalanceViews.realizeDone;
+    const gateLong = (qty: string) => makeCrossexPosition({ symbol: GATE_ETH, positionSide: 'LONG', positionQty: qty, markPrice: '1821' });
+    const hlShort = (qty: string) => makeCrossexPosition({ symbol: HL_ETH, positionSide: 'SHORT', positionQty: qty, markPrice: '1821' });
+    const carried: RebalanceView = {
+      ...done,
+      job: {
+        ...done.job!,
+        openGaps: [
+          {
+            leg: { symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', side: 'SHORT', positionQty: 119.8, hedge: 'GATE' },
+            qty: 53.8,
+            hedges: [{ symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', qty: 66 }],
+          },
+        ],
+      },
+    };
+    servePositions(carried, [hlShort('-66'), gateLong('66')]);
+    renderWithClient(<RebalanceSection />);
+    const gap = await within(await screen.findByRole('region', { name: 'Rebalance' })).findByText('53.8 ETH short not reopened, $97,970 not hedged');
+    expect(gap).toHaveClass('text-guava');
+    cleanup();
+    servePositions(carried, [hlShort('-66'), gateLong('12.2')]);
+    renderWithClient(<RebalanceSection />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    await waitFor(() => expect(within(region()).queryByText(/not reopened/)).toBeNull());
+  });
+
+  it('card gap with no positions read says the size', async () => {
+    await show(rebalanceViews.realizeRetrying);
+    expect(line('Hyperliquid short 53.8 ETH smaller · reopening.')).toHaveClass('text-gold');
+  });
+
+  it('part fill shows the gap', async () => {
+    serveMark(rebalanceViews.realizePartFill);
+    renderWithClient(<RebalanceSection />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    await waitFor(() => expect(line('Hyperliquid short 30.0 ETH smaller · $54,630 not hedged · reopening.')).not.toBeNull());
+  });
+
+  it('route convert reads step 2', async () => {
+    const steps = REALIZE_ROUTE_JOB.steps.map((step, index) => (index === REALIZE_ROUTE_JOB.stepIndex ? { ...step, name: 'Convert' } : step));
+    await show({ ...rebalanceViews.realizeRoute, job: { ...REALIZE_ROUTE_JOB, route: 'convert', steps } });
+    expect(within(region()).getByRole('button', { name: 'Running · step 2 of 2' })).toBeEnabled();
+  });
+
+  it('one-step run reads Running', async () => {
+    await show(auditRebalanceViews.realizeOnlyRunning);
+    expect(cardButtons()[0]).toHaveTextContent(/^Running$/);
+  });
+
+  it('stop before the close', async () => {
+    await show(rebalanceViews.realizeHaltedBeforeClose);
+    expect(line('Stopped before the close')).not.toBeNull();
+    expect(within(region()).getByRole('button', { name: 'Stopped · open' })).toBeEnabled();
+  });
+
+  it('stop after a close that was sent reads like the modal', async () => {
+    await show(auditRebalanceViews.realizeHaltedCloseSent);
+    expect(line('Stopped after sending the close')).not.toBeNull();
+    expect(line('Stopped before the close')).toBeNull();
+  });
+
+  it('refused plan names the refusal and still offers Rebalance', async () => {
+    await show(rebalanceViews.refusedMargin);
+    expect(line('Not enough margin to reopen.')).toHaveClass('text-gold');
+    expect(cardButtons()[0]).toHaveTextContent('Rebalance');
+    expect(cardButtons()[0]).toBeEnabled();
+  });
+
+  it('card sizes use one decimal', async () => {
+    await show(whaleRebalanceViews.realizeWhaleRetrying);
+    expect(line('Hyperliquid short 11,000.0 ETH smaller · reopening.')).not.toBeNull();
   });
 });

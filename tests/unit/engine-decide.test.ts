@@ -305,3 +305,97 @@ describe('OPENING pauses acquisition while a failed hedge waits out its backoff'
     });
   });
 });
+
+describe('maker + hedge close (both legs reduce-only)', () => {
+  // Closing a long on A (SELL rests) and a short on B (BUY hedges).
+  const closePair = (over?: Partial<PairRow>): PairRow =>
+    pairRow({
+      a: legSpec(A_CONTRACT, 'SELL', { reduceOnly: true }),
+      b: legSpec(B_CONTRACT, 'BUY', { reduceOnly: true }),
+      pricePolicy: 'touch',
+      limitPrice: '2501',
+      clipBandBp: 50,
+      ...over,
+    });
+  const restingSell = (over?: Partial<OrderRow>): OrderRow =>
+    order({ side: 'SELL', price: '2501', createdAt: 0, ...over });
+
+  it('a venue cancel of the resting close converts the rest at market, with an alert', () => {
+    const p = closePair();
+    const proj = project(p, [restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 0 })]);
+    const a = decide(p, proj, 1_000, ctx);
+    expect(a).toMatchObject({ type: 'setMode', mode: 'CONVERTING', resetClipBudget: true });
+    expect(a.type === 'setMode' && a.alert).toMatch(/cancelled on the venue/);
+  });
+
+  it('an exhausted POC budget converts a close instead of stopping it', () => {
+    const p = closePair({ pocRejects: TUNING.MAX_POC_REJECTS });
+    const a = decide(p, project(p, []), 1_000, ctx);
+    expect(a).toMatchObject({ type: 'setMode', mode: 'CONVERTING', resetClipBudget: true });
+  });
+
+  it('opens keep the old rules: venue cancel stops, POC exhaustion stops', () => {
+    const open = pairRow();
+    const cancelled = project(open, [order({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 0 })]);
+    expect(decide(open, cancelled, 1_000, ctx)).toMatchObject({ type: 'setMode', mode: 'STOPPING' });
+    const spent = pairRow({ pocRejects: TUNING.MAX_POC_REJECTS });
+    expect(decide(spent, project(spent, []), 1_000, ctx)).toMatchObject({ type: 'setMode', mode: 'STOPPING' });
+  });
+
+  it('re-pegs a resting close toward the market once it has rested long enough', () => {
+    const p = closePair();
+    const proj = project(p, [restingSell()]);
+    const lower = { ...ctx, touchA: '2500.5' };
+    // Too soon: keep resting.
+    expect(decide(p, proj, TUNING.CLOSE_REPEG_MS - 1, lower)).toMatchObject({ type: 'idle', reason: 'maker resting' });
+    // Rested long enough and the touch moved toward the market: cancel to re-place.
+    expect(decide(p, proj, TUNING.CLOSE_REPEG_MS, lower)).toMatchObject({ type: 'cancel' });
+    // The touch moved away (a SELL above our price): keep resting.
+    expect(decide(p, proj, TUNING.CLOSE_REPEG_MS, { ...ctx, touchA: '2502' })).toMatchObject({ type: 'idle' });
+  });
+
+  it('never auto re-pegs an open maker', () => {
+    const p = pairRow({ pricePolicy: 'touch' });
+    const proj = project(p, [order({ price: '2500' })]);
+    expect(decide(p, proj, 60_000, { ...ctx, touchA: '2500.5' })).toMatchObject({ type: 'idle' });
+  });
+
+  it('caps each hedge order at maxClip', () => {
+    const p = closePair({ targetQty: '10' });
+    const proj = project(p, [restingSell({ qty: '10', cumQty: '4' })]);
+    expect(decide(p, proj, 1_000, { ...ctx, maxClip: '1.5' })).toMatchObject({
+      type: 'place',
+      leg: 'B',
+      qty: '1.5',
+    });
+  });
+
+  it('a maxClip below the hedge minimum falls back to the full hedge', () => {
+    const p = closePair({ targetQty: '10', b: legSpec(B_CONTRACT, 'BUY', { reduceOnly: true, minSize: '2' }) });
+    const proj = project(p, [restingSell({ qty: '10', cumQty: '4' })]);
+    expect(decide(p, proj, 1_000, { ...ctx, maxClip: '1.5' })).toMatchObject({ type: 'place', leg: 'B', qty: '4' });
+  });
+
+  it('a stopping close gives up on a hedge leg that keeps refusing, and says so', () => {
+    const p = closePair({ mode: 'STOPPING', hedgeRejectStreak: TUNING.STOP_HEDGE_GIVE_UP });
+    const proj = project(p, [restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1, cumQty: '0.152' })]);
+    const a = decide(p, proj, 1_000, ctx);
+    expect(a.type).toBe('finish');
+    if (a.type !== 'finish') return;
+    expect(a.report.unhedged).toBe('0.152');
+    expect(a.report.reason).toMatch(/hedge leg refused/);
+    expect(a.alert).toMatch(/may already be closed/);
+  });
+
+  it('below the give-up limit a stopping close still retries the hedge', () => {
+    const p = closePair({ mode: 'STOPPING', hedgeRejectStreak: TUNING.STOP_HEDGE_GIVE_UP - 1 });
+    const proj = project(p, [restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1, cumQty: '0.152' })]);
+    expect(decide(p, proj, 1_000, ctx)).toMatchObject({ type: 'place', leg: 'B', qty: '0.152' });
+  });
+
+  it('an open deal never gives up on its hedge while stopping', () => {
+    const p = pairRow({ mode: 'STOPPING', hedgeRejectStreak: 50 });
+    const proj = project(p, [order({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1, cumQty: '0.152' })]);
+    expect(decide(p, proj, 1_000, ctx)).toMatchObject({ type: 'place', leg: 'B' });
+  });
+});

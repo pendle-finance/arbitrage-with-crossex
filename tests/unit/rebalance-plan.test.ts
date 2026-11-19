@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
+import { touchOf } from '../../src/core/estimate/books';
+import { walkBook } from '../../src/core/estimate/fill';
 import { roundToStep } from '../../src/core/numbers';
+import { marginPerConvertUsdc, realizedNetUsd } from '../../src/core/rebalance/realize';
+import { ETH_MARK, GATE_ETH, HL_ETH, OWNER_HL_ETH, ownerBook, perp, realizeBook } from './fixtures/realize-books';
 import {
   bookLevels,
   routeScore,
@@ -1677,5 +1681,96 @@ describe('planFor custom', () => {
     const plan = goalPlan({ usdt: 0, hyperliquid: 1060, lighter: 100, positionIm: 0 }, custom('HYPERLIQUID', 'LIGHTER', 480.98), {}, LIVE_TICKER);
     expect(routesOf(plan).length).toBeGreaterThan(1);
     expect(plan.recommended).not.toBeNull();
+  });
+});
+
+describe('planFor with a realize step', () => {
+  const owner = ownerBook();
+  const ownerPlan = (goal: Goal = EVEN_GOAL) => planFor(owner.buckets, owner.account, owner.inputs, goal);
+  const pickedOf = (plan: EvenPlan): RoutePlan => {
+    const route = plan.routes[plan.recommended ?? 'convert'];
+    if (!route) throw new Error('no route');
+    return route;
+  };
+  const stepOneCosts = (plan: EvenPlan): number =>
+    (plan.realize?.legs ?? []).reduce(
+      (total, leg) => total + leg.closeFeeUsd + leg.reopenFeeUsd + leg.closeImpactUsd + leg.reopenImpactUsd,
+      0,
+    );
+
+  it('clear debt lands at zero after the realize fees', () => {
+    const plan = ownerPlan(REPAY_GOAL);
+    expect(plan.realize?.refused).toBeNull();
+    expect(stepOneCosts(plan)).toBeGreaterThan(0);
+    expect(walletIn(pickedOf(plan).after, 'USDT', 'CROSSEX').cash).toBeGreaterThanOrEqual(-1);
+  });
+
+  it('custom max counts the profit', () => {
+    const plan = ownerPlan({ kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 50_000 });
+    const mid = touchOf(OWNER_HL_ETH)?.mid ?? 0;
+    const close = walkBook(OWNER_HL_ETH.asks, 66);
+    const reopen = walkBook(OWNER_HL_ETH.bids, 66);
+    const impact = ((close?.avgPrice ?? 0) - mid) * 66 + (mid - (reopen?.avgPrice ?? 0)) * 66;
+    const fees = 2 * 66 * 1_821 * 0.00042;
+    const convert = Math.ceil(((0.15 * 66 * 1_821 * 0.05 + 20 + 1_284) / marginPerConvertUsdc) * 100) / 100;
+    const expected = 3_140 + 66 * (2_460 - 1_821) - fees - impact - convert * CONVERT_RATE;
+    expect(Math.abs((plan.customMaxUsd ?? 0) - expected)).toBeLessThanOrEqual(1);
+    expect(ownerPlan().customMaxUsd).toBeNull();
+  });
+
+  it('the route moves the rest after step 1\'s convert', () => {
+    const plan = ownerPlan();
+    const converted = (plan.realize?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
+    const move = 45_314 - (45_314 - 29_812) / 2;
+    const rest = move - converted - stepOneCosts(plan) / 2 + (converted * CONVERT_RATE) / 2;
+    expect(converted).toBeGreaterThan(0);
+    expect(Math.abs(plan.moves - (rest + pickedOf(plan).costUsd / 2))).toBeLessThanOrEqual(0.05);
+    const custom = ownerPlan({ kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 20_000 });
+    const customConverted = (custom.realize?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
+    expect(customConverted).toBeGreaterThan(0);
+    expect(custom.moves).toBeCloseTo(Math.floor((20_000 - customConverted) * 100) / 100, 2);
+  });
+
+  it('step 1 alone covers the move', () => {
+    const rules = { ...owner.inputs.perpRules, HYPERLIQUID_FUTURE_ETH_USDC: { lotSize: '0.0001', minSize: '20', minNotional: '10' } };
+    const goal: Goal = { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 5_000 };
+    const plan = planFor(owner.buckets, owner.account, { ...owner.inputs, perpRules: rules }, goal);
+    const converted = (plan.realize?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
+    expect(plan.realize?.refused).toBeNull();
+    expect(converted).toBeGreaterThanOrEqual(5_000);
+    expect(plan.balanced).toBe(false);
+    expect(plan.recommended).not.toBeNull();
+    for (const route of [plan.routes.loop, plan.routes.convert]) {
+      expect(route).toMatchObject({ available: true, costUsd: 0, steps: [] });
+      expect(walletIn(route?.after ?? [], 'USDT', 'CROSSEX').cash).toBeCloseTo(-29_812 + converted * (1 - CONVERT_RATE), 1);
+    }
+  });
+});
+
+describe('planFor realize at $6,000,000', () => {
+  const qty = 3_312.6294;
+  const whale = (availableMargin: number) =>
+    realizeBook({
+      usdt: { cash: -4_500_000, upnl: 0 },
+      usdc: { cash: 4_800_000, upnl: 2_114_451.35 },
+      availableMargin,
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 2_460, ETH_MARK), perp('GATE_FUTURE_ETH_USDT', qty, ETH_MARK, ETH_MARK)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: qty * ETH_MARK,
+    });
+
+  it.each([
+    [910_989.65, 0],
+    [-400_000, 5],
+  ])('a $6,000,000 book with a realize ends even within 4 passes, available margin %d, %d Converts', (available, converts) => {
+    const book = whale(available);
+    const plan = planFor(book.buckets, book.account, book.inputs);
+    const legs = plan.realize?.legs ?? [];
+    expect(plan.realize?.refused).toBeNull();
+    expect(legs.map((leg) => leg.symbol)).toEqual(['HYPERLIQUID_FUTURE_ETH_USDC']);
+    expect(legs[0].convert?.count ?? 0).toBe(converts);
+    expect(legs.reduce((total, leg) => total + realizedNetUsd(leg), 0)).toBeGreaterThanOrEqual(907_225.67);
+    expect(plan.balanced).toBe(false);
+    expect(plan.shortOfEven).toBeLessThan(1);
   });
 });

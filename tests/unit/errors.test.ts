@@ -30,6 +30,8 @@ describe('classifyGateError label anchoring', () => {
     expect(classifyGateError(gate(429, 'TOO_MANY_REQUESTS')).category).toBe('rate-limited');
     expect(classifyGateError(gate(400, 'LEVERAGE_TOO_LARGE')).category).toBe('leverage');
     expect(classifyGateError(gate(400, 'SIZE_TOO_SMALL')).category).toBe('size-too-small');
+    expect(classifyGateError(gate(400, 'TRADE_ORDER_QUANTITY_MIN_ERROR')).category).toBe('size-too-small');
+    expect(classifyGateError(gate(400, 'TRADE_ORDER_AMOUNT_MIN_ERROR')).category).toBe('size-too-small');
     expect(classifyGateError(gate(400, 'MAX_MARKET_SIZE')).category).toBe('size-too-large');
     expect(classifyGateError(gate(400, 'POST_ONLY_REJECT')).category).toBe('post-only-would-cross');
     expect(classifyGateError(gate(400, 'REDUCE_ONLY_VIOLATION')).category).toBe('reduce-only-violation');

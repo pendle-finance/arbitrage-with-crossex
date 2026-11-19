@@ -218,6 +218,43 @@ export interface RoutePlan {
   steps: PlannedStep[];
 }
 
+export type PerpSide = 'LONG' | 'SHORT';
+
+export interface RealizeConvert {
+  amount: number;
+  count: number;
+  feeUsd: number;
+}
+
+export interface RealizeLeg {
+  pool: Pool;
+  symbol: string;
+  exchange: string;
+  base: string;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  realizedUsd: number;
+  convert: RealizeConvert | null;
+  closeFeeUsd: number;
+  reopenFeeUsd: number;
+  closeImpactUsd: number;
+  reopenImpactUsd: number;
+  impactBp: number;
+}
+
+export interface RealizeRefusal {
+  reason: 'no-fee-rate' | 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
+  bp: number | null;
+  maxBp: number;
+  capUsd?: number;
+}
+
+export interface RealizePlan {
+  legs: RealizeLeg[];
+  refused: RealizeRefusal | null;
+}
+
 export interface EvenPlan {
   goal: Goal;
   /** Nothing to do for this goal. */
@@ -233,6 +270,8 @@ export interface EvenPlan {
   targets: WalletTarget[];
   routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
+  realize?: RealizePlan | null;
+  customMaxUsd?: number | null;
 }
 
 export interface RebalanceStep {
@@ -253,6 +292,27 @@ export interface RebalanceStep {
   to: Pool;
   cashBefore?: number;
   sentAt?: number;
+  perp?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; reduceOnly: boolean } | null;
+  nextTryAt?: number | null;
+  retry?: { reason: 'margin'; convertAmount: number } | null;
+  phase?: 'realize' | 'route';
+}
+
+export interface RealizeJobLeg {
+  symbol: string;
+  base: string;
+  exchange: string;
+  pool: Pool;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  filledQty: number;
+  realizedUsd: number;
+  closeFeeUsd?: number;
+  reopenFeeUsd?: number;
+  closeImpactUsd?: number;
+  reopenImpactUsd?: number;
+  convert?: { amount: number; feeUsd: number } | null;
 }
 
 export interface RebalanceJob {
@@ -270,6 +330,28 @@ export interface RebalanceJob {
   createdAt: number;
   updatedAt: number;
   inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
+  realize?: { legs: RealizeJobLeg[]; costUsd?: number } | null;
+  before?: RebalanceBefore | null;
+  routeImpactUsd?: number;
+  openGaps?: RebalanceOpenGap[];
+}
+
+export interface RebalanceOpenGap {
+  leg: Pick<RealizeJobLeg, 'symbol' | 'base' | 'exchange' | 'side' | 'positionQty'> & { hedge?: string | null };
+  qty: number;
+  hedges: PerpSize[];
+}
+
+export interface PerpSize {
+  symbol: string;
+  exchange: string;
+  side: PerpSide;
+  qty: number;
+}
+
+export interface RebalanceBefore {
+  buckets: RebalanceBucket[];
+  perps: PerpSize[];
 }
 
 export interface RebalancePlans {
@@ -807,6 +889,18 @@ export interface ClosePositionAction {
   /** Marketable-limit protection band, percent. Default 0.5, bounded (0, 10]. */
   slippagePct?: number;
   pairGroupId?: string;
+  /**
+   * Maker + hedge close, set at confirm only (never sent to /preview): the
+   * 'maker' leg rests reduce-only post-only at the touch, the 'hedge' leg
+   * closes at market as it fills. Both legs carry the role.
+   */
+  pairRole?: 'maker' | 'hedge';
+  /** Starting price for the maker leg; the engine re-pegs it to the touch. */
+  makerPrice?: string;
+  /** Seconds before the rest closes at market. */
+  makerTimeoutSec?: number;
+  /** Largest single order on either leg, in base units. */
+  maxClip?: string;
 }
 
 export type ActionInput = OpenMarketAction | OpenLimitAction | ClosePositionAction;

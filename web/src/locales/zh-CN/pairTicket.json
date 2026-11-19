@@ -142,7 +142,6 @@
     "executionAria": "永续开仓方式",
     "twoMarket": "2 笔市价单",
     "limitHedge": "限价 + 对冲",
-    "savesFees": "省手续费",
     "execute": "执行组合",
     "leverageDetail": "杠杆 多头 {{long}}x / 空头 {{short}}x（交易所上限）",
     "pegNote": "发送时挂单价格锚定最优价"

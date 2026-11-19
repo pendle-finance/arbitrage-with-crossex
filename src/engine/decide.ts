@@ -240,6 +240,20 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
     m.closeReason === 'cancelled' && // loop encodes POC insta-cancels as 'poc-reject', never 'cancelled'
     !m.cancelRequested
   ) {
+    // A close is different: Gate itself cancels resting orders when margin runs
+    // low or the position changes (liquidation, ADL), which is exactly when the
+    // trader most wants out. Finish the close at market instead of stopping
+    // half done. If leg A's position is gone, the reduce-only clips are refused
+    // and the clip budget stops the deal with an error alert.
+    if (pair.a.reduceOnly) {
+      return {
+        type: 'setMode',
+        mode: 'CONVERTING',
+        reason: 'maker canceled on venue — closing the rest at market',
+        resetClipBudget: true,
+        alert: `The resting close order on ${pair.a.contract} was cancelled on the venue. Closing the rest at market.`,
+      };
+    }
     return { type: 'setMode', mode: 'STOPPING', reason: 'maker canceled on venue = STOP' };
   }
   if (pair.mode === 'OPENING' && pair.deadlineAt !== null && now >= pair.deadlineAt) {
@@ -270,12 +284,24 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
   const hedgeSized = pair.b ? sizeFor(fx(p.unhedged), pair.b, ctx.refB) : FX_ZERO;
   const hedgeOwed =
     pair.b !== null && (hedgeSized === null ? fx(p.unhedged) >= fx(pair.b.lot) : hedgeSized > FX_ZERO);
-  if (now >= pair.hedgeNotBefore && hedgeSized !== null && hedgeSized > FX_ZERO && pair.b) {
+  // A reduce-only hedge refused this many times while stopping has no position
+  // left to reduce. Retrying cannot succeed, so the STOPPING branch finishes
+  // the deal and names what is left (see TUNING.STOP_HEDGE_GIVE_UP).
+  const hedgeGaveUp =
+    pair.mode === 'STOPPING' &&
+    pair.b?.reduceOnly === true &&
+    pair.hedgeRejectStreak >= TUNING.STOP_HEDGE_GIVE_UP;
+  if (!hedgeGaveUp && now >= pair.hedgeNotBefore && hedgeSized !== null && hedgeSized > FX_ZERO && pair.b) {
     // Taker legs are pure MARKET IOC. The venue crosses within ITS OWN price-
     // limit band (measured against its mark), which IS the slippage protection;
     // a book-mid-derived LIMIT band can't reliably stay inside that venue band
     // and gets price-limit-rejected, blocking the fill. Reduce-only can't flip.
-    return { type: 'place', leg: 'B', kind: 'taker', tif: 'ioc', qty: fxStr(hedgeSized) };
+    // The order is capped at maxClip: one large maker fill must not go out as
+    // one market order that walks the whole hedge book. The rest follows on the
+    // next ticks. A cap below the leg's minimum falls back to the full size.
+    const capped = sizeFor(fxMin(fx(p.unhedged), fx(ctx.maxClip)), pair.b, ctx.refB);
+    const qty = capped !== null && capped > FX_ZERO ? capped : hedgeSized;
+    return { type: 'place', leg: 'B', kind: 'taker', tif: 'ioc', qty: fxStr(qty) };
   }
 
   switch (pair.mode) {
@@ -286,6 +312,15 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
 
     case 'STOPPING': {
       if (m && m.state === 'OPEN') return { type: 'cancel', order: m };
+      if (hedgeGaveUp && pair.b) {
+        if (!p.allSettled) return { type: 'idle', reason: 'waiting for orders to settle' };
+        const why = `hedge leg refused ${pair.hedgeRejectStreak} times — its position may already be closed`;
+        return {
+          type: 'finish',
+          report: report(pair, p, `${pair.haltReason ?? 'stopped'} (${why}; unhedged ${p.unhedged})`),
+          alert: `The close stopped: ${pair.b.contract} refused ${pair.hedgeRejectStreak} reduce-only orders in a row, so its position may already be closed. Check both legs on Gate.`,
+        };
+      }
       return finishIfSettled(pair, p, pair.haltReason ?? 'stopped', hedgeSized);
     }
 
@@ -366,6 +401,21 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
         if (pair.limitPrice !== null && m.price !== pair.limitPrice) {
           return { type: 'cancel', order: m };
         }
+        // A close follows the book. Once the market moves away from a resting
+        // close order, it would sit unfilled until the timeout and then pay
+        // taker on the whole size. Re-place it at the fresh touch, but only
+        // toward the market (a move through the order fills it) and only after
+        // it has rested CLOSE_REPEG_MS, so a jittery book cannot churn orders.
+        if (
+          pair.a.reduceOnly &&
+          pair.pricePolicy === 'touch' &&
+          ctx.touchA !== null &&
+          m.price !== null &&
+          now - m.createdAt >= TUNING.CLOSE_REPEG_MS &&
+          (pair.a.side === 'SELL' ? Number(ctx.touchA) < Number(m.price) : Number(ctx.touchA) > Number(m.price))
+        ) {
+          return { type: 'cancel', order: m };
+        }
         return { type: 'idle', reason: 'maker resting' };
       }
       // No live maker (fresh pair, POC reject, insta-cancel, or post-repeg-cancel).
@@ -387,6 +437,16 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
         // and a bare "stopped" hides the one failure the user can immediately
         // fix (the modal keys its try-again guidance off this text).
         const why = `the limit price kept crossing the market — the venue rejected the post-only maker ${TUNING.MAX_POC_REJECTS} times in a row`;
+        // A close the trader asked for finishes at market rather than stopping
+        // half done: the timeout would send the same market clips anyway.
+        if (pair.a.reduceOnly) {
+          return {
+            type: 'setMode',
+            mode: 'CONVERTING',
+            reason: `${why} — closing the rest at market`,
+            resetClipBudget: true,
+          };
+        }
         return { type: 'setMode', mode: 'STOPPING', reason: why, haltReason: why };
       }
       if (now < pair.makerNotBefore) return { type: 'idle', reason: 'maker backoff' };

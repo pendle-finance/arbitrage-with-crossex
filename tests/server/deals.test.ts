@@ -962,6 +962,76 @@ describe('POST /api/deals', () => {
     await tickPair(w.loop, pair.id);
     expect(w.store.getPair(pair.id)!.mode).toBe('DONE');
   });
+
+  it('creates a maker + hedge close, and refuses a second close on a leg it is still closing', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules(), times: 6 });
+    mockGateGet('/positions', {
+      body: [
+        { symbol: A_CONTRACT, position_qty: '0.5', mark_price: '2500' },
+        { symbol: B_CONTRACT, position_qty: '-0.5', mark_price: '2500' },
+      ],
+      times: 6,
+    });
+    capReads();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: {
+        id: 'mclose-000001',
+        a: { symbol: A_CONTRACT, side: 'SELL', reduceOnly: true },
+        b: { symbol: B_CONTRACT, side: 'BUY', reduceOnly: true },
+        qty: '0.2',
+        execution: 'maker',
+        price: '2500',
+        pricePolicy: 'touch',
+        timeoutSec: 300,
+        clipBandPct: 0.5,
+        maxClip: '0.1',
+      },
+    });
+    expect(res.statusCode, res.body).toBe(202);
+    const pair = w.store.getPair('mclose-000001')!;
+    expect(pair.mode).toBe('OPENING');
+    expect(pair.a.reduceOnly && pair.b?.reduceOnly).toBe(true);
+    expect(pair.clipBandBp).toBe(50);
+    expect(pair.maxClip).toBe('0.1');
+
+    // The single-leg close of B while the maker close still rests: refused.
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: {
+        id: 'close-000002',
+        a: { symbol: B_CONTRACT, side: 'BUY', reduceOnly: true },
+        qty: '0.1',
+        execution: 'taker',
+        clipBandPct: 0.5,
+      },
+    });
+    expect(second.statusCode, second.body).toBe(409);
+    expect(second.json().error.message).toMatch(new RegExp(`A close on ${B_CONTRACT} is still running`));
+    expect(w.store.getPair('close-000002')).toBeNull();
+
+    // Once the first close is done, the same close goes through.
+    w.store.updatePair('mclose-000001', { mode: 'DONE' });
+    const third = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: {
+        id: 'close-000003',
+        a: { symbol: B_CONTRACT, side: 'BUY', reduceOnly: true },
+        qty: '0.1',
+        execution: 'taker',
+        clipBandPct: 0.5,
+      },
+    });
+    expect(third.statusCode, third.body).toBe(202);
+  });
 });
 
 describe('deal commands + alerts', () => {

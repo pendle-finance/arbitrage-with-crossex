@@ -145,7 +145,6 @@
     "executionAria": "Perp entry mode",
     "twoMarket": "2 market orders",
     "limitHedge": "Limit + hedge",
-    "savesFees": "Saves fees",
     "execute": "Execute pair",
     "leverageDetail": "Leverage {{long}}x Long / {{short}}x Short (venue max)",
     "pegNote": "Maker price pegs to the best price when sent"
