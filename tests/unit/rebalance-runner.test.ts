@@ -6096,6 +6096,8 @@ describe('close, convert and reopen', () => {
       ['$10.20 at the close, $9.86 at send', '53.8', '53.7966', '3000', 'MIN_NOTIONAL'],
       ['no close fill price, $9 rest', '53.8', '53.797', null, 'SIZE_TOO_SMALL'],
       ['$6M leg, $10.20 at the close', '2000', '1999.9966', '3000', 'MIN_NOTIONAL'],
+      ['gate quantity minimum label', '53.8', '53.7966', '3000', 'TRADE_ORDER_QUANTITY_MIN_ERROR'],
+      ['gate amount minimum label', '53.8', '53.7966', '3000', 'TRADE_ORDER_AMOUNT_MIN_ERROR'],
     ];
     for (const [name, closed, filled, price, label] of cases) {
       const fill: Record<string, string> = price === null ? {} : { executedAvgPrice: price };
