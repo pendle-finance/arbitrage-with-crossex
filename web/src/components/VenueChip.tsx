@@ -5,7 +5,7 @@ import { TokenIcon, VenueIcon } from './AssetIcon';
 import { Chip } from './Chip';
 
 /** USDT-quoted perp venues get the cyan house tone; USD/USDC venues stay neutral. */
-const USDT_PERP_VENUES = new Set(['BINANCE', 'BYBIT', 'GATE', 'OKX']);
+const USDT_PERP_VENUES = new Set(['ASTER', 'BINANCE', 'BYBIT', 'GATE', 'OKX']);
 
 /** Quote currency note for non-USDT venues (Gate CrossEx conventions). */
 export const VENUE_QUOTE_NOTE: Record<string, string> = {
