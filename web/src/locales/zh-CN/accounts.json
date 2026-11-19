@@ -426,6 +426,8 @@
     "marginBody": "请向 {{wallet}} 补充 USDT，然后重试。",
     "bookTitle": "订单簿太薄，无法定价。",
     "bookBody": "请选更小的自定义金额。",
+    "feeRateTitle": "费率未加载。",
+    "feeRateBody": "利润暂不实现。资金划转照常进行。",
     "gapLine": "{{venue}} {{side}} 少 {{size}} {{base}} · {{usd}} 未对冲",
     "retryLine": "{{platform}} 拒绝了订单：保证金不足。再兑换 {{amount}} {{coin}}。第 {{try}} 次尝试，{{seconds}} 秒后。",
     "spotLoopRound": "现货循环，第 {{round}} 轮（共 {{rounds}} 轮）· 约剩 {{minutes}} 分钟",

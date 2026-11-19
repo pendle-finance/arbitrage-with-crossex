@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { EvenPlan, GoalKind, RebalanceBucket, RebalanceView } from '../api/types';
 import { rebalanceViews, rebased } from '../test/fixtures';
 import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, paybackDays, pickedRoute, realizeFeeUsd, realizeImpactUsd } from './RebalanceHovers';
-import { FeeCell } from './RebalanceBits';
+import { FeeCell } from './RebalanceRealizeBits';
 import { roundOf, RouteRow, shownKeys, stopsPerDayOf, targetsOf, totalCostUsd, worthChip, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {

@@ -2358,17 +2358,17 @@ function ownerRouteSteps(status: RebalanceStep['status']): RebalanceStep[] {
     const at = OWNER_STARTED + 12_000;
     return [
       jobStep({
-        ...HL_TO_GATE, name: 'From Hyperliquid', round, planned: 4538,
+        ...HL_TO_GATE, name: 'From Hyperliquid', round, planned: 4538, qty: status === 'done' ? 4538 : null,
         status: status === 'done' ? 'done' : first && status === 'running' ? 'running' : 'pending',
         startedAt: status === 'done' ? at : first && status === 'running' ? REBALANCE_NOW - 40_000 : null,
         doneAt: status === 'done' ? at + 2_000 : null,
       }),
       jobStep({
-        ...HL_TO_GATE, name: 'To Gate', round, planned: 4537, status: status === 'done' ? 'done' : 'pending',
+        ...HL_TO_GATE, name: 'To Gate', round, planned: 4537, qty: status === 'done' ? 4537 : null, status: status === 'done' ? 'done' : 'pending',
         startedAt: status === 'done' ? at + 2_000 : null, doneAt: status === 'done' ? at + 4_000 : null,
       }),
       jobStep({
-        ...HL_TO_GATE, name: 'Sell USDC', round, planned: 4537, borrowLeft: 0,
+        ...HL_TO_GATE, name: 'Sell USDC', round, planned: 4537, qty: status === 'done' ? 4537 : null, borrowLeft: 0,
         status: status === 'done' ? 'done' : 'pending',
         startedAt: status === 'done' ? at + 4_000 : null, doneAt: status === 'done' ? at + 6_000 : null,
       }),
@@ -2378,7 +2378,11 @@ function ownerRouteSteps(status: RebalanceStep['status']): RebalanceStep[] {
 
 function realizeJobLeg(over: Partial<RealizeJobLeg>): { legs: RealizeJobLeg[] } {
   return {
-    legs: [{ symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', pool: 'HYPERLIQUID', side: 'SHORT', positionQty: 66.0, qty: 53.8, filledQty: 0, realizedUsd: 0, ...over }],
+    legs: [{
+      symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', pool: 'HYPERLIQUID', side: 'SHORT', positionQty: 66.0, qty: 53.8, filledQty: 0, realizedUsd: 0,
+      closeFeeUsd: OWNER_ETH_LEG.closeFeeUsd, reopenFeeUsd: OWNER_ETH_LEG.reopenFeeUsd, closeImpactUsd: OWNER_ETH_LEG.closeImpactUsd,
+      reopenImpactUsd: OWNER_ETH_LEG.reopenImpactUsd, convert: { amount: 10298, feeUsd: 20.6 }, ...over,
+    }],
   };
 }
 
@@ -2511,7 +2515,7 @@ const scaled = (value: number, by: number) => Math.round(value * by * 1000) / 10
 function whaleJob(job: RebalanceJob): RebalanceJob {
   return {
     ...job,
-    id: 'whale0001', amount: 7500000, costUsd: 9120.45, target: WHALE_AFTER,
+    id: 'whale0001', amount: 7500000, costUsd: 27743.2, target: WHALE_AFTER,
     steps: job.steps.map((step) => {
       const by = step.name === 'Close' || step.name === 'Reopen' ? WHALE_QTY_SCALE
         : step.name === 'Convert' ? WHALE_CONVERT_SCALE : WHALE_ROUTE_SCALE;
@@ -2525,7 +2529,9 @@ function whaleJob(job: RebalanceJob): RebalanceJob {
     realize: job.realize && {
       legs: job.realize.legs.map((leg) => ({
         ...leg, positionQty: 13400.5, qty: 11000, filledQty: scaled(leg.filledQty, WHALE_QTY_SCALE),
-        realizedUsd: scaled(leg.realizedUsd, WHALE_USD_SCALE),
+        realizedUsd: scaled(leg.realizedUsd, WHALE_USD_SCALE), closeFeeUsd: WHALE_LEG.closeFeeUsd, reopenFeeUsd: WHALE_LEG.reopenFeeUsd,
+        closeImpactUsd: WHALE_LEG.closeImpactUsd, reopenImpactUsd: WHALE_LEG.reopenImpactUsd,
+        convert: { amount: WHALE_LEG.convert!.amount, feeUsd: WHALE_LEG.convert!.feeUsd },
       })),
     },
   };

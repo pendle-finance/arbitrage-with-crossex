@@ -237,6 +237,8 @@
   "haltReopenRefused": "Gate refused the reopen.",
   "haltUnderMinimum": "The rest is under Gate's smallest order.",
   "haltSizeChanged": "The {{venue}} {{sideWord}} is {{live}} {{base}} on Gate, not the {{expected}} {{base}} this rebalance left.",
+  "haltHedgeChanged": "The {{venue}} {{sideWord}} is {{live}} {{base}} on Gate, not the {{expected}} {{base}} it was when this rebalance started.",
+  "haltNotReopened": "The {{venue}} {{sideWord}} was not reopened.",
   "haltAbandonCheck": "Abandon it and check Positions.",
   "legGapThe": "The {{venue}} {{sideWord}} is {{size}} {{base}} smaller than the {{otherVenue}} {{otherSideWord}}.",
   "legGap": "{{venue}} {{sideWord}} is {{size}} {{base}} smaller than the {{otherVenue}} {{otherSideWord}}.",

@@ -9,13 +9,15 @@ import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
-import { jobSeconds, VerdictAlert } from './RebalanceBits';
-import { abandonedGapText, gapVerdict, openGapOf } from './rebalanceCardGap';
+import { VerdictAlert } from './RebalanceBits';
+import { jobSeconds } from './rebalanceStepRows';
+import { abandonedGapText, gapVerdict, hasLeftGap, openGapOf } from './rebalanceCardGap';
 import { CARD_LABEL, noLegs, PAYS_BACK, shortOfCash, verdictBalanced, verdictNoBorrow, verdictNoCashToMove } from './rebalanceCopy';
 import { waitsForDeal, waitsForTransfer } from './rebalanceCopy';
 import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, isNotWorthIt, paybackDays, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
-import { lastRealizeIndex, refusalOf } from './RebalanceJobView';
+import { isCloseSent, lastRealizeIndex } from './rebalanceJobSteps';
+import { refusalOf } from './RebalancePlanBits';
 import { RebalanceModal } from './RebalanceModal';
 import { plainOf } from './rebalanceModalPlan';
 import type { GateAccount, TransferCoin } from '../api/types';
@@ -29,7 +31,10 @@ function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
   const what = CARD_LABEL[job.goal];
   if (job.status === 'halted') {
-    if (job.realize?.legs.length && job.steps[job.stepIndex]?.name === 'Close') return t('accounts.rebalanceRealize.stoppedBeforeClose');
+    if (job.realize?.legs.length && job.steps[job.stepIndex]?.name === 'Close') {
+      const sent = job.realize.legs.some((leg) => isCloseSent(job, leg));
+      return t(sent ? 'accounts.rebalanceRealize.closeUnconfirmedTitle' : 'accounts.rebalanceRealize.stoppedBeforeClose');
+    }
     return round === null
       ? t('accounts.rebalanceSection.haltedAtConvert', { what })
       : t('accounts.rebalanceSection.haltedInRound', { what, round: num(round, 0) });
@@ -79,7 +84,7 @@ export function RebalanceSection({
   const loadError = useSettledError(query.status, query.error);
   const view = query.data;
   const openJob = view?.job && view.job.status !== 'done' ? view.job : null;
-  const positions = usePositions(openJob !== null && openGapOf(openJob) !== null).data?.positions;
+  const positions = usePositions((openJob !== null && openGapOf(openJob) !== null) || (view?.job ? hasLeftGap(view.job) : false)).data?.positions;
   const title = (
     <h2 className="text-[14px] font-semibold text-ink-50">
       <RebalanceInfo />

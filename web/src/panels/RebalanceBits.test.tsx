@@ -9,8 +9,11 @@ import {
   REALIZE_RUNNING_JOB,
   rebalanceViews,
 } from '../test/fixtures';
-import * as bits from './RebalanceBits';
-import { BalanceBars, planActionLeg, RealizeActions, RealizeRow, StepDot, StepList, type BarRow, type StepRow } from './RebalanceBits';
+import * as bars from './RebalanceBars';
+import { BalanceBars, scaleOf, type BarRow } from './RebalanceBars';
+import { StepDot, StepList, type StepRow } from './RebalanceBits';
+import { planActionLeg, RealizeActions, RealizeRow } from './RebalanceRealizeBits';
+import { jobRows } from './rebalanceStepRows';
 
 const BAR_CAPTION = 'Equity (cash + unrealized PnL)';
 const HOVER_TARGET = 'Balanced target';
@@ -106,7 +109,7 @@ describe('BalanceBars', () => {
     render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
     expect(screen.getByText(BAR_CAPTION)).toBeInTheDocument();
-    expect('BarLegend' in bits).toBe(false);
+    expect('BarLegend' in bars).toBe(false);
     expect(screen.queryByText('unrealized gain')).toBeNull();
     expect(screen.queryByText('cash')).toBeNull();
   });
@@ -128,7 +131,7 @@ describe('BalanceBars', () => {
   });
 
   it('zero line is centered', () => {
-    const plain = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={bits.scaleOf(ROWS)} />);
+    const plain = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={scaleOf(ROWS)} />);
     for (const row of ROWS) expect(partOf(rowOf(plain.container, row.key), 'zero-line').style.left).toBe('50%');
     plain.unmount();
 
@@ -136,7 +139,7 @@ describe('BalanceBars', () => {
       { key: 'USDT/CROSSEX', label: 'USDT · CrossEx', cash: 30, upnl: 0, target: 0, tone: 'usdt' },
       { key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -30, upnl: 0, target: 0, tone: 'lighter' },
     ];
-    const scale = bits.scaleOf(ROWS, book);
+    const scale = scaleOf(ROWS, book);
     expect(scale).toBe(60);
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={book} scale={scale} />);
 
@@ -151,8 +154,8 @@ describe('BalanceBars', () => {
 
   it('scale takes the widest end on either side', () => {
     const negativeOnly: BarRow[] = [{ key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -90, upnl: 20, target: 10, tone: 'lighter' }];
-    expect(bits.scaleOf(ROWS, negativeOnly)).toBe(90);
-    expect(bits.scaleOf([])).toBe(0);
+    expect(scaleOf(ROWS, negativeOnly)).toBe(90);
+    expect(scaleOf([])).toBe(0);
   });
 
   it('negative cash is guava even without a borrow', () => {
@@ -298,7 +301,7 @@ describe('jobRows for a Convert in chunks', () => {
       'done',
     );
 
-    const rows = bits.jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000, null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ label: 'Convert', state: 'done', sub: '1,197,600.00 arrives' });
@@ -312,7 +315,7 @@ describe('jobRows for a Convert in chunks', () => {
       'running',
     );
 
-    const rows = bits.jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000, null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ label: 'Convert', state: 'running', sub: '' });
@@ -331,7 +334,7 @@ describe('jobRows for a Convert in chunks', () => {
       'done',
     );
 
-    const rows = bits.jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000, null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ state: 'done', sub: '597,602.40 arrives' });
@@ -341,7 +344,7 @@ describe('jobRows for a Convert in chunks', () => {
   it('one Convert chunk shows the same row as before chunks existed', () => {
     const job = jobOf([chunk('Convert', 12, 11.97, 'done')], 0, 'done');
 
-    const [row] = bits.jobRows(job, 3_000, null);
+    const [row] = jobRows(job, 3_000, null);
 
     expect(row).toMatchObject({ state: 'done', sub: '11.97 arrives' });
     expect(row.text).toContain('12.00');
@@ -500,7 +503,7 @@ describe('RealizeActions', () => {
 
 describe('jobRows with a close and reopen', () => {
   it('groups Close, Convert and Reopen into one running row before the route rounds', () => {
-    const rows = bits.jobRows(REALIZE_RUNNING_JOB, REALIZE_RUNNING_JOB.updatedAt + 3_000, null);
+    const rows = jobRows(REALIZE_RUNNING_JOB, REALIZE_RUNNING_JOB.updatedAt + 3_000, null);
 
     expect(rows).toHaveLength(7);
     expect(rows[0]).toMatchObject({ label: '', text: 'Close + reopen 53.8 of 66.0 ETH short', sub: '', state: 'running', progress: 0 });
@@ -509,21 +512,21 @@ describe('jobRows with a close and reopen', () => {
   });
 
   it('a part-filled close shows what filled', () => {
-    const [row] = bits.jobRows(REALIZE_PART_FILL_JOB, REALIZE_PART_FILL_JOB.updatedAt, null);
+    const [row] = jobRows(REALIZE_PART_FILL_JOB, REALIZE_PART_FILL_JOB.updatedAt, null);
 
     expect(row).toMatchObject({ text: 'Close + reopen 30.0 of 66.0 ETH short', state: 'running' });
     expect(row.progress).toBeCloseTo(1 / 3);
   });
 
   it('a halted reopen shows the row stopped', () => {
-    const [row] = bits.jobRows(REALIZE_HALTED_LEG_OPEN_JOB, REALIZE_HALTED_LEG_OPEN_JOB.updatedAt, null);
+    const [row] = jobRows(REALIZE_HALTED_LEG_OPEN_JOB, REALIZE_HALTED_LEG_OPEN_JOB.updatedAt, null);
 
     expect(row).toMatchObject({ state: 'stopped', right: 'Stopped' });
     expect(row.progress).toBeCloseTo(2 / 3);
   });
 
   it('a done job ticks the realize row with its time', () => {
-    const rows = bits.jobRows(REALIZE_DONE_JOB, REALIZE_DONE_JOB.updatedAt, null);
+    const rows = jobRows(REALIZE_DONE_JOB, REALIZE_DONE_JOB.updatedAt, null);
 
     expect(rows[0]).toMatchObject({ text: 'Close + reopen 53.8 of 66.0 ETH short', state: 'done', progress: 1, right: '11s' });
     expect(rows.every((row) => row.state === 'done')).toBe(true);
@@ -534,7 +537,7 @@ describe('jobRows with a close and reopen', () => {
     const routeConvert = { ...steps[1], name: 'Convert', planned: 27228, qty: 27173.5 };
     const job: RebalanceJob = { ...REALIZE_DONE_JOB, route: 'convert', steps: [...steps, routeConvert], stepIndex: 3 };
 
-    const rows = bits.jobRows(job, job.updatedAt, null);
+    const rows = jobRows(job, job.updatedAt, null);
 
     expect(rows.map((row) => row.label)).toEqual(['', 'Convert']);
     expect(rows[1].text).toContain('27,228.00');

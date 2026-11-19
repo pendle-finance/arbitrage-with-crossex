@@ -29,6 +29,7 @@ import { catchRateLimit, sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   bannerFor,
+  gapsLeftBy,
   inTransitOf,
   LOCK_TEXT,
   moneyLockFor,
@@ -386,6 +387,12 @@ export function rebalanceRoutes(deps: AppDeps) {
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
       const moved = picked.steps.reduce((total, step) => total + step.move, 0);
+      const livePerps = perps.flatMap((perp) => {
+        const qty = Number(perp.positionQty);
+        if (!perp.symbol || !Number.isFinite(qty) || qty === 0) return [];
+        const side: PerpSide = qty < 0 ? 'SHORT' : 'LONG';
+        return [{ symbol: perp.symbol, exchange: parseSymbol(perp.symbol).exchange, side, qty: Math.abs(qty) }];
+      });
       const job = newJob(
         {
           goal,
@@ -397,15 +404,9 @@ export function rebalanceRoutes(deps: AppDeps) {
           userId,
           realize: legs.length > 0 ? plan.realize : null,
           realizeCostUsd: realizeCostUsd(legs),
-          before: {
-            buckets,
-            perps: perps.flatMap((perp) => {
-              const qty = Number(perp.positionQty);
-              if (!perp.symbol || !Number.isFinite(qty) || qty === 0) return [];
-              const side: PerpSide = qty < 0 ? 'SHORT' : 'LONG';
-              return [{ symbol: perp.symbol, exchange: parseSymbol(perp.symbol).exchange, side, qty: Math.abs(qty) }];
-            }),
-          },
+          before: { buckets, perps: livePerps },
+          routeImpactUsd: picked.priceImpactUsd,
+          openGaps: gapsLeftBy(store.read(), livePerps),
         },
         now(),
       );

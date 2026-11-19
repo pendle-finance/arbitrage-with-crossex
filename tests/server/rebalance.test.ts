@@ -8,7 +8,7 @@ import { makeClients } from '../../src/core/clients';
 import { roundToStep } from '../../src/core/numbers';
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import type { AccountLike, EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
-import type { RealizeLeg, RealizePerp } from '../../src/core/rebalance/realize';
+import type { RealizeLeg, RealizePerp, RealizePlan } from '../../src/core/rebalance/realize';
 import { FEE_ROWS, OWNER_HL_ETH, ownerBook, PERP_RULES } from '../unit/fixtures/realize-books';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
@@ -19,7 +19,7 @@ import { isShownRealize } from '../../src/server/routes/rebalance';
 import { gate, HOST, makeTestApp, mockGateGet, orderBody, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 import { accountA, asset, waitFor } from './helpers/rebalance';
 
-const planEdit = vi.hoisted(() => ({ dropConvertSteps: false, convertCost: null as number | null }));
+const planEdit = vi.hoisted(() => ({ dropConvertSteps: false, convertCost: null as number | null, realize: null as RealizePlan | null }));
 
 vi.mock(import('../../src/core/rebalance/plan'), async (importOriginal) => {
   const plan = await importOriginal();
@@ -30,7 +30,7 @@ vi.mock(import('../../src/core/rebalance/plan'), async (importOriginal) => {
       const convert = { ...made.routes.convert };
       if (planEdit.dropConvertSteps) convert.steps = [];
       if (planEdit.convertCost !== null) convert.costUsd = planEdit.convertCost;
-      return { ...made, routes: { ...made.routes, convert } };
+      return { ...made, routes: { ...made.routes, convert }, ...(planEdit.realize ? { realize: planEdit.realize } : {}) };
     },
   };
 });
@@ -46,6 +46,7 @@ beforeEach(() => {
   apps = [];
   planEdit.dropConvertSteps = false;
   planEdit.convertCost = null;
+  planEdit.realize = null;
 });
 
 afterEach(async () => {
@@ -979,6 +980,52 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(h.file().steps[0]).toMatchObject({ name: 'Close', status: 'running', venueId: null });
   });
 
+  it('legs in two pools run in order', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const [hyperliquidLeg] = (await h.plan()).realize!.legs;
+    const gateLeg: RealizeLeg = {
+      ...hyperliquidLeg,
+      pool: 'CROSSEX',
+      symbol: 'GATE_FUTURE_ETH_USDT',
+      exchange: 'GATE',
+      side: 'LONG',
+      qty: 10,
+      convert: { amount: 2_000, count: 1, feeUsd: 4 },
+    };
+    planEdit.realize = { legs: [hyperliquidLeg, gateLeg], refused: null };
+    const shown = shownOf(await h.plan());
+
+    const res = await h.post('/api/rebalance', shown);
+
+    expect(res.statusCode).toBe(202);
+    const file = h.file();
+    const realizeEnd = file.steps.map((step) => step.name).lastIndexOf('Reopen') + 1;
+    const hyperliquidConverts = Array.from({ length: hyperliquidLeg.convert?.count ?? 0 }, () => ['Convert', 'HYPERLIQUID', 'CROSSEX']);
+    expect(file.steps.slice(0, realizeEnd).map((step) => [step.name, step.from, step.to])).toEqual([
+      ['Close', 'HYPERLIQUID', 'HYPERLIQUID'],
+      ...hyperliquidConverts,
+      ['Reopen', 'HYPERLIQUID', 'HYPERLIQUID'],
+      ['Close', 'CROSSEX', 'CROSSEX'],
+      ['Convert', 'CROSSEX', 'HYPERLIQUID'],
+      ['Reopen', 'CROSSEX', 'CROSSEX'],
+    ]);
+    expect(file.steps.slice(0, realizeEnd).filter((step) => step.perp).map((step) => step.perp?.symbol)).toEqual([
+      HL_ETH,
+      HL_ETH,
+      'GATE_FUTURE_ETH_USDT',
+      'GATE_FUTURE_ETH_USDT',
+    ]);
+    expect(file.realize?.legs.map((leg) => [leg.symbol, leg.pool])).toEqual([
+      [HL_ETH, 'HYPERLIQUID'],
+      ['GATE_FUTURE_ETH_USDT', 'CROSSEX'],
+    ]);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    expect(h.file().steps[0]).toMatchObject({ name: 'Close', status: 'running', venueId: null });
+  });
+
   it('job stores the realize cost apart', async () => {
     mockOwnerBook();
     refuseSends();
@@ -995,6 +1042,78 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(file.realize!.costUsd).toBeGreaterThan(0);
     expect(file.realize!.costUsd).toBeCloseTo(shown.costUsd - routeCost, 6);
     expect(file.costUsd! - file.realize!.costUsd).toBeCloseTo(routeCost, 6);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('job stores the route price impact apart', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const plan = await h.plan();
+    const shown = shownOf(plan);
+
+    const res = await h.post('/api/rebalance', shown);
+
+    expect(res.statusCode).toBe(202);
+    expect(h.file().routeImpactUsd).toBe(plan.routes[shown.route]!.priceImpactUsd);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('realize steps carry the realize phase and route steps the route phase', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const shown = shownOf(await h.plan());
+
+    const res = await h.post('/api/rebalance', shown);
+
+    expect(res.statusCode).toBe(202);
+    const steps = h.file().steps;
+    const reopenAt = steps.map((step) => step.name).indexOf('Reopen');
+    expect(steps.slice(0, reopenAt + 1).map((step) => step.phase)).toEqual(steps.slice(0, reopenAt + 1).map(() => 'realize'));
+    expect(steps.slice(reopenAt + 1).length).toBeGreaterThan(0);
+    expect(steps.slice(reopenAt + 1).every((step) => step.phase === 'route')).toBe(true);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a new job carries an abandoned open gap while positions still show it', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const shown = shownOf(await h.plan());
+    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    const abandon = (job: Job, positionQty: number): Job => {
+      const legs = job.realize!.legs.map((leg) => ({ ...leg, positionQty, filledQty: 53.8 }));
+      const steps = job.steps.map((step) => (step.name === 'Close' ? { ...step, status: 'done' as const, qty: 53.8 } : step));
+      return { ...job, status: 'abandoned', realize: { ...job.realize!, legs }, steps, stepIndex: steps.findIndex((step) => step.name === 'Reopen') };
+    };
+    const first = h.file();
+    h.jobs.write(abandon(first, 66 + 53.8));
+
+    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
+
+    const carried = h.file();
+    expect(carried.status).not.toBe('abandoned');
+    expect(carried.openGaps).toEqual([
+      {
+        leg: { symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', side: 'SHORT', positionQty: 66 + 53.8, hedge: 'GATE' },
+        qty: 53.8,
+        hedges: first.before!.perps.filter((perp) => perp.symbol !== HL_ETH && perp.side === 'LONG' && perp.symbol.includes('ETH')),
+      },
+    ]);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    h.jobs.write({ ...h.file(), status: 'done' });
+    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
+    expect(h.file().openGaps).toEqual(carried.openGaps);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+
+    h.jobs.write({ ...abandon(h.file(), 66), openGaps: [] });
+    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
+    expect(h.file().openGaps).toBeUndefined();
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 

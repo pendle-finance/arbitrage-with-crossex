@@ -829,6 +829,34 @@ describe('RebalanceSection profit step', () => {
     expect(await within(await screen.findByRole('region', { name: 'Rebalance' })).findByText(text)).toBeInTheDocument();
   });
 
+  it('a new job keeps the abandoned gap line until positions are whole', async () => {
+    const done = rebalanceViews.realizeDone;
+    const gateLong = (qty: string) => makeCrossexPosition({ symbol: GATE_ETH, positionSide: 'LONG', positionQty: qty, markPrice: '1821' });
+    const hlShort = (qty: string) => makeCrossexPosition({ symbol: HL_ETH, positionSide: 'SHORT', positionQty: qty, markPrice: '1821' });
+    const carried: RebalanceView = {
+      ...done,
+      job: {
+        ...done.job!,
+        openGaps: [
+          {
+            leg: { symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', side: 'SHORT', positionQty: 119.8, hedge: 'GATE' },
+            qty: 53.8,
+            hedges: [{ symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', qty: 66 }],
+          },
+        ],
+      },
+    };
+    servePositions(carried, [hlShort('-66'), gateLong('66')]);
+    renderWithClient(<RebalanceSection />);
+    const gap = await within(await screen.findByRole('region', { name: 'Rebalance' })).findByText('53.8 ETH short not reopened, $97,970 not hedged');
+    expect(gap).toHaveClass('text-guava');
+    cleanup();
+    servePositions(carried, [hlShort('-66'), gateLong('12.2')]);
+    renderWithClient(<RebalanceSection />);
+    await screen.findByRole('region', { name: 'Rebalance' });
+    await waitFor(() => expect(within(region()).queryByText(/not reopened/)).toBeNull());
+  });
+
   it('card gap with no positions read says the size', async () => {
     await show(rebalanceViews.realizeRetrying);
     expect(line('Hyperliquid short 53.8 ETH smaller · reopening.')).toHaveClass('text-gold');
@@ -843,7 +871,7 @@ describe('RebalanceSection profit step', () => {
 
   it('route convert reads step 2', async () => {
     const steps = REALIZE_ROUTE_JOB.steps.map((step, index) => (index === REALIZE_ROUTE_JOB.stepIndex ? { ...step, name: 'Convert' } : step));
-    await show({ ...rebalanceViews.realizeRoute, job: { ...REALIZE_ROUTE_JOB, steps } });
+    await show({ ...rebalanceViews.realizeRoute, job: { ...REALIZE_ROUTE_JOB, route: 'convert', steps } });
     expect(within(region()).getByRole('button', { name: 'Running · step 2 of 2' })).toBeEnabled();
   });
 
@@ -856,6 +884,12 @@ describe('RebalanceSection profit step', () => {
     await show(rebalanceViews.realizeHaltedBeforeClose);
     expect(line('Stopped before the close')).not.toBeNull();
     expect(within(region()).getByRole('button', { name: 'Stopped · open' })).toBeEnabled();
+  });
+
+  it('stop after a close that was sent reads like the modal', async () => {
+    await show(auditRebalanceViews.realizeHaltedCloseSent);
+    expect(line('Stopped after sending the close')).not.toBeNull();
+    expect(line('Stopped before the close')).toBeNull();
   });
 
   it('refused plan names the refusal and still offers Rebalance', async () => {

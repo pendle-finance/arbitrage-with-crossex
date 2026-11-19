@@ -167,6 +167,24 @@ describe('RebalanceBeforeAfter', () => {
     expect(valuesOf(group('USDT · CrossEx'), 'Borrow')[0]).toBe(size === 50 ? '50' : '6,000,000');
   });
 
+  it.each([50 / 29812, 1, 200])('done now is before plus what landed on a trimmed route, at %s times the owner book', (by) => {
+    const trimmed = auditRebalanceViews.realizeDonePartFill.job!;
+    const buckets = owner.buckets.map((b) => ({ ...b, cash: b.cash * by, upnl: b.upnl * by, equity: b.equity * by, borrow: b.borrow * by, imHeldUsd: b.imHeldUsd * by }));
+    const job = {
+      ...trimmed,
+      before: { buckets, perps: OWNER_BEFORE_PERPS },
+      realize: { legs: trimmed.realize!.legs.map((leg) => ({ ...leg, realizedUsd: leg.realizedUsd * by })) },
+      steps: trimmed.steps.map((step) => ({ ...step, planned: step.planned === null || step.perp ? step.planned : step.planned * by, qty: step.qty === null || step.perp ? step.qty : step.qty * by })),
+    };
+    const landedUsdt = (5742.2 + 4537 + 4537 + 2941) * by;
+    const sentUsdc = (5742.2 + 4538 + 4538 + 2941.6) * by;
+    const rows = receiptChanges(job, owner.buckets, null);
+    const after = (key: string, label: string) => rows.find((g) => g.key === key)!.rows.find((r) => r.label === label)!.after;
+    expect(after('USDT/CROSSEX', 'Equity')).toBeCloseTo(-29812 * by + landedUsdt, 1);
+    expect(after('USDC/HYPERLIQUID', 'Equity')).toBeCloseTo(45314 * by - sentUsdc, 1);
+    expect(after('USDT/CROSSEX', 'Borrow')).toBeCloseTo(29812 * by - landedUsdt, 1);
+  });
+
   it('done now column shows a short reopen', () => {
     const job = { ...auditRebalanceViews.realizeDoneShortReopen.job!, before: { buckets: owner.buckets, perps: OWNER_BEFORE_PERPS } };
     render(<RebalanceBeforeAfter rows={receiptChanges(job, owner.buckets, null)} mode="now" />);

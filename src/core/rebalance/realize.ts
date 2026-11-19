@@ -58,7 +58,7 @@ export interface RealizeLeg {
   impactBp: number;
 }
 
-export type RealizeRefusalReason = 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
+export type RealizeRefusalReason = 'no-fee-rate' | 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
 
 export interface RealizeRefusal {
   reason: RealizeRefusalReason;
@@ -175,9 +175,11 @@ function marketCapUsd(perp: RealizePerp, rule: PerpRule, exchange: string, mark:
   return Math.min(ruleCap > 0 ? ruleCap : Infinity, venueCap);
 }
 
-function payingLegs(input: RealizeInput): Paying[] {
-  return input.perps.flatMap((perp): Paying[] => {
-    if (profitPoolOf(perp) !== input.pool) return [];
+const NO_FEE_RATE: RealizeRefusal = { reason: 'no-fee-rate', bp: null, maxBp: REFUSE_IMPACT_BP };
+
+function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean } {
+  const inProfit = input.perps.filter((perp) => profitPoolOf(perp) === input.pool);
+  const legs = inProfit.flatMap((perp): Paying[] => {
     const symbol = perp.symbol ?? '';
     const { exchange, base } = parseSymbol(symbol);
     const takerRate = resolveFeeRates(input.feeRows, symbol)?.takerRate;
@@ -209,6 +211,7 @@ function payingLegs(input: RealizeInput): Paying[] {
       },
     ];
   });
+  return { legs, feeMissing: legs.length < inProfit.length };
 }
 
 function priceOrder(leg: Paying, qty: number): Priced {
@@ -302,7 +305,9 @@ function refusalOf(orders: Order[], unfunded: boolean): RealizeRefusal | null {
 export function planRealize(input: RealizeInput): RealizePlan | null {
   const need = input.moveUsd - input.cashUsd;
   if (!(need > 0)) return null;
-  const legs = payingLegs(input).sort((a, b) => b.moved - a.moved);
+  const paying = payingLegs(input);
+  if (paying.feeMissing) return { legs: [], refused: NO_FEE_RATE };
+  const legs = paying.legs.sort((a, b) => b.moved - a.moved);
   if (legs.length === 0) return null;
   const start: State = {
     left: need,

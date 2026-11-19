@@ -197,9 +197,9 @@ describe('newJob', () => {
     expect(job.steps).toHaveLength(15);
     expect(job.steps.map((s) => s.round)).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5]);
     expect(job.steps.slice(9, 12)).toEqual([
-      { name: 'Buy USDC', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 23.77, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
-      { name: 'To spot', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
-      { name: 'To Hyperliquid', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: 44.66, borrowLeft: 11.53, from: 'CROSSEX', to: 'HYPERLIQUID' },
+      { name: 'Buy USDC', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 23.77, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
+      { name: 'To spot', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
+      { name: 'To Hyperliquid', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: 44.66, borrowLeft: 11.53, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
     ]);
     expect(job.steps[0]).toMatchObject({ name: 'Buy USDC', planned: 0 });
   });
@@ -223,7 +223,7 @@ describe('newJob', () => {
     const job = newJob({ route: 'convert', steps: [convert], amount: 175.94, costUsd: 0.36, target: [], userId: null }, 7);
 
     expect(job.steps).toEqual([
-      { name: 'Convert', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: null, planned: 175.94, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
+      { name: 'Convert', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: null, planned: 175.94, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
     ]);
     expect(job.fundsAt).toBe('CROSSEX');
   });

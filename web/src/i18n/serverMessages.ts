@@ -267,6 +267,8 @@ const RULES: readonly Rule[] = [
   [/^Gate refused the reopen\.$/, 'haltReopenRefused'],
   [/^The rest is under Gate's smallest order\.$/, 'haltUnderMinimum'],
   [/^The (\S+) (long|short) is (\S+) (\S+) on Gate, not the (\S+) \S+ this rebalance left\.$/, 'haltSizeChanged', ['venue', 'sideWord', 'live', 'base', 'expected']],
+  [/^The (\S+) (long|short) is (\S+) (\S+) on Gate, not the (\S+) \S+ it was when this rebalance started\.$/, 'haltHedgeChanged', ['venue', 'sideWord', 'live', 'base', 'expected']],
+  [/^The (\S+) (long|short) was not reopened\.$/, 'haltNotReopened', ['venue', 'sideWord']],
   [/^Abandon it and check Positions\.$/, 'haltAbandonCheck'],
   [/^The (\S+) (long|short) is (\S+) (\S+) smaller than the (\S+) (long|short)\.$/, 'legGapThe', ['venue', 'sideWord', 'size', 'base', 'otherVenue', 'otherSideWord']],
   [/^(\S+) (long|short) is (\S+) (\S+) smaller than the (\S+) (long|short)\.$/, 'legGap', ['venue', 'sideWord', 'size', 'base', 'otherVenue', 'otherSideWord']],

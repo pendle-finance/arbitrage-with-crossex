@@ -37,8 +37,10 @@ import { marginPerConvertUsdc, positiveOf } from '../core/rebalance/realize';
 import { decodeStatus } from '../engine/loop';
 import { TTL, type TtlCache } from './cache';
 import {
+  asRealize,
   convertSteps,
   HALT_TEXT,
+  hedgesOf,
   haltReasonFor,
   pendingStep,
   REOPEN_HALT,
@@ -279,7 +281,16 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   let liveUnchecked = job.steps.slice(job.stepIndex).find((step) => !step.name.startsWith('Convert'))?.name === 'Reopen';
 
+  const isSent = (step: Step): boolean => step.quoteId !== null || step.venueId !== null;
+
   const skipToReopen = (reopen: Step): void => {
+    const current = job.steps[job.stepIndex];
+    if (isSent(current)) {
+      current.status = 'pending';
+      current.startedAt = null;
+      job.steps.splice(job.stepIndex, 1);
+      job.steps.splice(job.steps.indexOf(reopen) + 1, 0, current);
+    }
     const at = job.steps.indexOf(reopen);
     for (const step of job.steps.slice(job.stepIndex, at)) {
       step.status = 'done';
@@ -291,16 +302,21 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
   };
 
-  const halt = (reason: string): void => {
+  const reopenAhead = (reason: string): Step | null => {
     const reopen = reopenOf(job.stepIndex);
-    const leg = reopen ? legOf(reopen) : undefined;
-    const current = job.steps[job.stepIndex];
-    const inFlight = current !== undefined && (current.quoteId !== null || current.venueId !== null);
-    const quotesGone = reason === HALT_TEXT.quotesUsed;
-    if (reopen && leg && !inFlight && !(reopen.retry && quotesGone)) {
-      skipToReopen(reopen);
+    if (!reopen || !legOf(reopen)) return null;
+    return reopen.retry && reason === HALT_TEXT.quotesUsed ? null : reopen;
+  };
+
+  const halt = (reason: string): void => {
+    const ahead = reopenAhead(reason);
+    if (ahead) {
+      skipToReopen(ahead);
       return;
     }
+    const reopen = reopenOf(job.stepIndex);
+    const leg = reopen ? legOf(reopen) : undefined;
+    const quotesGone = reason === HALT_TEXT.quotesUsed;
     job.status = 'halted';
     job.haltReason = reopen && leg && quotesGone ? REOPEN_HALT.quotesUsedLegOpen(leg, openOf(leg, reopen)) : reason;
     deps.jobs.write(job);
@@ -686,6 +702,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       }
       const sell = spec.kind === 'order' && spec.side === CrossexOrderRequest.Side.SELL;
       if (filled > 0) {
+        if (spec.kind === 'convert') await trimAfterRetry(Number(body.executedQty) || (step.planned ?? 0));
         const stuck = sell && (await sellRest(step, Number(body.executedQty)));
         finish(step, filled, spec.kind === 'convert' ? convertSpec(step).dest : spec.dest);
         if (stuck) halt(HALT_TEXT.sellStuck);
@@ -803,6 +820,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     });
     if (!body.orderId) throw new Error('convert order response has no orderId');
     step.venueId = String(body.orderId);
+    await trimAfterRetry(amount);
     finish(step, toAmount, spec.dest);
   };
 
@@ -869,14 +887,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
   };
 
-  const checkQuote = async (account: Account, retried = false): Promise<boolean> => {
-    if (job.steps.findIndex((step) => step.name === 'Close') !== job.stepIndex) return true;
-    const first = job.steps.find((_, index) => reopenOf(index) !== null);
-    if (!first) return true;
-    const spec = convertSpec(first);
-    const wallet = spec.fromCoin === 'USDT' ? USDT_WALLET : poolWallet(spec.venue);
-    const amount = Math.min(floorCents(first.planned ?? 0), floorCents(Math.max(0, account.cash(wallet))));
-    if (amount < HYPERLIQUID_MIN_USDC) return true;
+  const hasQuoteLeft = async (convert: Step, amount: number): Promise<boolean> => {
+    const spec = convertSpec(convert);
     const wait = lastQuoteAt + CONVERT_GAP_MS - deps.now();
     if (wait > 0) await deps.sleep(wait);
     lastQuoteAt = deps.now();
@@ -894,19 +906,33 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const c = classifyGateError(err);
       if (c.category === 'insufficient-margin') return true;
       if (c.category !== 'rate-limited') throw err;
-      if (!retried) {
-        await deps.sleep(REOPEN_MAX_WAIT_MS);
-        return checkQuote(account, true);
-      }
+      return false;
+    }
+  };
+
+  const checkQuotes = async (account: Account): Promise<boolean> => {
+    if (job.steps.findIndex((step) => step.name === 'Close') !== job.stepIndex) return true;
+    const kinds = new Map<string, Step>();
+    for (const [index, step] of job.steps.entries()) {
+      if (reopenOf(index) !== null && !kinds.has(convertSpec(step).symbol)) kinds.set(convertSpec(step).symbol, step);
+    }
+    for (const convert of kinds.values()) {
+      const spec = convertSpec(convert);
+      const wallet = spec.fromCoin === 'USDT' ? USDT_WALLET : poolWallet(spec.venue);
+      const amount = Math.min(floorCents(convert.planned ?? 0), floorCents(Math.max(0, account.cash(wallet))));
+      if (amount < HYPERLIQUID_MIN_USDC || (await hasQuoteLeft(convert, amount))) continue;
+      await deps.sleep(REOPEN_MAX_WAIT_MS);
+      if (await hasQuoteLeft(convert, amount)) continue;
       halt(HALT_TEXT.quotesUsed);
       return false;
     }
+    return true;
   };
 
   const trimRoute = async (missing: number): Promise<void> => {
     const start = job.steps.map((step) => step.name).lastIndexOf('Reopen') + 1;
     const groups: Step[][] = [];
-    for (const step of job.steps.slice(start)) {
+    for (const step of job.steps.slice(start).filter((later) => !isSent(later))) {
       const last = groups.at(-1);
       const joins = last !== undefined && (step.name === 'Convert to USDC' || (step.round !== null && step.round === last[0].round));
       if (last && joins) last.push(step);
@@ -933,6 +959,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       if (group[1]) group[1].planned = floorCents(size * (1 - CONVERT_RATE));
     }
     renumberRounds();
+  };
+
+  const trimAfterRetry = async (given: number): Promise<void> => {
+    if (reopenOf(job.stepIndex)?.retry) await trimRoute(nearestCents(given));
   };
 
   const pollClose = async (step: Step, leg: RealizeJobLeg, venueId: string): Promise<void> => {
@@ -975,7 +1005,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const { lot } = await perpRule(perp.symbol);
       const account = await readAccount(crossEx());
       step.cashBefore = account.cash(poolWallet(step.from));
-      if (!(await checkQuote(account))) return;
+      if (!(await checkQuotes(account))) return;
       if (step.text === null) {
         job.tagCount += 1;
         step.text = tagFor(job.id, job.tagCount);
@@ -1016,15 +1046,32 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return { lots, qty, under: lots > 0 && Number(qty) < minSize };
   };
 
-  const liveMismatch = async (step: Step, leg: RealizeJobLeg): Promise<string | null> => {
+  const leftLots = (held: RealizeJobLeg, lot: string): number => {
+    const reopen = job.steps.find((step) => step.name === 'Reopen' && step.perp?.symbol === held.symbol);
+    return lotsOf(held.positionQty, lot) - lotsOf(held.filledQty, lot) + lotsOf(reopen?.qty ?? 0, lot);
+  };
+
+  const liveMismatch = async (leg: RealizeJobLeg): Promise<string | null> => {
+    const positions = (await crossEx().listCrossexPositions()).body ?? [];
+    const liveOf = (symbol: string, side: RealizeJobLeg['side']): number => {
+      const signed = Number(positions.find((position) => position.symbol === symbol)?.positionQty ?? 0);
+      if (!Number.isFinite(signed)) throw new Error(`Gate sent no position size for ${symbol}`);
+      return side === 'SHORT' ? -signed : signed;
+    };
+    const sizeOf = (lots: number, lot: string): number => Number(roundToStep(lots * Number(lot), lot, 'nearest'));
     const { lot } = await perpRule(leg.symbol);
-    const held = ((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === leg.symbol);
-    const signed = Number(held?.positionQty ?? 0);
-    if (!Number.isFinite(signed)) throw new Error(`Gate sent no position size for ${leg.symbol}`);
-    const live = leg.side === 'SHORT' ? -signed : signed;
-    const expected = lotsOf(leg.positionQty, lot) - lotsOf(leg.filledQty, lot) + lotsOf(step.qty ?? 0, lot);
-    if (lotsOf(live, lot) === expected) return null;
-    return REOPEN_HALT.sizeChanged(leg, Math.max(0, live), Number(roundToStep(expected * Number(lot), lot, 'nearest')));
+    const live = liveOf(leg.symbol, leg.side);
+    const expected = leftLots(leg, lot);
+    if (lotsOf(live, lot) !== expected) return REOPEN_HALT.sizeChanged(leg, Math.max(0, live), sizeOf(expected, lot));
+    for (const hedge of hedgesOf(leg, job.before?.perps ?? [])) {
+      const rule = await perpRule(hedge.symbol);
+      const held = job.realize?.legs.find((other) => other.symbol === hedge.symbol);
+      const hedgeLots = held ? leftLots(held, rule.lot) : lotsOf(hedge.qty, rule.lot);
+      const hedgeLive = liveOf(hedge.symbol, hedge.side);
+      if (lotsOf(hedgeLive, rule.lot) === hedgeLots) continue;
+      return REOPEN_HALT.hedgeChanged(leg, hedge, Math.max(0, hedgeLive), sizeOf(hedgeLots, rule.lot));
+    }
+    return null;
   };
 
   const marginPerCoin = async (leg: RealizeJobLeg): Promise<number> => {
@@ -1047,7 +1094,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const whole = ceilCents((need / marginPerConvertUsdc) * RETRY_CONVERT_HEADROOM);
     const convertAmount = Math.min(cash, Math.max(HYPERLIQUID_MIN_USDC, whole));
     step.retry = { reason: 'margin', convertAmount };
-    job.steps.splice(job.steps.indexOf(step), 0, ...convertSteps(leg.pool, CONVERT_TO[leg.pool], convertAmount));
+    job.steps.splice(job.steps.indexOf(step), 0, ...asRealize(convertSteps(leg.pool, CONVERT_TO[leg.pool], convertAmount)));
     deps.jobs.write(job);
   };
 
@@ -1071,8 +1118,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     step.qty = (step.qty ?? 0) + (filled > 0 ? filled : 0);
     nextTry(step, null);
     const rest = await restOf(step, leg);
-    if (rest.lots === 0) return finish(step, step.qty, step.from);
-    if (rest.under) return halt(REOPEN_HALT.underMinimum(leg, Number(rest.qty)));
+    if (rest.lots === 0 || rest.under) return finish(step, step.qty, step.from);
     await afterTry(step, leg, /REJECT|FAIL/i.test(state) ? errorFromReason(String(body.reason ?? '') || state) : null);
   };
 
@@ -1094,13 +1140,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const wait = (step.nextTryAt ?? 0) - deps.now();
       if (wait > 0) await deps.sleep(wait);
       if (liveUnchecked) {
-        const mismatch = await liveMismatch(step, leg);
+        const mismatch = await liveMismatch(leg);
         if (mismatch !== null) return halt(mismatch);
         liveUnchecked = false;
       }
       const rest = await restOf(step, leg);
-      if (rest.lots === 0) return finish(step, step.qty ?? 0, step.from);
-      if (rest.under) return halt(REOPEN_HALT.underMinimum(leg, Number(rest.qty)));
+      if (rest.lots === 0 || rest.under) return finish(step, step.qty ?? 0, step.from);
       const { qty } = rest;
       if (step.text === null) {
         job.tagCount += 1;
@@ -1168,7 +1213,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
             continue;
           }
           if (step.sentAt !== undefined) {
-            delete step.sentAt;
+            if (!reopenAhead(HALT_TEXT.notListed)) delete step.sentAt;
             halt(HALT_TEXT.notListed);
             continue;
           }

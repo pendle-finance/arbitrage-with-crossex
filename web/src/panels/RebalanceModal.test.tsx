@@ -1757,6 +1757,6 @@ describe('done receipt from the job', () => {
     expect(screen.getByText('Moved the other 27,228 USDC')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '3 actions' })).toBeInTheDocument();
     expect(screen.getByText('$127.27')).toBeInTheDocument();
-    expect(screen.queryByText(/^Fee/)).toBeNull();
+    expect(screen.getByText('$108.39')).toBeInTheDocument();
   });
 });

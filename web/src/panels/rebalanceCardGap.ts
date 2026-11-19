@@ -1,10 +1,10 @@
-import type { CrossexPosition, PerpSize, RebalanceJob } from '../api/types';
+import type { CrossexPosition, PerpSize, RebalanceJob, RebalanceOpenGap } from '../api/types';
 import { t } from '../i18n';
 import { fmtUsd, prettyVenue } from '../lib/fmt';
 import { markPriceOf } from './RebalanceBits';
 import { sideText, sizeText } from './rebalanceCopy';
 import type { VerdictTone } from './RebalanceHovers';
-import { gapsOf, isOtherLeg, otherLegText, perpsOf, type Gap } from './RebalanceJobView';
+import { gapsOf, isOtherLeg, otherLegText, perpsOf, type Gap } from './rebalanceJobSteps';
 
 type PerpRow = Pick<PerpSize, 'symbol' | 'side' | 'qty'>;
 
@@ -35,22 +35,37 @@ export function gapVerdict(job: RebalanceJob, positions: readonly CrossexPositio
   };
 }
 
+type LeftGap = Omit<RebalanceOpenGap, 'hedges'> & { hedges: PerpSize[] | null };
+
+function leftGapsOf(job: RebalanceJob): LeftGap[] {
+  const own = job.status === 'abandoned' ? gapsOf(job) : [];
+  const before = job.before?.perps ?? null;
+  return [
+    ...own.map(({ leg, qty }) => ({ leg, qty, hedges: before ? before.filter((row) => isOtherLeg(row, leg)) : null })),
+    ...(job.openGaps ?? []),
+  ];
+}
+
+export const hasLeftGap = (job: RebalanceJob): boolean => leftGapsOf(job).length > 0;
+
+function liveGapOf({ leg, qty, hedges }: LeftGap, positions: readonly CrossexPosition[] | undefined): number {
+  if (!positions) return qty;
+  const live = perpsOf(positions);
+  const otherShrink = hedges ? qtyOf(hedges, () => true) - qtyOf(live, (row) => isOtherLeg(row, leg)) : 0;
+  const legShrink = leg.positionQty - qtyOf(live, (row) => row.symbol === leg.symbol && row.side === leg.side);
+  return Math.min(qty, legShrink - otherShrink);
+}
+
 export function abandonedGapText(job: RebalanceJob, positions: readonly CrossexPosition[] | undefined): string | null {
-  const found = job.status === 'abandoned' ? openGapOf(job) : null;
-  if (!found) return null;
-  const { leg } = found;
-  let gap = found.qty;
-  if (positions) {
-    const live = perpsOf(positions);
-    const before = job.before?.perps ?? null;
-    const otherShrink = before ? qtyOf(before, (row) => isOtherLeg(row, leg)) - qtyOf(live, (row) => isOtherLeg(row, leg)) : 0;
-    const legShrink = leg.positionQty - qtyOf(live, (row) => row.symbol === leg.symbol && row.side === leg.side);
-    gap = Math.min(found.qty, legShrink - otherShrink);
+  for (const found of leftGapsOf(job)) {
+    const { leg } = found;
+    const gap = liveGapOf(found, positions);
+    if (gap <= leg.positionQty * 1e-9) continue;
+    const mark = markPriceOf(positions ?? [], leg.symbol);
+    const words = { size: sizeText(gap), base: leg.base, side: sideText(leg.side) };
+    return mark === null
+      ? t('accounts.rebalanceRealize.abandonedGapSize', words)
+      : t('accounts.rebalanceRealize.abandonedGap', { ...words, usd: fmtUsd(gap * mark, 0) });
   }
-  if (gap <= leg.positionQty * 1e-9) return null;
-  const mark = markPriceOf(positions ?? [], leg.symbol);
-  const words = { size: sizeText(gap), base: leg.base, side: sideText(leg.side) };
-  return mark === null
-    ? t('accounts.rebalanceRealize.abandonedGapSize', words)
-    : t('accounts.rebalanceRealize.abandonedGap', { ...words, usd: fmtUsd(gap * mark, 0) });
+  return null;
 }

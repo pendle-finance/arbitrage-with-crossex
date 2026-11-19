@@ -55,10 +55,36 @@ describe('RebalanceModal hold', () => {
     expect(within(footer as HTMLElement).getByText('Total cost')).toBeInTheDocument();
   });
 
-  it('no borrow shows the worth line', () => {
-    show(rebalanceViews.hyperliquidFreeBorrow);
-    const worth = screen.getByText('No interest yet. Nothing to move.');
-    expect(worth.closest('.sticky')).not.toBeNull();
+  it.each(['accountA', 'hyperliquidFreeBorrow'] as const)('a move with no interest shows no nothing-to-move line on %s', (key) => {
+    show(rebalanceViews[key]);
+    expect(hold()).toBeInTheDocument();
+    expect(screen.queryByText('No interest yet. Nothing to move.')).toBeNull();
+  });
+
+  it('no fee rate shows why', () => {
+    const plan = rebalanceViews.refusedMargin.plans.even;
+    const refused = { ...plan, realize: { legs: plan.realize!.legs, refused: { reason: 'no-fee-rate' as const, bp: null, maxBp: 25 } } };
+    show({ ...rebalanceViews.refusedMargin, plans: { ...rebalanceViews.refusedMargin.plans, even: refused } });
+    const title = screen.getByText('Fee rate not loaded.');
+    expect(screen.getByText('Profit stays open. The cash move runs without it.')).toBeInTheDocument();
+    expect(follows(screen.getByText('How it runs'), title)).toBe(true);
+    expect(screen.queryByText(/^Realize .+ of profit$/)).toBeNull();
+    expect(hold()).toBeEnabled();
+  });
+
+  it('price impact keeps its hover', async () => {
+    const user = userEvent.setup();
+    show(rebalanceViews.ownerBook);
+    const footer = hold().closest('.sticky') as HTMLElement;
+    const trigger = within(footer).getByText('Price impact');
+    const card = await waitFor(async () => {
+      if (!screen.queryByRole('tooltip')) {
+        await user.unhover(trigger);
+        await user.hover(trigger);
+      }
+      return screen.getByRole('tooltip');
+    });
+    expect(card).toHaveTextContent('Not a fee. USDC bought above $1 or sold below it on Gate spot, and depth taken past the top of the book.');
   });
 
   it('route head keeps its hover', async () => {
@@ -80,6 +106,15 @@ describe('RebalanceModal hold', () => {
     serve();
     renderWithClient(<Polled views={[{ ...done, job: { ...done.job!, status: 'running' } }, done]} />);
     await act(async () => poll());
+    expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
+    expect(screen.getByText('Done. This is what each wallet holds now.')).toBeInTheDocument();
+  });
+
+  it('a running job that finishes with the modal open shows Done, not the picker', async () => {
+    serve();
+    renderWithClient(<Polled views={[rebalanceViews.accountARunning, rebalanceViews.convertDone]} />);
+    await act(async () => poll());
+    expect(screen.queryByRole('button', { name: 'Custom amount' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
     expect(screen.getByText('Done. This is what each wallet holds now.')).toBeInTheDocument();
   });

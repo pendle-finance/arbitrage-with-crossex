@@ -244,7 +244,7 @@ export interface RealizeLeg {
 }
 
 export interface RealizeRefusal {
-  reason: 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
+  reason: 'no-fee-rate' | 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
   bp: number | null;
   maxBp: number;
   capUsd?: number;
@@ -295,6 +295,7 @@ export interface RebalanceStep {
   perp?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; reduceOnly: boolean } | null;
   nextTryAt?: number | null;
   retry?: { reason: 'margin'; convertAmount: number } | null;
+  phase?: 'realize' | 'route';
 }
 
 export interface RealizeJobLeg {
@@ -331,6 +332,14 @@ export interface RebalanceJob {
   inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
   realize?: { legs: RealizeJobLeg[]; costUsd?: number } | null;
   before?: RebalanceBefore | null;
+  routeImpactUsd?: number;
+  openGaps?: RebalanceOpenGap[];
+}
+
+export interface RebalanceOpenGap {
+  leg: Pick<RealizeJobLeg, 'symbol' | 'base' | 'exchange' | 'side' | 'positionQty'> & { hedge?: string | null };
+  qty: number;
+  hedges: PerpSize[];
 }
 
 export interface PerpSize {

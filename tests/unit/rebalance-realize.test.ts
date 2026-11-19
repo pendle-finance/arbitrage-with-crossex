@@ -417,11 +417,22 @@ describe('realize fix round', () => {
     }
   });
 
-  it('a missing fee row plans no realize leg', () => {
-    for (const need of LADDER) expect(planRealize(hlShortInput(need, { feeRows: [] }))).toBeNull();
+  it('a missing fee rate refuses the realize', () => {
+    for (const need of LADDER) {
+      expect(planRealize(hlShortInput(need, { feeRows: [] }))).toEqual({
+        legs: [],
+        refused: { reason: 'no-fee-rate', bp: null, maxBp: 25 },
+      });
+    }
     const book = ownerBook();
-    const plan = planFor(book.buckets, book.account, { ...book.inputs, feeRows: [FEE_ROWS[1]] }, REPAY_GOAL);
-    expect(plan.realize?.legs ?? []).toEqual([]);
+    for (const goal of [EVEN_GOAL, REPAY_GOAL]) {
+      const plan = planFor(book.buckets, book.account, { ...book.inputs, feeRows: [FEE_ROWS[1]] }, goal);
+      expect(plan.realize?.refused?.reason).toBe('no-fee-rate');
+      expect(plan.realize?.legs).toEqual([]);
+      expect(plan.balanced).toBe(false);
+      expect(plan.moves).toBeGreaterThan(3_000);
+      expect(plan.moves).toBeLessThanOrEqual(3_140);
+    }
   });
 
   it('a plan convert under 11 USDC is raised to 11 and still passes the margin test', () => {

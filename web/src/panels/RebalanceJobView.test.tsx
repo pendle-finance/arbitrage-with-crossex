@@ -1,10 +1,11 @@
-import { screen } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import type { RealizeJobLeg, RebalanceJob, RebalanceStep } from '../api/types';
-import { accountBodies, accountHandler, REBALANCE_NOW, rebalanceViews, transferHandler, transferViews } from '../test/fixtures';
+import { accountBodies, accountHandler, REBALANCE_NOW, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
+import { convertsOf, lastRealizeIndex } from './rebalanceJobSteps';
 import { RebalanceJobView } from './RebalanceJobView';
 
 const FEES: Partial<RealizeJobLeg> = {
@@ -76,7 +77,86 @@ describe('RebalanceJobView', () => {
   });
 
   it('receipt fees come from the job, and an old job file shows none', () => {
-    render(rebalanceViews.realizeDone.job!);
+    const job = rebalanceViews.realizeDone.job!;
+    const legs = job.realize!.legs.map(({ symbol, base, exchange, pool, side, positionQty, qty, filledQty, realizedUsd }) => ({
+      symbol, base, exchange, pool, side, positionQty, qty, filledQty, realizedUsd,
+    }));
+    render({ ...job, realize: { legs } });
     expect(screen.queryByText(/^Fee \$/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Fee')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['owner', rebalanceViews.realizeDone.job!, '$127.27', '$108.39', '$18.88'],
+    ['whale', whaleRebalanceViews.realizeWhaleDone.job!, '$27,743.20', '$23,892.90', '$3,850.30'],
+  ])('total cost parts add up to the total on the %s fixture', (_name, job, total, fee, impact) => {
+    render(job);
+    const card = screen.getByText('Total cost').closest('.card') as HTMLElement;
+    const value = (label: string) => within(card).getByText(label).closest('div')!.lastElementChild!.textContent;
+    expect(value('Total cost')).toBe(total);
+    expect(value('Fee')).toBe(fee);
+    expect(value('Price impact')).toBe(impact);
+    const cents = (text: string) => Math.round(Number(text.replace(/[$,]/g, '')) * 100);
+    expect(cents(fee) + cents(impact)).toBe(cents(total));
+  });
+
+  it('the stop box says the gap once', () => {
+    const job = {
+      ...rebalanceViews.realizeHaltedLegOpen.job!,
+      haltReason:
+        'Gate refused the reopen. Some raw Gate text. The Hyperliquid short is 53.8 ETH smaller than the Gate long. Resume to try again, or close 53.8 ETH of the Gate long in Positions.',
+    };
+    render(job);
+    const box = screen.getByRole('alert');
+    expect(within(box).getAllByText(/smaller than the/)).toHaveLength(1);
+    expect(within(box).getByText('Gate refused the reopen.')).toBeInTheDocument();
+    expect(within(box).getByText('Resume to try again, or close 53.8 ETH of the Gate long in Positions.')).toBeInTheDocument();
+  });
+
+  it('the started line and the actions toggle use tabular figures', () => {
+    render(rebalanceViews.realizeLegClosed.job!);
+    expect(screen.getByText(/^Started /)).toHaveClass('num');
+    cleanup();
+    render(rebalanceViews.realizeDone.job!);
+    expect(screen.getByRole('button', { name: '3 actions' })).toHaveClass('num');
+  });
+
+  it('a convert sent before the reopen and looked up after it stays in step 1', () => {
+    const done = rebalanceViews.realizeDone.job!;
+    const [close, convert, reopen, ...route] = done.steps;
+    const deferred = { ...convert!, status: 'pending' as const, qty: null, doneAt: null, quoteId: 'q1' };
+    const job: RebalanceJob = { ...done, status: 'running', stepIndex: 2, steps: [close!, reopen!, deferred, ...route.map((s) => ({ ...s, status: 'pending' as const, qty: null, doneAt: null, startedAt: null }))] };
+    expect(lastRealizeIndex(job)).toBe(2);
+    expect(convertsOf(job, job.realize!.legs[0]!)).toEqual([deferred]);
+    render(job);
+    expect(screen.getByText(/^Realizing .+ of profit$/)).toBeInTheDocument();
+    expect(screen.getByText('Move the other 27,228 USDC')).toBeInTheDocument();
+  });
+
+  it('a finished deferred convert on a convert route stays in step 1 when the job marks phases', () => {
+    const done = rebalanceViews.realizeDone.job!;
+    const [close, convert, reopen, ...route] = done.steps;
+    const deferred = { ...convert!, quoteId: 'q1' };
+    const routeConvert = { ...convert!, quoteId: 'q2', planned: 27228, qty: 27222 };
+    const steps = [close!, reopen!, deferred, routeConvert, ...route];
+    const unmarked: RebalanceJob = { ...done, route: 'convert', stepIndex: steps.length - 1, steps };
+    expect(lastRealizeIndex(unmarked)).toBe(1);
+    const marked: RebalanceJob = { ...unmarked, steps: steps.map((step, index) => ({ ...step, phase: index < 3 ? 'realize' : 'route' })) };
+    expect(lastRealizeIndex(marked)).toBe(2);
+    expect(convertsOf(marked, marked.realize!.legs[0]!)).toEqual([marked.steps[2]]);
+  });
+
+  it.each([
+    ['owner', rebalanceViews.realizeDone.job!, 12.34, '$127.27', '$96.05', '$31.22'],
+    ['whale', whaleRebalanceViews.realizeWhaleDone.job!, 100, '$27,743.20', '$23,792.90', '$3,950.30'],
+  ])('route price impact counts in Price impact, not Fee, on the %s fixture', (_name, job, routeImpactUsd, total, fee, impact) => {
+    render({ ...job, routeImpactUsd });
+    const card = screen.getByText('Total cost').closest('.card') as HTMLElement;
+    const value = (label: string) => within(card).getByText(label).closest('div')!.lastElementChild!.textContent;
+    expect(value('Total cost')).toBe(total);
+    expect(value('Fee')).toBe(fee);
+    expect(value('Price impact')).toBe(impact);
+    const cents = (text: string) => Math.round(Number(text.replace(/[$,]/g, '')) * 100);
+    expect(cents(fee) + cents(impact)).toBe(cents(total));
   });
 });

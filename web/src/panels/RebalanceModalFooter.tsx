@@ -2,7 +2,7 @@ import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { useTranslation } from 'react-i18next';
 import type { EvenPlan, GoalKind, RebalanceBucket, RoutePlan } from '../api/types';
 import { VerdictAlert } from './RebalanceBits';
-import { TotalCost } from './RebalanceJobView';
+import { TotalCost } from './RebalancePlanBits';
 import { HOLD_LABEL, modalRefreshRoute } from './rebalanceCopy';
 import type { worthLine } from './RebalanceHovers';
 

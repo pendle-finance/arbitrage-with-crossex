@@ -4,7 +4,7 @@ import { fmtUsd } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { ROUTE_ORDER, routeScore } from './RebalanceBits';
 import { defaultGoal, isCashLimitedEven, movesKey, totalCostUsd } from './RebalanceHovers';
-import { refusalOf } from './RebalanceJobView';
+import { refusalOf } from './RebalancePlanBits';
 import { PRESET_OFF, shortOfCash, verdictBalanced, verdictNoCashToMove } from './rebalanceCopy';
 
 export type Preset = 'even' | 'repay';

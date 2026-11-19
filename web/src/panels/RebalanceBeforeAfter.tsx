@@ -7,6 +7,7 @@ import { fmtUsd, parseSymbol, prettyVenue, sigGrouped } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { borrowLeftOf, interestAfterOf, isRateUnknown, keyOf, MONTH_DAYS, Term, WalletTerm } from './RebalanceHovers';
 import { HOVER, hoverCash, modalFrees, sideText, sizeText, WALLET_LABEL } from './rebalanceCopy';
+import { lots, walletsNow } from './rebalanceJobSteps';
 
 export interface ChangeRow {
   label: string;
@@ -79,14 +80,13 @@ export function walletChanges(view: RebalanceView, _plan: EvenPlan, route: Route
 }
 
 export function receiptChanges(job: RebalanceJob, buckets: RebalanceBucket[], live: PerpSize[] | null): WalletChange[] {
-  const wallets = job.target ? changesOf(job.before?.buckets ?? buckets, job.target, null) : [];
+  const before = job.before?.buckets ?? buckets;
+  const wallets = job.target ? changesOf(before, walletsNow(job, before), null) : [];
   const legs = job.realize?.legs ?? [];
   if (legs.length === 0) return wallets;
   const perps: WalletChange = { key: 'perps', label: t('accounts.rebalanceRealize.perps'), rows: perpRows(job, live ?? []) };
   return [...wallets, perps];
 }
-
-export const lots = (qty: number): number => Math.round(qty * 1e9) / 1e9;
 
 const perpLabel = (perp: Pick<PerpSize, 'exchange' | 'side'>): string => `${prettyVenue(perp.exchange)} ${sideText(perp.side)}`;
 

@@ -241,6 +241,7 @@ const ENGLISH = [
     "Gate refused the reopen. Some raw Gate text. The Hyperliquid short is 53.8 ETH smaller than the Gate long. Resume to try again, or close 53.8 ETH of the Gate long in Positions.",
     "The rest is under Gate's smallest order. The Gate long is 1,204.5 BTC smaller than the Hyperliquid short. Abandon, then close 1,204.5 BTC of the Hyperliquid short in Positions.",
     "The Hyperliquid short is 40 ETH on Gate, not the 53.8 ETH this rebalance left. Abandon it and check Positions.",
+    "The Gate long is 12.2 ETH on Gate, not the 66 ETH it was when this rebalance started. The Hyperliquid short was not reopened. Abandon it and check Positions.",
     "Rebalance stopped. Hyperliquid short is 23.8 ETH smaller than the Gate long.",
     "Rebalance stopped before the close.",
   ],
@@ -501,6 +502,10 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
   [
     "The Hyperliquid short is 40 ETH on Gate, not the 53.8 ETH this rebalance left. Abandon it and check Positions.",
     "Gate 上的 Hyperliquid 空头为 40 ETH，而不是本次再平衡留下的 53.8 ETH。请放弃并检查持仓。",
+  ],
+  [
+    "The Gate long is 12.2 ETH on Gate, not the 66 ETH it was when this rebalance started. The Hyperliquid short was not reopened. Abandon it and check Positions.",
+    "Gate 上的 Gate 多头为 12.2 ETH，而不是本次再平衡开始时的 66 ETH。Hyperliquid 空头未重新开仓。请放弃并检查持仓。",
   ],
   ["Rebalance stopped. Hyperliquid short is 23.8 ETH smaller than the Gate long.", "再平衡已停止。Hyperliquid 空头比 Gate 多头少 23.8 ETH。"],
   ["Rebalance stopped before the close.", "再平衡在平仓前已停止。"],

@@ -237,6 +237,8 @@
   "haltReopenRefused": "Gate 拒绝了重新开仓。",
   "haltUnderMinimum": "剩余数量低于 Gate 的最小下单量。",
   "haltSizeChanged": "Gate 上的 {{venue}} {{sideWord}}为 {{live}} {{base}}，而不是本次再平衡留下的 {{expected}} {{base}}。",
+  "haltHedgeChanged": "Gate 上的 {{venue}} {{sideWord}}为 {{live}} {{base}}，而不是本次再平衡开始时的 {{expected}} {{base}}。",
+  "haltNotReopened": "{{venue}} {{sideWord}}未重新开仓。",
   "haltAbandonCheck": "请放弃并检查持仓。",
   "legGapThe": "{{venue}} {{sideWord}}比 {{otherVenue}} {{otherSideWord}}少 {{size}} {{base}}。",
   "legGap": "{{venue}} {{sideWord}}比 {{otherVenue}} {{otherSideWord}}少 {{size}} {{base}}。",

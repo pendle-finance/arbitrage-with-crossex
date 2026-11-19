@@ -13,9 +13,11 @@ import { num } from '../lib/fmt';
 import { useDebounced } from '../lib/useDebounced';
 import { useNow } from '../lib/useNow';
 import { RebalanceBeforeAfter, walletChanges } from './RebalanceBeforeAfter';
-import { planRows, VerdictAlert } from './RebalanceBits';
-import { HowItRuns, JobChip, realizeText, RebalanceJobView, refusalOf, StepsFold, stepsHoverOf } from './RebalanceJobView';
-import type { Pressed } from './RebalanceJobView';
+import { VerdictAlert } from './RebalanceBits';
+import type { Pressed } from './RebalanceJobBits';
+import { JobChip, RebalanceJobView } from './RebalanceJobView';
+import { HowItRuns, realizeText, refusalOf, StepsFold, stepsHoverOf } from './RebalancePlanBits';
+import { planRows } from './rebalanceStepRows';
 import { RebalanceCustomRow } from './RebalanceCustomRow';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
 import { AFTER_LABEL, GOAL_LABEL, HOLD_LABEL, HOVER, poolCoin } from './rebalanceCopy';
@@ -55,7 +57,7 @@ export function RebalanceModal({
   const [acceptNext, setAcceptNext] = useState(false);
   const [pick, setPick] = useState<RouteName | null>(null);
   const [stepsOpen, setStepsOpen] = useState(false);
-  const [ranId, setRanId] = useState<string | null>(null);
+  const [sawRun, setSawRun] = useState(false);
   const [pressed, setPressed] = useState<Pressed | null>(null);
   const running = job?.status === 'running';
   const halted = job?.status === 'halted';
@@ -88,7 +90,7 @@ export function RebalanceModal({
   const [accepted, setAccepted] = useState<Accepted | null>(() => acceptedOf(plan, pickedRoute(plan, null).name));
 
   useEffect(() => {
-    if (job && (job.status === 'running' || job.status === 'halted')) setRanId(job.id);
+    if (job && (job.status === 'running' || job.status === 'halted')) setSawRun(true);
   }, [job?.id, job?.status]);
 
   useEffect(() => {
@@ -138,7 +140,7 @@ export function RebalanceModal({
     setPick(name);
     setAccepted(acceptedOf(plan, pickedRoute(plan, name).name));
   };
-  const finished = job?.status === 'done' && (job.id === ranId || start.isSuccess);
+  const finished = job?.status === 'done' && (sawRun || start.isSuccess);
   const aboveMost = goal === 'custom' && plan.goal.kind === 'custom' && plan.customMaxUsd != null && plan.goal.amount > plan.customMaxUsd;
   const borrow = receivingBorrow(buckets, planSteps(plan));
   const held = receivingHeld(buckets, planSteps(plan));
@@ -150,7 +152,7 @@ export function RebalanceModal({
   const clearsBorrow = goal !== 'custom' || receivingBorrow(buckets, planSteps(plan)) !== null;
   const worth = chosen === null || !clearsBorrow ? null : worthLine(plan, route, buckets);
   const optional = worth !== null && worth.tone !== 'act';
-  const worthAlert = worth !== null && worthChip(plan, route, buckets) === null;
+  const worthAlert = worth !== null && worth.tone !== 'info' && worthChip(plan, route, buckets) === null;
   const walletPools = POOLS.filter((pool) => buckets.some((bucket) => keyOf(bucket) === poolKey(pool)));
   const presetOptions = (['even', 'repay'] as const).map((preset) => ({
     value: preset,

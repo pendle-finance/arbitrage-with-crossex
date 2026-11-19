@@ -11,7 +11,9 @@ import { t } from '../i18n';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
-import { ALWAYS_SHOWN, FeeCell, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
+import { ALWAYS_SHOWN, WALLET_TONE, type BarRow } from './RebalanceBars';
+import { ROUTE_ORDER } from './RebalanceBits';
+import { FeeCell } from './RebalanceRealizeBits';
 import {
   factBorrowing,
   factInterestNow,
