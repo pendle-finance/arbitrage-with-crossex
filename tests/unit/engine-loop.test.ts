@@ -1182,3 +1182,74 @@ describe('venue statuses the decoder has not met', () => {
     expect(w.store.getPair(w.pairId)!.mode).toBe('STOPPING');
   });
 });
+
+describe('maker + hedge close (both legs reduce-only)', () => {
+  const closeWorld = (over?: Parameters<typeof mkWorld>[0]): World =>
+    mkWorld({ a: { reduceOnly: true }, b: { reduceOnly: true }, clipBandBp: 50, ...over });
+
+  it('every order on both legs goes out reduce-only', async () => {
+    const w = closeWorld();
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.152');
+    await stepChecked(w, 4);
+    expect([...w.venue.orders.values()].every((o) => o.reduceOnly)).toBe(true);
+    assertHonestReport(w);
+  });
+
+  it('a venue cancel finishes the close at market, hedged, with a warning', async () => {
+    const w = closeWorld();
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.05');
+    w.venue.venueCancel(maker.clientText); // e.g. Gate cancels on low margin
+    await stepChecked(w, 8);
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.mode).toBe('DONE');
+    const report = JSON.parse(pair.reportJson!);
+    expect(report.aFilled).toBe('0.152');
+    expect(report.bFilled).toBe('0.152');
+    expect(w.store.listAlerts().some((a) => /cancelled on the venue/.test(a.message))).toBe(true);
+  });
+
+  it('a maker refused after acceptance draws the failure budget, not a re-place every tick', async () => {
+    const w = closeWorld({ a: { reduceOnly: false }, b: { reduceOnly: false } }); // opens too
+    await stepChecked(w);
+    const first = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.setRawStatus(first.clientText, 'FAIL');
+    await stepChecked(w);
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.pocRejects).toBe(1);
+    expect(pair.makerNotBefore).toBeGreaterThan(w.clock.now() - TUNING.TICK_MS);
+  });
+
+  it('a hedge leg whose position is gone ends the close with an error alert instead of retrying forever', async () => {
+    const w = closeWorld();
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.152');
+    w.venue.nextCreate = Array(200).fill('reject:REDUCE_ONLY_ORDER_REJECTED');
+    await stepChecked(w, 30);
+    expect(w.store.getPair(w.pairId)!.mode).toBe('HALTED');
+    commands.resumeAfterHalt(w.store, w.pairId);
+    for (let i = 0; i < 200 && w.store.getPair(w.pairId)!.mode !== 'DONE'; i++) await stepChecked(w);
+    const done = w.store.getPair(w.pairId)!;
+    expect(done.mode).toBe('DONE');
+    expect(JSON.parse(done.reportJson!).reason).toMatch(/hedge leg refused/);
+    expect(w.store.listAlerts().some((a) => a.level === 'error' && /may already be closed/.test(a.message))).toBe(true);
+  });
+
+  it('a resting close follows the book toward the market', async () => {
+    const w = closeWorld({ pricePolicy: 'touch' }); // leg A BUYs back a short
+    w.venue.touchA = '2499';
+    await stepChecked(w);
+    expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2499');
+    w.venue.touchA = '2499.5'; // bid rose: a BUY closer to the market
+    for (let i = 0; i < 8; i++) await stepChecked(w);
+    const live = w.venue.liveOrder(A_CONTRACT)!;
+    expect(live.price).toBe('2499.5');
+    w.venue.touchA = '2498'; // moved away: no chase
+    for (let i = 0; i < 8; i++) await stepChecked(w);
+    expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2499.5');
+  });
+});

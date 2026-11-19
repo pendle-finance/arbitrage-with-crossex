@@ -208,13 +208,16 @@ describe('AssetCard — roll over', () => {
   it.each([
     // An older server: no ladder, so the modal opens on the whole position
     // at the seed.
-    ['a fifth of the pair rolling at a better rate makes the banner loud and flags the card', undefined, 0.01],
+    ['a fifth of the pair rolling at a better rate makes the banner loud and flags the card', undefined, 0.01, 0],
     // A stray 0.01 ETH inside the 1% seed ahead of 1,000 ETH at 1.3%: at the
     // seed the fit was 0.0095 ETH, under a fifth, and the banner stayed quiet
     // (his catch 2026-09-23). Sized at the band the whole 100 rolls, quoted
     // at the tolerance the modal widens to: 1.3% × 1.1 headroom.
-    ['a stray level inside the seed does not hide the opportunity: sized at the band', [[0.004, 0.01], [0.013, 1000]], 0.0143],
-  ] as const)('%s', async (_name, depth, wantSlip) => {
+    ['a stray level inside the seed does not hide the opportunity: sized at the band', [[0.004, 0.01], [0.013, 1000]], 0.0143, 0],
+    // Fees already paid to open the pair are not charged to "now": rolling
+    // cannot get them back. "Now" stays the forward 14.29%.
+    ['fees already paid do not lower the rate the roll is compared with', undefined, 0.01, 2_000],
+  ] as const)('%s', async (_name, depth, wantSlip, paidFeeUsd) => {
     const now = Math.floor(Date.now() / 1000);
     const LATER = now + 45 * DAY;
     const row = (marketId: number, venue: string, maturity: number) => ({
@@ -303,7 +306,30 @@ describe('AssetCard — roll over', () => {
       }),
     );
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }));
-    renderCard(book(8));
+    const held = book(8);
+    renderCard(
+      paidFeeUsd > 0
+        ? {
+            ...held,
+            borosHistory: held.borosOpen.map((b) => ({
+              marketId: b.marketId,
+              venue: b.venue,
+              spreadVenues: null,
+              maturity: b.maturity,
+              settleUsd: 0,
+              settleFeeUsd: 0,
+              rebateUsd: 0,
+              tradePnlUsd: -paidFeeUsd / 2,
+              tradeFeeUsd: paidFeeUsd / 2,
+              peakSizeToken: b.sizeToken,
+              peakNotionalUsd: b.notionalUsd,
+              firstEventSec: now - 10 * DAY,
+              entryApr: b.entryApr,
+              side: b.side,
+            })),
+          }
+        : held,
+    );
 
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     // A generous wait: the context and the probe are two round trips, and the

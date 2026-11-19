@@ -29,7 +29,7 @@ export function SetupRows({
     >
       <GateKeyRow {...rowProps('gateKey')} />
       <BorosWalletRow {...rowProps('borosWallet')} />
-      <TelegramRow {...rowProps('telegram')} />
+      <TelegramRow {...rowProps('telegram')} onLogIn={() => onOpenStep('borosWallet')} />
     </div>
   );
 }

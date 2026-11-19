@@ -246,6 +246,58 @@ describe('the roll probe on the server', () => {
     expect(exit?.legs.map((l) => [l.marketId, l.direction])).toEqual([[59, 'long']]);
   });
 
+  it('fees already paid to open the pair do not make a lower later rate look better', async () => {
+    // Held spread at 3.62% on $250k notional, $60k capital: holding still earns
+    // 15.08% on capital. $300 of Boros fees paid to open it drag the life-of-pair
+    // figure to about 5%. The later market quotes 3% (about 14.3% on capital).
+    const held = {
+      ...spreadGroup(),
+      borosOpen: [
+        yu({ marketId: 59, venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SOON, entryApr: 0.0362, spreadVenues: ['HYPERLIQUID', 'GATE'] }),
+      ],
+      borosHistory: [
+        {
+          marketId: 59,
+          venue: 'HYPERLIQUID',
+          spreadVenues: ['HYPERLIQUID', 'GATE'],
+          maturity: SOON,
+          settleUsd: 0,
+          settleFeeUsd: 0,
+          rebateUsd: 0,
+          tradePnlUsd: -300,
+          tradeFeeUsd: 300,
+          peakSizeToken: 100,
+          peakNotionalUsd: 250_000,
+          firstEventSec: NOW - 10 * DAY,
+          entryApr: 0.0362,
+          side: 'SHORT',
+        },
+      ],
+    } as AssetGroup;
+    const quoting = (newRate: number) => async (body: PairSimulateBody) => ({
+      simulation: simulation({
+        intent: body.intent,
+        estSpreadApr: newRate,
+        legs: body.legs.map((l) =>
+          leg({ marketId: l.marketId, direction: l.direction, marginRequired: 1, ...(body.intent === 'close' ? { execApr: 0.0362 } : {}) }),
+        ),
+        receiveLeg: 0,
+      }),
+    });
+    const run = (newRate: number) =>
+      createRollProbe(
+        deps({ assets: [held], markets: [spreadMarket(59, SOON), spreadMarket(60, LATER)], price: quoting(newRate) }),
+      )();
+
+    const lower = await run(0.03);
+    expect(lower).toHaveLength(1);
+    expect(lower[0].targets).toEqual([]);
+
+    const higher = await run(0.04);
+    expect(higher[0].targets.map((t) => t.maturity)).toEqual([LATER]);
+    expect(higher[0].targets[0].currentApr).toBeCloseTo(0.0362 * 250_000 / 60_000, 6);
+  });
+
   it('case 3: twin pairs at one date are priced apart, and only the singles twin rolls', async () => {
     const signals = await createRollProbe(
       deps({ assets: [twinsBook()], markets: [spreadMarket(59, SOON), spreadMarket(60, LATER), ...markets.slice(0, 4)], price: pricer() }),

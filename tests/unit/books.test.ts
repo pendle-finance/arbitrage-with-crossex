@@ -15,6 +15,7 @@ describe('nativeSymbol', () => {
   it('maps each venue to its own instrument id', () => {
     expect(nativeSymbol('BINANCE', 'BTC', 'USDT')).toBe('BTCUSDT');
     expect(nativeSymbol('BYBIT', 'BTC', 'USDT')).toBe('BTCUSDT');
+    expect(nativeSymbol('ASTER', 'ETH', 'USDT')).toBe('ETHUSDT');
     expect(nativeSymbol('OKX', 'BTC', 'USDT')).toBe('BTC-USDT-SWAP');
     expect(nativeSymbol('KRAKEN', 'BTC', 'USD')).toBe('PF_BTCUSD');
     expect(nativeSymbol('HYPERLIQUID', 'BTC', 'USDC')).toBe('BTC');
@@ -277,5 +278,21 @@ describe('normalization invariants', () => {
     })!;
     expect(b.bids).toEqual([[98, 1]]);
     expect(b.asks).toEqual([]);
+  });
+});
+
+describe('Aster book', () => {
+  it("reads Aster's Binance-shaped depth from its own API", async () => {
+    const { default: axios } = await import('axios');
+    const { vi } = await import('vitest');
+    const { fetchVenueBook } = await import('../../src/core/estimate/books');
+    const get = vi.spyOn(axios, 'get').mockResolvedValueOnce({
+      data: { lastUpdateId: 1, bids: [['1795.52', '22.274'], ['1795.51', '22.274']], asks: [['1795.53', '31.915']] },
+    });
+    const book = await fetchVenueBook('ASTER', 'ETH', 'USDT');
+    expect(get.mock.calls[0][0]).toBe('https://fapi.asterdex.com/fapi/v1/depth?symbol=ETHUSDT&limit=100');
+    expect(book?.bids[0]).toEqual([1795.52, 22.274]);
+    expect(book?.asks[0]).toEqual([1795.53, 31.915]);
+    get.mockRestore();
   });
 });
