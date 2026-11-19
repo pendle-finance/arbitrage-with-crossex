@@ -824,13 +824,12 @@ function PairCard({
 
   // ---- the roll signal ----------------------------------------------------
   /**
-   * Inside the window, each later maturity both venues list is probed at a
-   * FIFTH of the position: the entry legs alone (the round trip's fees are
-   * deliberately left out — the question is whether the market offers a
-   * better rate, not what today's exit costs), against the rate this row
-   * shows NET of the fees its own switches charge. A target that fills that
-   * fifth inside its tolerance at a better rate is an opportunity; the best
-   * one goes up to the banner (his call 2026-09-20).
+   * Inside the window, each later maturity both venues list is probed and
+   * priced net of the roll's own costs, against what holding still earns
+   * (`lockedAprFwd`). Fees already paid to open this pair are left out of
+   * that: rolling cannot get them back, so charging them to "keep" made a
+   * lower later rate look better. A target that fills inside its tolerance
+   * at a better rate is an opportunity; the best one goes up to the banner.
    */
   const rollAddress = useTrackedAddressOptional()?.address ?? null;
   const rollCtx = useBorosPairContext(rollDue ? rollAddress : null);
@@ -840,7 +839,7 @@ function PairCard({
   );
   // A pair with no rate (under $100, or a rate unknown) has nothing to compare
   // a probe against, so it sends none: each probe is a paid Boros simulate.
-  const probing = rollDue && netApr !== null;
+  const probing = rollDue && lockedAprFwd !== null;
   const probeTargets = useMemo(
     () => (probing && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
     [probing, rollMarkets, pair, base, soonest],
@@ -850,8 +849,8 @@ function PairCard({
   // Results from before a no-rate spell must not price a later chip.
   if (!probing && Object.keys(probes).length > 0) setProbes({});
   const opportunities = useMemo(
-    () => rollOpportunities(probes, probeTargets, netApr, soonest),
-    [probes, probeTargets, netApr, soonest],
+    () => rollOpportunities(probes, probeTargets, lockedAprFwd, soonest),
+    [probes, probeTargets, lockedAprFwd, soonest],
   );
   const opportunity = opportunities[0] ?? null;
   const signalRef = useRef(onRollSignal);
@@ -1462,7 +1461,8 @@ export interface RollOpportunity {
   /** The rate the modal opens on for this maturity: NET of the round trip,
    * at the size it defaults to. */
   rate: number;
-  /** What the pair earns now, net of the fees its row charges. */
+  /** What holding still earns: the locked rate on capital, less the
+   * settlement fee, without the fees already paid to open the pair. */
   current: number;
   /** When the pair being held settles — the banner reads the two rates with
    * the days each one runs for, so a bigger number over a shorter term

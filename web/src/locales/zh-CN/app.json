@@ -278,7 +278,10 @@
     "notForThisWallet": "此钱包未设置",
     "skip": "接近清算、开始计息或临近到期时将不会收到预警。",
     "checkingBot": "正在向 Telegram 机器人查询…",
-    "linkedElsewhere": "提醒绑定的是 <a>{{other}}</a>，而不是 <b>{{viewed}}</b>。请以此钱包登录来设置它的提醒。"
+    "linkedElsewhere": "提醒绑定的是 <a>{{other}}</a>，而不是 <b>{{viewed}}</b>。请以此钱包登录来设置它的提醒。",
+    "logInFirst": "请先登录",
+    "logInToSetUp": "登录以设置",
+    "logInFirstBody": "提醒发给在此终端登录的钱包。请以 <a>{{viewed}}</a> 登录来设置它的提醒。"
   },
   "api": {
     "network": "请求 {{path}} 时网络出错：{{error}}",
