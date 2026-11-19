@@ -4,8 +4,8 @@ import { describe, it, expect } from 'vitest';
 import { touchOf } from '../../src/core/estimate/books';
 import { walkBook } from '../../src/core/estimate/fill';
 import { roundToStep } from '../../src/core/numbers';
-import { marginPerConvertUsdc } from '../../src/core/rebalance/realize';
-import { OWNER_HL_ETH, ownerBook } from './fixtures/realize-books';
+import { marginPerConvertUsdc, realizedNetUsd } from '../../src/core/rebalance/realize';
+import { ETH_MARK, GATE_ETH, HL_ETH, OWNER_HL_ETH, ownerBook, perp, realizeBook } from './fixtures/realize-books';
 import {
   bookLevels,
   routeScore,
@@ -1744,5 +1744,33 @@ describe('planFor with a realize step', () => {
       expect(route).toMatchObject({ available: true, costUsd: 0, steps: [] });
       expect(walletIn(route?.after ?? [], 'USDT', 'CROSSEX').cash).toBeCloseTo(-29_812 + converted * (1 - CONVERT_RATE), 1);
     }
+  });
+});
+
+describe('planFor realize at $6,000,000', () => {
+  const qty = 3_312.6294;
+  const whale = (availableMargin: number) =>
+    realizeBook({
+      usdt: { cash: -4_500_000, upnl: 0 },
+      usdc: { cash: 4_800_000, upnl: 2_114_451.35 },
+      availableMargin,
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 2_460, ETH_MARK), perp('GATE_FUTURE_ETH_USDT', qty, ETH_MARK, ETH_MARK)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: qty * ETH_MARK,
+    });
+
+  it.each([
+    [910_989.65, 0],
+    [-400_000, 5],
+  ])('a $6,000,000 book with a realize ends even within 4 passes, available margin %d, %d Converts', (available, converts) => {
+    const book = whale(available);
+    const plan = planFor(book.buckets, book.account, book.inputs);
+    const legs = plan.realize?.legs ?? [];
+    expect(plan.realize?.refused).toBeNull();
+    expect(legs.map((leg) => leg.symbol)).toEqual(['HYPERLIQUID_FUTURE_ETH_USDC']);
+    expect(legs[0].convert?.count ?? 0).toBe(converts);
+    expect(legs.reduce((total, leg) => total + realizedNetUsd(leg), 0)).toBeGreaterThanOrEqual(907_225.67);
+    expect(plan.balanced).toBe(false);
+    expect(plan.shortOfEven).toBeLessThan(1);
   });
 });

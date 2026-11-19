@@ -1124,9 +1124,9 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     if (decodeStatus(state) !== 'closed') return deps.sleep(POLL_MS);
     const filled = Number(body.executedQty ?? 0);
     step.qty = (step.qty ?? 0) + (filled > 0 ? filled : 0);
-    nextTry(step, null);
     const rest = await restOf(step, leg);
     if (rest.lots === 0 || rest.under) return finish(step, step.qty, step.from);
+    nextTry(step, null);
     await afterTry(step, leg, /REJECT|FAIL/i.test(state) ? errorFromReason(String(body.reason ?? '') || state) : null);
   };
 

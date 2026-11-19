@@ -5299,6 +5299,16 @@ describe('close, convert and reopen', () => {
     expect(h.jobs.read()?.status).toBe('done');
   });
 
+  it('a reopen filled whole on its first try keeps its tag, its Gate order id and no retry', async () => {
+    const h = harness(fakeClock(), realizeOnly(realizeOf(realizeLeg())), realizeRun({}));
+    await h.run();
+    const reopen = h.jobs.read()?.steps.find((step) => step.name === 'Reopen');
+    expect(h.jobs.read()?.status).toBe('done');
+    expect(reopen).toMatchObject({ status: 'done', attempt: 0, nextTryAt: null });
+    expect(reopen?.text).toBe(h.sent('createCrossexOrder')[1].crossexOrderRequest?.text);
+    expect(reopen?.venueId).not.toBeNull();
+  });
+
   it('skips the check quote under 11 USDC of cash', async () => {
     const h = harness(fakeClock(), realizeOnly(realizeOf(realizeLeg())), realizeRun({
       getCrossexAccount: seq(account({ hyperliquid: 10.99 }), account({ hyperliquid: 34_396.99 })),
@@ -6529,5 +6539,102 @@ describe('scale ladder: Reopen', () => {
     expect(h.jobs.read()?.status).toBe('done');
     if (rung === 6_000_000) expect(chunks.length).toBeGreaterThan(1);
     if (rung === 50) expect(expected).toBe(50);
+  });
+});
+
+describe('scale ladder: funding between the close cash reads', () => {
+  function fundedClose(filled: string, cashAfter: number) {
+    let hyperliquid = 0;
+    let usdt = 0;
+    const quoted = new Map<string, number>();
+    const sends: { amount: number; cash: number }[] = [];
+    const quotes = quotesAt((from) => from * 0.998);
+    const orders = ordersInTurn();
+    const leg = realizeLeg({ qty: 10_000, positionQty: 12_000, realizedUsd: 7_000_000, convert: null });
+    const h = harness(
+      fakeClock(),
+      { direction: 'toUsdt', route: 'convert', steps: [convert(7_000_000)], realize: realizeOf(leg) },
+      realizeRun({
+        getCrossexAccount: async () => account({ ...WHALE, hyperliquid, usdt }),
+        getCrossexOrder: ordersBy({
+          o1: () => {
+            hyperliquid = cashAfter;
+            return order('FILLED', filled, 'o1');
+          },
+          o2: order('FILLED', filled, 'o2'),
+        }),
+        createCrossexConvertQuote: async (arg: RequestOf<'createCrossexConvertQuote'>) => {
+          const res = (await quotes(arg as never)) as { body: { quoteId: string } };
+          quoted.set(res.body.quoteId, Number(arg.crossexConvertQuoteRequest.fromAmount));
+          return res;
+        },
+        createCrossexConvertOrder: async (arg: RequestOf<'createCrossexConvertOrder'>) => {
+          const amount = quoted.get(arg.crossexConvertOrderRequest.quoteId) ?? 0;
+          sends.push({ amount, cash: hyperliquid });
+          hyperliquid = nearestCents(hyperliquid - amount);
+          usdt = nearestCents(usdt + amount * 0.998);
+          return orders(arg as never);
+        },
+      }),
+    );
+    return { h, sends };
+  }
+
+  it('a funding payment between the cash reads moves the realized figure by at most the funding', async () => {
+    const { h, sends } = fundedClose('10000', 7_000_000 - 75);
+    await h.run();
+    const job = h.jobs.read();
+    expect(job?.realize?.legs[0]).toMatchObject({ filledQty: 10_000, realizedUsd: 6_999_925 });
+    expect(sends.map((send) => send.amount)).toEqual([...Array.from({ length: 13 }, () => 500_000), 499_925]);
+    expect(sends.every((send) => send.amount <= send.cash)).toBe(true);
+    expect(job?.status).toBe('done');
+  });
+
+  it('a funding payment before a 60% fill trims the route 125 short, and the last Convert stops at the cash', async () => {
+    const { h, sends } = fundedClose('6000', 4_200_000 - 75);
+    await h.run();
+    const job = h.jobs.read();
+    expect(job?.realize?.legs[0]).toMatchObject({ filledQty: 6_000, realizedUsd: 4_199_925 });
+    const route = job?.steps.slice(job.steps.findIndex((step) => step.name === 'Reopen') + 1) ?? [];
+    expect(route.map((step) => step.planned)).toEqual([...Array.from({ length: 8 }, () => 500_000), 200_050]);
+    expect(sends.map((send) => send.amount)).toEqual([...Array.from({ length: 8 }, () => 500_000), 199_925]);
+    expect(sends.every((send) => send.amount <= send.cash)).toBe(true);
+    expect(job?.status).toBe('done');
+  });
+});
+
+describe('scale ladder: Spot loop trim', () => {
+  it('a part-filled $6,000,000 close trims the Spot loop rounds', async () => {
+    const moves = [250_000, 500_000, 1_000_000, 2_000_000, 4_896_572.39, 700_000];
+    const leg = realizeLeg({ qty: 3_300, positionQty: 3_312.6294, realizedUsd: 2_108_700, convert: null });
+    const h = harness(
+      fakeClock(),
+      { direction: 'toUsdt', route: 'loop', steps: moves.map((move, index) => round(index + 1, move)), realize: realizeOf(leg) },
+      realizeRun({
+        getCrossexAccount: seq(account({ hyperliquid: 0 }), account({ hyperliquid: 1_265_220 })),
+        getCrossexOrder: ordersBy({ o1: order('FILLED', '1980', 'o1') }),
+        createCrossexOrder: seq(created('o1'), gateError(403, 'FORBIDDEN', 'Forbidden')),
+      }),
+    );
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(job.realize?.legs[0]).toMatchObject({ filledQty: 1_980, realizedUsd: 1_265_220 });
+    const route = job.steps.slice(2);
+    expect(route.map((step) => step.name)).toEqual(
+      Array.from({ length: 5 }, () => ['From Hyperliquid', 'To Gate', 'Sell USDC']).flat(),
+    );
+    const outs = route.filter((step) => step.name === 'From Hyperliquid');
+    expect(outs.map((step) => [step.round, step.planned])).toEqual([
+      [1, 250_000],
+      [2, 500_000],
+      [3, 1_000_000],
+      [4, 2_000_000],
+      [5, 4_753_092.39],
+    ]);
+    expect(route.filter((step) => step.round === 5 && step.name !== 'From Hyperliquid').map((step) => step.planned)).toEqual([
+      4_753_091.39, 4_753_091.39,
+    ]);
+    expect(outs.every((step) => (step.planned ?? 0) > 11 && (step.planned ?? 0) <= 4_896_572.39)).toBe(true);
+    expect(outs.reduce((total, step) => total + Math.round((step.planned ?? 0) * 100), 0)).toBe(934_657_239 - 84_348_000);
   });
 });
