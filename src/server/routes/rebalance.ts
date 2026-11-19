@@ -1,6 +1,9 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { classifyPlain, CoreError, describeError } from '../../core/errors';
+import { fetchDeepBook, type NormalizedBook } from '../../core/estimate/books';
+import { DEFAULT_STEP, parseSymbol } from '../../core/numbers';
 import { computeExposure } from '../../core/positions';
+import { isInProfit, realizeCostUsd, type PerpRule, type PerpSide, type RealizeLeg, type RealizePerp } from '../../core/rebalance/realize';
 import {
   bookLevels,
   bucketsFrom,
@@ -26,6 +29,7 @@ import { catchRateLimit, sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   bannerFor,
+  gapsLeftBy,
   inTransitOf,
   LOCK_TEXT,
   moneyLockFor,
@@ -100,6 +104,36 @@ const cents = (usd: number): number => Math.round(usd * 100);
 const costRoseTooMuch = (fresh: number, shown: number): boolean =>
   cents(fresh) - cents(shown) > Math.max(100, cents(shown) / 20);
 
+interface ShownLeg {
+  symbol: string;
+  qty: number;
+}
+
+function shownLegsOf(value: unknown): ShownLeg[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const isShownLeg = (leg: unknown): leg is ShownLeg => {
+    const { symbol, qty } = (leg ?? {}) as Partial<ShownLeg>;
+    return typeof symbol === 'string' && typeof qty === 'number' && Number.isFinite(qty);
+  };
+  return value.every(isShownLeg) ? value : null;
+}
+
+const SHOWN_SIZE_GAP = 0.01;
+
+export function isShownRealize(fresh: RealizeLeg[], shown: ShownLeg[], rules: Record<string, PerpRule>): boolean {
+  if (fresh.length !== shown.length) return false;
+  return fresh.every((leg) => {
+    const seen = shown.find((candidate) => candidate.symbol === leg.symbol);
+    const lot = Number(rules[leg.symbol]?.lotSize) || Number(DEFAULT_STEP);
+    const allowedLots = Math.max(1, Math.floor((leg.qty * SHOWN_SIZE_GAP) / lot + 1e-9));
+    return seen !== undefined && Math.abs(Math.round(seen.qty / lot) - Math.round(leg.qty / lot)) <= allowedLots;
+  });
+}
+
+const leadsToReopen = (job: Job): boolean =>
+  job.steps.slice(job.stepIndex).find((step) => !step.name.startsWith('Convert'))?.name === 'Reopen';
+
 export function rebalanceRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
     app.setErrorHandler((err, req, reply) => sendError(err, req, reply, classifyPlain));
@@ -151,7 +185,11 @@ export function rebalanceRoutes(deps: AppDeps) {
 
     const bootJob = jobs?.read() ?? null;
     const bootStep = bootJob?.status === 'running' ? bootJob.steps[bootJob.stepIndex] : undefined;
-    if (jobs && bootJob && bootStep && (bootStep.venueId !== null || bootStep.text !== null)) {
+    const resumesAtBoot =
+      bootJob !== null &&
+      bootStep !== undefined &&
+      (bootStep.venueId !== null || bootStep.text !== null || leadsToReopen(bootJob));
+    if (jobs && bootStep && resumesAtBoot) {
       bootStep.startedAt = now();
       jobs.write(bootJob);
       start(jobs, true);
@@ -176,6 +214,17 @@ export function rebalanceRoutes(deps: AppDeps) {
           if (e instanceof CoreError && e.details === INTEREST_OVERFLOW) alert(null, e.message);
           return { value: {}, stale: true };
         });
+
+    const perpBooks = async (symbols: string[]): Promise<Record<string, NormalizedBook | null>> => {
+      const read = (symbol: string): Promise<NormalizedBook | null> => {
+        const { exchange, base, quote } = parseSymbol(symbol);
+        return deps.cache.get(`book:deep:${symbol}`, TTL.live, () => fetchDeepBook(exchange, base, quote)).then(
+          ({ value }) => value,
+          () => null,
+        );
+      };
+      return Object.fromEntries(await Promise.all(symbols.map(async (symbol) => [symbol, await read(symbol)] as const)));
+    };
 
     const loadView = async (fresh: boolean, custom: Goal | null) => {
       const crossEx = () => deps.getClients().crossEx;
@@ -203,6 +252,13 @@ export function rebalanceRoutes(deps: AppDeps) {
           ),
       ]);
       const buckets = bucketsFrom(account.value, rates.value, paid.value);
+      const perps: RealizePerp[] = positions.value ?? [];
+      const books = await perpBooks(perps.filter(isInProfit).flatMap((perp) => (perp.symbol ? [perp.symbol] : [])));
+      const perpRules: Record<string, PerpRule> = Object.fromEntries(
+        rules.value.flatMap((rule) =>
+          rule.symbol ? [[rule.symbol, { lotSize: rule.lotSize, minSize: rule.minSize, minNotional: rule.minNotional, maxMarketSize: rule.maxMarketSize }]] : [],
+        ),
+      );
       const gateFees = fees.value.find((f) => f.exchangeType === 'GATE');
       const special = gateFees?.specialFeeList?.find((s) => s.symbol === SPOT_SYMBOL);
       const ask = Number(tickers.value[0]?.lowestAsk);
@@ -216,6 +272,11 @@ export function rebalanceRoutes(deps: AppDeps) {
         asks: depth.asks,
         bids: depth.bids,
         notional: notionalByWallet(computeExposure(positions.value ?? []).flatMap((group) => group.legs)),
+        perps,
+        books,
+        feeRows: fees.value,
+        perpRules,
+        availableMargin: Number(account.value.availableMargin),
       };
       // Every goal is planned off the same read, so the presets a trader
       // compares are priced against one account picture.
@@ -225,7 +286,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plans, stale, userId };
+      return { buckets, plans, stale, userId, perpRules, perps };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -287,13 +348,23 @@ export function rebalanceRoutes(deps: AppDeps) {
     app.post('/rebalance', async (req, reply) => {
       const envPath = deps.credentials?.envPath;
       if (envPath && !isDisclaimerAccepted(envPath)) return reply.code(403).send(DISCLAIMER_NOT_ACCEPTED);
-      const body = (req.body ?? {}) as { goal?: unknown; route?: unknown; costUsd?: unknown; from?: unknown; to?: unknown; amount?: unknown };
+      const body = (req.body ?? {}) as {
+        goal?: unknown;
+        route?: unknown;
+        costUsd?: unknown;
+        from?: unknown;
+        to?: unknown;
+        amount?: unknown;
+        realizeQty?: unknown;
+      };
       const { route, costUsd } = body;
       const goal: GoalKind = body.goal === undefined ? 'even' : isGoalKind(body.goal) ? body.goal : (() => {
         throw new CoreError(`unknown goal ${String(body.goal)}`);
       })();
       if (!isRouteName(route)) throw new CoreError(`unknown route ${String(route)}`);
       if (!isShownCost(costUsd)) return conflict(reply, RELOAD_TEXT);
+      const shownLegs = shownLegsOf(body.realizeQty);
+      if (shownLegs === null) return conflict(reply, RELOAD_TEXT);
       const custom = goal === 'custom' ? customGoalOf(body) : null;
       if (goal === 'custom' && custom === null) throw new CoreError(CUSTOM_NEEDS);
       const store = requireJobs();
@@ -301,27 +372,41 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (locked) return conflict(reply, locked);
       const view = await catchRateLimit(loadView(true, custom));
       if (!view) return conflict(reply, STALE_TEXT);
-      const { plans, userId } = view;
+      const { plans, userId, perpRules, buckets, perps } = view;
       const plan = plans[goal];
       if (!plan) throw new CoreError(CUSTOM_NEEDS);
       if (plan.balanced) return conflict(reply, nothingText(plan));
       const picked = plan.routes[route];
       if (!picked) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (!picked.available) return conflict(reply, picked.reason ?? PLAN_CHANGED_TEXT);
-      if (picked.steps.length === 0) return conflict(reply, nothingText(plan));
-      if (costRoseTooMuch(picked.costUsd, costUsd)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      const legs = plan.realize && !plan.realize.refused ? plan.realize.legs : [];
+      if (picked.steps.length === 0 && legs.length === 0) return conflict(reply, nothingText(plan));
+      if (!isShownRealize(legs, shownLegs, perpRules)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      const totalUsd = picked.costUsd + realizeCostUsd(legs);
+      if (costRoseTooMuch(totalUsd, costUsd)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
       const moved = picked.steps.reduce((total, step) => total + step.move, 0);
+      const livePerps = perps.flatMap((perp) => {
+        const qty = Number(perp.positionQty);
+        if (!perp.symbol || !Number.isFinite(qty) || qty === 0) return [];
+        const side: PerpSide = qty < 0 ? 'SHORT' : 'LONG';
+        return [{ symbol: perp.symbol, exchange: parseSymbol(perp.symbol).exchange, side, qty: Math.abs(qty) }];
+      });
       const job = newJob(
         {
           goal,
           route,
           steps: picked.steps,
           amount: floorCents(moved),
-          costUsd: picked.costUsd,
+          costUsd: totalUsd,
           target: picked.after,
           userId,
+          realize: legs.length > 0 ? plan.realize : null,
+          realizeCostUsd: realizeCostUsd(legs),
+          before: { buckets, perps: livePerps },
+          routeImpactUsd: picked.priceImpactUsd,
+          openGaps: gapsLeftBy(store.read(), livePerps),
         },
         now(),
       );

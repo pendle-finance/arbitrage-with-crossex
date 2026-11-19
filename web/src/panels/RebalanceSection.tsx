@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useRebalance, useTransfer } from '../api/queries';
-import type { RebalanceJob } from '../api/types';
+import { usePositions, useRebalance, useTransfer } from '../api/queries';
+import type { EvenPlan, RebalanceBucket, RebalanceJob, RoutePlan } from '../api/types';
 import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { t } from '../i18n';
@@ -9,12 +9,17 @@ import { borrowingBuckets } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
-import { jobSeconds, VerdictAlert } from './RebalanceBits';
-import { CARD_LABEL, noLegs, shortOfCash, verdictBalanced, verdictNoBorrow, verdictNoCashToMove } from './rebalanceCopy';
+import { VerdictAlert } from './RebalanceBits';
+import { jobSeconds } from './rebalanceStepRows';
+import { abandonedGapText, gapVerdict, hasLeftGap, openGapOf } from './rebalanceCardGap';
+import { CARD_LABEL, noLegs, PAYS_BACK, shortOfCash, verdictBalanced, verdictNoBorrow, verdictNoCashToMove } from './rebalanceCopy';
 import { waitsForDeal, waitsForTransfer } from './rebalanceCopy';
-import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
+import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, isNotWorthIt, paybackDays, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
+import { isCloseSent, lastRealizeIndex } from './rebalanceJobSteps';
+import { refusalOf } from './RebalancePlanBits';
 import { RebalanceModal } from './RebalanceModal';
+import { plainOf } from './rebalanceModalPlan';
 import type { GateAccount, TransferCoin } from '../api/types';
 
 const timeLeft = (seconds: number): string =>
@@ -26,17 +31,34 @@ function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
   const what = CARD_LABEL[job.goal];
   if (job.status === 'halted') {
+    if (job.realize?.legs.length && job.steps[job.stepIndex]?.name === 'Close') {
+      const sent = job.realize.legs.some((leg) => isCloseSent(job, leg));
+      return t(sent ? 'accounts.rebalanceRealize.closeUnconfirmedTitle' : 'accounts.rebalanceRealize.stoppedBeforeClose');
+    }
     return round === null
       ? t('accounts.rebalanceSection.haltedAtConvert', { what })
       : t('accounts.rebalanceSection.haltedInRound', { what, round: num(round, 0) });
   }
   const total = jobSeconds(job);
   const left = Math.max(0, total - Math.max(0, now - job.createdAt) / 1000);
-  return total > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.running', { what });
+  if (total <= 0) return t('accounts.rebalanceSection.running', { what });
+  return left > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.runningLong', { what });
+}
+
+function notWorthDays(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): string | null {
+  const days = isNotWorthIt(plan, route, buckets) ? paybackDays(plan, route, buckets) : null;
+  if (days === null) return null;
+  const whole = Math.max(1, Math.ceil(days));
+  return PAYS_BACK(t('accounts.rebalanceHovers.days', { count: whole, n: num(whole, 0) }));
 }
 
 function jobButton(job: RebalanceJob): string {
-  if (job.status === 'halted') return t('accounts.rebalanceSection.stoppedOpen');
+  if (job.status === 'halted') return job.realize && openGapOf(job) ? CARD_LABEL[job.goal] : t('accounts.rebalanceSection.stoppedOpen');
+  if (job.realize?.legs.length) {
+    const last = lastRealizeIndex(job);
+    if (last === job.steps.length - 1) return t('common.running');
+    return t('accounts.rebalanceRealize.cardStep', { step: job.stepIndex <= last ? 1 : 2, steps: 2 });
+  }
   const round = roundOf(job);
   return round === null
     ? t('accounts.rebalanceSection.runningConvert')
@@ -62,6 +84,8 @@ export function RebalanceSection({
   const [openedWith] = useState(query.dataUpdatedAt);
   const loadError = useSettledError(query.status, query.error);
   const view = query.data;
+  const openJob = view?.job && view.job.status !== 'done' ? view.job : null;
+  const positions = usePositions((openJob !== null && openGapOf(openJob) !== null) || (view?.job ? hasLeftGap(view.job) : false)).data?.positions;
   const title = (
     <h2 className="text-[14px] font-semibold text-ink-50">
       <RebalanceInfo />
@@ -99,14 +123,15 @@ export function RebalanceSection({
     // custom move, so the button opens it even when this preset has nothing
     // to do.
     const goal = defaultGoal(view);
-    const plan = view.plans[goal];
+    const refusal = refusalOf(view.plans[goal]);
+    const plan = plainOf(view.plans[goal]);
     const cta = CARD_LABEL[goal];
     const job = view.job && (view.job.status === 'running' || view.job.status === 'halted') ? view.job : null;
     const showAge = loadError !== null || (openedWith > 0 && query.dataUpdatedAt === openedWith);
     const picked = pickedRoute(plan, null);
     const hasBorrow = borrowingBuckets(buckets).length > 0;
     // With every route blocked, the window cannot run, so the card gives no verdict.
-    const worth = hasBorrow && picked.name !== null ? worthLine(picked.route, buckets, goal, plan.noLegs) : null;
+    const worth = hasBorrow && picked.name !== null ? worthLine(plan, picked.route, buckets) : null;
     const moving = transfer?.transfer?.status === 'moving';
     const dealWorking = transfer?.lock === 'deal';
 
@@ -126,7 +151,16 @@ export function RebalanceSection({
     let verdict: ReactNode = null;
     let verdictSub: string | null = null;
     let tone: VerdictTone = 'info';
-    if (job) verdict = jobVerdict(job, now);
+    const gap = job ? gapVerdict(job, positions) : null;
+    if (gap) {
+      verdict = gap.text;
+      verdictSub = gap.sub;
+      tone = gap.tone;
+    } else if (job) verdict = jobVerdict(job, now);
+    else if (refusal) {
+      verdict = refusal.title;
+      tone = 'warn';
+    }
     // What caps a move is cash when there are no positions, and position
     // margin when there are — the goal on screen does not decide it.
     else if (isCashLimitedEven(plan) && plan.noLegs) verdict = `${fmtUsd(plan.shortOfEven)} ${shortOfCash()}`;
@@ -143,9 +177,10 @@ export function RebalanceSection({
     else if (!hasBorrow) verdict = verdictNoBorrow();
     else if (worth) {
       verdict = worth.text;
-      verdictSub = worth.sub ?? null;
+      verdictSub = worth.sub ?? notWorthDays(plan, picked.route, buckets);
       tone = worth.tone;
     }
+    const leftOpen = view.job ? abandonedGapText(view.job, positions) : null;
 
     let label: ReactNode = cta;
     if (job) label = jobButton(job);
@@ -177,7 +212,17 @@ export function RebalanceSection({
       </div>
     );
     facts = <Facts items={borrowFacts(buckets)} />;
-    if (verdict !== null) line = <VerdictAlert tone={tone} text={verdict} sub={verdictSub} />;
+    if (verdict !== null) {
+      line = <VerdictAlert tone={!job && tone === 'act' ? 'good' : tone} text={verdict} sub={verdictSub} />;
+    }
+    if (leftOpen !== null) {
+      line = (
+        <>
+          {line}
+          <p className="num text-xs text-guava">{leftOpen}</p>
+        </>
+      );
+    }
     main = (
       <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => setOpen(true)}>
         {label}

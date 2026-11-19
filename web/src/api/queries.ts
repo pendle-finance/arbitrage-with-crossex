@@ -617,6 +617,7 @@ export interface StartRebalanceBody extends Partial<CustomMove> {
   goal: GoalKind;
   route: RouteName;
   costUsd: number;
+  realizeQty?: { symbol: string; qty: number }[];
 }
 
 export function useStartRebalance() {

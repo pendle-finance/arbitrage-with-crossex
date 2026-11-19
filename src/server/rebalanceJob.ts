@@ -1,14 +1,67 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fmtSize } from '../core/boros/pair';
 import { classifyGateError, plainErrorFor } from '../core/errors';
-import { CONVERT_MAX, CONVERT_RATE, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
-import type { GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
+import { parseSymbol } from '../core/numbers';
+import { CONVERT_MAX, CONVERT_RATE, CONVERT_TO, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
+import type { Bucket, GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
+import type { PerpSide, RealizeLeg, RealizePlan } from '../core/rebalance/realize';
 import { restrictToOwner } from './secretFile';
 
 export type { Pool, RouteName };
 export type JobStatus = 'running' | 'halted' | 'done' | 'abandoned';
 export type StepStatus = 'pending' | 'running' | 'done';
+export type StepPhase = 'realize' | 'route';
 export type FundsAt = 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID' | 'LIGHTER';
+
+export interface StepPerp {
+  symbol: string;
+  exchange: string;
+  side: 'BUY' | 'SELL';
+  reduceOnly: boolean;
+}
+
+export interface StepRetry {
+  reason: 'margin';
+  convertAmount: number;
+}
+
+export interface RealizeJobLeg {
+  symbol: string;
+  base: string;
+  exchange: string;
+  pool: Pool;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  filledQty: number;
+  realizedUsd: number;
+  closePrice?: number;
+  hedge?: string | null;
+  closeFeeUsd?: number;
+  reopenFeeUsd?: number;
+  closeImpactUsd?: number;
+  reopenImpactUsd?: number;
+  convert?: { amount: number; feeUsd: number } | null;
+}
+
+export interface JobPerp {
+  symbol: string;
+  exchange: string;
+  side: PerpSide;
+  qty: number;
+}
+
+export interface JobBefore {
+  buckets: Bucket[];
+  perps: JobPerp[];
+}
+
+export interface OpenGap {
+  leg: Pick<RealizeJobLeg, 'symbol' | 'base' | 'exchange' | 'side' | 'positionQty' | 'hedge'>;
+  qty: number;
+  hedges: JobPerp[];
+}
 
 export interface Step {
   name: string;
@@ -28,6 +81,10 @@ export interface Step {
   to: Pool;
   cashBefore?: number;
   sentAt?: number;
+  perp?: StepPerp | null;
+  nextTryAt?: number | null;
+  retry?: StepRetry | null;
+  phase?: StepPhase;
 }
 
 export interface Job {
@@ -50,6 +107,10 @@ export interface Job {
   tagCount: number;
   createdAt: number;
   updatedAt: number;
+  realize: { legs: RealizeJobLeg[]; costUsd: number } | null;
+  before?: JobBefore;
+  routeImpactUsd?: number;
+  openGaps?: OpenGap[];
 }
 
 export const TO_VENUE_STEP = { HYPERLIQUID: 'To Hyperliquid', LIGHTER: 'To Lighter' } as const;
@@ -57,6 +118,7 @@ export const FROM_VENUE_STEP = { HYPERLIQUID: 'From Hyperliquid', LIGHTER: 'From
 export const TO_USDC_STEPS = ['Buy USDC', 'To spot', TO_VENUE_STEP.HYPERLIQUID] as const;
 export const TO_USDT_STEPS = [FROM_VENUE_STEP.HYPERLIQUID, 'To Gate', 'Sell USDC'] as const;
 export const CONVERT_STEPS = ['Convert', 'Convert to USDT', 'Convert to USDC'] as const;
+export const PERP_STEPS = ['Close', 'Reopen'] as const;
 export type StepName =
   | 'Buy USDC'
   | 'To spot'
@@ -64,7 +126,8 @@ export type StepName =
   | 'Sell USDC'
   | (typeof TO_VENUE_STEP)[Venue]
   | (typeof FROM_VENUE_STEP)[Venue]
-  | (typeof CONVERT_STEPS)[number];
+  | (typeof CONVERT_STEPS)[number]
+  | (typeof PERP_STEPS)[number];
 export const STEP_NAMES: readonly string[] = [
   'Buy USDC',
   'To spot',
@@ -73,7 +136,9 @@ export const STEP_NAMES: readonly string[] = [
   ...Object.values(TO_VENUE_STEP),
   ...Object.values(FROM_VENUE_STEP),
   ...CONVERT_STEPS,
+  ...PERP_STEPS,
 ];
+const PERP_STEP_NAMES: readonly string[] = PERP_STEPS;
 
 export function roundStepNames(from: Pool, to: Pool): StepName[] {
   if (from === 'CROSSEX') return ['Buy USDC', 'To spot', TO_VENUE_STEP[to as Venue]];
@@ -90,6 +155,7 @@ const LEGACY_MOVE: Record<string, { from: Pool; to: Pool }> = {
 const LEGACY_STEP: Record<string, StepName> = { 'Pull from Hyperliquid': 'From Hyperliquid' };
 
 const JOB_STATUSES: readonly string[] = ['running', 'halted', 'done', 'abandoned'];
+const STEP_PHASES: readonly string[] = ['realize', 'route'];
 const FUNDS_AT: readonly string[] = ['CROSSEX', 'GATE', 'SPOT', 'HYPERLIQUID', 'LIGHTER'];
 const IN_TRANSIT_STATUSES: readonly JobStatus[] = ['running', 'halted', 'abandoned'];
 const MOVES_TO: Record<string, string> = {
@@ -124,6 +190,36 @@ export const HALT_TEXT = {
   sellStuck: 'Gate did not sell all the USDC in USDC · Gate. Press Resume to sell the rest.',
   noPrice: 'Could not read the Gate spot price to check the Convert quote. Press Resume to try again.',
   notListed: 'Gate does not show the last step after 2 min. Press Resume to check again. If Gate still does not show it, Resume sends it again.',
+} as const;
+
+type OpenLeg = Pick<RealizeJobLeg, 'exchange' | 'side' | 'base' | 'hedge'>;
+
+const VENUE_NAME: Record<string, string> = { HYPERLIQUID: 'Hyperliquid', GATE: 'Gate', LIGHTER: 'Lighter', BINANCE: 'Binance' };
+const venueName = (exchange: string): string => VENUE_NAME[exchange] ?? exchange;
+const legName = (leg: OpenLeg): string => `${venueName(leg.exchange)} ${leg.side.toLowerCase()}`;
+const otherLegName = (leg: OpenLeg): string =>
+  `${venueName(leg.hedge ?? (leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE'))} ${leg.side === 'SHORT' ? 'long' : 'short'}`;
+const closeOtherText = (leg: OpenLeg, open: number): string =>
+  `close ${fmtSize(open)} ${leg.base} of the ${otherLegName(leg)} in Positions`;
+
+const legGapText = (leg: OpenLeg, open: number): string =>
+  `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than the ${otherLegName(leg)}.`;
+
+export const REOPEN_HALT = {
+  tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',
+  closeOnly: (leg: OpenLeg, open: number): string =>
+    `Gate CrossEx takes no new orders on this contract. Resume when it does, or ${closeOtherText(leg, open)}.`,
+  noCash: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
+  quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>
+    `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours, or ${closeOtherText(leg, open)}.`,
+  refused: (leg: OpenLeg, open: number, reason: string): string =>
+    `Gate refused the reopen. ${reason} The ${legGapText(leg, open)} Resume to try again, or ${closeOtherText(leg, open)}.`,
+  underMinimum: (leg: OpenLeg, open: number): string =>
+    `The rest is under Gate's smallest order. The ${legGapText(leg, open)} Abandon, then ${closeOtherText(leg, open)}.`,
+  sizeChanged: (leg: OpenLeg, live: number, expected: number): string =>
+    `The ${legName(leg)} is ${fmtSize(live)} ${leg.base} on Gate, not the ${fmtSize(expected)} ${leg.base} this rebalance left. Abandon it and check Positions.`,
+  hedgeChanged: (leg: OpenLeg, hedge: Pick<JobPerp, 'exchange' | 'side'>, live: number, expected: number): string =>
+    `The ${legName({ ...hedge, base: leg.base })} is ${fmtSize(live)} ${leg.base} on Gate, not the ${fmtSize(expected)} ${leg.base} it was when this rebalance started. The ${legName(leg)} was not reopened. Abandon it and check Positions.`,
 } as const;
 
 export const LOCK_TEXT = {
@@ -168,8 +264,11 @@ export const pendingStep = (
   status: 'pending',
   startedAt: null,
   doneAt: null,
+  phase: 'route',
   ...plan,
 });
+
+export const asRealize = (steps: Step[]): Step[] => steps.map((step) => ({ ...step, phase: 'realize' }));
 
 export function convertSteps(from: Pool, to: Pool, amount: number): Step[] {
   const move = { from, to, round: null, arrives: null, borrowLeft: null };
@@ -216,6 +315,46 @@ function stepsFor(step: PlannedStep): Step[] {
   ];
 }
 
+function perpStep(name: (typeof PERP_STEPS)[number], leg: RealizeLeg, side: StepPerp['side']): Step {
+  const at = { from: leg.pool, to: leg.pool, round: null, planned: leg.qty, arrives: null, borrowLeft: null };
+  const perp = { symbol: leg.symbol, exchange: leg.exchange, side, reduceOnly: name === 'Close' };
+  return { ...pendingStep(name, at), perp, nextTryAt: null, retry: null };
+}
+
+function realizeSteps(leg: RealizeLeg): Step[] {
+  const closeSide = leg.side === 'SHORT' ? 'BUY' : 'SELL';
+  return asRealize([
+    perpStep('Close', leg, closeSide),
+    ...(leg.convert ? convertSteps(leg.pool, CONVERT_TO[leg.pool], leg.convert.amount) : []),
+    perpStep('Reopen', leg, closeSide === 'BUY' ? 'SELL' : 'BUY'),
+  ]);
+}
+
+export const hedgesOf = (leg: Pick<RealizeLeg, 'symbol' | 'side' | 'base'>, perps: JobPerp[]): JobPerp[] =>
+  perps.filter((perp) => perp.symbol !== leg.symbol && perp.side !== leg.side && parseSymbol(perp.symbol).base === leg.base);
+
+function hedgeOf(leg: RealizeLeg, perps: JobPerp[]): string | null {
+  return hedgesOf(leg, perps).sort((a, b) => b.qty - a.qty)[0]?.exchange ?? null;
+}
+
+const realizeJobLeg = (leg: RealizeLeg, perps: JobPerp[]): RealizeJobLeg => ({
+  symbol: leg.symbol,
+  base: leg.base,
+  exchange: leg.exchange,
+  pool: leg.pool,
+  side: leg.side,
+  positionQty: leg.positionQty,
+  qty: leg.qty,
+  filledQty: 0,
+  realizedUsd: 0,
+  hedge: hedgeOf(leg, perps),
+  closeFeeUsd: leg.closeFeeUsd,
+  reopenFeeUsd: leg.reopenFeeUsd,
+  closeImpactUsd: leg.closeImpactUsd,
+  reopenImpactUsd: leg.reopenImpactUsd,
+  convert: leg.convert ? { amount: leg.convert.amount, feeUsd: leg.convert.feeUsd } : null,
+});
+
 export function newJob(
   input: {
     goal?: GoalKind;
@@ -225,9 +364,15 @@ export function newJob(
     costUsd: number;
     target: WalletAfter[];
     userId: string | null;
+    realize?: RealizePlan | null;
+    realizeCostUsd?: number;
+    before?: JobBefore;
+    routeImpactUsd?: number;
+    openGaps?: OpenGap[];
   },
   now: number,
 ): Job {
+  const legs = input.realize?.legs ?? [];
   return {
     id: now.toString(36),
     userId: input.userId,
@@ -238,12 +383,19 @@ export function newJob(
     target: input.target,
     status: 'running',
     stepIndex: 0,
-    steps: input.steps.flatMap(stepsFor),
-    fundsAt: input.steps[0]?.from ?? 'CROSSEX',
+    steps: [...legs.flatMap(realizeSteps), ...input.steps.flatMap(stepsFor)],
+    fundsAt: legs[0]?.pool ?? input.steps[0]?.from ?? 'CROSSEX',
     haltReason: null,
     tagCount: 0,
     createdAt: now,
     updatedAt: now,
+    realize:
+      legs.length > 0
+        ? { legs: legs.map((leg) => realizeJobLeg(leg, input.before?.perps ?? [])), costUsd: input.realizeCostUsd ?? 0 }
+        : null,
+    ...(input.before ? { before: input.before } : {}),
+    ...(input.routeImpactUsd === undefined ? {} : { routeImpactUsd: input.routeImpactUsd }),
+    ...(input.openGaps?.length ? { openGaps: input.openGaps } : {}),
   };
 }
 
@@ -316,9 +468,42 @@ export function inTransitOf(job: Job): { coin: 'USDC'; qty: number; at: 'SPOT' |
 export const formatMoney = (value: number): string =>
   value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+function openLegsOf(job: Job): { leg: RealizeJobLeg; open: number }[] {
+  return (job.realize?.legs ?? []).flatMap((leg) => {
+    const reopen = job.steps.find((step) => step.name === 'Reopen' && step.perp?.symbol === leg.symbol);
+    if (!reopen || reopen.status === 'done') return [];
+    const open = leg.filledQty - (reopen.qty ?? 0);
+    return open > 0 ? [{ leg, open }] : [];
+  });
+}
+
+const openLegOf = (job: Job): { leg: RealizeJobLeg; open: number } | null => openLegsOf(job)[0] ?? null;
+
+const sizeOf = (perps: JobPerp[]): number => perps.reduce((total, perp) => total + perp.qty, 0);
+
+function isGapOpen(gap: OpenGap, live: JobPerp[]): boolean {
+  const { leg } = gap;
+  const legShrink = leg.positionQty - sizeOf(live.filter((perp) => perp.symbol === leg.symbol && perp.side === leg.side));
+  const hedgeShrink = sizeOf(gap.hedges) - sizeOf(hedgesOf(leg, live));
+  return Math.min(gap.qty, legShrink - hedgeShrink) > leg.positionQty * 1e-9;
+}
+
+export function gapsLeftBy(job: Job | null, live: JobPerp[]): OpenGap[] {
+  if (job === null || (job.status !== 'abandoned' && job.status !== 'done')) return [];
+  const own = job.status === 'abandoned' ? openLegsOf(job) : [];
+  const left = own.map(({ leg, open }): OpenGap => {
+    const { symbol, base, exchange, side, positionQty, hedge = null } = leg;
+    return { leg: { symbol, base, exchange, side, positionQty, hedge }, qty: open, hedges: hedgesOf(leg, job.before?.perps ?? []) };
+  });
+  return [...left, ...(job.openGaps ?? [])].filter((gap) => isGapOpen(gap, live));
+}
+
 export function bannerFor(job: Job): string {
   const step = job.steps[job.stepIndex];
   if (!step) return 'Rebalance stopped.';
+  const openLeg = openLegOf(job);
+  if (openLeg) return `Rebalance stopped. ${legGapText(openLeg.leg, openLeg.open)}`;
+  if (step.name === 'Close' && step.venueId === null && step.text === null) return 'Rebalance stopped before the close.';
   const { round } = step;
   if (round === null) return `Rebalance stopped at ${step.name}.`;
   const stopped = `Rebalance stopped in round ${round}.`;
@@ -359,6 +544,11 @@ function parseJob(value: unknown): Job | null {
   if (job.goal === undefined) job.goal = 'even';
   if (job.costUsd === undefined) job.costUsd = null;
   if (job.target === undefined) job.target = null;
+  if (job.realize === undefined) job.realize = null;
+  if (job.realize !== null && (typeof job.realize !== 'object' || !Array.isArray(job.realize.legs))) return null;
+  if (job.realize !== null && job.realize.costUsd === undefined) job.realize.costUsd = 0;
+  if (job.routeImpactUsd !== undefined && !Number.isFinite(job.routeImpactUsd)) delete job.routeImpactUsd;
+  if (job.openGaps !== undefined && !Array.isArray(job.openGaps)) delete job.openGaps;
   if (!JOB_STATUSES.includes(String(job.status))) return null;
   if (!Array.isArray(job.steps) || job.steps.length === 0) return null;
   for (const step of job.steps as (Partial<Step> | null)[]) {
@@ -370,8 +560,14 @@ function parseJob(value: unknown): Job | null {
     if (step.borrowLeft === undefined) step.borrowLeft = null;
     if (step.cashBefore !== undefined && !Number.isFinite(step.cashBefore)) delete step.cashBefore;
     if (step.sentAt !== undefined && !Number.isFinite(step.sentAt)) delete step.sentAt;
+    if (step.perp === undefined) step.perp = null;
+    if (step.nextTryAt === undefined) step.nextTryAt = null;
+    if (step.retry === undefined) step.retry = null;
+    if (step.phase !== undefined && !STEP_PHASES.includes(step.phase)) delete step.phase;
     if (step.from === undefined && step.to === undefined && legacy) Object.assign(step, legacy);
-    if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool) || step.from === step.to) return null;
+    if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool)) return null;
+    const isPerp = PERP_STEP_NAMES.includes(String(step.name));
+    if (isPerp ? step.perp === null || job.realize === null : step.from === step.to) return null;
   }
   const index = job.stepIndex;
   if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= job.steps.length) return null;

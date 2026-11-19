@@ -1,9 +1,19 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import type { RebalanceJob, RebalanceStep } from '../api/types';
-import { rebalanceViews } from '../test/fixtures';
-import * as bits from './RebalanceBits';
-import { BalanceBars, StepList, type BarRow, type StepRow } from './RebalanceBits';
+import type { RealizePlan, RebalanceJob, RebalanceStep } from '../api/types';
+import {
+  REALIZE_DONE_JOB,
+  REALIZE_HALTED_LEG_OPEN_JOB,
+  REALIZE_PART_FILL_JOB,
+  REALIZE_RUNNING_JOB,
+  rebalanceViews,
+} from '../test/fixtures';
+import * as bars from './RebalanceBars';
+import { BalanceBars, scaleOf, type BarRow } from './RebalanceBars';
+import { StepDot, StepList, type StepRow } from './RebalanceBits';
+import { planActionLeg, RealizeActions, RealizeRow } from './RebalanceRealizeBits';
+import { jobRows } from './rebalanceStepRows';
 
 const BAR_CAPTION = 'Equity (cash + unrealized PnL)';
 const HOVER_TARGET = 'Balanced target';
@@ -99,7 +109,7 @@ describe('BalanceBars', () => {
     render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={100} />);
 
     expect(screen.getByText(BAR_CAPTION)).toBeInTheDocument();
-    expect('BarLegend' in bits).toBe(false);
+    expect('BarLegend' in bars).toBe(false);
     expect(screen.queryByText('unrealized gain')).toBeNull();
     expect(screen.queryByText('cash')).toBeNull();
   });
@@ -121,7 +131,7 @@ describe('BalanceBars', () => {
   });
 
   it('zero line is centered', () => {
-    const plain = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={bits.scaleOf(ROWS)} />);
+    const plain = render(<BalanceBars caption={BAR_CAPTION} rows={ROWS} scale={scaleOf(ROWS)} />);
     for (const row of ROWS) expect(partOf(rowOf(plain.container, row.key), 'zero-line').style.left).toBe('50%');
     plain.unmount();
 
@@ -129,7 +139,7 @@ describe('BalanceBars', () => {
       { key: 'USDT/CROSSEX', label: 'USDT · CrossEx', cash: 30, upnl: 0, target: 0, tone: 'usdt' },
       { key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -30, upnl: 0, target: 0, tone: 'lighter' },
     ];
-    const scale = bits.scaleOf(ROWS, book);
+    const scale = scaleOf(ROWS, book);
     expect(scale).toBe(60);
     const { container } = render(<BalanceBars caption={BAR_CAPTION} rows={book} scale={scale} />);
 
@@ -144,8 +154,8 @@ describe('BalanceBars', () => {
 
   it('scale takes the widest end on either side', () => {
     const negativeOnly: BarRow[] = [{ key: 'USDC/LIGHTER', label: 'USDC · Lighter', cash: -90, upnl: 20, target: 10, tone: 'lighter' }];
-    expect(bits.scaleOf(ROWS, negativeOnly)).toBe(90);
-    expect(bits.scaleOf([])).toBe(0);
+    expect(scaleOf(ROWS, negativeOnly)).toBe(90);
+    expect(scaleOf([])).toBe(0);
   });
 
   it('negative cash is guava even without a borrow', () => {
@@ -234,11 +244,11 @@ describe('the wallet hover', () => {
 });
 
 describe('StepList', () => {
-  const STEP_ROWS: StepRow[] = [
+  const STEP_ROWS = [
     { key: 'r1', label: 'Round 1', text: 'Move 100 USDC to Lighter', sub: '100 arrives', right: '01:02 of 02:00', state: 'running', progress: 0.5 },
     { key: 'r2', label: 'Round 2', text: 'Move 50 USDC to Lighter', sub: '50 arrives', right: 'about 2 min', state: 'pending', progress: 0 },
     { key: 'r3', label: 'Round 3', text: 'Move 25 USDC to Lighter', sub: '25 arrives', right: 'about 1 min', state: 'pending', progress: 0 },
-  ];
+  ] satisfies StepRow[];
 
   it('clock binds to its own round', () => {
     const { container } = render(<StepList rows={STEP_ROWS} />);
@@ -291,7 +301,7 @@ describe('jobRows for a Convert in chunks', () => {
       'done',
     );
 
-    const rows = bits.jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000, null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ label: 'Convert', state: 'done', sub: '1,197,600.00 arrives' });
@@ -305,7 +315,7 @@ describe('jobRows for a Convert in chunks', () => {
       'running',
     );
 
-    const rows = bits.jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000, null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ label: 'Convert', state: 'running', sub: '' });
@@ -324,7 +334,7 @@ describe('jobRows for a Convert in chunks', () => {
       'done',
     );
 
-    const rows = bits.jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000, null);
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ state: 'done', sub: '597,602.40 arrives' });
@@ -334,9 +344,202 @@ describe('jobRows for a Convert in chunks', () => {
   it('one Convert chunk shows the same row as before chunks existed', () => {
     const job = jobOf([chunk('Convert', 12, 11.97, 'done')], 0, 'done');
 
-    const [row] = bits.jobRows(job, 3_000, null);
+    const [row] = jobRows(job, 3_000, null);
 
     expect(row).toMatchObject({ state: 'done', sub: '11.97 arrives' });
     expect(row.text).toContain('12.00');
+  });
+});
+
+const realizeOf = (plan: { realize?: RealizePlan | null }): RealizePlan => {
+  if (!plan.realize) throw new Error('no realize in the plan');
+  return plan.realize;
+};
+
+const OWNER_REALIZE = realizeOf(rebalanceViews.ownerBook.plans.even);
+
+const textWithArrows = (el: Element): string => {
+  const copy = el.cloneNode(true) as Element;
+  copy.querySelectorAll('svg').forEach((svg) => svg.replaceWith(' → '));
+  return (copy.textContent ?? '').replace(/\s+/g, ' ').trim();
+};
+
+const actionRows = () =>
+  [...document.querySelectorAll('[data-action]')].map((row) => ({
+    text: textWithArrows(row.querySelector('[data-action-text]')!),
+    note: row.querySelector('[data-action-note]')?.textContent ?? null,
+    cost: row.lastElementChild?.textContent,
+  }));
+
+function OpenableActions({ realize, tense }: { realize: RealizePlan; tense: 'plan' | 'past' }) {
+  const [open, setOpen] = useState(false);
+  return <RealizeActions legs={realize.legs.map(planActionLeg)} open={open} onToggle={() => setOpen((was) => !was)} tense={tense} />;
+}
+
+describe('StepDot', () => {
+  it('numbers a pending step, spins a running one, ticks a done one and reds a stopped one', () => {
+    const { container, rerender } = render(<StepDot n={2} state="pending" />);
+    const dot = () => container.querySelector<HTMLElement>('[data-step-dot]')!;
+    expect(dot().textContent).toBe('2');
+    expect(dot().className).toContain('border-ink-600');
+
+    rerender(<StepDot n={2} state="running" />);
+    expect(dot().querySelector('.animate-spin')).not.toBeNull();
+    expect(dot().className).toContain('border-info');
+
+    rerender(<StepDot n={2} state="done" />);
+    expect(dot().querySelector('svg')).not.toBeNull();
+    expect(dot().textContent).toBe('');
+    expect(dot().className).toContain('text-grass');
+
+    rerender(<StepDot n={2} state="stopped" />);
+    expect(dot().textContent).toBe('2');
+    expect(dot().className).toContain('border-guava');
+  });
+
+  it('StepList numbers its steps in order with one dot each', () => {
+    const rows: StepRow[] = [
+      { key: 'a', label: '', text: 'Close + reopen 53.8 of 66.0 ETH short', sub: '', right: '3s', state: 'done', progress: null },
+      { key: 'b', label: '', text: 'Move the other 27,228 USDC', sub: '', right: '', state: 'pending', progress: null, body: <span>route rows</span> },
+    ];
+    const { container } = render(<StepList rows={rows} />);
+
+    const dots = [...container.querySelectorAll('[data-step-dot]')];
+    expect(dots.map((dot) => dot.getAttribute('data-step-dot'))).toEqual(['done', 'pending']);
+    expect(dots[1].textContent).toBe('2');
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+    expect(screen.getByText('route rows')).toBeInTheDocument();
+    expect(container.querySelector('.w-20')).toBeNull();
+  });
+});
+
+describe('RealizeRow', () => {
+  it('step 1 row reads the part of the whole perp, plain, with its fee and price impact', () => {
+    const { container } = render(<RealizeRow legs={OWNER_REALIZE.legs.map(planActionLeg)} />);
+
+    const row = container.querySelector<HTMLElement>('[data-realize-row]')!;
+    expect(row.firstElementChild?.textContent).toBe('Close + reopen 53.8 of 66.0 ETH short');
+    expect(row.className).not.toMatch(/\bborder\b|\bbg-/);
+    expect(row.lastElementChild?.textContent).toBe('Fee $102.39+ $18.88 price impact');
+  });
+});
+
+describe('RealizeActions', () => {
+  it('three actions closed', () => {
+    render(<RealizeActions legs={OWNER_REALIZE.legs.map(planActionLeg)} open={false} onToggle={() => {}} tense="plan" />);
+
+    const toggle = screen.getByRole('button', { name: '3 actions' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle.className).toContain('btn-link');
+    expect(toggle.firstElementChild?.tagName.toLowerCase()).toBe('svg');
+    expect(toggle.lastChild?.textContent).toBe('3 actions');
+    expect(document.querySelectorAll('[data-action]')).toHaveLength(0);
+  });
+
+  it('three actions open in run order', () => {
+    render(<OpenableActions realize={OWNER_REALIZE} tense="plan" />);
+
+    fireEvent.click(screen.getByRole('button', { name: '3 actions' }));
+
+    expect(screen.getByRole('button', { name: '3 actions' })).toHaveAttribute('aria-expanded', 'true');
+    expect(actionRows()).toEqual([
+      { text: 'Close 53.8 ETH short', note: null, cost: '$40.90 + $9.44' },
+      {
+        text: 'Convert 10,298 USDC → USDT · CrossEx',
+        note: 'Repays part of the USDT borrow, so Gate CrossEx accepts the reopen.',
+        cost: '$20.60',
+      },
+      { text: 'Reopen 53.8 ETH short', note: null, cost: '$40.89 + $9.44' },
+    ]);
+  });
+
+  it('convert split note', () => {
+    const realize = realizeOf(rebalanceViews.ownerConvertSplit.plans.repay);
+    expect(realize.legs[0].convert?.count).toBe(2);
+    render(<RealizeActions legs={realize.legs.map(planActionLeg)} open onToggle={() => {}} tense="plan" />);
+
+    const [, convert] = actionRows();
+    expect(convert.text).toBe('Convert 955,498 USDC → USDT · CrossEx');
+    expect(convert.note).toContain('Runs as 2 Converts of 477,749, because Gate takes at most 500,000 in one.');
+  });
+
+  it('a single Convert has no split note', () => {
+    render(<RealizeActions legs={OWNER_REALIZE.legs.map(planActionLeg)} open onToggle={() => {}} tense="plan" />);
+
+    expect(actionRows()[1].note).not.toContain('Runs as');
+  });
+
+  it('three actions past tense', () => {
+    render(<RealizeActions legs={OWNER_REALIZE.legs.map(planActionLeg)} open onToggle={() => {}} tense="past" />);
+
+    expect(actionRows().map((row) => row.text)).toEqual([
+      'Closed 53.8 ETH short',
+      'Converted 10,298 USDC → USDT · CrossEx',
+      'Reopened 53.8 ETH short',
+    ]);
+    expect(actionRows().every((row) => row.note === null)).toBe(true);
+  });
+
+  it('a close and reopen with no Convert shows no actions list', () => {
+    const { container } = render(
+      <RealizeActions legs={realizeOf(rebalanceViews.ethUp.plans.even).legs.map(planActionLeg)} open={false} onToggle={() => {}} tense="plan" />,
+    );
+
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('a Gate long converts USDT into the Hyperliquid wallet', () => {
+    const [leg] = realizeOf(rebalanceViews.ethUp.plans.even).legs;
+    const realize: RealizePlan = { legs: [{ ...leg, convert: { amount: 2000, count: 1, feeUsd: 4 } }], refused: null };
+    render(<RealizeActions legs={realize.legs.map(planActionLeg)} open onToggle={() => {}} tense="plan" />);
+
+    expect(actionRows().map((row) => row.text)).toEqual([
+      'Close 47.1 ETH long',
+      'Convert 2,000 USDT → USDC · Hyperliquid',
+      'Reopen 47.1 ETH long',
+    ]);
+  });
+});
+
+describe('jobRows with a close and reopen', () => {
+  it('groups Close, Convert and Reopen into one running row before the route rounds', () => {
+    const rows = jobRows(REALIZE_RUNNING_JOB, REALIZE_RUNNING_JOB.updatedAt + 3_000, null);
+
+    expect(rows).toHaveLength(7);
+    expect(rows[0]).toMatchObject({ label: '', text: 'Close + reopen 53.8 of 66.0 ETH short', sub: '', state: 'running', progress: 0 });
+    expect(rows.slice(1).map((row) => row.label)).toEqual(['Round 1', 'Round 2', 'Round 3', 'Round 4', 'Round 5', 'Round 6']);
+    expect(rows.slice(1).every((row) => row.state === 'pending')).toBe(true);
+  });
+
+  it('a part-filled close shows what filled', () => {
+    const [row] = jobRows(REALIZE_PART_FILL_JOB, REALIZE_PART_FILL_JOB.updatedAt, null);
+
+    expect(row).toMatchObject({ text: 'Close + reopen 30.0 of 66.0 ETH short', state: 'running' });
+    expect(row.progress).toBeCloseTo(1 / 3);
+  });
+
+  it('a halted reopen shows the row stopped', () => {
+    const [row] = jobRows(REALIZE_HALTED_LEG_OPEN_JOB, REALIZE_HALTED_LEG_OPEN_JOB.updatedAt, null);
+
+    expect(row).toMatchObject({ state: 'stopped', right: 'Stopped' });
+    expect(row.progress).toBeCloseTo(2 / 3);
+  });
+
+  it('a done job ticks the realize row with its time', () => {
+    const rows = jobRows(REALIZE_DONE_JOB, REALIZE_DONE_JOB.updatedAt, null);
+
+    expect(rows[0]).toMatchObject({ text: 'Close + reopen 53.8 of 66.0 ETH short', state: 'done', progress: 1, right: '11s' });
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+  });
+
+  it('a route Convert after the reopen stays its own row', () => {
+    const steps = REALIZE_DONE_JOB.steps.slice(0, 3);
+    const routeConvert = { ...steps[1], name: 'Convert', planned: 27228, qty: 27173.5 };
+    const job: RebalanceJob = { ...REALIZE_DONE_JOB, route: 'convert', steps: [...steps, routeConvert], stepIndex: 3 };
+
+    const rows = jobRows(job, job.updatedAt, null);
+
+    expect(rows.map((row) => row.label)).toEqual(['', 'Convert']);
+    expect(rows[1].text).toContain('27,228.00');
   });
 });
