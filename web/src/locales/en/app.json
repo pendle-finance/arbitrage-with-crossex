@@ -280,7 +280,10 @@
     "notForThisWallet": "Not set up for this wallet",
     "skip": "No warning near liquidation, interest or maturity.",
     "checkingBot": "Checking with the Telegram bot…",
-    "linkedElsewhere": "Alerts are linked to <a>{{other}}</a>, not <b>{{viewed}}</b>. Log in as this wallet to set up its alerts."
+    "linkedElsewhere": "Alerts are linked to <a>{{other}}</a>, not <b>{{viewed}}</b>. Log in as this wallet to set up its alerts.",
+    "logInFirst": "Log in first",
+    "logInToSetUp": "Log in to set up",
+    "logInFirstBody": "Alerts go to the wallet logged in on this terminal. Log in as <a>{{viewed}}</a> to set up its alerts."
   },
   "api": {
     "network": "Network error on {{path}}: {{error}}",

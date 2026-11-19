@@ -25,6 +25,7 @@ export function nativeSymbol(exchange: string, base: string, quote: string): str
       return `${base}_USDT`;
     case 'BINANCE':
     case 'BYBIT':
+    case 'ASTER':
       return `${base}${quote}`;
     case 'OKX':
       return `${base}-${quote}-SWAP`;
@@ -182,6 +183,12 @@ const BOOK_SOURCES: Record<string, BookSource> = {
   BINANCE: {
     method: 'GET',
     url: (base, quote) => `https://fapi.binance.com/fapi/v1/depth?symbol=${nativeSymbol('BINANCE', base, quote)}&limit=100`,
+    parse: parseBinanceBook,
+  },
+  // Aster's futures API is a copy of Binance's: same path, same depth shape.
+  ASTER: {
+    method: 'GET',
+    url: (base, quote) => `https://fapi.asterdex.com/fapi/v1/depth?symbol=${nativeSymbol('ASTER', base, quote)}&limit=100`,
     parse: parseBinanceBook,
   },
   BYBIT: {

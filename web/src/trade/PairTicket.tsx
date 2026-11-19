@@ -469,8 +469,8 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
             setPricePinned(false);
           }}
           options={[
+            { value: 'maker', label: t('pairTicket.pair.limitHedge') },
             { value: 'market', label: t('pairTicket.pair.twoMarket') },
-            { value: 'maker', label: t('pairTicket.pair.limitHedge'), sub: t('pairTicket.pair.savesFees') },
           ]}
         />
       </div>

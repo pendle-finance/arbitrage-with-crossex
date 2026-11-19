@@ -7,7 +7,6 @@ import type { BorosPairSimulation } from '../../core/boros/pair';
 import {
   MAX_ROLL_TARGETS,
   ROLL_OPPORTUNITY_SHARE,
-  pairNetApr,
   pairRollGeometry,
   rollFigures,
   rollBatchTolerance,
@@ -68,7 +67,7 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
     const { yuLegs, heldSize, pairPerpImUsd } = pairRollGeometry(pair);
     if (yuLegs.length === 0 || yuLegs.some((l) => l.marketId === undefined) || !(heldSize > 0)) return [];
     const heldIds = yuLegs.map((l) => l.marketId as number);
-    const current = pairNetApr(pair, nowSec);
+    const current = pair.lockedAprFwd;
     if (current === null) return [];
 
     const targets = rollTargetsFor(markets, pair, base, pair.soonestMaturitySec).slice(0, MAX_ROLL_TARGETS);

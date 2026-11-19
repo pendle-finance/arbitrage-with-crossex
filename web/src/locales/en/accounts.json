@@ -362,7 +362,18 @@
     "slipHint": "Raise it for a large size or a thin book.",
     "closeBoth": "Close both",
     "pairNote": "First leg: limit at mid ± slippage. Second leg: market, inside the venue's price limit.",
-    "mechanics": "<b>Reduce-only</b>. Neither leg can add to a position or rest on the book."
+    "mechanics": "<b>Reduce-only</b>. Neither leg can add to a position or rest on the book.",
+    "execution": "Perp exit",
+    "executionAria": "Perp exit mode",
+    "makerLegHint": "Auto: the leg whose market order costs more",
+    "savingHint": "Fee saved vs closing both legs as taker",
+    "convertHint": "After this time, the unfilled rest closes at market on both venues.",
+    "rests": "Rests",
+    "restsTitle": "Post-only at the best price. Follows the book.",
+    "hedgeTitle": "Market, as the resting leg fills.",
+    "slipTitleMaker": "Limit for the market orders after the timeout: mid ± this much.",
+    "pairNoteMaker": "One leg rests post-only and follows the book. The other closes at market as it fills. After the timeout, the rest closes at market.",
+    "mechanicsMaker": "<b>Reduce-only</b>. Each fill is hedged at once, so the pair stays hedged while it closes."
   },
   "tracked": {
     "renewLogin": "Renew login for {{address}}",

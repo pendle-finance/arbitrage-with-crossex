@@ -807,6 +807,18 @@ export interface ClosePositionAction {
   /** Marketable-limit protection band, percent. Default 0.5, bounded (0, 10]. */
   slippagePct?: number;
   pairGroupId?: string;
+  /**
+   * Maker + hedge close, set at confirm only (never sent to /preview): the
+   * 'maker' leg rests reduce-only post-only at the touch, the 'hedge' leg
+   * closes at market as it fills. Both legs carry the role.
+   */
+  pairRole?: 'maker' | 'hedge';
+  /** Starting price for the maker leg; the engine re-pegs it to the touch. */
+  makerPrice?: string;
+  /** Seconds before the rest closes at market. */
+  makerTimeoutSec?: number;
+  /** Largest single order on either leg, in base units. */
+  maxClip?: string;
 }
 
 export type ActionInput = OpenMarketAction | OpenLimitAction | ClosePositionAction;

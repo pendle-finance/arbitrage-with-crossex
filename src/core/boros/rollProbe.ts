@@ -1,4 +1,4 @@
-import { defaultChargePerpFees, entryAprOf } from '../../../web/src/panels/assets/assetModel';
+import { entryAprOf } from '../../../web/src/panels/assets/assetModel';
 import { fitAtBand, planBatch, suggestedRollSize } from '../../../web/src/panels/assets/rollSizing';
 import type { BorosMarket } from './client';
 import type { BorosPairSimulation, SimulatedLeg } from './pair';
@@ -121,18 +121,6 @@ export function pairRollGeometry(pair: Pick<RollPairFacts, 'legs'>): {
     heldSize: yuLegs.length > 0 ? Math.min(...yuLegs.map((l) => l.sizeToken)) : 0,
     pairPerpImUsd: perpLegs.reduce((total, l) => total + l.imUsd, 0),
   };
-}
-
-export function pairNetApr(pair: RollPairFacts, nowSec: number): number | null {
-  const soonest = pair.soonestMaturitySec;
-  const termYears = soonest > 0 ? (soonest - (pair.hedgedSinceSec ?? nowSec)) / SECONDS_IN_YEAR : 0;
-  const perYearUsd = pair.lockedAprFwd !== null ? pair.lockedAprFwd * pair.capitalUsd : null;
-  const carryUsd = perYearUsd !== null && termYears > 0 ? perYearUsd * termYears : null;
-  const chargedUsd = pair.borosFeesPaidUsd + (defaultChargePerpFees(pair) ? pair.perpFeesPaidUsd : 0);
-  const netUsd = carryUsd === null ? null : carryUsd - chargedUsd;
-  return netUsd !== null && termYears > 0 && pair.capitalUsd > 0
-    ? netUsd / pair.capitalUsd / termYears
-    : null;
 }
 
 export function addedMarginOf(sim: BorosPairSimulation | null | undefined): number | null {
@@ -259,6 +247,12 @@ export function rollQuoteIsFillable(
   );
 }
 
+/**
+ * `current` is what holding still earns (`lockedAprFwd`: the locked rate on
+ * capital, less the settlement fee). It must leave out fees already paid to
+ * open the pair: rolling cannot get them back, and charging them to "keep"
+ * made a lower later rate look better.
+ */
 export function rollOpportunities(
   probes: Record<number, RollProbeResult>,
   targets: ReadonlyArray<RollTarget>,
