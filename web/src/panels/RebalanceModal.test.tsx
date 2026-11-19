@@ -1309,6 +1309,14 @@ describe('RebalanceModal Gate spot lines', () => {
     expect(onTransfer).toHaveBeenCalledWith('USDT', 'CROSSEX');
   });
 
+  it('the spot money line sits above the pinned hold, so nothing scrolls under it', async () => {
+    show(rebalanceViews.accountB, { transfer: transferViews.accountB });
+    await waitFor(() => expect(line('Gate spot has 318.42 USDT. Move it in to use it.')).toBeInTheDocument());
+    const spot = line('Gate spot has 318.42 USDT. Move it in to use it.') as HTMLElement;
+    const hold = within(dialog()).getByRole('button', { name: /^Hold to/ });
+    expect(spot.compareDocumentPosition(hold) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('no spot line under 1', async () => {
     serve({ transfer: transferViews.spotDust });
     renderWithClient(

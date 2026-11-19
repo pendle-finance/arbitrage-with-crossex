@@ -255,6 +255,7 @@ export function RebalanceModal({
               <StepsFold open={stepsOpen} onToggle={() => setStepsOpen(!stepsOpen)} hover={stepsHoverOf(route.rounds, held)} rows={planRows(route, borrow)} />
             )}
           </HowItRuns>
+          <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
           <RebalanceModalFooter
             plan={plan} route={route} buckets={buckets} goal={goal} chosen={chosen} worth={worth} worthAlert={worthAlert} optional={optional}
             stale={stale} lock={lock} pricing={pricing} holdMs={holdMs}
@@ -276,7 +277,6 @@ export function RebalanceModal({
               );
             }}
           />
-          <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
         </>
       );
     }
