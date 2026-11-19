@@ -6090,6 +6090,68 @@ describe('close, convert and reopen', () => {
     }
   });
 
+  it('a gate size-too-small refusal of a rest finishes the reopen', async () => {
+    const rules = { body: perpRules().body.map((rule) => ({ ...rule, minSize: '0.001', minNotional: '10' })) };
+    const cases: Array<[string, string, string, string | null, string]> = [
+      ['$10.20 at the close, $9.86 at send', '53.8', '53.7966', '3000', 'MIN_NOTIONAL'],
+      ['no close fill price, $9 rest', '53.8', '53.797', null, 'SIZE_TOO_SMALL'],
+      ['$6M leg, $10.20 at the close', '2000', '1999.9966', '3000', 'MIN_NOTIONAL'],
+    ];
+    for (const [name, closed, filled, price, label] of cases) {
+      const fill: Record<string, string> = price === null ? {} : { executedAvgPrice: price };
+      const leg = realizeLeg({ positionQty: Number(closed), qty: Number(closed), convert: null });
+      const h = harness(
+        fakeClock(),
+        { direction: 'toUsdt', route: 'convert', steps: [convert(1_000)], realize: realizeOf(leg) },
+        realizeRun({
+          listCrossexRuleSymbols: seq(rules),
+          createCrossexOrder: seq(created('o1'), created('o2'), gateError(400, label, 'Order below minimum')),
+          getCrossexOrder: ordersBy({ o1: order('FILLED', closed, 'o1', fill), o2: order('CANCELLED', filled, 'o2', fill) }),
+        }),
+      );
+      await h.run();
+      const job = h.jobs.read();
+      expect({ name, sent: perpSent(h).length, status: job?.status, haltReason: job?.haltReason }).toEqual({
+        name,
+        sent: 3,
+        status: 'done',
+        haltReason: null,
+      });
+      expect(h.onHalt).not.toHaveBeenCalled();
+      expect(job?.steps.map((step) => [step.name, step.status])).toEqual([
+        ['Close', 'done'],
+        ['Reopen', 'done'],
+        ['Convert', 'done'],
+      ]);
+      expect(job?.steps[1].qty).toBe(Number(filled));
+      expect(h.count('createCrossexConvertOrder')).toBe(1);
+    }
+  });
+
+  it('a gate size-too-small refusal of the whole reopen still halts', async () => {
+    const cases: Array<[string, string]> = [
+      ['$50 leg', '0.0167'],
+      ['$6M leg', '2000'],
+    ];
+    for (const [name, closed] of cases) {
+      const leg = realizeLeg({ positionQty: Number(closed), qty: Number(closed), convert: null });
+      const h = harness(
+        fakeClock(),
+        { direction: 'toUsdt', route: 'convert', steps: [convert(1_000)], realize: realizeOf(leg) },
+        realizeRun({
+          createCrossexOrder: seq(created('o1'), gateError(400, 'MIN_NOTIONAL', 'Order below minimum')),
+          getCrossexOrder: ordersBy({ o1: order('FILLED', closed, 'o1', { executedAvgPrice: '3000' }) }),
+        }),
+      );
+      await h.run();
+      const job = h.jobs.read();
+      expect({ name, sent: perpSent(h).length, status: job?.status }).toEqual({ name, sent: 2, status: 'halted' });
+      expect(job?.haltReason).toMatch(/^The rest is under Gate's smallest order\./);
+      expect(job?.steps[1].status).not.toBe('done');
+      expect(h.count('createCrossexConvertOrder')).toBe(0);
+    }
+  });
+
   it('a rest at the minimum order value is still sent', async () => {
     const rules = { body: perpRules().body.map((rule) => ({ ...rule, minSize: '0.001', minNotional: '10' })) };
     const h = harness(

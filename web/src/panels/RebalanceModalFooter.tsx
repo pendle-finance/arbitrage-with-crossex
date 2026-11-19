@@ -27,7 +27,7 @@ export function RebalanceModalFooter({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="sticky bottom-0 z-10 flex flex-col gap-3 border-t border-ink-800 bg-ink-950 pt-3">
+    <div className="sticky -bottom-5 z-10 -mb-5 flex flex-col gap-3 border-t border-ink-800 bg-ink-950 pb-5 pt-3">
       {worth !== null && worthAlert && <VerdictAlert tone={worth.tone} text={worth.text} sub={worth.sub} />}
       {chosen !== null && <TotalCost plan={plan} route={route} buckets={buckets} />}
       <div className="flex flex-wrap items-center gap-3">

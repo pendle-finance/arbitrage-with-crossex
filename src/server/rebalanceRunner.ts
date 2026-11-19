@@ -1111,6 +1111,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     if (c.category === 'rate-limited' || ORDER_ALLOWANCE_LABELS.includes(c.label ?? '')) return;
     if (c.category === 'auth') return halt(REOPEN_HALT.tradePermission);
     if (c.category === 'insufficient-margin') return retryConvert(step, leg);
+    if (c.category === 'size-too-small' && (step.qty ?? 0) > 0) return finish(step, step.qty ?? 0, step.from);
     const open = Number((await restOf(step, leg)).qty);
     if (c.category === 'size-too-small') return halt(REOPEN_HALT.underMinimum(leg, open));
     if (c.label === DELIST_LABEL || (await isCloseOnly(leg.symbol))) return halt(REOPEN_HALT.closeOnly(leg, open));
