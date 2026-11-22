@@ -41,6 +41,14 @@ import { localizeServerText } from '../i18n/serverMessages';
 
 export const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
 export const DUST = 1;
+
+const sliceHover = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.now');
+
+export const SLICE_HOVER = {
+  get priceImpact() { return sliceHover('slicePriceImpact'); },
+  get tradingFeePerps() { return sliceHover('tradingFeePerps'); },
+  get imUsed() { return sliceHover('imUsed'); },
+};
 const TRANSIT_WALLET = 'USDC/GATE';
 
 export const ROUTE_LABEL: Readonly<Record<RouteName, string>> = {

@@ -25,6 +25,7 @@
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { sigFigsDirectional } from '../lib/ticks';
 import { useTradeFlowOptional, type BorosOpenPrefill } from './TradeFlow';
 import { doubledCover, type BorosOverlap } from './borosOverlap';
 import {
@@ -91,15 +92,6 @@ const SIMULATION_MAX_AGE_MS = 12_000;
  */
 const FALLBACK_SLIP_PCT = 0.25;
 const MAX_SLIP_PCT = 10;
-
-/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8). */
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  // toPrecision trims the binary noise `Math.floor(x / step) * step` leaves
-  // (0.0001234 floors to 0.00009999999999999999 without it).
-  return Number((Math.floor(x / step) * step).toPrecision(12));
-}
 
 /** Client order ids must survive a lost response so a resend cannot double-fill,
  * but must be fresh for a genuinely new order. Keyed on the intent below. */
@@ -656,7 +648,7 @@ export function BorosPairTicket({
     const caps = ids.map(capOf).filter((c): c is number => c !== null);
     if (caps.length === 0) return FALLBACK_SLIP_PCT;
     const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-    const pctVal = floorTo1Sf(meanHalf * 100);
+    const pctVal = sigFigsDirectional(meanHalf * 100, 1, 'down');
     return pctVal > 0 ? pctVal : FALLBACK_SLIP_PCT;
   };
   // One leg drives a single-leg ticket; both drive a spread.

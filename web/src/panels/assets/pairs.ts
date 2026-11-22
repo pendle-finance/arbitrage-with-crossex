@@ -1,6 +1,8 @@
 import { useMemo } from 'react';
 import { useAssetPrefs, useAssetView } from '../../api/queries';
 import type { AssetGroup } from '../../api/types';
+import { t } from '../../i18n';
+import { daysToMaturity } from '../../lib/boros';
 import { parseSymbol } from '../../lib/fmt';
 import { bookKey, useBookId } from '../bookId';
 import { useTrackedAddress } from '../trackedAddress';
@@ -57,7 +59,12 @@ export function openPairsOf(
   );
 }
 
-export function useOpenPairs(): { pairs: OpenPair[]; loading: boolean } {
+export const daysLeftText = (maturitySec: number, nowSec: number): string => {
+  const days = daysToMaturity(maturitySec, nowSec);
+  return days > 0 ? t('assetCard.daysLeft', { days }) : t('assetCard.matured');
+};
+
+export function useOpenPairs(): { pairs: OpenPair[]; loading: boolean; failed: boolean; retry: () => void } {
   const { address } = useTrackedAddress();
   const book = bookKey(useBookId(address));
   const prefsQuery = useAssetPrefs(book, address !== null);
@@ -72,6 +79,7 @@ export function useOpenPairs(): { pairs: OpenPair[]; loading: boolean } {
     () => (data ? openPairsOf(data.assets, { exclusions, sinceSec: data.sinceSec, nowSec: data.nowSec }) : []),
     [data, exclusions],
   );
-  const loading = address !== null && (prefsQuery.isPending || query.isPending);
-  return { pairs, loading };
+  const loading = address !== null && !query.isError && (prefsQuery.isPending || query.isPending);
+  const failed = query.isError && data === undefined;
+  return { pairs, loading, failed, retry: () => void query.refetch() };
 }

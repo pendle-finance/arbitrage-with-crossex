@@ -19,6 +19,20 @@ describe('halfCapSeedPct', () => {
     expect(halfCapSeedPct(caps)).toBe(pct);
   });
 
+  it.each([
+    [0.0014, 0.07],
+    [0.006, 0.3],
+    [0.012, 0.6],
+    [0.018, 0.9],
+    [0.01, 0.5],
+    [0.02, 1],
+    [0.05, 2],
+    [0.003, 0.1],
+  ])('a %d cap seeds %d percent, the Close Boros floor without the float error', (cap, pct) => {
+    expect(halfCapSeedPct([cap])).toBe(pct);
+    expect(seedSlippageApr([market(1, cap)], [1])).toBeCloseTo(pct / 100, 12);
+  });
+
   it.each([[[]], [[0]], [[-0.1]], [[Number.NaN]], [[Number.POSITIVE_INFINITY]]])('gives null for %j', (caps) => {
     expect(halfCapSeedPct(caps)).toBeNull();
   });

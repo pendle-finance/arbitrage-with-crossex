@@ -7,6 +7,7 @@ import { num } from '../lib/fmt';
 import type { MoveFlow } from './moveCashPlan';
 import { poolCoin } from './rebalanceCopy';
 import { walletOf } from './RebalancePlanBits';
+import { AffixedInput } from '../trade/PairTicketBits';
 
 function WalletBox({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -54,7 +55,15 @@ export function MoveCashWallets({
       <select aria-label={t('accounts.rebalanceModal.from')} className="input num h-8 !py-0 text-xs" value={from} onChange={(e) => onFrom(e.target.value as Pool)}>
         {options}
       </select>
-      <input aria-label={t('accounts.rebalanceModal.amount')} className="input num h-8 !py-0 text-xs" inputMode="decimal" value={text} onChange={(e) => onText(e.target.value)} />
+      <AffixedInput affix={poolCoin(from)}>
+        <input
+          aria-label={t('accounts.rebalanceModal.amount')}
+          className="input num h-8 w-full pr-12"
+          inputMode="decimal"
+          value={text}
+          onChange={(e) => onText(e.target.value)}
+        />
+      </AffixedInput>
     </>
   ) : (
     flow.sent.map(({ pool, amount }) => (
@@ -80,7 +89,7 @@ export function MoveCashWallets({
           {flow.arrives.map(({ pool, amount }) => (
             <div key={pool} className="flex flex-col gap-0.5">
               {!custom && <span className="text-ink-300">{walletOf(pool)}</span>}
-              {flow.hasBorrow && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
+              {flow.hasBorrow && !custom && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
               {priced && amountText(amount, pool)}
             </div>
           ))}

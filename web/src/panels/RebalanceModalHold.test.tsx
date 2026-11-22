@@ -8,6 +8,7 @@ import { accountBodies, accountHandler, rebalanceViews, transferHandler, transfe
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RebalanceModal } from './RebalanceModal';
+import { RebalanceModalFooter } from './RebalanceModalFooter';
 
 const NO_POSITIONS: PositionsResponse = { positions: [], exposure: [] };
 
@@ -72,5 +73,28 @@ describe('RebalanceModal hold', () => {
     expect(screen.queryByRole('radio', { name: 'Custom amount' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
     expect(screen.getByText('Done. This is what each wallet holds now.')).toBeInTheDocument();
+  });
+});
+
+describe('RebalanceModalFooter', () => {
+  const footer = (over: { quoteStale?: boolean; lock?: string | null }) =>
+    renderWithClient(
+      <RebalanceModalFooter
+        rows={[]} holdLabel="Hold to move 3,000 USDC" optional={false} stale={false} pricing={false} disabled={false}
+        lock={over.lock ?? null} quoteStale={over.quoteStale} onRefresh={vi.fn()} onConfirm={vi.fn()}
+      />,
+    );
+
+  it('a stale quote disables the hold and says why', () => {
+    footer({ quoteStale: true });
+    expect(screen.getByText('The quote is out of date. Waiting for a fresh one.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to move 3,000 USDC' })).toBeDisabled();
+  });
+
+  it('a running job draws the waits line in place of the hold', () => {
+    footer({ lock: 'New deals and transfers wait until it ends.', quoteStale: true });
+    expect(screen.getByText('New deals and transfers wait until it ends.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
+    expect(screen.queryByText('The quote is out of date. Waiting for a fresh one.')).toBeNull();
   });
 });

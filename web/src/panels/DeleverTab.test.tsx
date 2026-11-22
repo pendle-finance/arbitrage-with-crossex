@@ -10,11 +10,17 @@ import { renderWithClient } from '../test/utils';
 import type { OpenPair } from './assets/pairs';
 import { DeleverTab } from './DeleverTab';
 
-const openState = vi.hoisted(() => ({ pairs: [] as OpenPair[], loading: false }));
+const openState = vi.hoisted(() => ({ pairs: [] as OpenPair[], loading: false, failed: false, retry: () => {} }));
+const walletState = vi.hoisted(() => ({ state: 'can-trade' as string | null, canTrade: true, loginLabel: null as string | null }));
 
 vi.mock('./assets/pairs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./assets/pairs')>()),
   useOpenPairs: () => openState,
+}));
+
+vi.mock('./trackedAddress', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./trackedAddress')>()),
+  useActiveWallet: () => ({ address: '0xabc', viewOnly: false, endsSoon: null, openLogin: () => {}, ...walletState }),
 }));
 
 const BTC = openPairs.btc900[0]!;
@@ -65,6 +71,8 @@ const defaultOption = (plan: DeleverPlan) => plan.sliceOptions.find((o) => !o.cu
 
 beforeEach(() => {
   openState.loading = false;
+  openState.failed = false;
+  Object.assign(walletState, { state: 'can-trade', canTrade: true, loginLabel: null });
 });
 
 describe('DeleverTab pair', () => {
@@ -123,6 +131,89 @@ describe('DeleverTab pair', () => {
     show(openPairs.dollarPair);
     expect(screen.getByText('No open pairs')).toBeInTheDocument();
   });
+
+  it('a failed pair read shows an error with retry, never no open pairs', async () => {
+    const retry = vi.fn();
+    openState.failed = true;
+    openState.retry = retry;
+    show(openPairs.none);
+    expect(screen.queryByText('No open pairs')).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Retry' }));
+    expect(retry).toHaveBeenCalled();
+  });
+
+  it('picker rows use the pair row maturity format', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    expect(trigger()).toHaveTextContent(/Matures \d{4}-\d{2}-\d{2} · (\d+d left|matured)/);
+  });
+
+  it('escape closes the picker, not the dialog', async () => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    const outer = vi.fn();
+    window.addEventListener('keydown', outer);
+    await user.click(trigger());
+    expect(screen.getByRole('combobox', { name: 'Search coin or venue' })).toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('combobox', { name: 'Search coin or venue' })).not.toBeInTheDocument();
+    expect(outer).not.toHaveBeenCalled();
+    window.removeEventListener('keydown', outer);
+  });
+});
+
+describe('DeleverTab guards', () => {
+  it.each(['0', 'abc', '-5'])('custom %s shows the invalid sentence and no hold', async (typed) => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await user.click(screen.getByRole('radio', { name: 'Custom' }));
+    await user.type(screen.getByRole('textbox', { name: 'Custom' }), typed);
+    expect(screen.getByText(/^(Not a number|Must be more than 0)$/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+  });
+
+  it('custom above the pair size names the most and shows no hold', async () => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await user.click(screen.getByRole('radio', { name: 'Custom' }));
+    await user.type(screen.getByRole('textbox', { name: 'Custom' }), '900.001');
+    expect(screen.getByText('Maximum is 900')).toBeInTheDocument();
+    expect(screen.queryByText(/^100(\.0+)?%$/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+  });
+
+  it('the hold stays disabled until the plan for the picked size returns', async () => {
+    const user = userEvent.setup();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.post('/api/rebalance/delever/plan', async ({ request }) => {
+        const body = (await request.json()) as DeleverRequest;
+        if (body.perps[0]?.qty === 270) await gate;
+        return HttpResponse.json(env(deleverPlans.twentyPct));
+      }),
+    );
+    show(openPairs.btc900);
+    await waitFor(() => expect(screen.getByRole('button', { name: /by 20% \(180 BTC\)/ })).toBeEnabled());
+    await user.click(screen.getByRole('radio', { name: '30%' }));
+    const hold = screen.getByRole('button', { name: /by 30% \(270 BTC\)/ });
+    expect(hold).toBeDisabled();
+    release();
+    await waitFor(() => expect(hold).toBeEnabled());
+  });
+
+  it('a wallet that cannot trade cannot start a delever with a Boros leg', async () => {
+    Object.assign(walletState, { state: 'not-approved', canTrade: false, loginLabel: null });
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    expect(await screen.findByText('This build cannot close Boros positions. Close them in the Boros app.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
+  });
 });
 
 describe('DeleverTab size', () => {
@@ -166,6 +257,13 @@ describe('DeleverTab plan', () => {
     expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
   });
 
+  it('two perps on the same side refuse with no hold', async () => {
+    servePlan(deleverPlans.sameSide);
+    show(openPairs.btc900);
+    expect(await screen.findByText('Both perps are on the same side. Delever needs one long and one short.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+  });
+
   it('after legs', async () => {
     servePlan(deleverPlans.twoBoros);
     show(openPairs.btc900);
@@ -186,7 +284,7 @@ describe('DeleverTab plan', () => {
     show(openPairs.btc900);
     const time = fmtAbout(defaultOption(plan).seconds.maker);
     expect(
-      await screen.findByText(`Boros closes after the perps. Until then, up to 180 YU has no perp behind it (${time}).`),
+      await screen.findByText(`Boros closes after the perps. Until then, the YU with no perp behind it grows to 180 by the end (${time}).`),
     ).toBeInTheDocument();
   });
 
@@ -195,7 +293,9 @@ describe('DeleverTab plan', () => {
     servePlan(plan);
     show(openPairs.btc900);
     const text = `Not hedged during each slice: max ${sigGrouped(plan.notHedgedMaxQty)} BTC (${fmtUsd(plan.notHedgedMaxUsd, 0)})`;
-    expect(await screen.findByText(text)).toBeInTheDocument();
+    const line = await screen.findByText(text);
+    expect(line.tagName).toBe('P');
+    expect(line.closest('[role="alert"], .card')).toBeNull();
   });
 
   it('delever cost rows', async () => {
@@ -204,7 +304,9 @@ describe('DeleverTab plan', () => {
     show(openPairs.btc900);
     const card = (await screen.findByText('Trading fee · perps')).closest('.card') as HTMLElement;
     const labels = ['Trading fee · perps', 'Trading fee · Boros', 'Price impact', 'Total cost'];
-    expect(within(card).getAllByText((_, el) => el?.tagName === 'SPAN' && labels.includes(el.textContent ?? '')).map((el) => el.textContent)).toEqual(labels);
+    const shown = within(card).getAllByText((_, el) => el?.tagName === 'SPAN' && labels.includes(el.textContent ?? '')).map((el) => el.textContent);
+    expect([...new Set(shown)]).toEqual(labels);
+    expect(within(card).getByRole('button', { name: /Price impact/ })).toBeInTheDocument();
     expect(card).toHaveTextContent(fmtUsd(plan.estimates.maker.totalUsd));
   });
 
@@ -216,9 +318,9 @@ describe('DeleverTab plan', () => {
     const orders = await screen.findByRole('radiogroup', { name: 'Orders' });
     const [limit, market] = within(orders).getAllByRole('radio');
     const option = defaultOption(plan);
-    expect(limit).toHaveTextContent(`Limit + hedge ${fmtUsd(plan.estimates.maker.totalUsd, 0)} · ${fmtAbout(option.seconds.maker)}`);
+    expect(limit).toHaveTextContent(`Limit + hedge ${fmtUsd(plan.estimates.maker.totalUsd, 0)} · ${fmtAbout(option.seconds.maker)} per slice`);
     expect(limit).toHaveAttribute('aria-checked', 'true');
-    expect(market).toHaveTextContent(`Market ${fmtUsd(plan.estimates.market.totalUsd, 0)} · ${fmtAbout(option.seconds.market)}`);
+    expect(market).toHaveTextContent(`Market ${fmtUsd(plan.estimates.market.totalUsd, 0)} · ${fmtAbout(option.seconds.market)} per slice`);
     expect(screen.getByText(new RegExp(`^Slice size \\$[\\d.]+k · ${option.count} slices?$`))).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Change' }));
     const slices = screen.getByRole('radiogroup', { name: 'Slice size' });

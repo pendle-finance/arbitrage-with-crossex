@@ -487,7 +487,7 @@ describe('BalancesPanel assets', () => {
 });
 
 async function openRebalanceDialog(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(within(region('Borrow')).getByRole('button', { name: 'Reduce borrow' }));
+  await user.click(within(region('Borrow')).getByRole('button', { name: /^(Reduce borrow|Move cash)$/ }));
   return screen.findByRole('dialog');
 }
 

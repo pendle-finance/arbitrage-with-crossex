@@ -118,7 +118,8 @@ import {
   sizeIn,
 } from './assetModel';
 import { DUST_USD, sameSize } from './grouping';
-import { openPairKey, pairKey } from './pairs';
+import { daysLeftText, openPairKey, pairKey } from './pairs';
+import { sigFigsDirectional } from '../../lib/ticks';
 import { useRebalanceOpener } from '../rebalanceOpener';
 import { sliceStateLabel } from '../RebalanceSliceJobView';
 import { PairTitle } from '../../components/PairTitle';
@@ -352,12 +353,6 @@ const exactUsd = (usd: number): string => fmtUsd(usd);
  * "20k SOL" for a $20k position. */
 const exactSize = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? exactQty(size, base) : exactUsd(size);
-
-/** "16d left" / "matured" — the term in the unit a trader thinks in. */
-const daysLeftText = (maturitySec: number, nowSec: number): string => {
-  const days = daysToMaturity(maturitySec, nowSec);
-  return days > 0 ? t('assetCard.daysLeft', { days }) : t('assetCard.matured');
-};
 
 /** The pair's term as one bar on the asset's shared time axis: it starts when
  * the pair was hedged and ends at maturity, the filled part is the time that
@@ -768,6 +763,9 @@ function PairCard({
   excludeMenu: ExcludeMenu;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const wallet = useActiveWallet();
+  const deleverBlocked =
+    deleverJob === null && pair.legs.some((l) => l.kind === 'yu') && wallet.state !== null && !wallet.canTrade;
   // The roll is OFFERED on any live pair; everything that reminds — the
   // chips, the probes, "Show me", the button's colour — waits for the window.
   const canRoll = pairCanRoll(pair, nowSec);
@@ -1170,11 +1168,13 @@ function PairCard({
               <button
                 type="button"
                 className={pill}
-                disabled={pair.unit !== 'base'}
+                disabled={pair.unit !== 'base' || deleverBlocked}
                 title={
-                  pair.unit === 'base'
-                    ? t('assetCard.actions.deleverTitle')
-                    : t('assetCard.actions.closePerpsUsdTitle')
+                  pair.unit !== 'base'
+                    ? t('assetCard.actions.closePerpsUsdTitle')
+                    : deleverBlocked
+                      ? (wallet.loginLabel ?? t('pairTicket.closeBoros.agentReason'))
+                      : t('assetCard.actions.deleverTitle')
                 }
                 onClick={onDelever}
               >
@@ -1350,15 +1350,6 @@ const ROLL_MAX_SLIP_PCT = 10;
 const ROLL_FALLBACK_SLIP_PCT = 1;
 /** The slider's shortcuts, as shares of the position. */
 const ROLL_SHARE_STEPS = [0.25, 0.5, 0.75, 1] as const;
-/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8) — the
- * ticket's and the close form's own rounding, so the three seed alike. Down
- * rather than to-nearest: a seeded bound must stay inside the venue's cap. */
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  // toPrecision trims the binary noise `Math.floor(x / step) * step` leaves.
-  return Number((Math.floor(x / step) * step).toPrecision(12));
-}
 
 /**
  * The tolerance a batch is seeded with, in % APR: half each market's own
@@ -1377,7 +1368,7 @@ function seedSlipPctFor(markets: ReadonlyArray<BorosPairMarketRow>, ids: number[
     .filter((c): c is number => typeof c === 'number' && c > 0);
   if (caps.length === 0) return ROLL_FALLBACK_SLIP_PCT;
   const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-  const pctVal = floorTo1Sf(meanHalf * 100);
+  const pctVal = sigFigsDirectional(meanHalf * 100, 1, 'down');
   return pctVal > 0 ? pctVal : ROLL_FALLBACK_SLIP_PCT;
 }
 

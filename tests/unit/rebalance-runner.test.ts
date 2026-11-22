@@ -29,6 +29,7 @@ import {
   newJob,
   REOPEN_HALT,
   TO_USDC_STEPS,
+  borosPartText,
   requestPause,
   RETRY_CONVERT_CAP,
   type DeleverJobInput,
@@ -59,7 +60,7 @@ vi.mock('../../src/server/borosClose', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/server/borosClose')>()),
   closeBorosLegs: vi.fn(async (_deps: unknown, input: { legs: { marketId: number; size: number }[] }) => {
     borosSpy.calls.push({ input, gateCalls: borosSpy.gateCalls() });
-    return { filled: input.legs, rest: input.legs.map((leg) => ({ marketId: leg.marketId, size: 0 })) };
+    return { filled: input.legs, rest: input.legs.map((leg) => ({ marketId: leg.marketId, size: 0 })), held: [] };
   }),
 }));
 type CrossExApi = Clients['crossEx'];
@@ -7070,7 +7071,7 @@ describe('slices: rate limits', () => {
     expect(hedged(venue)).toEqual({ leads: 10, follows: 10 });
   });
 
-  it('a rate-limited maker lead falls back to the banded IOC', async () => {
+  it('a rate-limited maker lead waits and retries the post-only close', async () => {
     let limited = 0;
     const venue = sliceVenue((req) => {
       if (String(req.timeInForce) === 'POC' && limited === 0) {
@@ -7081,7 +7082,8 @@ describe('slices: rate limits', () => {
     });
     const h = sliceRun(venue);
     await h.run();
-    expect(venue.reqs()[0]).toMatchObject({ side: 'BUY', type: 'LIMIT', timeInForce: 'IOC', price: '3007.5', qty: '5' });
+    expect(limited).toBe(1);
+    expect(venue.reqs()[0]).toMatchObject({ side: 'BUY', type: 'LIMIT', timeInForce: 'POC', qty: '5' });
     expect(h.onHalt).not.toHaveBeenCalled();
     expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
     expect(hedged(venue)).toEqual({ leads: 10, follows: 10 });
@@ -7112,16 +7114,16 @@ describe('slices: rate limits', () => {
   });
 });
 
+const deleverAt = (q: number, yu = 50): DeleverJobInput => ({
+  makerLeg: 0,
+  legs: [
+    { symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', before: 2 * q, after: q, closeQty: q },
+    { symbol: GATE_ETH, exchange: 'GATE', base: 'ETH', side: 'LONG', before: 2 * q, after: q, closeQty: q },
+  ],
+  boros: [{ marketId: 7, before: 2 * yu, after: yu, closeSize: yu }],
+});
+
 describe('slices: Boros part-fills after the last perp slice', () => {
-  const PART_TEXT = 'Boros did not close all of its share. The rest has no perp behind it.';
-  const deleverOf = (q: number, yu: number): DeleverJobInput => ({
-    makerLeg: 0,
-    legs: [
-      { symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', before: 2 * q, after: q, closeQty: q },
-      { symbol: GATE_ETH, exchange: 'GATE', base: 'ETH', side: 'LONG', before: 2 * q, after: q, closeQty: q },
-    ],
-    boros: [{ marketId: 7, before: 2 * yu, after: yu, closeSize: yu }],
-  });
 
   it.each([
     [5, 7_500, 50, 30],
@@ -7130,19 +7132,19 @@ describe('slices: Boros part-fills after the last perp slice', () => {
     borosSpy.calls.length = 0;
     vi.mocked(closeBorosLegs).mockImplementationOnce(async (_deps, input) => {
       borosSpy.calls.push({ input, gateCalls: 0 });
-      return { filled: input.legs.map((leg) => ({ ...leg, size: part })), rest: input.legs.map((leg) => ({ ...leg, size: leg.size - part })) };
+      return { filled: input.legs.map((leg) => ({ marketId: leg.marketId, size: part })), rest: input.legs.map((leg) => ({ marketId: leg.marketId, size: leg.size - part })), held: [] };
     });
     const venue = sliceVenue();
-    const h = sliceRun(venue, { delever: deleverOf(q, yu), sliceUsd });
+    const h = sliceRun(venue, { delever: deleverAt(q, yu), sliceUsd });
     Object.assign(h.deps, { boros: { deps: {} as BorosCloseDeps, address: '0x00000000000000000000000000000000000000a1' } });
     await h.run();
     const leads = venue.reqs().filter((req) => req.symbol === HL_ETH).reduce((total, req) => total + Number(req.qty), 0);
     expect(leads).toBeCloseTo(q, 6);
-    expect((borosSpy.calls[0].input as BorosCloseInput).legs).toEqual([{ marketId: 7, size: yu }]);
+    expect((borosSpy.calls[0].input as BorosCloseInput).legs).toEqual([{ marketId: 7, size: yu, keep: yu }]);
     expect(h.jobs.read()).toMatchObject({
       status: 'halted',
       haltKind: 'boros',
-      haltReason: PART_TEXT,
+      haltReason: borosPartText(yu - part),
       borosLeftYu: yu - part,
       delever: { boros: [{ closed: part }] },
     });
@@ -7284,14 +7286,6 @@ describe('slices: delever', () => {
 
 describe('slices: fixes, cost and IM used', () => {
   const BOROS_A1 = '0x00000000000000000000000000000000000000a1';
-  const deleverAt = (q: number): DeleverJobInput => ({
-    makerLeg: 0,
-    legs: [
-      { symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', before: 2 * q, after: q, closeQty: q },
-      { symbol: GATE_ETH, exchange: 'GATE', base: 'ETH', side: 'LONG', before: 2 * q, after: q, closeQty: q },
-    ],
-    boros: [{ marketId: 7, before: 100, after: 50, closeSize: 50 }],
-  });
   const withBoros = (h: ReturnType<typeof sliceRun>) => Object.assign(h.deps, { boros: { deps: {} as BorosCloseDeps, address: BOROS_A1 } });
   const borosLegs = () => borosSpy.calls.map((call) => (call.input as BorosCloseInput).legs);
   const atBorosPart = (venue: ReturnType<typeof sliceVenue>, q: number) =>
@@ -7304,7 +7298,7 @@ describe('slices: fixes, cost and IM used', () => {
         job.realize!.legs[0].filledQty = q;
         job.delever!.boros[0].closed = 20;
         job.borosLeftYu = 30;
-        job.haltReason = 'Boros did not close all of its share. The rest has no perp behind it.';
+        job.haltReason = borosPartText(30);
         job.haltKind = 'boros';
       },
     });
@@ -7340,6 +7334,99 @@ describe('slices: fixes, cost and IM used', () => {
     expect(job.status).toBe('done');
   });
 
+  it('a Boros close with no answer halts on Boros with the gap set', async () => {
+    vi.mocked(closeBorosLegs).mockImplementationOnce(async () => {
+      throw new Error('Boros gave no answer');
+    });
+    const venue = sliceVenue();
+    const h = sliceRun(venue, { delever: deleverAt(5), sliceUsd: 7_500 });
+    withBoros(h);
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'boros', borosLeftYu: 50, borosGapYu: 50, delever: { boros: [{ closed: 0 }] } });
+  });
+
+  it.each([0.0166, 2_000])('boros retry credits a close the chain already shows and never closes past the share, %d ETH', async (q) => {
+    borosSpy.calls.length = 0;
+    vi.mocked(closeBorosLegs).mockImplementationOnce(async (_deps, input) => {
+      borosSpy.calls.push({ input, gateCalls: 0 });
+      const held = 70;
+      const size = Math.min(input.legs[0].size, held - (input.legs[0].keep ?? 0));
+      return { filled: [{ marketId: 7, size }], rest: [{ marketId: 7, size: 0 }], held: [{ marketId: 7, size: held }] };
+    });
+    const venue = sliceVenue();
+    const h = atBorosPart(venue, q);
+    withBoros(h);
+    const job = await applyFix(h.deps, h.jobs.read()!, 'boros-retry');
+    expect(borosLegs()).toEqual([[{ marketId: 7, size: 30, keep: 50 }]]);
+    expect(job).toMatchObject({ status: 'done', borosLeftYu: 0, delever: { boros: [{ closed: 50 }] } });
+  });
+
+  it('add back sends each perp in chunks no larger than the venue max market size', async () => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexRuleSymbols = seq({
+      body: [HL_ETH, GATE_ETH].map((symbol) => ({ symbol, state: 'live', lotSize: '0.0001', minSize: '0.0001', tickSize: '0.1', businessType: 'FUTURE', maxMarketSize: '500' })),
+    });
+    const h = atBorosPart(venue, 2_000);
+    const job = await applyFix(h.deps, h.jobs.read()!, 'add-back');
+    const sent = (symbol: string) => venue.reqs().filter((req) => req.symbol === symbol).map((req) => req.qty);
+    expect(sent(HL_ETH)).toEqual(['500', '500', '200']);
+    expect(sent(GATE_ETH)).toEqual(['500', '500', '200']);
+    expect(job.steps[1].addBack?.legs.map((leg) => leg.filled)).toEqual([1_200, 1_200]);
+    expect(job.status).toBe('done');
+  });
+
+  const followBookDown = (venue: ReturnType<typeof sliceVenue>) => {
+    const state = { down: false, placed: false, misses: [] as number[] };
+    const place = venue.handlers.createCrossexOrder as Handler;
+    venue.handlers.createCrossexOrder = async (arg: never) => {
+      const out = await place(arg);
+      if (!state.placed) state.down = true;
+      state.placed = true;
+      return out;
+    };
+    const h = sliceRun(venue, { exec: 'market' });
+    Object.assign(h.deps, { book: async () => (state.down ? null : BOOK) });
+    const write = h.jobs.write.bind(h.jobs);
+    h.jobs.write = (job: Job) => {
+      state.misses.push(job.followMisses);
+      write(job);
+    };
+    return { h, state };
+  };
+
+  it('a follow whose book read fails counts a miss', async () => {
+    const venue = sliceVenue();
+    const { h, state } = followBookDown(venue);
+    const write = h.jobs.write;
+    h.jobs.write = (job: Job) => {
+      write(job);
+      if (job.followMisses >= 3) state.down = false;
+    };
+    await h.run();
+    expect(Math.max(...state.misses)).toBe(3);
+    expect(h.onHalt).not.toHaveBeenCalled();
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it('a market fix queued while the run misses follows runs inside the runner', async () => {
+    const venue = sliceVenue();
+    const { h, state } = followBookDown(venue);
+    let fixed: Job | null = null;
+    let given = false;
+    Object.assign(h.deps, {
+      takeFix: () => {
+        if (given || (h.jobs.read()?.followMisses ?? 0) < 3) return null;
+        given = true;
+        state.down = false;
+        return { action: 'market', done: (job: Job) => void (fixed = job), fail: (err: unknown) => { throw err; } };
+      },
+    });
+    await h.run();
+    expect(fixed).not.toBeNull();
+    expect(venue.reqs().filter((req) => String(req.type) === 'MARKET')).toHaveLength(1);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0, followMisses: 0 });
+  });
+
   it('a delever with no Boros left to close finishes with no halt and no Boros wallet', async () => {
     borosSpy.calls.length = 0;
     const venue = sliceVenue();
@@ -7357,12 +7444,12 @@ describe('slices: fixes, cost and IM used', () => {
     withBoros(h);
     await h.run();
     const fixed = await applyFix(h.deps, h.jobs.read()!, 'boros-retry');
-    expect(borosLegs()).toEqual([[{ marketId: 7, size: 25 }]]);
+    expect(borosLegs()).toEqual([[{ marketId: 7, size: 25, keep: 75 }]]);
     expect(fixed).toMatchObject({ status: 'halted', paused: true, stepIndex: 0, borosGapYu: 0, delever: { boros: [{ closed: 25 }] } });
     expect(fixed.steps[0].status).not.toBe('done');
     await h.resume();
     expect(venue.reqs()).toHaveLength(4);
-    expect(borosLegs()).toEqual([[{ marketId: 7, size: 25 }], [{ marketId: 7, size: 25 }]]);
+    expect(borosLegs()).toEqual([[{ marketId: 7, size: 25, keep: 75 }], [{ marketId: 7, size: 25, keep: 50 }]]);
     expect(h.jobs.read()).toMatchObject({ status: 'done', delever: { boros: [{ closed: 50 }] } });
   });
 

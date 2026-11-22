@@ -223,7 +223,7 @@ export interface BorosCloseLeg {
 
 export interface BorosCloseInput {
   address: string;
-  legs: BorosCloseLeg[];
+  legs: (BorosCloseLeg & { keep?: number })[];
   slippagePct: number;
   clientOrderId: string;
 }
@@ -231,6 +231,7 @@ export interface BorosCloseInput {
 export interface BorosCloseResult {
   filled: BorosCloseLeg[];
   rest: BorosCloseLeg[];
+  held: BorosCloseLeg[];
 }
 
 export async function closeBorosLegs(deps: BorosCloseDeps, input: BorosCloseInput): Promise<BorosCloseResult> {
@@ -238,8 +239,8 @@ export async function closeBorosLegs(deps: BorosCloseDeps, input: BorosCloseInpu
   const account = await deps.pricer.loadAccount(address, true);
   const sent = input.legs.flatMap((leg) => {
     const current = account.positionByMarket.get(leg.marketId) ?? 0;
-    const size = Math.abs(leg.size);
-    if (current === 0 || size === 0) return [];
+    const size = Math.min(Math.abs(leg.size), Math.max(0, Math.abs(current) - (leg.keep ?? 0)));
+    if (current === 0 || !(size > 0)) return [];
     const direction: BorosLegDirection = current > 0 ? 'short' : 'long';
     return [
       {
@@ -259,6 +260,7 @@ export async function closeBorosLegs(deps: BorosCloseDeps, input: BorosCloseInpu
     return {
       filled: input.legs.map((l) => ({ marketId: l.marketId, size: Math.abs(fillOf(l.marketId)?.filledSize ?? 0) })),
       rest: input.legs.map((l) => ({ marketId: l.marketId, size: fillOf(l.marketId)?.shortfallSize ?? 0 })),
+      held: input.legs.map((l) => ({ marketId: l.marketId, size: Math.abs(account.positionByMarket.get(l.marketId) ?? 0) })),
     };
   };
   if (sent.length === 0) return report([]);

@@ -80,14 +80,21 @@ export function sliceOptions(input: {
   minQty: number;
   lot: string;
   customUsd?: number;
+  maxUsd?: number;
 }): SliceOption[] {
   const { book, side, mid, totalQty, minQty, lot, customUsd } = input;
   if (!book || !touchOf(book) || !(mid > 0) || !(totalQty > 0)) return [];
+  const maxUsd = input.maxUsd !== undefined && input.maxUsd > 0 ? input.maxUsd : Infinity;
   const optionFor = (sizeUsd: number, custom: boolean): SliceOption | null => {
-    const qtys = sliceQtys(totalQty, sizeUsd / mid, minQty, lot);
+    const qtys = sliceQtys(totalQty, Math.min(sizeUsd, maxUsd) / mid, minQty, lot);
     if (qtys.length === 0) return null;
-    const impacts = qtys.map((qty) => impactOf(book, side, mid, qty)).filter((impact) => impact !== null);
-    const largest = Math.max(...qtys);
+    const walked = new Map<number, Impact | null>();
+    const impactAt = (qty: number): Impact | null => {
+      if (!walked.has(qty)) walked.set(qty, impactOf(book, side, mid, qty));
+      return walked.get(qty) ?? null;
+    };
+    const impacts = qtys.map(impactAt).filter((impact) => impact !== null);
+    const largest = qtys.reduce((max, qty) => Math.max(max, qty), 0);
     const largestImpact = impactOf(book, side, mid, largest);
     if (impacts.length !== qtys.length || !largestImpact) return null;
     return {
@@ -103,7 +110,7 @@ export function sliceOptions(input: {
   };
   const rows = SLICE_SIZES_USD.map((sizeUsd) => optionFor(sizeUsd, false));
   if (customUsd !== undefined && Number.isFinite(customUsd)) {
-    const clamped = Math.min(Math.max(customUsd, Math.max(0, minQty) * mid), totalQty * mid);
+    const clamped = Math.min(Math.max(customUsd, Math.max(0, minQty) * mid), totalQty * mid, maxUsd);
     rows.push(optionFor(clamped, true));
   }
   return rows.filter((row): row is SliceOption => row !== null);

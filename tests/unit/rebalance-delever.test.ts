@@ -283,4 +283,26 @@ describe('planDelever', () => {
       'No open Boros position on market 999.',
     );
   });
+
+  it('refuses two perps on the same side, so it never doubles the exposure', () => {
+    const base = inputOf();
+    const plan = planDelever({ ...base, positions: base.positions.map((row) => ({ ...row, side: 'LONG' as const })) });
+    expect(plan.refused).toEqual({ reason: 'same-side', coin: 'BTC' });
+    expect(planDelever(inputOf()).refused).toBeNull();
+  });
+
+  it('caps the custom slice at the venue max order size, from $50 to $6M', () => {
+    const maxCoins = 2;
+    const rules = { ...PERP_RULES, [GATE]: { ...PERP_RULES[GATE], maxMarketSize: String(maxCoins) } };
+    const capUsd = maxCoins * BTC_MARK;
+    for (const sliceUsd of LADDER) {
+      const plan = planDelever({ ...inputOf({ sliceUsd }), rules });
+      const custom = plan.sliceOptions.find((option) => option.custom);
+      expect(custom?.sizeUsd).toBeLessThanOrEqual(capUsd);
+      expect(plan.notHedgedMaxQty).toBeLessThanOrEqual(maxCoins);
+      for (const option of plan.sliceOptions) expect(option.notHedgedMaxQty).toBeLessThanOrEqual(maxCoins);
+    }
+    const free = planDelever(inputOf({ sliceUsd: 50_000_000 }));
+    expect(free.notHedgedMaxQty).toBe(180);
+  });
 });

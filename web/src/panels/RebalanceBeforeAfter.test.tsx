@@ -38,7 +38,7 @@ describe('RebalanceBeforeAfter', () => {
       const arrows = row.querySelectorAll('svg.lucide-arrow-right');
       expect(arrows.length).toBe(before!.textContent === '' ? 0 : 1);
     }
-    const [freesBefore, freesAfter] = valuesOf(group('USDT · CrossEx'), 'Frees');
+    const [freesBefore, freesAfter] = valuesOf(group('USDT · CrossEx'), 'Frees initial margin');
     expect(freesBefore).toBe('');
     expect(freesAfter).toBe('$5,962.00');
   });
@@ -69,7 +69,7 @@ describe('RebalanceBeforeAfter', () => {
     planCard(owner, ownerRoute());
     const usdt = group('USDT · CrossEx');
     const usdc = group('USDC · Hyperliquid');
-    expect(labelsOf(usdt)).toEqual(['Equity', 'Borrow', 'Interest a month', 'Frees']);
+    expect(labelsOf(usdt)).toEqual(['Equity', 'Borrow', 'Interest a month', 'Frees initial margin']);
     expect(labelsOf(usdc)).toEqual(['Equity', 'Cash']);
     expect(valuesOf(usdt, 'Equity')).toEqual(['-29,812', '7,687']);
     expect(valuesOf(usdt, 'Borrow')).toEqual(['29,812', '0']);
@@ -112,7 +112,7 @@ describe('RebalanceBeforeAfter', () => {
       { coin: 'USDC', venue: 'HYPERLIQUID', cash: 5000, equity: 5000 },
     ];
     const rows = walletChanges({ ...owner, buckets }, owner.plans.even, ownerRoute({ after, marginFreedUsd: 800 }));
-    const frees = rows.flatMap((g) => g.rows.filter((r) => r.label === 'Frees').map((r) => r.after));
+    const frees = rows.flatMap((g) => g.rows.filter((r) => r.label === 'Frees initial margin').map((r) => r.after));
     expect(rows.map((g) => g.key)).toEqual(['USDT/CROSSEX', 'USDC/LIGHTER', 'USDC/HYPERLIQUID']);
     expect(frees).toEqual([600, 200]);
   });

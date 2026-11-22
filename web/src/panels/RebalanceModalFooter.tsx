@@ -10,6 +10,7 @@ import type { worthLine } from './RebalanceHovers';
 interface FooterBase {
   optional: boolean;
   stale: boolean;
+  quoteStale?: boolean;
   lock: string | null;
   pricing: boolean;
   disabled: boolean;
@@ -50,7 +51,7 @@ function contentOf(props: PlanFooter | RowsFooter) {
 }
 
 export function RebalanceModalFooter(props: FooterProps) {
-  const { optional, stale, lock, pricing, disabled, holdMs, onRefresh, onConfirm } = props;
+  const { optional, stale, quoteStale = false, lock, pricing, disabled, holdMs, onRefresh, onConfirm } = props;
   const { t } = useTranslation();
   const { verdict, rows, chip, daysLine, holdLabel } = contentOf(props);
   return (
@@ -58,19 +59,29 @@ export function RebalanceModalFooter(props: FooterProps) {
       {verdict}
       {rows.length > 0 && <TotalCost rows={rows} chip={chip} />}
       {daysLine !== null && <span className="num text-xs text-ink-400">{daysLine}</span>}
-      <div className="flex flex-wrap items-center gap-3">
-        {stale ? (
-          <button type="button" className="btn btn-primary num" onClick={onRefresh}>
-            {modalRefreshRoute()}
-          </button>
-        ) : (
-          <HoldToConfirmButton tone={optional ? 'outline' : 'cyan'} holdMs={holdMs} disabled={disabled} onConfirm={onConfirm}>
-            {holdLabel}
-          </HoldToConfirmButton>
-        )}
-        {lock !== null && <span className="text-xs text-ink-500">{lock}</span>}
-        {lock === null && pricing && <span className="text-xs text-ink-500">{t('accounts.rebalanceModal.pricing')}</span>}
-      </div>
+      {quoteStale && lock === null && <p className="text-xs text-gold">{t('accounts.rebalanceModal.staleQuote')}</p>}
+      {lock !== null ? (
+        <p className="text-xs text-ink-400">{lock}</p>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          {stale && !quoteStale ? (
+            <button type="button" className="btn btn-primary num" onClick={onRefresh}>
+              {modalRefreshRoute()}
+            </button>
+          ) : (
+            <HoldToConfirmButton
+              tone={optional ? 'outline' : 'cyan'}
+              className="w-full"
+              holdMs={holdMs}
+              disabled={disabled || quoteStale}
+              onConfirm={onConfirm}
+            >
+              {holdLabel}
+            </HoldToConfirmButton>
+          )}
+          {pricing && <span className="text-xs text-ink-500">{t('accounts.rebalanceModal.pricing')}</span>}
+        </div>
+      )}
     </div>
   );
 }

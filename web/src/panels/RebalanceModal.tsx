@@ -21,7 +21,10 @@ export function initialTab(view: RebalanceView): RebalanceTab {
 
 const jobTab = (job: RebalanceJob): RebalanceTab => job.kind ?? 'move';
 
-const isLive = (job: RebalanceJob | null): boolean => job?.status === 'running' || job?.status === 'halted';
+const isLive = (job: RebalanceJob | null): boolean =>
+  job?.status === 'running' ||
+  job?.status === 'halted' ||
+  (job?.status === 'abandoned' && job.kind === 'delever' && (job.borosGapYu ?? 0) > 0);
 
 export function RebalanceModal({
   view,
@@ -87,6 +90,7 @@ export function RebalanceModal({
         <span className="flex items-end gap-3">
           <UnderlineTabs<RebalanceTab>
             ariaLabel={t('accounts.borrowCard.reduce')}
+            look="underline"
             value={tab}
             onChange={setTab}
             options={TABS.map((value) => ({ value, label: t(`accounts.rebalanceTabs.${value}`) }))}

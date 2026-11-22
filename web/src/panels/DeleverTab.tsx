@@ -3,25 +3,28 @@ import { useDeleverPlan, useStartRebalance } from '../api/queries';
 import type { DeleverPlan, DeleverRequest, RealizeExec, SliceOption } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { ExecModeToggle } from '../components/ExecModeToggle';
-import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { PairPicker, type PairPickerRow } from '../components/PairPicker';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
-import { fmtAbout, fmtDateShort, fmtUsd, fmtUsdCompact, prettyVenue, sigGrouped, WALLET_SHORT } from '../lib/fmt';
+import { amountError } from '../lib/amount';
+import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
-import { daysToMaturity } from '../lib/boros';
 import { useNow } from '../lib/useNow';
+import { BorosLogInButton } from '../trade/BorosAgentSetup';
 import { AffixedInput } from '../trade/PairTicketBits';
-import { useOpenPairs, type OpenPair } from './assets/pairs';
+import { daysLeftText, useOpenPairs, type OpenPair } from './assets/pairs';
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
 import { execModeLabel, poolKey } from './rebalanceCopy';
+import { SLICE_HOVER } from './RebalanceHovers';
+import { RebalanceModalFooter } from './RebalanceModalFooter';
 import { parsedAmount } from './rebalanceModalPlan';
-import { TotalCost, type CostRow } from './RebalancePlanBits';
+import { NotHedgedLine, TotalCost, type CostRow } from './RebalancePlanBits';
 import { SliceSizeRow } from './SliceTable';
+import { useActiveWallet } from './trackedAddress';
 
 type Share = '10' | '20' | '30' | 'custom';
 type SlicePick = { kind: 'preset'; usd: number } | { kind: 'custom' } | null;
@@ -34,21 +37,26 @@ const qtyText = (qty: number): string => sigGrouped(qty);
 const pctText = (pct: number): string => sigGrouped(pct >= 0.1 ? Math.round(pct * 10) / 10 : Math.round(pct * 1000) / 1000);
 
 function rowOf(pair: OpenPair, now: number): PairPickerRow {
-  const days = daysToMaturity(pair.maturitySec, now / 1000);
   return {
     key: pair.key,
     longVenue: pair.longVenue,
     shortVenue: pair.shortVenue,
     base: pair.base,
-    maturityText: t('accounts.deleverTab.matures', { date: fmtDateShort(pair.maturitySec, { year: 'numeric' }), count: days }),
+    maturityText: t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturitySec), left: daysLeftText(pair.maturitySec, now / 1000) }),
     sizeText: t('accounts.deleverTab.pairSize', { qty: qtyText(pair.size), coin: pair.base }),
     imText: fmtUsdCompact(pair.imUsd),
   };
 }
 
-function closeOf(pair: OpenPair, share: Share, customText: string): number | null {
-  if (share !== 'custom') return (pair.size * Number(share)) / 100;
-  return parsedAmount(customText);
+function closeOf(pair: OpenPair, share: Share, customText: string): { close: number | null; error: string | null } {
+  if (share !== 'custom') return { close: (pair.size * Number(share)) / 100, error: null };
+  const text = customText.trim();
+  if (text === '') return { close: null, error: null };
+  const error = amountError(text);
+  if (error !== null) return { close: null, error };
+  const close = Number(text);
+  if (close > pair.size) return { close: null, error: t('app.amount.max', { value: qtyText(pair.size) }) };
+  return { close, error: null };
 }
 
 function requestOf(pair: OpenPair, close: number, exec: RealizeExec, sliceUsd: number | null): DeleverRequest {
@@ -91,6 +99,7 @@ function afterChanges(plan: DeleverPlan, pair: OpenPair): WalletChange[] {
     before: row.before,
     after: row.after,
     unit: 'pct',
+    hover: SLICE_HOVER.imUsed,
   }));
   return [{ key: pair.key, label: pair.base, rows: [...perps, ...boros, ...im] }];
 }
@@ -108,7 +117,8 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const now = useNow(60_000);
   const toast = useToast();
   const start = useStartRebalance();
-  const { pairs: open, loading } = useOpenPairs();
+  const wallet = useActiveWallet();
+  const { pairs: open, loading, failed, retry } = useOpenPairs();
   const [picked, setPicked] = useState<string | null>(pairKey);
   const [share, setShare] = useState<Share>('20');
   const [customText, setCustomText] = useState('');
@@ -118,13 +128,24 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const [slicesOpen, setSlicesOpen] = useState(false);
   const pairs = open.filter((p) => p.unit === 'base');
   const pair = pairs.find((p) => p.key === picked) ?? largestIm(pairs);
-  const close = pair ? closeOf(pair, share, customText) : null;
-  const valid = pair !== null && close !== null && close > 0 && close <= pair.size;
+  const { close, error: amountText } = pair ? closeOf(pair, share, customText) : { close: null, error: null };
   const sliceUsd = sliceUsdOf(slicePick, sliceText);
-  const request = valid ? requestOf(pair, close, exec, sliceUsd) : null;
+  const request = pair !== null && close !== null ? requestOf(pair, close, exec, sliceUsd) : null;
   const query = useDeleverPlan(request);
 
   if (loading) return <Skeleton className="h-40 w-full" />;
+  if (failed) {
+    return (
+      <EmptyState
+        title={t('accounts.deleverTab.pairsFailed')}
+        action={
+          <button type="button" className="btn" onClick={retry}>
+            {t('common.retry')}
+          </button>
+        }
+      />
+    );
+  }
   if (pair === null) return <EmptyState title={t('accounts.deleverTab.noPairs')} />;
 
   const plan = request !== null ? (query.data ?? null) : null;
@@ -132,19 +153,32 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const option = plan ? optionOf(plan, slicePick) : null;
   const estimate = plan?.estimates[exec] ?? null;
   const borosGapYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
-  const ready = plan !== null && !query.isPlaceholderData && plan.refused === null && lock === null && !start.isPending;
+  const needsBoros = pair.boros.length > 0;
+  const walletBlocked = needsBoros && wallet.state !== null && !wallet.canTrade;
+  const walletReady = !needsBoros || wallet.canTrade;
+  const stale = plan !== null && query.isError;
+  const ready =
+    plan !== null && !query.isPlaceholderData && !stale && plan.refused === null && lock === null && !start.isPending && walletReady;
 
   const modeLabel = (mode: RealizeExec): string =>
     execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(option?.seconds[mode] ?? 0));
 
   const costRows: CostRow[] = estimate
     ? [
-        { label: t('accounts.deleverTab.tradingFeePerps'), usd: estimate.feePerpsUsd },
+        { label: t('accounts.deleverTab.tradingFeePerps'), usd: estimate.feePerpsUsd, hover: SLICE_HOVER.tradingFeePerps },
         ...(plan && plan.boros.length > 0 ? [{ label: t('accounts.deleverTab.tradingFeeBoros'), usd: estimate.feeBorosUsd }] : []),
-        { label: t('accounts.deleverTab.priceImpact'), usd: estimate.impactUsd },
+        { label: t('accounts.deleverTab.priceImpact'), usd: estimate.impactUsd, hover: SLICE_HOVER.priceImpact },
         { label: t('accounts.deleverTab.totalCost'), usd: estimate.totalUsd, strong: true },
       ]
     : [];
+
+  const holdLabel = t('accounts.deleverTab.hold', {
+    coin: pair.base,
+    venueA: prettyVenue(pair.longVenue),
+    venueB: prettyVenue(pair.shortVenue),
+    pct: pctText(pct),
+    qty: qtyText(close ?? 0),
+  });
 
   const confirm = () => {
     if (request === null || estimate === null) return;
@@ -163,9 +197,9 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
 
   const planBody = (): ReactNode => {
     if (request === null) return null;
-    if (query.isError && !query.isPlaceholderData) return <VerdictAlert tone="warn" text={query.error.message} />;
+    if (query.isError && plan === null) return <VerdictAlert tone="warn" text={query.error.message} />;
     if (plan === null) return <Skeleton className="h-48 w-full" />;
-    const venue = plan.refused ? prettyVenue(plan.refused.venue) : '';
+    const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
     return (
       <>
         <Field label={t('accounts.realizeTab.orders')}>
@@ -198,11 +232,9 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             }}
           />
         )}
-        {costRows.length > 0 && <TotalCost rows={costRows} />}
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {plan.notHedgedMaxQty > 0 && (
-          <VerdictAlert
-            tone="warn"
+          <NotHedgedLine
             text={t('accounts.deleverTab.notHedged', { qty: qtyText(plan.notHedgedMaxQty), coin: pair.base, usd: fmtUsd(plan.notHedgedMaxUsd, 0) })}
           />
         )}
@@ -212,25 +244,37 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             text={t('accounts.deleverTab.borosGap', { amount: qtyText(borosGapYu), time: fmtAbout(option?.seconds[exec] ?? 0) })}
           />
         )}
+        {walletBlocked && !wallet.loginLabel && (
+          <p className="text-xs text-gold">{t('pairTicket.closeBoros.agentReason')}</p>
+        )}
         {plan.refused ? (
           <VerdictAlert
             tone="warn"
-            text={t('accounts.deleverTab.belowMin', { venue, min: qtyText(plan.refused.minQty), coin: plan.refused.coin })}
+            text={
+              plan.refused.reason === 'same-side'
+                ? t('accounts.deleverTab.sameSide')
+                : t('accounts.deleverTab.belowMin', { venue, min: qtyText(plan.refused.minQty), coin: plan.refused.coin })
+            }
           />
-        ) : (
-          <div className="flex flex-wrap items-center gap-3">
-            <HoldToConfirmButton holdMs={holdMs} disabled={!ready} onConfirm={confirm}>
-              {t('accounts.deleverTab.hold', {
-                coin: pair.base,
-                venueA: prettyVenue(pair.longVenue),
-                venueB: prettyVenue(pair.shortVenue),
-                pct: pctText(pct),
-                qty: qtyText(close ?? 0),
-              })}
-            </HoldToConfirmButton>
-            {lock !== null && <span className="text-xs text-ink-500">{lock}</span>}
-            {lock === null && query.isPlaceholderData && <span className="text-xs text-ink-500">{t('accounts.rebalanceModal.pricing')}</span>}
+        ) : walletBlocked && wallet.loginLabel ? (
+          <div className="flex flex-col gap-3">
+            {costRows.length > 0 && <TotalCost rows={costRows} />}
+            <BorosLogInButton />
           </div>
+        ) : (
+          <RebalanceModalFooter
+            rows={costRows}
+            holdLabel={holdLabel}
+            optional={false}
+            stale={false}
+            quoteStale={stale}
+            lock={lock}
+            pricing={query.isPlaceholderData}
+            disabled={!ready}
+            holdMs={holdMs}
+            onRefresh={() => void query.refetch()}
+            onConfirm={confirm}
+          />
         )}
       </>
     );
@@ -267,9 +311,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
                 />
               </AffixedInput>
             </div>
-            {close !== null && close > 0 && <span className="num text-xs text-ink-100">{t('accounts.deleverTab.customPct', { pct: pctText(pct) })}</span>}
+            {close !== null && <span className="num text-xs text-ink-100">{t('accounts.deleverTab.customPct', { pct: pctText(pct) })}</span>}
           </div>
         )}
+        {share === 'custom' && amountText !== null && <p className="text-xs text-gold">{amountText}</p>}
       </Field>
       {planBody()}
     </div>

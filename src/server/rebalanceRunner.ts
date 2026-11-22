@@ -44,11 +44,14 @@ import { TTL, type TtlCache } from './cache';
 import {
   asRealize,
   BOROS_STEP,
+  borosPartText,
+  FIX_UNCONFIRMED,
   MAKER_REPEG_MS,
   MAKER_REST_MS,
   RETRY_CONVERT_CAP,
   SLICE_STEP,
   SLIPPAGE_BAND_BP,
+  type AddBack,
   type FixAction,
   type PerpOrder,
   convertSteps,
@@ -85,6 +88,13 @@ export interface RunnerDeps {
   pollOnly?: boolean;
   book?: (symbol: string) => Promise<NormalizedBook | null>;
   boros?: BorosRunnerDeps;
+  takeFix?: () => QueuedFix | null;
+}
+
+export interface QueuedFix {
+  action: FixAction;
+  done: (job: Job) => void;
+  fail: (err: unknown) => void;
 }
 
 export interface BorosRunnerDeps {
@@ -242,7 +252,7 @@ async function readAccount(
 }
 
 type OrderMode = { kind: 'market' } | { kind: 'ioc'; price: string } | { kind: 'poc'; price: string };
-type SliceRule = { lot: string; tick: string; limits: PerpRule };
+type SliceRule = { lot: string; tick: string; limits: PerpRule & { maxMarketSize?: string } };
 
 const QTY_SCALE = 1e8;
 const addQty = (a: number, b: number): number => Math.round((a + b) * QTY_SCALE) / QTY_SCALE;
@@ -361,27 +371,34 @@ function setBorosGap(job: Job): void {
   job.borosGapYu = borosTargets(job).reduce((total, { row, target }) => total + Math.max(0, target - row.closed), 0);
 }
 
-const BOROS_PART_TEXT = 'Boros did not close all of its share. The rest has no perp behind it.';
 const BOROS_MISSING_TEXT = 'The app has no Boros wallet to close the Boros share with.';
 const BOROS_DUST_YU = 1e-9;
 
 async function closeBorosRest(deps: RunnerDeps, job: Job): Promise<number> {
-  for (const { row, target } of borosTargets(job)) {
-    const rest = target - row.closed;
-    if (!(rest > BOROS_DUST_YU)) continue;
-    const boros = deps.boros;
-    if (!boros) throw new Error(BOROS_MISSING_TEXT);
-    job.tagCount += 1;
-    const clientOrderId = tagFor(job.id, job.tagCount);
-    deps.jobs.write(job);
-    const slippagePct = (await boros.slippagePct?.(row.marketId)) ?? BOROS_CLOSE_FALLBACK_SLIPPAGE_PCT;
-    const result = await closeBorosLegs(boros.deps, { address: boros.address, legs: [{ marketId: row.marketId, size: rest }], slippagePct, clientOrderId });
-    row.closed += result.filled.find((leg) => leg.marketId === row.marketId)?.size ?? 0;
+  try {
+    for (const { row, target } of borosTargets(job)) {
+      const rest = target - row.closed;
+      if (!(rest > BOROS_DUST_YU)) continue;
+      const boros = deps.boros;
+      if (!boros) throw new Error(BOROS_MISSING_TEXT);
+      job.tagCount += 1;
+      const clientOrderId = tagFor(job.id, job.tagCount);
+      deps.jobs.write(job);
+      const slippagePct = (await boros.slippagePct?.(row.marketId).catch(() => null)) ?? BOROS_CLOSE_FALLBACK_SLIPPAGE_PCT;
+      const keep = Math.max(0, Math.abs(row.before) - target);
+      const result = await closeBorosLegs(boros.deps, { address: boros.address, legs: [{ marketId: row.marketId, size: rest, keep }], slippagePct, clientOrderId });
+      const held = result.held.find((leg) => leg.marketId === row.marketId)?.size;
+      const goneBefore = held === undefined ? row.closed : Math.max(row.closed, Math.abs(row.before) - held);
+      const filled = result.filled.find((leg) => leg.marketId === row.marketId)?.size ?? 0;
+      row.closed = Math.min(target, goneBefore + filled);
+      deps.jobs.write(job);
+    }
+  } finally {
+    job.borosLeftYu = borosTargets(job).reduce((total, { row, target }) => total + Math.max(0, target - row.closed), 0);
+    if (job.borosLeftYu <= BOROS_DUST_YU) job.borosLeftYu = 0;
+    setBorosGap(job);
     deps.jobs.write(job);
   }
-  job.borosLeftYu = borosTargets(job).reduce((total, { row, target }) => total + Math.max(0, target - row.closed), 0);
-  if (job.borosLeftYu <= BOROS_DUST_YU) job.borosLeftYu = 0;
-  setBorosGap(job);
   return job.borosLeftYu;
 }
 
@@ -419,11 +436,65 @@ export async function cancelRestingLead(deps: RunnerDeps, job: Job): Promise<voi
 
 const MARKET_FIX_WAIT_MS = STEP_TIMEOUT_MS;
 
+async function addBackLeg(
+  deps: RunnerDeps,
+  job: Job,
+  perp: NonNullable<Job['delever']>['legs'][number],
+  row: AddBack['legs'][number],
+  qty: number,
+): Promise<void> {
+  const crossEx = deps.clients().crossEx;
+  const rule = await sliceRule(deps, perp.symbol);
+  const lot = Number(rule.lot);
+  const wantLots = Math.floor(qty / lot + 1e-9);
+  const max = positiveOf(rule.limits.maxMarketSize);
+  const maxLots = max > 0 ? Math.max(1, Math.floor(max / lot + 1e-9)) : Number.POSITIVE_INFINITY;
+  const side = perp.side === 'SHORT' ? 'SELL' : 'BUY';
+  const target: StepPerp = { symbol: perp.symbol, exchange: perp.exchange, side, reduceOnly: false };
+  for (;;) {
+    const order = row.order;
+    if (order) {
+      const body = await readOrder(crossEx, order.venueId ?? order.text);
+      if (!body) {
+        if (order.venueId !== null || deps.now() - order.sentAt < LOOKUP_WINDOW_MS) throw new Error(FIX_UNCONFIRMED);
+        row.order = null;
+      } else {
+        order.venueId = order.venueId ?? (body.orderId ? String(body.orderId) : null);
+        const { delta, closed } = creditOrder(job, order, body);
+        row.filled = addQty(row.filled, delta);
+        deps.jobs.write(job);
+        if (!closed) {
+          if (deps.now() - order.sentAt > MARKET_FIX_WAIT_MS) throw new Error(FIX_UNCONFIRMED);
+          await deps.sleep(POLL_MS);
+          continue;
+        }
+        row.order = null;
+        deps.jobs.write(job);
+        if (order.credited === 0) throw new Error(String(body.reason ?? '') || `Gate filled none of the ${perp.base} order. Try again.`);
+      }
+    }
+    const leftLots = wantLots - lotsOf(row.filled, rule.lot);
+    if (leftLots <= 0) return;
+    job.tagCount += 1;
+    const sent: PerpOrder = { text: tagFor(job.id, job.tagCount), venueId: null, sentAt: deps.now(), credited: 0, poc: false, price: null, side, mid: null };
+    row.order = sent;
+    deps.jobs.write(job);
+    try {
+      sent.venueId = await placePerp(crossEx, target, sent.text, qtyText(Math.min(leftLots, maxLots), rule.lot), { kind: 'market' });
+    } catch (err) {
+      if (isRefusal(classifyGateError(err))) row.order = null;
+      deps.jobs.write(job);
+      throw err;
+    }
+    deps.jobs.write(job);
+  }
+}
+
 export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): Promise<Job> {
   const step = job.steps[job.stepIndex];
   const crossEx = deps.clients().crossEx;
   if (action === 'boros-retry') {
-    if (step?.name === SLICE_STEP && job.delever) {
+    if (job.delever && (job.status === 'abandoned' || step?.name === SLICE_STEP)) {
       await closeBorosRest(deps, job);
       deps.jobs.write(job);
       return job;
@@ -431,7 +502,7 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
     if (step?.name !== BOROS_STEP) return job;
     const left = await closeBorosRest(deps, job);
     if (left > 0) {
-      job.haltReason = BOROS_PART_TEXT;
+      job.haltReason = borosPartText(left);
       job.haltKind = 'boros';
     } else {
       step.status = 'done';
@@ -451,22 +522,12 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
     const lead = job.realize?.legs[0];
     const total = borosTargets(job).reduce((sum, { target }) => sum + target, 0);
     const perps = job.delever?.legs ?? [];
-    if (step?.name !== BOROS_STEP || !lead || !(total > 0) || !(job.borosLeftYu > 0) || perps.length < 2) return job;
-    const qty = (lead.filledQty * job.borosLeftYu) / total;
-    const added = (step.addedBack ??= []);
+    if (step?.name !== BOROS_STEP || !lead || !(total > 0) || perps.length < 2) return job;
+    if (!step.addBack && !(job.borosLeftYu > 0)) return job;
+    const plan = (step.addBack ??= { qty: (lead.filledQty * job.borosLeftYu) / total, legs: perps.map((perp) => ({ symbol: perp.symbol, filled: 0, order: null })) });
     for (const perp of perps) {
-      if (added.includes(perp.symbol)) continue;
-      const rule = await sliceRule(deps, perp.symbol);
-      const lots = Math.floor(qty / Number(rule.lot) + 1e-9);
-      if (lots > 0) {
-        job.tagCount += 1;
-        const tag = tagFor(job.id, job.tagCount);
-        deps.jobs.write(job);
-        const side = perp.side === 'SHORT' ? 'SELL' : 'BUY';
-        await placePerp(crossEx, { symbol: perp.symbol, exchange: perp.exchange, side, reduceOnly: false }, tag, qtyText(lots, rule.lot), { kind: 'market' });
-      }
-      added.push(perp.symbol);
-      deps.jobs.write(job);
+      const row = plan.legs.find((candidate) => candidate.symbol === perp.symbol);
+      if (row) await addBackLeg(deps, job, perp, row, plan.qty);
     }
     job.borosLeftYu = 0;
     job.borosGapYu = 0;
@@ -479,6 +540,22 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
   const leg = legFor(job, step);
   const follow = step?.follow;
   if (!step || !leg || !follow || step.name !== SLICE_STEP) return job;
+  const pending = step.hedge;
+  if (pending) {
+    const body = await readOrder(crossEx, pending.venueId ?? pending.text);
+    if (!body && (pending.venueId !== null || deps.now() - pending.sentAt < LOOKUP_WINDOW_MS)) throw new Error(FIX_UNCONFIRMED);
+    if (body) {
+      pending.venueId = pending.venueId ?? (body.orderId ? String(body.orderId) : null);
+      const credit = creditOrder(job, pending, body);
+      step.qty = addQty(step.qty ?? 0, credit.delta);
+      deps.jobs.write(job);
+      if (!credit.closed) throw new Error(FIX_UNCONFIRMED);
+      if (pending.credited > 0) job.followMisses = 0;
+    }
+    step.hedge = null;
+    syncFollow(job, step, leg);
+    deps.jobs.write(job);
+  }
   const rule = await sliceRule(deps, follow.symbol);
   const lots = lotsOf(openFollowOf(leg, step), rule.lot);
   if (lots <= 0) return job;
@@ -501,7 +578,13 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
   };
   step.hedge = order;
   deps.jobs.write(job);
-  order.venueId = await placePerp(crossEx, follow, order.text, qtyText(lots, rule.lot), mode);
+  try {
+    order.venueId = await placePerp(crossEx, follow, order.text, qtyText(lots, rule.lot), mode);
+  } catch (err) {
+    if (isRefusal(classifyGateError(err))) step.hedge = null;
+    deps.jobs.write(job);
+    throw err;
+  }
   deps.jobs.write(job);
   const start = deps.now();
   for (;;) {
@@ -1581,7 +1664,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const wait = (step.nextTryAt ?? 0) - deps.now();
     if (wait > 0) await deps.sleep(wait);
     const priced = await priceFor(deps, follow, rule, false);
-    if (!priced) return deps.sleep(POLL_MS);
+    if (!priced) return miss(step);
     const lots = lotsOf(openFollowOf(leg, step), rule.lot);
     job.tagCount += 1;
     const sent: PerpOrder = { text: tagFor(job.id, job.tagCount), venueId: null, sentAt: deps.now(), credited: 0, poc: false, price: priced.price, side: follow.side, mid: priced.mid };
@@ -1666,6 +1749,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const minQty = minQtyOf(rule.limits, rule.lot, priced.mid);
     const qtys = sliceQtys(left, slice.sizeUsd > 0 ? slice.sizeUsd / priced.mid : 0, minQty, rule.lot);
     if (!firstEver) slice.index += 1;
+    if (firstEver || slice.qty === undefined) slice.qty = qtys[0] ?? 0;
     slice.count = Math.max(slice.count, slice.index - 1 + qtys.length);
     job.slice = slice;
     step.cut = { qty: qtys[0] ?? 0, from: leg.filledQty, at: deps.now(), ioc: job.exec === 'market' };
@@ -1702,13 +1786,13 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const definite = isRefusal(c) || c.category === 'rate-limited' || c.category === 'post-only-would-cross';
       if (!definite) return deps.sleep(POLL_MS);
       step.lead = null;
+      deps.jobs.write(job);
+      if (c.category === 'rate-limited') return deps.sleep(REOPEN_FIRST_WAIT_MS);
       if (poc && (c.category === 'post-only-would-cross' || POC_REJECT.test(c.label ?? '') || isRefusal(c))) {
         cut.ioc = true;
         deps.jobs.write(job);
         return;
       }
-      deps.jobs.write(job);
-      if (c.category === 'rate-limited') return deps.sleep(POLL_MS);
       if (c.category === 'auth') return halt(REOPEN_HALT.tradePermission);
       halt(haltReasonFor(err));
     }
@@ -1725,10 +1809,20 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     try {
       const rule = await sliceRule(deps, perp.symbol);
       const followRule = follow.symbol === perp.symbol ? rule : await sliceRule(deps, follow.symbol);
-      const mark = Number(step.lead?.price ?? step.hedge?.price ?? 0);
-      const followMin = mark > 0 ? minQtyOf(followRule.limits, followRule.lot, mark) : positiveOf(followRule.limits.minSize);
       const openQty = openFollowOf(leg, step);
-      const open = lotsOf(openQty, followRule.lot) > 0 && openQty >= followMin - 1e-12;
+      const openLots = lotsOf(openQty, followRule.lot) > 0;
+      const known = Number(step.lead?.price ?? step.hedge?.price ?? 0);
+      const mark = known > 0 || !openLots ? known : ((await priceFor(deps, follow, followRule, false))?.mid ?? 0);
+      const followMin = mark > 0 ? minQtyOf(followRule.limits, followRule.lot, mark) : positiveOf(followRule.limits.minSize);
+      const leadLeft = Math.min(lotsOf(addQty(leg.qty, -leg.filledQty), rule.lot), lotsOf(addQty(leg.positionQty, -leg.filledQty), rule.lot)) > 0;
+      const open = openLots && (openQty >= followMin - 1e-12 || !leadLeft);
+      if (!step.lead && !step.hedge) {
+        const queued = deps.takeFix?.();
+        if (queued) {
+          if (!open) return queued.done(job);
+          return await applyFix(deps, job, queued.action).then(queued.done, queued.fail);
+        }
+      }
       if (step.lead) return await runLead(step, leg, perp, rule, open);
       if (open || step.hedge) return await runFollow(step, leg, follow, followRule);
       const cut = step.cut ?? null;
@@ -1758,7 +1852,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const runBoros = async (step: Step): Promise<void> => {
     try {
       const left = await closeBorosRest(deps, job);
-      if (left > 0) return halt(BOROS_PART_TEXT, 'boros');
+      if (left > 0) return halt(borosPartText(left), 'boros');
       finish(step, 0, step.from);
     } catch (err) {
       halt(err instanceof Error && err.message === BOROS_MISSING_TEXT ? BOROS_MISSING_TEXT : haltReasonFor(err), 'boros');

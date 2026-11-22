@@ -1184,6 +1184,28 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(fixes[0].json().error.message).toBe('Nothing is left to fix.');
   });
 
+  it('fix answers in the states the run view draws its holds', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const running = slicedJob({ status: 'running', followMisses: 2 });
+    h.jobs.write(running);
+    const early = await h.post(`/api/rebalance/${running.id}/fix`, { action: 'market' });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error.message).toBe(`rebalance ${running.id} is running`);
+
+    const abandoned = slicedJob({ status: 'abandoned', borosGapYu: 5, delever: null });
+    h.jobs.write(abandoned);
+    const notDelever = await h.post(`/api/rebalance/${abandoned.id}/fix`, { action: 'boros-retry' });
+    expect(notDelever.statusCode).toBe(409);
+    expect(notDelever.json().error.message).toBe(`rebalance ${abandoned.id} is abandoned`);
+
+    const paused = slicedJob({ status: 'halted', paused: true, borosGapYu: 5, borosLeftYu: 0, delever: { pct: 0.2, legs: [], boros: [] } });
+    h.jobs.write(paused);
+    const gap = await h.post(`/api/rebalance/${paused.id}/fix`, { action: 'boros-retry' });
+    expect(gap.json().error?.message).not.toBe('Nothing is left to fix.');
+  });
+
   it('plan check allows a 1% size gap at 6M', () => {
     const lot = Number(PERP_RULES[HL_ETH].lotSize);
     const qty = 3_294.6;

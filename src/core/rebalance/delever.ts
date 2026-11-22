@@ -8,7 +8,7 @@ import { resolveFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { walkBook } from '../estimate/fill';
 import { coarsestLot, DEFAULT_STEP, floorToStep, roundToStep } from '../numbers';
 import { type AccountLike, imUsedOf, type Pool } from './plan';
-import { lotOf, minQtyOf, type PerpRule, type PerpSide, positiveOf, type RealizeExec } from './realize';
+import { lotOf, marketCapUsd, minQtyOf, type PerpRule, type PerpSide, positiveOf, type RealizeExec } from './realize';
 import { impactOf, type SliceOption, sliceOptions, sliceQtys, sliceSizeOf } from './slices';
 
 export interface DeleverRequest {
@@ -35,8 +35,12 @@ export interface DeleverPlan {
   estimates: Record<RealizeExec, DeleverEstimate>;
   notHedgedMaxQty: number;
   notHedgedMaxUsd: number;
-  refused: { reason: 'below-min'; venue: string; minQty: number; coin: string } | null;
+  refused: DeleverRefusal | null;
 }
+
+export type DeleverRefusal =
+  | { reason: 'below-min'; venue: string; minQty: number; coin: string }
+  | { reason: 'same-side'; coin: string };
 
 export interface DeleverInput {
   request: DeleverRequest;
@@ -185,7 +189,8 @@ function imUsedAfterOf(account: AccountLike, legs: Leg[], closeQty: number): Del
   }));
 }
 
-function refusalOf(legs: Leg[], closeQty: number): DeleverPlan['refused'] {
+function refusalOf(legs: Leg[], closeQty: number): DeleverRefusal | null {
+  if (legs[0].side === legs[1].side) return { reason: 'same-side', coin: legs[0].base };
   const short = legs
     .map((leg) => ({ leg, minQty: minQtyOf(leg.rule, leg.lot, leg.mark) }))
     .filter(({ minQty }) => closeQty < minQty)
@@ -217,10 +222,11 @@ export function planDelever(input: DeleverInput): DeleverPlan {
   const mid = follow.mid;
   const slice = { book: follow.book, side: closeSideOf(follow), mid };
   const defaultSliceUsd = sliceSizeOf({ ...slice, totalUsd: closeQty * mid });
-  const customUsd = request.sliceUsd !== undefined && request.sliceUsd > 0 ? request.sliceUsd : undefined;
-  const chosenUsd = customUsd ?? defaultSliceUsd;
+  const maxUsd = Math.min(...legs.map((leg) => marketCapUsd({}, leg.rule, leg.exchange, leg.mark)));
+  const customUsd = request.sliceUsd !== undefined && request.sliceUsd > 0 ? Math.min(request.sliceUsd, maxUsd) : undefined;
+  const chosenUsd = Math.min(customUsd ?? defaultSliceUsd, maxUsd);
   const qtys = sliceQtys(closeQty, chosenUsd > 0 ? chosenUsd / mid : 0, minQty, lot);
-  const notHedgedMaxQty = qtys.length > 0 ? Math.max(...qtys) : 0;
+  const notHedgedMaxQty = qtys.reduce((max, qty) => Math.max(max, qty), 0);
   const boros = request.boros.map((asked) => borosLegOf(input, asked));
   const feeBorosUsd = boros.reduce((total, leg) => total + leg.feeUsd, 0);
   const borosImpactUsd = boros.reduce((total, leg) => total + leg.impactUsd, 0);
@@ -243,7 +249,7 @@ export function planDelever(input: DeleverInput): DeleverPlan {
     boros: boros.map(({ marketId, before, after, closeSize }) => ({ marketId, before, after, closeSize })),
     imUsed: imUsedAfterOf(input.account, legs, closeQty),
     makerLeg,
-    sliceOptions: sliceOptions({ ...slice, totalQty: closeQty, minQty, lot, customUsd }),
+    sliceOptions: sliceOptions({ ...slice, totalQty: closeQty, minQty, lot, customUsd, maxUsd }),
     defaultSliceUsd,
     estimates: {
       maker: estimateOf(feeOf(lead, lead.makerRate) + feeOf(follow, follow.takerRate), followImpactUsd),

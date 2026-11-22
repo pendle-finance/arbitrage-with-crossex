@@ -8,6 +8,7 @@ import {
   fmtClock,
   fmtDateLocal,
   fmtDateShort,
+  fmtNotionalShort,
   fmtPct,
   fmtSyncAge,
   fmtTokenQty,
@@ -249,6 +250,19 @@ describe('fmtUsdCompact', () => {
     [1_000_000, '$1.00M'],
   ])('fmtUsdCompact(%f) -> %s', (n, expected) => {
     expect(fmtUsdCompact(n)).toBe(expected);
+  });
+});
+
+describe('fmtNotionalShort', () => {
+  it.each([
+    [999_499.99, '$999k'],
+    [999_500, '$1M'],
+    [999_999.99, '$1M'],
+    [1_000_000, '$1M'],
+    [99_949, '$99.9k'],
+    [99_950, '$100k'],
+  ])('fmtNotionalShort(%f) -> %s', (n, expected) => {
+    expect(fmtNotionalShort(n)).toBe(expected);
   });
 });
 

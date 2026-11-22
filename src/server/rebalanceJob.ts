@@ -97,7 +97,12 @@ export interface Step {
   lead?: PerpOrder | null;
   hedge?: PerpOrder | null;
   cut?: SliceCut | null;
-  addedBack?: string[];
+  addBack?: AddBack | null;
+}
+
+export interface AddBack {
+  qty: number;
+  legs: { symbol: string; filled: number; order: PerpOrder | null }[];
 }
 
 export interface PerpOrder {
@@ -123,6 +128,7 @@ export interface JobSlice {
   index: number;
   count: number;
   sizeUsd: number;
+  qty?: number;
 }
 
 export interface JobFollow {
@@ -295,6 +301,11 @@ const closeOtherText = (leg: OpenLeg, open: number): string =>
 
 const legGapText = (leg: OpenLeg, open: number): string =>
   `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than the ${otherLegName(leg)}.`;
+
+export const borosPartText = (leftYu: number): string =>
+  `Boros did not close ${fmtSize(leftYu)} YU of its share. It has no perp behind it.`;
+
+export const FIX_UNCONFIRMED = 'Gate has not confirmed the last order yet. Try again in two minutes.';
 
 export const REOPEN_HALT = {
   tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',

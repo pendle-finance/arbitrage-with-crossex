@@ -68,13 +68,13 @@ export function StopBox({ title, lines }: { title: string; lines: string[] }) {
 }
 
 export function Actions({
-  onResume, onAbandon, holdMs, busy, resuming, note, resumeLabel, abandonLabel,
-}: JobViewProps & { note: string; resumeLabel?: string; abandonLabel?: string }) {
+  onResume, onAbandon, holdMs, busy, resuming, note, resumeLabel, abandonLabel, quietResume,
+}: JobViewProps & { note: string; resumeLabel?: string; abandonLabel?: string; quietResume?: boolean }) {
   return (
     <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
       <span className="num text-xs text-ink-400">{note}</span>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="btn btn-primary px-4 py-2 text-sm" disabled={busy} onClick={onResume}>
+        <button type="button" className={`btn ${quietResume ? '' : 'btn-primary'} px-4 py-2 text-sm`} disabled={busy} onClick={onResume}>
           {resuming ? t('accounts.rebalanceModal.resuming') : (resumeLabel ?? modalResume())}
         </button>
         <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={busy} onConfirm={onAbandon}>

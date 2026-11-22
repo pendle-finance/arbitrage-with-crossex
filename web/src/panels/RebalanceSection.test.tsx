@@ -170,7 +170,7 @@ describe('RebalanceSection card', () => {
   });
 
   it('button reads Reduce borrow', async () => {
-    for (const view of [rebalanceViews.recommendedRealize, rebalanceViews.notRecommended, rebalanceViews.noBorrow, rebalanceViews.interestFree]) {
+    for (const view of [rebalanceViews.recommendedRealize, rebalanceViews.notRecommended, rebalanceViews.interestFree]) {
       await show(view);
       expect(cardButtons().map((button) => button.textContent)).toEqual(['Reduce borrow']);
       expect(cardButtons()[0]).toBeEnabled();
@@ -238,6 +238,17 @@ describe('RebalanceSection card', () => {
     await user.click(cardButtons()[0]);
     expect(opened()).toBe('no tab');
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('with no borrow the button reads Move cash and opens the Move cash tab', async () => {
+    const user = userEvent.setup();
+    for (const view of [rebalanceViews.noBorrow, NO_BORROW]) {
+      await show(view);
+      expect(cardButtons().map((button) => button.textContent)).toEqual(['Move cash']);
+      await user.click(cardButtons()[0]);
+      expect(opened()).toBe('move');
+      cleanup();
+    }
   });
 
   it('a stopped run opens through the opener too', async () => {
@@ -336,6 +347,13 @@ describe('RebalanceSection verdict', () => {
     expect(region().querySelector('.alert-blue, .alert-red')).toBeNull();
     expect(within(region()).queryByText(/recommended/)).toBeNull();
     expect(cardButtons()[0].className).not.toContain('btn-primary');
+  });
+
+  it('cash short with no uPnL says how much cash clears', async () => {
+    await show(rebalanceViews.cashShort);
+    expect(fullPlanOf(rebalanceViews.cashShort).needsRealize).toBe(false);
+    expect(line('Cash clears 600.00 of 2,000.00.')).toHaveClass('text-ink-400');
+    expect(region().querySelector('.alert-blue, .alert-amber, .alert-red')).toBeNull();
   });
 
   it('refusal reason per code', async () => {
@@ -786,5 +804,24 @@ describe('RebalanceSection profit step', () => {
   it('card sizes use one decimal', async () => {
     await show(whaleRebalanceViews.realizeWhaleRetrying);
     expect(line('Hyperliquid short 11,000.0 ETH smaller · reopening.')).not.toBeNull();
+  });
+});
+
+describe('Borrow card names the job by kind and state', () => {
+  it('a running Realize reads Realize uPnL running', async () => {
+    serve(rebalanceViews.ownerRealizeRunning);
+    renderWithClient(withOpener(<RebalanceSection />));
+    expect(await within(await screen.findByRole('region', { name: 'Borrow' })).findByText('Realize uPnL running.')).toBeInTheDocument();
+    expect(screen.queryByText(/^Clear debt/)).toBeNull();
+  });
+
+  it('a paused Delever reads paused and shows its Boros gap', async () => {
+    serve(rebalanceViews.deleverPausedGap);
+    renderWithClient(withOpener(<RebalanceSection />));
+    const card = await screen.findByRole('region', { name: 'Borrow' });
+    expect(await within(card).findByText('Delever paused.')).toBeInTheDocument();
+    expect(within(card).getByText('Paused')).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Paused · open' })).toBeInTheDocument();
+    expect(within(card).getByText(/^Boros .+ YU has no perp behind it$/)).toBeInTheDocument();
   });
 });

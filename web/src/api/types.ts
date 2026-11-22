@@ -325,7 +325,7 @@ export interface DeleverPlan {
   estimates: { maker: DeleverEstimate; market: DeleverEstimate };
   notHedgedMaxQty: number;
   notHedgedMaxUsd: number;
-  refused: { reason: 'below-min'; venue: string; minQty: number; coin: string } | null;
+  refused: { reason: 'below-min'; venue: string; minQty: number; coin: string } | { reason: 'same-side'; coin: string } | null;
 }
 
 export type RebalanceFixAction = 'market' | 'limit' | 'boros-retry' | 'add-back';
@@ -413,7 +413,7 @@ export interface RebalanceJob {
   openGaps?: RebalanceOpenGap[];
   kind?: 'move' | 'realize' | 'delever';
   exec?: RealizeExec;
-  slice?: { index: number; count: number; sizeUsd: number } | null;
+  slice?: { index: number; count: number; sizeUsd: number; qty?: number } | null;
   notHedgedQty?: number;
   followMisses?: number;
   follow?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; qty: number; reduceOnly: boolean } | null;

@@ -10,6 +10,7 @@ import {
   fullPlanOf,
   planFor,
   REPAY_GOAL,
+  realizeTabEstimateOf,
   realizeTabOf,
 } from '../../src/core/rebalance/plan';
 import {
@@ -21,7 +22,9 @@ import {
   type RealizePlan,
   realizedNetUsd,
   realizeEstimateOf,
+  slicedEstimateOf,
 } from '../../src/core/rebalance/realize';
+import { costOf, sliceOf } from '../../web/src/panels/realizeTabCost';
 import { newJob } from '../../src/server/rebalanceJob';
 import {
   bookBb43,
@@ -254,7 +257,8 @@ describe('planRealize sizes and refusals', () => {
       planRealize(input({ books: { [OWNER_ETH]: null } }))?.refused,
       planRealize(input({ availableMargin: -1_000_000 }))?.refused,
       planRealize(input({ feeRows: [] }))?.refused,
-      planRealize(hlShortInput(1_000_000, {}, '5'))?.refused,
+      planRealize(hlShortInput(1_000_000, { rules: { HYPERLIQUID_FUTURE_ETH_USDC: { lotSize: '0.0001', minSize: '1', maxMarketSize: '0.5' } } }))
+        ?.refused,
     ];
     expect(refusals.map((refused) => refused?.reason)).toEqual(['past-book', 'no-margin', 'no-fee-rate', 'over-cap']);
     for (const refused of refusals) expect(Object.keys(refused ?? {})).not.toContain('maxBp');
@@ -403,26 +407,25 @@ const hlShortInput = (need: number, extra: Partial<RealizeInput> = {}, maxLevera
 };
 
 describe('realize fix round', () => {
-  it('an order over the market cap is refused', () => {
+  it('the market cap judges one slice, not the whole order', () => {
     const caps = [
       ['5', 500_000],
       ['10', 2_000_000],
       ['20', 5_000_000],
       ['25', 30_000_000],
     ] as const;
-    let refusedCount = 0;
+    let overCapOrders = 0;
     for (const need of LADDER) {
       for (const [leverage, capUsd] of caps) {
         const plan = planRealize(hlShortInput(need, {}, leverage));
-        const orderUsd = (plan?.legs[0].qty ?? 0) * 2800;
-        if (orderUsd > capUsd) {
-          refusedCount += 1;
-          expect(plan?.refused).toEqual({ reason: 'over-cap', bp: null, capUsd });
-        } else expect(plan?.refused?.reason).not.toBe('over-cap');
+        if ((plan?.legs[0].qty ?? 0) * 2800 > capUsd) overCapOrders += 1;
+        expect(plan?.refused).toBeNull();
+        expect(planRealize(hlShortInput(need, { sliceUsd: 50_000_000 }, leverage))?.refused).toBeNull();
       }
     }
-    expect(refusedCount).toBeGreaterThan(4);
-    expect(planRealize(hlShortInput(5_000, {}, '5'))?.refused).toBeNull();
+    expect(overCapOrders).toBeGreaterThan(4);
+    const minOverCap = { HYPERLIQUID_FUTURE_ETH_USDC: { lotSize: '0.0001', minSize: '1', maxMarketSize: '0.5' } };
+    expect(planRealize(hlShortInput(5_000, { rules: minOverCap }))?.refused).toEqual({ reason: 'over-cap', bp: null, capUsd: 1_400 });
     const gate = (maxMarketSize: string): RealizeInput => ({
       ...hlShortInput(1_000_000),
       pool: 'CROSSEX',
@@ -430,8 +433,27 @@ describe('realize fix round', () => {
       books: { GATE_FUTURE_ETH_USDT: evenBook(2800, 2000, 500) },
       rules: { GATE_FUTURE_ETH_USDT: { lotSize: '0.001', minSize: '0.001', maxMarketSize } },
     });
-    expect(planRealize(gate('100'))?.refused).toEqual({ reason: 'over-cap', bp: null, capUsd: 280_000 });
+    expect(planRealize(gate('100'))?.refused).toBeNull();
     expect(planRealize(gate('100000'))?.refused).toBeNull();
+  });
+
+  it('past-book judges one slice: a $1M order on a 30 ETH book is fine in 50k slices, refused in 100k ones', () => {
+    const thin = { books: { HYPERLIQUID_FUTURE_ETH_USDC: evenBook(2800, 3, 10) } };
+    const plan = planRealize(hlShortInput(1_000_000, thin));
+    expect((plan?.legs[0].qty ?? 0) * 2800).toBeGreaterThan(1_000_000);
+    expect(plan?.refused).toBeNull();
+    expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 50_000 }))?.refused).toBeNull();
+    expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 100_000 }))?.refused).toEqual({ reason: 'past-book', bp: null });
+    expect(planRealize(hlShortInput(50, thin))?.refused).toBeNull();
+  });
+
+  it('caps the custom slice row at the venue max order size', () => {
+    const book = realizeBookOf(1_000_000, 7_500);
+    const capped = { ...book.inputs, perps: book.inputs.perps?.map((row) => ({ ...row, maxLeverage: '5' })) };
+    const tab = realizeTabOf(book.buckets, book.account, capped, null, 6_000_000);
+    const custom = tab?.sliceOptions.find((option) => option.custom);
+    expect(custom?.sizeUsd).toBe(500_000);
+    expect(custom?.notHedgedMaxUsd).toBeLessThanOrEqual(500_000 * 1.0001);
   });
 
   it('a refused realize still carries the plain cash move', () => {
@@ -577,6 +599,45 @@ function realizeBookOf(debt: number, qty: number, cash = 0): RealizeBook {
     },
   };
 }
+
+describe('realize cost per slice, the same figure as the dialog', () => {
+  const books = [
+    ['owner book', ownerBook()],
+    ['$1M debt', realizeBookOf(1_000_000, 7_500)],
+    ['$6M debt', realizeBookOf(6_000_000, 45_000)],
+    ['$50 debt', realizeBookOf(50, 1)],
+  ] as const;
+
+  it.each(books)('server and web price every slice row alike on the %s', (_, book) => {
+    const tab = tabOf(book);
+    const priced = tab?.clearDebt?.legs.length ? tab.clearDebt : tab?.all;
+    if (!tab || !priced) throw new Error('no realize tab');
+    expect(tab.sliceOptions.length).toBeGreaterThan(0);
+    for (const exec of ['maker', 'market'] as const) {
+      for (const option of tab.sliceOptions) {
+        const web = costOf(priced, exec, sliceOf(tab.sliceOptions, option.sizeUsd, priced.legs[0], true));
+        expect(realizeTabEstimateOf(tab, priced, exec, option.sizeUsd).totalUsd).toBeCloseTo(web.totalUsd, 9);
+      }
+      expect(realizeTabEstimateOf(tab, priced, exec, 12_345).totalUsd).toBeCloseTo(priced.estimates[exec].totalUsd, 9);
+    }
+  });
+
+  it('a plan the slices do not price keeps its whole estimate, as the dialog does', () => {
+    const tab = tabOf(ownerBook());
+    if (!tab?.all || !tab.clearDebt?.legs.length) throw new Error('needs both plans');
+    const other = { ...tab.all };
+    expect(realizeTabEstimateOf(tab, other, 'market', tab.defaultSliceUsd)).toEqual(tab.all.estimates.market);
+    expect(slicedEstimateOf(tab.all, 'maker', null)).toEqual(tab.all.estimates.maker);
+  });
+
+  it.each(books)('the Borrow card realize cost equals the dialog default on the %s', (_, book) => {
+    const tab = tabOf(book);
+    const full = fullOf(book);
+    if (!tab?.clearDebt?.legs.length || !full) throw new Error('no clear debt plan');
+    const dialog = realizeTabEstimateOf(tab, tab.clearDebt, 'maker', tab.defaultSliceUsd).totalUsd;
+    expect(full.realizeCostUsd).toBeCloseTo(dialog, 2);
+  });
+});
 
 describe('realize estimate per order mode', () => {
   const R1_FEES = [{ exchangeType: 'HYPERLIQUID', futureMakerFee: '0.0002', futureTakerFee: '0.0005' }];

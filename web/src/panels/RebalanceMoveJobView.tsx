@@ -5,7 +5,7 @@ import { t } from '../i18n';
 import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { ProgressBar } from './RebalanceBits';
 import { BalanceBars, scaleOf, type BarRow } from './RebalanceBars';
-import { CARD_LABEL, gateSpot, HOVER } from './rebalanceCopy';
+import { gateSpot, HOVER } from './rebalanceCopy';
 import { barRowsOf, DUST, Facts, receivingBorrow, receivingHeld, roundCountOf, roundOf, ROUTE_LABEL, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import { abandonNote, Actions, CloseButton, haltLine, StopBox, stopTitle, type JobViewProps } from './RebalanceJobBits';
 import { landedOf } from './rebalanceJobSteps';
@@ -47,11 +47,10 @@ export function MoveJobView(props: JobViewProps) {
         <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.finishedLead')}</p>
         <Facts
           items={[
-            { key: 'goal', label: t('accounts.rebalanceModal.for'), value: CARD_LABEL[job.goal] },
             { key: 'route', label: t('accounts.rebalanceModal.route'), value: ROUTE_LABEL[job.route] },
             { key: 'moved', label: t('accounts.rebalanceModal.moved'), value: fmtUsd(landedOf(job)) },
             { key: 'took', label: t('accounts.rebalanceModal.took'), value: fmtAge(took) },
-            ...(job.costUsd === null ? [] : [{ key: 'cost', label: t('accounts.rebalanceModal.cost'), value: fmtUsd(job.costUsd) }]),
+            ...(job.costUsd === null ? [] : [{ key: 'cost', label: t('accounts.moveCash.totalCost'), value: fmtUsd(job.costUsd) }]),
           ]}
         />
         <BalanceBars caption={<Term label={t('accounts.rebalanceModal.now')} text={HOVER.now} />} rows={nowRows} scale={scaleOf(nowRows)} />
@@ -85,10 +84,9 @@ export function MoveJobView(props: JobViewProps) {
     return (
       <>
         {header}
-        <p className="num text-xs text-ink-400">{t('accounts.rebalanceModal.started', { age: fmtAge(elapsed) })}</p>
+        <p className="num text-xs text-ink-400">{t('accounts.moveCash.started', { age: fmtAge(elapsed) })}</p>
         <Facts
           items={[
-            { key: 'goal', label: t('accounts.rebalanceModal.for'), value: CARD_LABEL[job.goal] },
             { key: 'route', label: t('accounts.rebalanceModal.route'), value: ROUTE_LABEL[job.route] },
             ...(round === null
               ? []

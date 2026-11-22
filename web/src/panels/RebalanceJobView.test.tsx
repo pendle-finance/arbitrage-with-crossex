@@ -2,7 +2,7 @@ import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/re
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
 import type { RealizeJobLeg, RebalanceJob, RebalanceStep, RebalanceView } from '../api/types';
-import { fmtUsd } from '../lib/fmt';
+import { fmtUsd, num } from '../lib/fmt';
 import { accountBodies, accountHandler, auditRebalanceViews, REBALANCE_NOW, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -215,14 +215,16 @@ describe('RebalanceJobView, sliced runs', () => {
   });
 
   it('realized and not hedged now', async () => {
-    show(rebalanceViews.ownerRealizeRunning);
-    expect(screen.getByText('Realized 2,482 of 7,128 USDC')).toBeInTheDocument();
+    const { job } = show(rebalanceViews.ownerRealizeRunning);
+    const net = job.realize!.legs.reduce((sum, leg) => sum + leg.realizedUsd, 0) - job.feeSoFarUsd!;
+    expect(screen.getByText(`Realized ${num(net, 0)} of ${num(job.amount, 0)} USDC`)).toBeInTheDocument();
     expect(await screen.findByText('Not hedged now 3.9 ETH ($12,480)')).toBeInTheDocument();
   });
 
   it('fee so far and pause hold', async () => {
     const { job, posts } = show(rebalanceViews.ownerRealizeRunning);
-    expect(screen.getByText(`Fee so far ${fmtUsd(job.feeSoFarUsd!)} · est. total ${fmtUsd(job.estimate!.feeUsd)}`)).toBeInTheDocument();
+    expect(job.estimate!.totalUsd).not.toBe(job.estimate!.feeUsd);
+    expect(screen.getByText(`Fee so far ${fmtUsd(job.feeSoFarUsd!)} · est. total ${fmtUsd(job.estimate!.totalUsd)}`)).toBeInTheDocument();
     hold('Hold to pause after this slice');
     await waitFor(() => expect(posts.map((p) => p.path)).toEqual(['acct0001/pause']));
   });
@@ -272,7 +274,8 @@ describe('RebalanceJobView, sliced runs', () => {
 
   it('realize done receipt', () => {
     const { job } = show(rebalanceViews.ownerRealizeDone);
-    expect(screen.getByText('Realized 7,128 USDC')).toBeInTheDocument();
+    const net = job.realize!.legs.reduce((sum, leg) => sum + leg.realizedUsd, 0) - job.totalCostUsd!;
+    expect(screen.getByText(`Realized ${num(net, 0)} USDC`)).toBeInTheDocument();
     expect(screen.getByText(`Total cost ${fmtUsd(job.totalCostUsd!)} (est. ${fmtUsd(job.estimate!.totalUsd)})`)).toBeInTheDocument();
   });
 
@@ -293,15 +296,22 @@ describe('RebalanceJobView, sliced runs', () => {
   it('delever running legs', () => {
     show(rebalanceViews.deleverRunning);
     expect(screen.getByText(/^Perps · slice 20 of 65 900(\.0+)? → 847\.18 BTC each$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Boros 900(\.0+)? YU · closes after perps$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Boros 900(\.0+)? → 720(\.0+)? YU · closes after perps$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Delever BTC · \S+ \/ \S+$/)).toBeInTheDocument();
   });
 
   it('delever running figures', async () => {
     const { job } = show(rebalanceViews.deleverRunning);
     expect(await screen.findByText(/^Not hedged now max 2\.7778 BTC \(\$250,000\) per slice$/)).toBeInTheDocument();
-    expect(screen.getByText('IM used 86.2% now · 74.2% at end')).toBeInTheDocument();
+    expect(screen.getByText('IM used · CrossEx 86.2% now · 74.2% at end')).toBeInTheDocument();
     expect(screen.getByText(`Fee so far ${fmtUsd(job.feeSoFarUsd!)} · Est. fee ${fmtUsd(job.estimate!.feeUsd)}`)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hold to pause after this slice' })).toBeInTheDocument();
+  });
+
+  it('delever running max not hedged reads the slice qty the server sends', async () => {
+    const view = rebalanceViews.deleverRunning;
+    show({ ...view, job: { ...view.job!, slice: { ...view.job!.slice!, qty: 2.5 } } });
+    expect(await screen.findByText(/^Not hedged now max 2\.5(0+)? BTC \(\$225,000\) per slice$/)).toBeInTheDocument();
   });
 
   it('delever boros gap on pause', async () => {
@@ -310,7 +320,7 @@ describe('RebalanceJobView, sliced runs', () => {
     expect(box.className).toContain('alert-red');
     expect(within(box).getByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
     expect(within(box).getByText('Paused after slice 19 of 65')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' }).className).not.toContain('btn-primary');
     hold('Hold to close 52.82 YU on Boros');
     await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'boros-retry' } }]));
   });
@@ -328,7 +338,8 @@ describe('RebalanceJobView, sliced runs', () => {
     const { job } = show(rebalanceViews.deleverDone);
     expect(screen.getByText(/^Hyperliquid Long · Gate Short 900(\.0+)? → 720(\.0+)? BTC each$/)).toBeInTheDocument();
     expect(screen.getByText(/^Boros 900(\.0+)? → 720(\.0+)? YU$/)).toBeInTheDocument();
-    expect(screen.getByText('IM used 91.2% → 74.2%')).toBeInTheDocument();
+    expect(screen.getByText('IM used · CrossEx 91.2% → 74.2%')).toBeInTheDocument();
+    expect(screen.getByText('Delever 20.0%')).toBeInTheDocument();
     expect(screen.getByText(`Total cost ${fmtUsd(job.totalCostUsd!)} (est. ${fmtUsd(job.estimate!.totalUsd)})`)).toBeInTheDocument();
   });
 
@@ -340,6 +351,28 @@ describe('RebalanceJobView, sliced runs', () => {
     show({ ...rebalanceViews.deleverDone, buckets: rebalanceViews.deleverDone.buckets.map((b) => ({ ...b, borrow: 0 })) });
     expect(screen.queryByRole('button', { name: 'Next: Move cash' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('abandoned delever keeps the boros gap and the close hold', async () => {
+    const { posts } = show(rebalanceViews.deleverPausedGap, { status: 'abandoned', paused: false });
+    expect(within(screen.getByRole('alert')).getByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+    hold('Hold to close 52.82 YU on Boros');
+    await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'boros-retry' } }]));
+  });
+
+  it('boros part fill shows the filled-of line', () => {
+    show(rebalanceViews.deleverStoppedBoros);
+    expect(within(screen.getByRole('alert')).getByText(/^Boros filled \S+ of \S+ YU$/)).toBeInTheDocument();
+  });
+
+  it('pause and not-hedged chips', () => {
+    const paused = rebalanceViews.realizePaused.job!;
+    renderWithClient(<JobChip job={{ ...paused, notHedgedQty: 0, borosGapYu: 0, borosLeftYu: 0 }} />);
+    expect(screen.getByText('Paused')).toBeInTheDocument();
+    cleanup();
+    renderWithClient(<JobChip job={rebalanceViews.deleverStoppedBoros.job!} />);
+    expect(screen.getByText('Not hedged')).toBeInTheDocument();
   });
 
   it('done chip', () => {
@@ -363,8 +396,11 @@ describe('RebalanceJobView, sliced runs', () => {
   it('realized and total cost come from the job', () => {
     const view = rebalanceViews.ownerRealizeRunning;
     const leg = view.job!.realize!.legs[0]!;
-    show(view, { realize: { legs: [{ ...leg, realizedUsd: 1_000 }] } });
-    expect(screen.getByText('Realized 1,000 of 7,128 USDC')).toBeInTheDocument();
+    show(view, { realize: { legs: [{ ...leg, realizedUsd: 1_000 }] }, feeSoFarUsd: 40, totalCostUsd: null });
+    expect(screen.getByText('Realized 960 of 7,128 USDC')).toBeInTheDocument();
+    cleanup();
+    show(view, { realize: { legs: [{ ...leg, realizedUsd: 1_000 }] }, feeSoFarUsd: 40, totalCostUsd: 55 });
+    expect(screen.getByText('Realized 945 of 7,128 USDC')).toBeInTheDocument();
     cleanup();
     show(rebalanceViews.ownerRealizeDone, { totalCostUsd: null });
     expect(screen.queryByText(/^Total cost/)).not.toBeInTheDocument();
@@ -372,7 +408,7 @@ describe('RebalanceJobView, sliced runs', () => {
 
   it('delever im used now starts at the start reading', () => {
     show(rebalanceViews.deleverRunning, { imUsedNow: null });
-    expect(screen.getByText('IM used 91.2% now · 74.2% at end')).toBeInTheDocument();
+    expect(screen.getByText('IM used · CrossEx 91.2% now · 74.2% at end')).toBeInTheDocument();
   });
 
   it('delever missed follow says close', async () => {
@@ -389,7 +425,11 @@ describe('RebalanceJobView, sliced runs', () => {
   });
 
   it.each([
-    ['realize', whaleRebalanceViews.realizeRunning, 'Realized 99,406 of 5,965,174 USDC'],
+    [
+      'realize',
+      whaleRebalanceViews.realizeRunning,
+      `Realized ${num(whaleRebalanceViews.realizeRunning.job!.realize!.legs.reduce((sum, leg) => sum + leg.realizedUsd, 0) - (whaleRebalanceViews.realizeRunning.job!.feeSoFarUsd ?? 0), 0)} of 5,965,174 USDC`,
+    ],
     ['delever', whaleRebalanceViews.deleverRunning, /^Perps · slice \d+ of \d+ 66\.7\d* → .+ BTC each$/],
   ])('the %s run reads at $6M', (_name, view, line) => {
     show(view);

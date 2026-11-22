@@ -14,6 +14,14 @@ const books: [string, AssetViewResponse][] = [
 
 const viewOf = (av: AssetViewResponse) => ({ exclusions: {}, sinceSec: av.sinceSec, nowSec: av.nowSec });
 
+describe('openPairsOf on a matured Boros leg', () => {
+  it('drops the pair once its only Boros leg has matured, as the asset card does', () => {
+    const av = assetViewBodies.maturedLeg;
+    const pairs = openPairsOf(av.assets, viewOf(av));
+    expect(pairs).toEqual([]);
+  });
+});
+
 describe('openPairsOf', () => {
   it.each(books)('keeps the Fixed Rate Pairs order and keys on the %s book', (_name, av) => {
     const expected = av.assets.flatMap((g) =>

@@ -1,4 +1,4 @@
-import { Check, Info, TriangleAlert } from 'lucide-react';
+import { ArrowRight, Check, Info, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { RouteName } from '../api/types';
 import { Spinner } from '../components/Spinner';
@@ -28,10 +28,12 @@ export function VerdictAlert({
   tone,
   text,
   sub,
+  action,
 }: {
   tone: 'info' | 'warn' | 'act' | 'good' | 'recommend';
   text: ReactNode;
   sub?: string | null;
+  action?: { label: string; onClick: () => void };
 }) {
   const style = VERDICT_STYLE[tone];
   return (
@@ -55,6 +57,12 @@ export function VerdictAlert({
         </span>
         {sub && <span className="num text-[11px] leading-4 text-ink-400">{sub}</span>}
       </span>
+      {action && (
+        <button type="button" className="btn-link ml-auto inline-flex shrink-0 items-center gap-1 text-xs leading-5" onClick={action.onClick}>
+          {action.label}
+          <ArrowRight size={12} aria-hidden />
+        </button>
+      )}
     </div>
   );
 }

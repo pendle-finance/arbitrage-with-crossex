@@ -2153,7 +2153,7 @@ const OWNER_REPAY = realizeEven(
 
 const CUSTOM_HL_TO_GATE: Goal = { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 37526 };
 
-const OWNER_CUSTOM = { ...OWNER_EVEN, goal: CUSTOM_HL_TO_GATE, customMaxUsd: 45190 };
+const OWNER_CUSTOM = { ...OWNER_EVEN, goal: CUSTOM_HL_TO_GATE, customMaxUsd: 3140 };
 
 const OWNER_CASH_AFTER: WalletAfter[] = [
   { coin: 'USDT', venue: 'CROSSEX', cash: -26812, equity: -26812 },
@@ -2167,7 +2167,7 @@ const OWNER_CUSTOM_CASH = realizeEven(
     loop: loopRoute(1, 3000, 1, 400, 0.5, OWNER_CASH_AFTER, HL_TO_GATE),
     convert: convertRoute([3000], 6, 0.5, OWNER_CASH_AFTER, [HL_TO_GATE]),
   },
-  'loop', null, { customMaxUsd: 45190 },
+  'loop', null, { customMaxUsd: 3140 },
 );
 
 const OWNER_ABOVE_LEG: RealizeLeg = {
@@ -2187,7 +2187,7 @@ const OWNER_CUSTOM_ABOVE = realizeEven(
     loop: loopRoute(4, 14950, 4, 1600, 3, OWNER_ABOVE_AFTER, HL_TO_GATE),
     convert: convertRoute([14950], 29.9, 3, OWNER_ABOVE_AFTER, [HL_TO_GATE]),
   },
-  'loop', { legs: [OWNER_ABOVE_LEG], refused: null }, { customMaxUsd: 45190 },
+  'loop', { legs: [OWNER_ABOVE_LEG], refused: null }, { customMaxUsd: 3140 },
 );
 
 const SPLIT_LEG: RealizeLeg = {
@@ -2660,7 +2660,7 @@ function acctBuckets(b: BorrowBook): RebalanceBucket[] {
 function acctPlans(b: BorrowBook): RebalancePlans {
   const moved = Math.min(b.cash, b.borrow);
   const after: WalletAfter[] = [
-    { coin: 'USDT', venue: 'CROSSEX', cash: r2(moved - b.borrow), equity: r2(moved - b.borrow) },
+    { coin: 'USDT', venue: 'CROSSEX', cash: r2(moved * (1 - 0.002) - b.borrow), equity: r2(moved * (1 - 0.002) - b.borrow) },
     { coin: 'USDC', venue: 'HYPERLIQUID', cash: r2(b.cash - moved), equity: r2(b.cash - moved + b.upnl) },
   ];
   const repay = realizeEven(
@@ -2679,6 +2679,8 @@ function acctView(
     imUsed: ACCT_IM, job: null, ...over,
   };
 }
+
+export const realizeCustomPlan = (usd: number, sliceUsd: number | null = null): RealizePlan => acctRealize(usd, null, sliceUsd);
 
 const OWNER_ACCOUNT = borrowBook(7169.33, 55.98, 9400, 0.0596);
 const WHALE_ACCOUNT = borrowBook(6_000_000, 46_850, 12_345_678.9, 0.0596);
@@ -2776,10 +2778,20 @@ function acctJobs(b: BorrowBook, sliceUsd: number) {
 const OWNER_JOBS = acctJobs(OWNER_ACCOUNT, 25_000);
 const WHALE_JOBS = acctJobs(WHALE_ACCOUNT, WHALE_SLICE_USD);
 
+const OWNER_DONE_CASH = r2(OWNER_ACCOUNT.cash + OWNER_ACCOUNT.realized);
+const OWNER_DONE_UPNL = r2(OWNER_ACCOUNT.upnl - OWNER_ACCOUNT.realized);
+
 const OWNER_DONE_VIEW_BUCKETS = rebased(acctBuckets(OWNER_ACCOUNT), {
-  'USDT/CROSSEX': { cash: 0, equity: 0, borrow: 0, imHeldUsd: 0, mmHeldUsd: 0, interestPerDayUsd: 0 },
-  'USDC/HYPERLIQUID': { cash: 0, upnl: r2(OWNER_ACCOUNT.upnl - OWNER_ACCOUNT.realized), equity: r2(OWNER_ACCOUNT.upnl - OWNER_ACCOUNT.realized) },
+  'USDC/HYPERLIQUID': { cash: OWNER_DONE_CASH, upnl: OWNER_DONE_UPNL, equity: r2(OWNER_DONE_CASH + OWNER_DONE_UPNL) },
 });
+
+const OWNER_REALIZE_DONE_JOB: RebalanceJob = {
+  ...OWNER_JOBS.done,
+  target: [
+    { coin: 'USDT', venue: 'CROSSEX', cash: 0, equity: -OWNER_ACCOUNT.borrow },
+    { coin: 'USDC', venue: 'HYPERLIQUID', cash: OWNER_DONE_CASH, equity: r2(OWNER_DONE_CASH + OWNER_DONE_UPNL) },
+  ],
+};
 
 const BTC_MID = 90_000;
 const HL_BTC = 'HYPERLIQUID_FUTURE_BTC_USDC';
@@ -2827,8 +2839,11 @@ export const deleverPlans = {
   belowMin: withTotals(deleverPlanOf(0.004, [0.004], 10, {
     refused: { reason: 'below-min', venue: 'GATE', minQty: 0.001, coin: 'BTC' },
   })),
+  sameSide: withTotals(deleverPlanOf(900, [900], 20, { refused: { reason: 'same-side', coin: 'BTC' } })),
   twoBoros: withTotals(deleverPlanOf(900, [500, 400], 20)),
   twoAccounts: withTotals(deleverPlanOf(900, [900], 20, {}, true)),
+  noBoros: withTotals(deleverPlanOf(900, [], 20)),
+  whale: withTotals(deleverPlanOf(66.7, [66.7], 20, {}, true)),
 } satisfies Record<string, DeleverPlan>;
 
 const BTC_IM_USD = 4_050_000;
@@ -2910,8 +2925,20 @@ function deleverJobs(size: number, sliceUsd: number, b: BorrowBook) {
     imUsedNow: [{ account: 'CROSSEX', pct: DELEVER_END_IM }],
   });
   const running: RebalanceJob = { ...base, ...sliced(doneSlices) };
+  const pausedGap: RebalanceJob = {
+    ...running, slice: { index: doneSlices, count, sizeUsd: sliceUsd }, status: 'halted', paused: true, notHedgedQty: 0, follow: null,
+    borosGapYu: r6(doneSlices * sliceQty),
+  };
+  const haltedGap: RebalanceJob = {
+    ...pausedGap, paused: false, haltKind: 'margin',
+    haltReason: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
+  };
   return {
     running,
+    pausing: { ...running, pauseRequested: true } satisfies RebalanceJob,
+    haltedGap,
+    abandonedGap: { ...haltedGap, status: 'abandoned' } satisfies RebalanceJob,
+    followMissed: { ...running, followMisses: 3 } satisfies RebalanceJob,
     pausedGap: {
       ...running, slice: { index: doneSlices, count, sizeUsd: sliceUsd }, status: 'halted', paused: true, notHedgedQty: 0, follow: null,
       borosGapYu: r6(doneSlices * sliceQty),
@@ -2939,6 +2966,23 @@ const NO_BORROW_BUCKETS: RebalanceBucket[] = [
   { ...bucketOf('USDT', 'CROSSEX', 800, 0, 0, 0, 0.0596), imHeldUsd: 0, mmHeldUsd: 0 },
   { ...bucketOf('USDC', 'HYPERLIQUID', 1200, 0, 0, 0, 0.05), imHeldUsd: 0, mmHeldUsd: 0 },
 ];
+
+const interestFreeView: RebalanceView = {
+  buckets: FREE_BORROW_BUCKETS, plans: plansOf(balancedPlan(afterOf(1800, -3200, 0))), realize: null,
+  fullPlan: {
+    costUsd: 0, days: null, clearsBorrow: false, needsRealize: false, moveCostUsd: 0, realizeCostUsd: 0,
+    interestPerMonthUsd: 0, refused: null,
+  },
+  imUsed: ACCT_IM, job: null,
+};
+
+const ownerAccountLongView: RebalanceView = (() => {
+  const view = acctView(OWNER_ACCOUNT);
+  const legOf = (leg: RealizeLeg): RealizeLeg => ({ ...leg, side: 'LONG' });
+  const tab = view.realize!;
+  const planOf = (p: RealizePlan | null): RealizePlan | null => p && { ...p, legs: p.legs.map(legOf) };
+  return { ...view, realize: { ...tab, clearDebt: planOf(tab.clearDebt), all: planOf(tab.all) } };
+})();
 
 const withJob = (view: RebalanceView, job: RebalanceJob): RebalanceView => ({ ...view, job });
 
@@ -3184,14 +3228,7 @@ export const rebalanceViews = {
     imUsed: [{ account: 'CROSSEX', pct: 0.914 }, { account: 'HYPERLIQUID', pct: 0.31 }],
   }),
   cashShort: acctView(borrowBook(2000, 600, 0, 0.0596)),
-  interestFree: {
-    buckets: FREE_BORROW_BUCKETS, plans: plansOf(balancedPlan(afterOf(1800, -3200, 0))), realize: null,
-    fullPlan: {
-      costUsd: 0, days: null, clearsBorrow: false, needsRealize: false, moveCostUsd: 0, realizeCostUsd: 0,
-      interestPerMonthUsd: 0, refused: null,
-    },
-    imUsed: ACCT_IM, job: null,
-  },
+  interestFree: interestFreeView,
   noBorrow: {
     buckets: NO_BORROW_BUCKETS, plans: plansOf(balancedPlan(afterOf(800, 1200, 0))), realize: null, fullPlan: null,
     imUsed: ACCT_IM, job: null,
@@ -3212,8 +3249,8 @@ export const rebalanceViews = {
   realizeStoppedNotHedged: withJob(acctView(OWNER_ACCOUNT), OWNER_JOBS.stoppedNotHedged),
   realizeStoppedMargin: withJob(acctView(OWNER_ACCOUNT), OWNER_JOBS.stoppedMargin),
   ownerRealizeDone: {
-    ...acctView(OWNER_ACCOUNT), buckets: OWNER_DONE_VIEW_BUCKETS, plans: plansOf(balancedPlan(OWNER_JOBS.done.target!)),
-    realize: null, fullPlan: null, job: OWNER_JOBS.done,
+    ...acctView(OWNER_ACCOUNT), buckets: OWNER_DONE_VIEW_BUCKETS, plans: acctPlans({ ...OWNER_ACCOUNT, cash: OWNER_DONE_CASH, upnl: OWNER_DONE_UPNL }),
+    realize: null, fullPlan: null, job: OWNER_REALIZE_DONE_JOB,
   },
   deleverRunning: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.running),
   deleverPausedGap: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.pausedGap),
@@ -3221,7 +3258,73 @@ export const rebalanceViews = {
   deleverDone: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.done),
 } satisfies Record<string, RebalanceView>;
 
+const fromCrossexPlan = (plan: EvenPlan): EvenPlan => ({
+  ...plan,
+  routes: {
+    ...plan.routes,
+    convert: { ...plan.routes.convert, steps: plan.routes.convert.steps.map((step) => ({ ...step, from: 'CROSSEX' as const, to: 'HYPERLIQUID' as const })) },
+  },
+});
+
+const imFullFromCrossex = (): RebalanceView => {
+  const view = rebalanceViews.imFull;
+  return { ...view, plans: { ...view.plans, repay: fromCrossexPlan(view.plans.repay), even: fromCrossexPlan(view.plans.even) } };
+};
+
+export const extraRebalanceViews = {
+  deleverPausing: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.pausing),
+  deleverHaltedGap: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.haltedGap),
+  deleverAbandonedGap: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.abandonedGap),
+  deleverFollowMissed: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.followMissed),
+  deleverDoneNoBorrow: withJob(
+    { ...acctView(OWNER_ACCOUNT), buckets: acctBuckets(borrowBook(0, 55.98, 9400, 0.0596)) }, DELEVER_JOBS.done,
+  ),
+  realizeFollowMissed2: withJob(acctView(OWNER_ACCOUNT), { ...OWNER_JOBS.followMissed, followMisses: 2 }),
+  ownerAccountLong: ownerAccountLongView,
+  refusedNoFeeRate: acctView(OWNER_ACCOUNT, { reason: 'no-fee-rate', bp: null }),
+  refusedOverCap: acctView(WHALE_ACCOUNT, { reason: 'over-cap', bp: null, capUsd: 5_000_000 }, WHALE_SLICE_USD),
+  refusedMarginLowIm: acctView(OWNER_ACCOUNT, { reason: 'no-margin', bp: null }, null, {
+    imUsed: [{ account: 'CROSSEX', pct: 0.8 }, { account: 'HYPERLIQUID', pct: 0.31 }],
+  }),
+  imAtStopBelow: acctView(OWNER_ACCOUNT, { reason: 'no-margin', bp: null }, null, {
+    imUsed: [{ account: 'CROSSEX', pct: 0.8928 }, { account: 'HYPERLIQUID', pct: 0.31 }],
+  }),
+  imAtStopAbove: acctView(OWNER_ACCOUNT, { reason: 'no-margin', bp: null }, null, {
+    imUsed: [{ account: 'CROSSEX', pct: 0.893 }, { account: 'HYPERLIQUID', pct: 0.31 }],
+  }),
+  rateUnknown: acctView(OWNER_ACCOUNT, null, null, {
+    buckets: acctBuckets(OWNER_ACCOUNT).map((b) => (b.borrow > 0 ? { ...b, ratePerYear: null, interestPerDayUsd: 0 } : b)),
+  }),
+  imFullOutOfCrossex: imFullFromCrossex(),
+} satisfies Record<string, RebalanceView>;
+
+const WHALE_DONE_CASH = r2(WHALE_ACCOUNT.cash + WHALE_ACCOUNT.realized);
+const WHALE_DONE_UPNL = r2(WHALE_ACCOUNT.upnl - WHALE_ACCOUNT.realized);
+
+const whaleBorrowView = (borrow: number, cash: number, upnl: number, rate: number, refused: RealizeRefusal | null = null): RebalanceView =>
+  acctView(borrowBook(borrow, cash, upnl, rate), refused, WHALE_SLICE_USD);
+
 export const whaleRebalanceViews = {
+  recommendedRealize: whaleBorrowView(6_000_000, 46_850, 12_345_678.9, 0.1095),
+  recommendedCashOnly: whaleBorrowView(3_000_000, 5_400_000, 0, 0.1095),
+  notRecommended: whaleBorrowView(6_000_000, 46_850, 12_345_678.9, 0.0412),
+  refusedBook: whaleBorrowView(6_000_000, 46_850, 12_345_678.9, 0.0596, { reason: 'past-book', bp: null }),
+  refusedMargin: whaleBorrowView(6_000_000, 46_850, 12_345_678.9, 0.0596, { reason: 'no-margin', bp: null }),
+  refusedOverCap: whaleBorrowView(6_000_000, 46_850, 12_345_678.9, 0.0596, { reason: 'over-cap', bp: null, capUsd: 5_000_000 }),
+  moveCashLeftover: whaleBorrowView(4_000_000, 7_000_000, 0, 0.0596),
+  ownerRealizeDone: {
+    ...acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD),
+    buckets: rebased(acctBuckets(WHALE_ACCOUNT), {
+      'USDC/HYPERLIQUID': { cash: WHALE_DONE_CASH, upnl: WHALE_DONE_UPNL, equity: r2(WHALE_DONE_CASH + WHALE_DONE_UPNL) },
+    }),
+    plans: acctPlans({ ...WHALE_ACCOUNT, cash: WHALE_DONE_CASH, upnl: WHALE_DONE_UPNL }),
+    realize: null, fullPlan: null, job: WHALE_JOBS.done,
+  },
+  realizePausing: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_JOBS.pausing),
+  realizePaused: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_JOBS.paused),
+  deleverPausedGap: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.pausedGap),
+  deleverStoppedBoros: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.stoppedBoros),
+  deleverDone: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.done),
   ownerAccount: acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD),
   realizeRunning: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_JOBS.running),
   deleverRunning: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.running),
@@ -3313,7 +3416,7 @@ const AUDIT_CLOSED = { leg: OWNER_ETH_LEG, filled: 53.8, usd: 34386 };
 const ownerPlans = (over: Partial<RebalancePlans>): RebalancePlans => ({ ...OWNER_BOOK_PLANS, ...over });
 
 const customPlan = (amount: number): EvenPlan => ({
-  ...OWNER_EVEN, goal: { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount }, customMaxUsd: 45190,
+  ...OWNER_EVEN, goal: { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount }, customMaxUsd: 3140,
 });
 
 const BTC_HL_LEG: RealizeLeg = {
@@ -3433,7 +3536,7 @@ export const auditRebalanceViews = {
           loop: loopRoute(1, 3140, 1, 400, 0.5, OWNER_CASH_AFTER, HL_TO_GATE),
           convert: convertRoute([3140], 6.3, 0.5, OWNER_CASH_AFTER, [HL_TO_GATE]),
         },
-        'loop', null, { customMaxUsd: 45190 },
+        'loop', null, { customMaxUsd: 3140 },
       ),
     }),
     job: null,
@@ -4558,8 +4661,59 @@ export const whaleBook = {
   },
 } satisfies { account: CrossexAccount; positions: PositionsResponse; assetView: AssetViewResponse };
 
+const BTC_MATURITY = 1_794_816_000;
+const BTC_PAST_MATURITY = 1_788_000_000;
+
+function btcBoros(
+  marketId: number, size: number, side: 'LONG' | 'SHORT', venue: string, spread: [string, string] | null, maturity = BTC_MATURITY,
+): AssetBorosOpen {
+  const notionalUsd = size * BTC_MID;
+  return {
+    marketId, venue, spreadVenues: spread, maturity, collateral: 'BTC', side, sizeToken: size, notionalUsd, entryApr: 0.031,
+    markApr: 0.034, floatingApr: 0.029, settleUsd: 0, mtmUsd: 0, imUsd: size * 500, settleFeeApr: 0.001,
+  };
+}
+
+function btcView(hlSide: 'LONG' | 'SHORT', boros: AssetBorosOpen[]): AssetViewResponse {
+  const gateSide = hlSide === 'LONG' ? 'SHORT' : 'LONG';
+  const group = assetGroup(
+    'BTC', BTC_MID,
+    [
+      { ...perpLeg(HL_BTC, hlSide, 900, 89_000, BTC_MID, 12, 1_783_000_000), imUsd: 1_800_000 },
+      { ...perpLeg(GATE_BTC, gateSide, 900, 89_100, BTC_MID, -4, 1_783_000_000), imUsd: 1_800_000 },
+    ],
+    { open: boros, history: [] },
+  );
+  return { ...avDefault, assets: [group] };
+}
+
+const BTC_SPREAD_LONG = btcBoros(101, 900, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'GATE']);
+
+const hypePairGroup = () => assetGroup('HYPE', 86.597, [
+    perpLeg('HYPERLIQUID_FUTURE_HYPE_USDC', 'LONG', 57.7, 85.1, 86.597, 0.4, OWNER_DEFAULT_SINCE_SEC),
+    perpLeg('GATE_FUTURE_HYPE_USDT', 'SHORT', 57.7, 85.2, 86.597, -0.2, OWNER_DEFAULT_SINCE_SEC),
+  ], { open: [{ ...btcBoros(301, 57.7, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'GATE']), collateral: 'HYPE' }], history: [] });
+
+const twoPairsView = (): AssetViewResponse => {
+  const btc = btcView('LONG', [BTC_SPREAD_LONG]);
+  const eth = assetGroup('ETH', 2510, [
+    { ...perpLeg('HYPERLIQUID_FUTURE_ETH_USDC', 'LONG', 120, 2490, 2510, 3, 1_783_000_000), imUsd: 15_060 },
+    { ...perpLeg('GATE_FUTURE_ETH_USDT', 'SHORT', 120, 2495, 2510, -1, 1_783_000_000), imUsd: 15_060 },
+  ], { open: [{ ...btcBoros(201, 120, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'GATE']), collateral: 'ETH', notionalUsd: 120 * 2510, imUsd: 9_000 }], history: [] });
+  return { ...btc, assets: [...btc.assets, eth] };
+};
+
 export const assetViewBodies = {
   default: avDefault,
+  btc900: btcView('LONG', [BTC_SPREAD_LONG]),
+  btc900Mirror: btcView('SHORT', [btcBoros(101, 900, 'SHORT', 'HYPERLIQUID', ['HYPERLIQUID', 'GATE'])]),
+  btcTwoBoros: btcView('LONG', [
+    btcBoros(101, 500, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'GATE']),
+    btcBoros(102, 400, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'GATE']),
+  ]),
+  dollarPair: { ...avDefault, assets: [hypePairGroup()] },
+  twoPairs: twoPairsView(),
+  maturedLeg: btcView('LONG', [btcBoros(101, 900, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'GATE'], BTC_PAST_MATURITY)]),
   allTime: avAllTime,
   backfilling: {
     ...avDefault,

@@ -115,7 +115,10 @@
       "minimum": "Gate minimum for moves into or out of the CrossEx Hyperliquid and Lighter wallets. Fee included.",
       "upToOut": "Free margin, capped at this wallet's cash.",
       "upToInto": "Your Gate spot balance.",
-      "priceImpact": "Not a fee. USDC bought above $1 or sold below it on Gate spot, and depth taken past the top of the book."
+      "priceImpact": "Not a fee. USDC bought above $1 or sold below it on Gate spot, and depth taken past the top of the book.",
+      "slicePriceImpact": "Not a fee. Each close and reopen takes depth past the top of the book.",
+      "tradingFeePerps": "Venue fee on each perp order, at your maker or taker rate.",
+      "imUsed": "Initial margin your positions hold, as a share of the account's margin balance."
     },
     "verdict": {
       "noBorrow": "No borrow. Nothing to move.",
@@ -142,7 +145,7 @@
     },
     "modal": {
       "feeUsd": "Fee {{usd}}",
-      "frees": "Frees",
+      "frees": "Frees initial margin",
       "interest": "Interest",
       "fee": "Fee",
       "perMonth": "{{now}} → {{after}} a month",
@@ -178,6 +181,7 @@
     "whereCaption": "Where your money is",
     "onTheWay": "On the way",
     "waitsLine": "New deals and transfers wait until it ends.",
+    "staleQuote": "The quote is out of date. Waiting for a fresh one.",
     "started": "Started {{age}} ago. You can close this. The rebalance keeps going.",
     "finishedLead": "Done. This is what each wallet holds now.",
     "abandonTransit": "Abandon leaves {{qty}} {{coin}} in transit. It is not margin until it lands.",
@@ -232,6 +236,9 @@
     "runningLeft": "{{what}} running, {{left}} left.",
     "runningLong": "{{what}} running, longer than usual.",
     "running": "{{what}} running.",
+    "paused": "{{what}} paused.",
+    "stopped": "{{what}} stopped.",
+    "pausedOpen": "Paused · open",
     "runningConvert": "Running · Convert",
     "runningRound": "Running · round {{round}} of {{rounds}}"
   },
@@ -452,7 +459,8 @@
     "deleverLink": "Delever a pair",
     "infoBorrow": "A wallet below zero borrows from CrossEx and pays interest.",
     "infoReduce": "Reduce borrow opens Move cash. If cash is not enough, it opens Realize uPnL first.",
-    "infoRealize": "Realize uPnL closes and reopens a leg in profit. Its uPnL becomes cash. Size and pair PnL unchanged, except fees."
+    "infoRealize": "Realize uPnL closes and reopens a leg in profit. Its uPnL becomes cash. Size and pair PnL unchanged, except fees.",
+    "cashClears": "Cash clears {{a}} of {{b}}."
   },
   "rebalanceTabs": {
     "move": "Move cash",
@@ -464,6 +472,9 @@
     "runHeader": "Move cash · {{goal}}"
   },
   "moveCash": {
+    "goal": "Goal",
+    "feeHead": "Est. fee · Price impact",
+    "started": "Started {{age}} ago. You can close this. The move keeps going.",
     "from": "From",
     "to": "To",
     "repays": "repays the borrow",
@@ -488,8 +499,8 @@
     "closeReopen": "Close and reopen",
     "legPart": "{{coin}} {{side}} {{size}} of {{held}}",
     "orders": "Orders",
-    "limitHedge": "Limit + hedge {{usd}} · {{time}}",
-    "market": "Market {{usd}} · {{time}}",
+    "limitHedge": "Limit + hedge {{usd}} · {{time}} per slice",
+    "market": "Market {{usd}} · {{time}} per slice",
     "sliceSize_one": "Slice size {{size}} · {{count}} slice",
     "sliceSize_other": "Slice size {{size}} · {{count}} slices",
     "tradingFee": "Trading fee",
@@ -502,7 +513,12 @@
     "all": "All",
     "custom": "Custom amount",
     "noUpnl": "No uPnL to realize.",
-    "upTo": "Up to {{amount}} {{coin}}"
+    "upTo": "Up to {{amount}} {{coin}}",
+    "wallet": "Wallet: {{wallet}}",
+    "walletUpnl": "uPnL {{amount}} {{coin}}",
+    "typeAmount": "Type an amount to realize.",
+    "typeSlice": "Type a slice size above $0.",
+    "customOverAll": "More than you can realize. This realizes all {{amount}} {{coin}}."
   },
   "slices": {
     "title": "Slice size",
@@ -543,14 +559,16 @@
     "yu": "YU",
     "imUsedLabel": "IM used · {{account}}",
     "afterBoros": "Boros {{a}} → {{b}} YU",
-    "borosGap": "Boros closes after the perps. Until then, up to {{amount}} YU has no perp behind it ({{time}}).",
+    "borosGap": "Boros closes after the perps. Until then, the YU with no perp behind it grows to {{amount}} by the end ({{time}}).",
     "notHedged": "Not hedged during each slice: max {{qty}} {{coin}} ({{usd}})",
     "hold": "Hold to delever {{coin}} {{venueA}} / {{venueB}} by {{pct}}% ({{qty}} {{coin}})",
     "noPairs": "No open pairs",
     "noPairsMatch": "No pairs match",
     "belowMin": "{{venue}} takes at least {{min}} {{coin}}",
     "borosNoPerp": "Boros {{amount}} YU has no perp behind it",
-    "holdCloseBoros": "Hold to close {{amount}} YU on Boros"
+    "holdCloseBoros": "Hold to close {{amount}} YU on Boros",
+    "pairsFailed": "Could not read your pairs.",
+    "sameSide": "Both perps are on the same side. Delever needs one long and one short."
   },
   "sliceRun": {
     "slice": "Slice {{i}} of {{n}}",
@@ -576,11 +594,11 @@
     "holdRetryBoros": "Hold to retry closing {{amount}} YU on Boros",
     "holdAddBack": "Hold to add {{qty}} {{coin}} back on both perps",
     "perpsLine": "Perps · slice {{i}} of {{n}} {{old}} → {{now}} {{coin}} each",
-    "borosLine": "Boros {{amount}} YU · closes after perps",
+    "borosLine": "Boros {{amount}} → {{end}} YU · closes after perps",
     "notHedgedMax": "Not hedged now max {{qty}} {{coin}} ({{usd}}) per slice",
-    "imNowEnd": "IM used {{a}}% now · {{b}}% at end",
+    "imNowEnd": "IM used · {{account}} {{a}}% now · {{b}}% at end",
     "feeEst": "Fee so far {{fee}} · Est. fee {{est}}",
-    "imDone": "IM used {{a}}% → {{b}}%",
+    "imDone": "IM used · {{account}} {{a}}% → {{b}}%",
     "totalCost": "Total cost {{real}} (est. {{est}})",
     "realized": "Realized {{amount}} USDC",
     "pairPnl": "Pair PnL",
@@ -589,6 +607,12 @@
     "next": "Next: Move cash",
     "leftover": "The last move left {{amount}} USDC in Gate spot.",
     "transfer": "Transfer",
-    "moveHeader": "Move cash · {{goal}}"
+    "moveHeader": "Move cash · {{goal}}",
+    "chipPaused": "Paused",
+    "chipNotHedged": "Not hedged",
+    "deleverHeader": "Delever {{coin}} · {{long}} / {{short}}",
+    "deleverDoneHeader": "Delever {{pct}}%",
+    "perpsBorosNow": "Perps {{perps}} {{coin}} each · Boros {{boros}} YU",
+    "borosFilled": "Boros filled {{filled}} of {{target}} YU"
   }
 }

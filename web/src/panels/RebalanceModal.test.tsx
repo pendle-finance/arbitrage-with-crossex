@@ -8,11 +8,11 @@ import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, T
 import type { RebalanceJob, RouteName } from '../api/types';
 import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased, whaleRebalanceViews } from '../test/fixtures';
 import { REALIZE_DONE_BEFORE_JOB, REALIZE_ROUTE_JOB } from '../test/fixtures';
-import { transferHandler, transferViews } from '../test/fixtures';
+import { extraRebalanceViews, transferHandler, transferViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RebalanceJobView } from './RebalanceJobView';
-import { fmtAbout, fmtNotionalShort, fmtUsd, num } from '../lib/fmt';
+import { fmtAbout, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
 import { rebalanceHandler } from '../test/fixtures';
 import { RebalanceModal, RebalanceModalHost } from './RebalanceModal';
 import { RebalanceOpenerProvider, useRebalanceOpener, type RebalanceTab } from './rebalanceOpener';
@@ -420,12 +420,12 @@ describe('RebalanceModal plan state', () => {
   it('hold waits for a moving transfer or a running deal', async () => {
     show(rebalanceViews.twoBorrows, { transfer: transferViews.moving });
     expect(await within(dialog()).findByText('Transfer running')).toBeInTheDocument();
-    expect(holdButton()).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
     cleanup();
 
     show(rebalanceViews.twoBorrows, { transfer: transferViews.lockDeal });
     expect(await within(dialog()).findByText('Deal running')).toBeInTheDocument();
-    expect(holdButton()).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
   });
 });
 
@@ -447,7 +447,7 @@ describe('RebalanceModal run states', () => {
   it('shows the running state: route, round, time left, progress, wallets and the money on the way', async () => {
     show(rebalanceViews.accountARunning);
     expect(screen.getByText('Running')).toBeInTheDocument();
-    expect(facts()).toEqual({ For: 'Rebalance', Route: 'Spot loop', Round: '3 of 5', 'Time left': 'about 6 min' });
+    expect(facts()).toEqual({ Route: 'Spot loop', Round: '3 of 5', 'Time left': 'about 6 min' });
     expect(subs('Time left')).toEqual(['4m 58s passed']);
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
     expect(barRows('Now')).toEqual([
@@ -461,7 +461,7 @@ describe('RebalanceModal run states', () => {
   it('says the running job keeps going after the modal closes', async () => {
     const { onClose } = show(rebalanceViews.accountARunning);
     expect(
-      within(dialog()).getByText('Started 4m 58s ago. You can close this. The rebalance keeps going.'),
+      within(dialog()).getByText('Started 4m 58s ago. You can close this. The move keeps going.'),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
@@ -507,7 +507,7 @@ describe('RebalanceModal run states', () => {
     expect(screen.getByText('Running')).toBeInTheDocument();
     await next();
     expect(screen.getAllByText('Done')[0]).toBeInTheDocument();
-    expect(facts()).toEqual({ For: 'Rebalance', Route: 'Spot loop', Moved: '$175.63', Took: '4m 18s', Cost: '$0.26' });
+    expect(facts()).toEqual({ Route: 'Spot loop', Moved: '$175.63', Took: '4m 18s', 'Total cost': '$0.26' });
     expect(barRows('Now')).toContain('USDT · CrossEx92.54');
     expect(onClose).not.toHaveBeenCalled();
     // Close is the one way out once the run has finished under the dialog.
@@ -976,7 +976,7 @@ describe('RebalanceModal where the money is', () => {
     expect(screen.getByRole('alert').textContent).toBe('Stopped at Convert.Convert quote was more than 0.3% under the Gate spot price.');
     await next();
     expect(screen.getAllByText('Done')[0]).toBeInTheDocument();
-    expect(facts()).toEqual({ For: 'Rebalance', Route: 'Convert', Moved: '$498.00', Took: '2s', Cost: '$2.00' });
+    expect(facts()).toEqual({ Route: 'Convert', Moved: '$498.00', Took: '2s', 'Total cost': '$2.00' });
     await user.click(screen.getByRole('button', { name: 'Show steps' }));
     const rows = within(dialog()).getAllByRole('listitem');
     expect(rows).toHaveLength(1);
@@ -1494,7 +1494,7 @@ describe('RebalanceModal presets and custom amount', () => {
   it('a running or finished job names its goal', async () => {
     const running = rebalanceViews.accountARunning;
     show({ ...running, job: { ...running.job, goal: 'repay' } });
-    expect(facts()).toMatchObject({ For: 'Clear debt' });
+    expect(screen.getByText('Move cash · Clear debt')).toBeInTheDocument();
     cleanup();
     const done = rebalanceViews.convertDone;
     show({ ...done, job: { ...done.job, goal: 'custom' } });
@@ -1536,7 +1536,7 @@ describe('RebalanceModal close and reopen, before the hold', () => {
 
   it('days line says how many days of interest it saves', () => {
     show(rebalanceViews.ownerBook);
-    expect(totalCard().nextElementSibling?.textContent).toBe('Pays back in 26 days of interest');
+    expect(totalCard().nextElementSibling?.textContent).toBe('Pays back in 21 days of interest');
   });
 
   it('above the most shows the amber line, and above the most disables the hold', async () => {
@@ -1546,7 +1546,7 @@ describe('RebalanceModal close and reopen, before the hold', () => {
     show(rebalanceViews.ownerBook);
     await user.click(screen.getByRole('radio', { name: 'Custom amount' }));
     await typeCustom(user, '50000');
-    expect(await screen.findByText('Up to 45,190 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText('Up to 3,140 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeDisabled();
     expect(screen.queryByText('Total cost')).toBeNull();
   });
@@ -1695,6 +1695,13 @@ describe('RebalanceModal tabs', () => {
     expect(within(dialog()).queryByText('Rebalance')).toBeNull();
   });
 
+  it('an abandoned delever with a boros gap still opens on its run view with the close hold', async () => {
+    showOn(extraRebalanceViews.deleverAbandonedGap);
+    expect(tabRadio('Delever')).toHaveAttribute('aria-checked', 'true');
+    expect(await screen.findByText(/^Boros [\d.,]+ YU has no perp behind it$/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to close [\d.,]+ YU on Boros/ })).toBeInTheDocument();
+  });
+
   it('opens on the tab that clears it', () => {
     showOn(rebalanceViews.recommendedCashOnly);
     expect(tabRadio('Move cash')).toHaveAttribute('aria-checked', 'true');
@@ -1738,7 +1745,12 @@ describe('RebalanceModal tabs', () => {
     expect(tabRadio('Move cash')).toHaveAttribute('aria-checked', 'true');
     await userEvent.click(tabRadio('Realize uPnL'));
     expect(screen.getByText('New deals and transfers wait until it ends.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Hold to realize/ })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
+    cleanup();
+    showOn(rebalanceViews.ownerRealizeRunning, 'move');
+    await userEvent.click(tabRadio('Move cash'));
+    expect(screen.getByText('New deals and transfers wait until it ends.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
   });
 });
 
@@ -1772,7 +1784,7 @@ describe('RebalanceModal Move cash tab', () => {
   it('interest a month in move cash', () => {
     showOn(rebalanceViews.recommendedCashOnly, 'move');
     const row = screen.getByText('Interest a month').parentElement!.parentElement as HTMLElement;
-    expect(row.textContent).toMatch(/\$[\d,.]+.*\$0\.00/);
+    expect(row.textContent).toMatch(/\$[\d,.]+.*\$0\.06/);
   });
 
   it('cash short line', async () => {
@@ -1839,9 +1851,35 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(sent).toBeLessThan(999999999);
   });
 
+  it('realize All: the After box shows the Convert paying down the borrow in the target wallet', async () => {
+    showOn(owner);
+    const chips = within(screen.getByRole('radiogroup', { name: 'Custom amount' })).getAllByRole('radio');
+    await userEvent.click(chips[1]!);
+    const legs = owner.realize!.all!.legs;
+    const landed = legs.reduce((total, leg) => total + (leg.convert ? leg.convert.amount - leg.convert.feeUsd : 0), 0);
+    const borrow = owner.buckets.find((b) => b.coin === 'USDT' && b.venue === 'CROSSEX')!.borrow;
+    expect(landed).toBeGreaterThan(0);
+    const usdt = await screen.findByRole('rowgroup', { name: 'USDT · CrossEx' });
+    const row = within(usdt).getAllByRole('row').find((r) => within(r).queryByRole('rowheader')?.textContent === 'Borrow')!;
+    const [before, after] = within(row).getAllByRole('cell');
+    expect(before!.textContent).toBe(sigGrouped(borrow));
+    expect(after!.textContent).toBe(sigGrouped(Math.max(0, borrow - landed)));
+  });
+
   it('realize hold label', () => {
     showOn(owner);
     expect(screen.getByRole('button', { name: 'Hold to realize 7,128 USDC' })).toBeInTheDocument();
+  });
+
+  it('while a new custom amount prices, the hold shows the pricing label, not the old amount', async () => {
+    serve({});
+    server.use(http.get('/api/rebalance', () => new Promise(() => {})));
+    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
+    const chips = within(screen.getByRole('radiogroup', { name: 'Custom amount' })).getAllByRole('radio');
+    await userEvent.click(chips[2]!);
+    await userEvent.type(screen.getByRole('textbox', { name: 'Custom amount' }), '5000');
+    expect(screen.queryByRole('button', { name: /^Hold to realize [\d,]+ USDC/ })).toBeNull();
+    expect(screen.getAllByText('Pricing the move.').length).toBeGreaterThan(0);
   });
 
   it('slice rows', async () => {

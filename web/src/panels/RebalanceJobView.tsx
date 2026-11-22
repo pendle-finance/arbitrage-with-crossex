@@ -220,6 +220,8 @@ function RouteBody({ job, now, state }: { job: RebalanceJob; now: number; state:
 
 export function JobChip({ job }: { job: RebalanceJob }) {
   if (job.status === 'running') return <Chip tone="info">{t('common.running')}</Chip>;
-  if (job.status === 'halted') return <Chip tone="red">{t('common.stopped')}</Chip>;
-  return <Chip>{t('accounts.sliceRun.done')}</Chip>;
+  if (job.status === 'done') return <Chip>{t('accounts.sliceRun.done')}</Chip>;
+  const notHedged = (job.notHedgedQty ?? 0) > 0 || (job.borosLeftYu ?? 0) > 0 || (job.borosGapYu ?? 0) > 0;
+  if (job.status === 'halted' && job.paused === true) return <Chip tone={notHedged ? 'red' : 'amber'}>{t('accounts.sliceRun.chipPaused')}</Chip>;
+  return <Chip tone="red">{t(notHedged ? 'accounts.sliceRun.chipNotHedged' : 'common.stopped')}</Chip>;
 }

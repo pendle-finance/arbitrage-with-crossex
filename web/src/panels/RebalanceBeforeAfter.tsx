@@ -31,7 +31,7 @@ const moved = (a: number, b: number): boolean => floorCents(Math.abs(a - b)) > 0
 const freedWeight = (bucket: RebalanceBucket, left: number): number =>
   bucket.borrow > 0 ? ((bucket.borrow - left) * bucket.imHeldUsd) / bucket.borrow : 0;
 
-function borrowRows(bucket: RebalanceBucket, left: number, freesUsd: number | null): ChangeRow[] {
+export function borrowRows(bucket: RebalanceBucket, left: number, freesUsd: number | null): ChangeRow[] {
   const interest: ChangeRow[] = isRateUnknown(bucket)
     ? []
     : [{

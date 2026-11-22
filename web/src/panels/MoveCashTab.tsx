@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowRight } from 'lucide-react';
 import { ApiError } from '../api/client';
 import { useCustomPlan, useStartRebalance, useTransfer, type CustomMove } from '../api/queries';
 import type { EvenPlan, GateAccount, GoalKind, Pool, RebalanceView, RouteName, TransferCoin } from '../api/types';
@@ -25,12 +24,11 @@ import { crossexImFull } from './rebalanceImStop';
 import { defaultGoal, DUST, fmtCoinOrUsd, isCashLimitedEven, keyOf, movesOf, paybackDays, pickedRoute } from './RebalanceHovers';
 import { planSteps, receivingBorrow, receivingHeld, RouteRow, routeFeeUsd, routeImpactUsd, sharedCoin, SpotLines } from './RebalanceHovers';
 import { Term, totalCostUsd, worthLine } from './RebalanceHovers';
-import { acceptedOf, cashLimitedText, initialGoal, isStale, parsedAmount, PLAN_CHANGED_LABEL, plainOf, presetOffText, shownOrder } from './rebalanceModalPlan';
+import { acceptedOf, cashLimitedText, CUSTOM_DEBOUNCE_MS, initialGoal, isStale, parsedAmount, PLAN_CHANGED_LABEL, plainOf, presetOffText, shownOrder } from './rebalanceModalPlan';
 import type { Accepted } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
 
 const POOLS: readonly Pool[] = ['CROSSEX', 'HYPERLIQUID', 'LIGHTER'];
-const CUSTOM_DEBOUNCE_MS = 300;
 
 export function MoveCashTab({
   view,
@@ -92,7 +90,9 @@ export function MoveCashTab({
     const first = movesOf(planSteps(plan))[0];
     setCustomFrom(first?.from ?? 'HYPERLIQUID');
     setCustomTo(first?.to ?? 'CROSSEX');
-    setCustomText(plan.moves > 0 ? String(floorCents(plan.moves)) : '');
+    const cash = floorCents(bucketOf(buckets, first?.from ?? 'HYPERLIQUID')?.cash ?? 0);
+    const prefill = floorCents(Math.min(plan.moves, cash));
+    setCustomText(prefill > 0 ? String(prefill) : '');
     pickGoal('custom');
   };
   const editCustom = (apply: () => void) => {
@@ -157,7 +157,11 @@ export function MoveCashTab({
     body = (
       <>
         <VerdictAlert tone="warn" text={realizeText('customMax', { max: num(plan.customMaxUsd ?? 0, 0), coin: poolCoin(customFrom) })} />
-        <HoldToConfirmButton holdMs={holdMs} disabled onConfirm={() => undefined}>{HOLD_LABEL[goal]}</HoldToConfirmButton>
+        {waits !== null ? (
+          <p className="text-xs text-ink-400">{waits}</p>
+        ) : (
+          <HoldToConfirmButton className="w-full" holdMs={holdMs} disabled onConfirm={() => undefined}>{HOLD_LABEL[goal]}</HoldToConfirmButton>
+        )}
       </>
     );
   } else {
@@ -182,6 +186,13 @@ export function MoveCashTab({
           <div className={microLabelClass}>
             <Term label={t('accounts.rebalanceModal.route')} text={HOVER.route} />
           </div>
+          <div aria-hidden className="flex items-center gap-3 px-3 text-[11px] text-ink-400">
+            <span className="w-3.5 shrink-0" />
+            <span className="w-44 shrink-0" />
+            <span className="w-28 shrink-0" />
+            <span className="flex-1">{t('accounts.rebalanceModal.time')}</span>
+            <span className="text-right">{t('accounts.moveCash.feeHead')}</span>
+          </div>
           <div role="radiogroup" aria-label={t('accounts.rebalanceModal.route')} className="flex flex-col gap-1.5">
             {shownOrder(plan, accepted).map((name) => (
               <RouteRow key={name} route={name} plan={plan} checked={chosen === name} onPick={() => choose(name)} />
@@ -204,23 +215,19 @@ export function MoveCashTab({
         )}
         <RebalanceBeforeAfter rows={walletChanges(view, plan, route)} mode="after" />
         {cashShort && (
-          <div className="alert-blue flex-row items-center justify-between gap-3 text-xs text-ink-100">
-            <span className="num">{t('accounts.moveCash.cashShort', { left: num(flow.left), coin: flow.borrowCoin, wallet: fromPools.map(walletOf).join(' + ') })}</span>
-            <button type="button" className="btn-link inline-flex items-center gap-1" onClick={() => onTab('realize')}>
-              {t('accounts.moveCash.cashShortLink')}
-              <ArrowRight size={12} aria-hidden />
-            </button>
-          </div>
+          <VerdictAlert
+            tone="info"
+            text={<span className="num">{t('accounts.moveCash.cashShort', { left: num(flow.left), coin: flow.borrowCoin, wallet: fromPools.map(walletOf).join(' + ') })}</span>}
+            action={{ label: t('accounts.moveCash.cashShortLink'), onClick: () => onTab('realize') }}
+          />
         )}
         <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
         {imStop ? (
-          <div role="alert" className="alert-amber flex-row items-center justify-between gap-3 text-xs text-gold">
-            <span className="num">{t('accounts.borrowCard.imUsed', { pct: num(imStop.pct * 100, 1) })}</span>
-            <button type="button" className="btn-link inline-flex items-center gap-1" onClick={() => onTab('delever')}>
-              {t('accounts.moveCash.deleverLink')}
-              <ArrowRight size={12} aria-hidden />
-            </button>
-          </div>
+          <VerdictAlert
+            tone="warn"
+            text={<span className="num">{t('accounts.borrowCard.imUsed', { pct: num(imStop.pct * 100, 1) })}</span>}
+            action={{ label: t('accounts.moveCash.deleverLink'), onClick: () => onTab('delever') }}
+          />
         ) : (
           <RebalanceModalFooter
             rows={[]}
@@ -248,18 +255,18 @@ export function MoveCashTab({
 
   return (
     <div className="flex flex-col gap-4">
-      <Term
-        wrapsControl
-        label={
-          <SegmentedToggle<GoalKind>
-            ariaLabel={t('accounts.rebalanceModal.preset')}
-            value={goal}
-            options={goalOptions}
-            onChange={(next) => (next === 'custom' ? enterCustom() : pickGoal(next))}
-          />
-        }
-        text={HOVER.presets}
-      />
+      <div className="flex flex-col gap-2">
+        <div className={microLabelClass}>
+          <Term label={t('accounts.moveCash.goal')} text={HOVER.presets} />
+        </div>
+        <SegmentedToggle<GoalKind>
+          ariaLabel={t('accounts.rebalanceModal.preset')}
+          fill
+          value={goal}
+          options={goalOptions}
+          onChange={(next) => (next === 'custom' ? enterCustom() : pickGoal(next))}
+        />
+      </div>
       <MoveCashWallets
         custom={goal === 'custom'}
         flow={flow}

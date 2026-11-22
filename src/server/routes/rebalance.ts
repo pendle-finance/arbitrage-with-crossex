@@ -28,6 +28,7 @@ import {
   notionalByWallet,
   planFor,
   POOLS,
+  realizeTabEstimateOf,
   realizeTabOf,
   REPAY_GOAL,
   SPOT_PAIR,
@@ -46,6 +47,7 @@ import { catchRateLimit, sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   bannerFor,
+  FOLLOW_MISSES_RED,
   gapsLeftBy,
   inTransitOf,
   LOCK_TEXT,
@@ -61,7 +63,7 @@ import {
   type MoneyLock,
   type StepName,
 } from '../rebalanceJob';
-import { applyFix, cancelRestingLead, receivedOf, runJob, STEPS, transferRow, type RunnerDeps } from '../rebalanceRunner';
+import { applyFix, cancelRestingLead, receivedOf, runJob, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
 import { configuredRoot, createBorosCloseDeps, createPairPricer } from './borosPair';
 
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
@@ -159,7 +161,12 @@ const sliceCountOf = (options: SliceOption[], sliceUsd: number, notionalUsd: num
   options.find((option) => option.sizeUsd === sliceUsd)?.count ?? Math.max(1, Math.ceil(notionalUsd / sliceUsd));
 
 const belowMinText = (refused: NonNullable<DeleverPlan['refused']>): string =>
-  `${refused.venue} takes at least ${refused.minQty} ${refused.coin}.`;
+  refused.reason === 'same-side'
+    ? 'Both perps are on the same side, so a Delever would add to the position.'
+    : `${refused.venue} takes at least ${refused.minQty} ${refused.coin}.`;
+
+const cappedSliceOf = (options: SliceOption[], asked: number): number =>
+  Math.min(asked, options.find((option) => option.custom)?.sizeUsd ?? asked);
 
 interface LivePerp extends JobPerp {
   base: string;
@@ -267,6 +274,12 @@ export function rebalanceRoutes(deps: AppDeps) {
     const envTakerFee = Number(process.env.BOROS_TAKER_FEE_OVERRIDE);
     const takerFeeOverride = Number.isFinite(envTakerFee) ? envTakerFee : undefined;
     let fixing: Promise<Job> | null = null;
+    let queuedFix: QueuedFix | null = null;
+    const takeFix = (): QueuedFix | null => {
+      const queued = queuedFix;
+      queuedFix = null;
+      return queued;
+    };
 
     const borosSlippagePct = async (marketId: number): Promise<number | null> => {
       const market = (await pricer.loadMarkets(false)).find((m) => m.marketId === marketId);
@@ -284,6 +297,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         onHalt,
         onDone: deps.rebalance?.onDone,
         pollOnly,
+        takeFix,
         ...(address ? { boros: { deps: borosCloseDeps, address, slippagePct: borosSlippagePct } } : {}),
       };
     };
@@ -298,7 +312,18 @@ export function rebalanceRoutes(deps: AppDeps) {
         .catch((err: unknown) => console.error(`rebalance stopped: ${describeError(err)}`))
         .finally(() => {
           inflight = null;
+          const left = takeFix();
+          if (left) fixStopped(store, left);
         });
+    };
+
+    const fixStopped = (store: JobFile, queued: QueuedFix): void => {
+      const job = store.read();
+      if (job?.status !== 'halted') return queued.fail(new CoreError(NOTHING_TO_FIX, 'validation'));
+      applyFix(runnerDeps(store), job, queued.action).then((fixed) => {
+        queued.done(fixed);
+        if (fixed.status === 'running') start(store);
+      }, queued.fail);
     };
 
     const bootJob = jobs?.read() ?? null;
@@ -576,11 +601,11 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!tab || !plan) return conflict(reply, NOTHING_TO_REALIZE);
       if (plan.refused) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (plan.legs.length === 0) return conflict(reply, NOTHING_TO_REALIZE);
-      const estimate = plan.estimates[exec];
+      const sliceUsd = cappedSliceOf(tab.sliceOptions, shownSlice ?? tab.defaultSliceUsd);
+      const estimate = realizeTabEstimateOf(tab, plan, exec, sliceUsd);
       if (costRoseTooMuch(estimate.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
-      const sliceUsd = shownSlice ?? tab.defaultSliceUsd;
       const live = livePerpsOf(view.perps);
       const notionalUsd = plan.legs.reduce((total, leg) => total + leg.qty * (live.find((perp) => perp.symbol === leg.symbol)?.markPrice ?? 0), 0);
       const livePerps = jobPerpsOf(view.perps);
@@ -626,7 +651,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (costRoseTooMuch(cost.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
-      const sliceUsd = shownSlice ?? plan.defaultSliceUsd;
+      const sliceUsd = cappedSliceOf(plan.sliceOptions, shownSlice ?? plan.defaultSliceUsd);
       const lead = plan.legs[plan.makerLeg];
       const leadUsd = lead ? (lead.closeQty * plan.notHedgedMaxUsd) / Math.max(plan.notHedgedMaxQty, Number.EPSILON) : 0;
       const job = newJob(
@@ -737,9 +762,17 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!isFixAction(action)) throw new CoreError(`unknown fix ${String(action)}`);
       const store = requireJobs();
       if (fixing) return reply.ok(await fixing);
-      const job = haltedOr409(store, (req.params as { id: string }).id, reply);
-      if (!job) return reply;
-      const open = action === 'market' || action === 'limit' ? (job.follow?.qty ?? 0) > 0 : job.borosLeftYu > 0;
+      const job = jobOr404(store, (req.params as { id: string }).id);
+      const follow = action === 'market' || action === 'limit';
+      const missed = job.status === 'running' && job.followMisses >= FOLLOW_MISSES_RED;
+      const fixable =
+        job.status === 'halted' || (follow && missed) || (action === 'boros-retry' && job.status === 'abandoned' && job.delever !== null);
+      if (!fixable) return conflict(reply, `rebalance ${job.id} is ${job.status}`);
+      const open = follow
+        ? (job.follow?.qty ?? 0) > 0
+        : action === 'boros-retry'
+          ? job.delever !== null && Math.max(job.borosLeftYu, job.borosGapYu) > 0
+          : job.borosLeftYu > 0;
       if (!open) return conflict(reply, NOTHING_TO_FIX);
       const working = resumeLock();
       if (working) return conflict(reply, working);
@@ -747,7 +780,12 @@ export function rebalanceRoutes(deps: AppDeps) {
         return conflict(reply, 'This rebalance was started on another Gate account. Abandon it.');
       }
       if (fixing) return reply.ok(await fixing);
-      const run = applyFix(runnerDeps(store), job, action);
+      const run =
+        job.status === 'running' && inflight
+          ? new Promise<Job>((done, fail) => {
+              queuedFix = { action, done, fail };
+            })
+          : applyFix(runnerDeps(store), job, action);
       fixing = run;
       try {
         const fixed = await run;

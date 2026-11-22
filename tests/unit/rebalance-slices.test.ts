@@ -202,6 +202,17 @@ describe('sliceOptions', () => {
     expect(sliceOptions({ ...input, customUsd: Number.NaN })).toHaveLength(4);
   });
 
+  it('no slice is bigger than the venue max order size', () => {
+    const input = { book: flat(4), side: 'BUY' as const, mid: MID, totalQty: 6_000, minQty: 0.011, lot: '0.001', maxUsd: 40_000 };
+    const options = sliceOptions({ ...input, customUsd: 6_000_000 });
+    expect(options.map((option) => option.sizeUsd)).toEqual([25_000, 50_000, 100_000, 250_000, 40_000]);
+    expect(options.map((option) => option.notHedgedMaxQty)).toEqual([25, 40, 40, 40, 40]);
+    expect(options[4].count).toBe(150);
+    const free = sliceOptions({ ...input, maxUsd: undefined, customUsd: 6_000_000 })[4];
+    expect(free.sizeUsd).toBe(6_000_000);
+    expect(free.count).toBe(1);
+  });
+
   it('returns no rows without a book, a mid or a total', () => {
     const base = { side: 'BUY' as const, mid: MID, totalQty: 10, minQty: 0.01, lot: '0.001' };
     expect(sliceOptions({ ...base, book: null })).toEqual([]);

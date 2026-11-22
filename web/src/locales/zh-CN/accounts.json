@@ -114,7 +114,10 @@
       "minimum": "转入或转出 CrossEx Hyperliquid 和 Lighter 钱包的 Gate 最低金额，含手续费。",
       "upToOut": "可用保证金，上限为该钱包现金。",
       "upToInto": "您的 Gate 现货余额。",
-      "priceImpact": "不是手续费。在 Gate 现货以高于 $1 买入或低于 $1 卖出 USDC 的差价，以及吃到盘口以外深度的部分。"
+      "priceImpact": "不是手续费。在 Gate 现货以高于 $1 买入或低于 $1 卖出 USDC 的差价，以及吃到盘口以外深度的部分。",
+      "slicePriceImpact": "不是费用。每次平仓和重开会吃掉盘口之外的深度。",
+      "tradingFeePerps": "每笔永续订单的交易所费用，按你的挂单或吃单费率。",
+      "imUsed": "持仓占用的初始保证金，占账户保证金余额的比例。"
     },
     "verdict": {
       "noBorrow": "无借款，无需划转。",
@@ -141,7 +144,7 @@
     },
     "modal": {
       "feeUsd": "费用 {{usd}}",
-      "frees": "释放",
+      "frees": "释放初始保证金",
       "interest": "利息",
       "fee": "费用",
       "perMonth": "每月 {{now}} → {{after}}",
@@ -177,6 +180,7 @@
     "whereCaption": "资金所在位置",
     "onTheWay": "在途",
     "waitsLine": "新交易任务和划转将等待其完成。",
+    "staleQuote": "报价已过期，正在等待新报价。",
     "started": "{{age}} 前开始。可关闭此窗口，再平衡会继续。",
     "finishedLead": "已完成。以下为各钱包当前余额。",
     "abandonTransit": "放弃后，{{qty}} {{coin}} 将留在途中，到账前不计为保证金。",
@@ -228,6 +232,9 @@
     "runningLeft": "{{what}}进行中，剩余 {{left}}。",
     "runningLong": "{{what}}进行中，比通常更久。",
     "running": "{{what}}进行中。",
+    "paused": "{{what}}已暂停。",
+    "stopped": "{{what}}已停止。",
+    "pausedOpen": "已暂停 · 打开",
     "runningConvert": "运行中 · 兑换",
     "runningRound": "运行中 · 第 {{round}} / {{rounds}} 轮"
   },
@@ -446,7 +453,8 @@
     "deleverLink": "降低一个组合的规模",
     "infoBorrow": "余额低于零的钱包会向 CrossEx 借款并支付利息。",
     "infoReduce": "“减少借款”会打开“移动现金”。现金不足时，先打开“兑现未实现盈亏”。",
-    "infoRealize": "“兑现未实现盈亏”会平掉并重开一条盈利的腿，其未实现盈亏变为现金。规模和组合盈亏不变，手续费除外。"
+    "infoRealize": "“兑现未实现盈亏”会平掉并重开一条盈利的腿，其未实现盈亏变为现金。规模和组合盈亏不变，手续费除外。",
+    "cashClears": "现金可还清 {{b}} 中的 {{a}}。"
   },
   "rebalanceTabs": {
     "move": "移动现金",
@@ -458,6 +466,9 @@
     "runHeader": "移动现金 · {{goal}}"
   },
   "moveCash": {
+    "goal": "目标",
+    "feeHead": "预估手续费 · 价格冲击",
+    "started": "{{age}}前开始。可以关闭此窗口，移动会继续。",
     "from": "转出",
     "to": "转入",
     "repays": "用于还清借款",
@@ -482,8 +493,8 @@
     "closeReopen": "平仓并重开",
     "legPart": "{{coin}} {{side}} {{size}}（共 {{held}}）",
     "orders": "订单",
-    "limitHedge": "限价 + 对冲 {{usd}} · {{time}}",
-    "market": "市价 {{usd}} · {{time}}",
+    "limitHedge": "限价 + 对冲 {{usd}} · 每片 {{time}}",
+    "market": "市价 {{usd}} · 每片 {{time}}",
     "sliceSize_other": "切片规模 {{size}} · {{count}} 片",
     "tradingFee": "交易手续费",
     "priceImpact": "价格冲击",
@@ -495,7 +506,12 @@
     "all": "全部",
     "custom": "自定义金额",
     "noUpnl": "没有可兑现的未实现盈亏。",
-    "upTo": "最多 {{amount}} {{coin}}"
+    "upTo": "最多 {{amount}} {{coin}}",
+    "wallet": "钱包：{{wallet}}",
+    "walletUpnl": "未实现盈亏 {{amount}} {{coin}}",
+    "typeAmount": "输入要实现的金额。",
+    "typeSlice": "输入大于 $0 的分片大小。",
+    "customOverAll": "超过可实现金额。将实现全部 {{amount}} {{coin}}。"
   },
   "slices": {
     "title": "切片规模",
@@ -536,14 +552,16 @@
     "yu": "YU",
     "imUsedLabel": "初始保证金占用 · {{account}}",
     "afterBoros": "Boros {{a}} → {{b}} YU",
-    "borosGap": "Boros 在永续之后平仓。在此之前，最多 {{amount}} YU 没有永续对冲（{{time}}）。",
+    "borosGap": "Boros 在永续之后平仓。在此之前，没有永续对冲的 YU 会在结束时增至 {{amount}}（{{time}}）。",
     "notHedged": "每片期间未对冲：最多 {{qty}} {{coin}}（{{usd}}）",
     "hold": "长按将 {{coin}} {{venueA}} / {{venueB}} 降规模 {{pct}}%（{{qty}} {{coin}}）",
     "noPairs": "没有持仓组合",
     "noPairsMatch": "没有匹配的组合",
     "belowMin": "{{venue}} 最少接受 {{min}} {{coin}}",
     "borosNoPerp": "Boros {{amount}} YU 没有永续对冲",
-    "holdCloseBoros": "长按在 Boros 平掉 {{amount}} YU"
+    "holdCloseBoros": "长按在 Boros 平掉 {{amount}} YU",
+    "pairsFailed": "无法读取你的交易对。",
+    "sameSide": "两个永续合约方向相同。降规模需要一个多头和一个空头。"
   },
   "sliceRun": {
     "slice": "第 {{i}} 片（共 {{n}} 片）",
@@ -569,11 +587,11 @@
     "holdRetryBoros": "长按重试在 Boros 平掉 {{amount}} YU",
     "holdAddBack": "长按在两条永续上各加回 {{qty}} {{coin}}",
     "perpsLine": "永续 · 第 {{i}} 片（共 {{n}} 片）{{old}} → {{now}} {{coin}}（每条）",
-    "borosLine": "Boros {{amount}} YU · 在永续之后平仓",
+    "borosLine": "Boros {{amount}} → {{end}} YU · 永续之后平仓",
     "notHedgedMax": "当前未对冲，每片最多 {{qty}} {{coin}}（{{usd}}）",
-    "imNowEnd": "初始保证金占用：现在 {{a}}% · 结束时 {{b}}%",
+    "imNowEnd": "已用初始保证金 · {{account}} 当前 {{a}}% · 结束 {{b}}%",
     "feeEst": "已付手续费 {{fee}} · 预计手续费 {{est}}",
-    "imDone": "初始保证金占用 {{a}}% → {{b}}%",
+    "imDone": "已用初始保证金 · {{account}} {{a}}% → {{b}}%",
     "totalCost": "总成本 {{real}}（预计 {{est}}）",
     "realized": "已兑现 {{amount}} USDC",
     "pairPnl": "组合盈亏",
@@ -582,6 +600,12 @@
     "next": "下一步：移动现金",
     "leftover": "上次移动在 Gate 现货中留下 {{amount}} USDC。",
     "transfer": "划转",
-    "moveHeader": "移动现金 · {{goal}}"
+    "moveHeader": "移动现金 · {{goal}}",
+    "chipPaused": "已暂停",
+    "chipNotHedged": "未对冲",
+    "deleverHeader": "降规模 {{coin}} · {{long}} / {{short}}",
+    "deleverDoneHeader": "降规模 {{pct}}%",
+    "perpsBorosNow": "永续 每边 {{perps}} {{coin}} · Boros {{boros}} YU",
+    "borosFilled": "Boros 已成交 {{filled}} / {{target}} YU"
   }
 }

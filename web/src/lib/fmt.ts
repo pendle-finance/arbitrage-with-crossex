@@ -118,8 +118,9 @@ export function fmtNotionalShort(n: number): string {
   if (!Number.isFinite(n)) return '—';
   const sign = n < 0 ? '-' : '';
   const abs = Math.abs(n);
-  if (abs >= 1e6) return `${sign}$${+(abs / 1e6).toFixed(abs >= 1e7 ? 0 : 1)}M`;
-  if (abs >= 1e3) return `${sign}$${+(abs / 1e3).toFixed(abs >= 1e5 ? 0 : 1)}k`;
+  const k = +(abs / 1e3).toFixed(abs >= 1e5 ? 0 : 1);
+  if (abs >= 1e6 || k >= 1000) return `${sign}$${+(abs / 1e6).toFixed(abs >= 1e7 ? 0 : 1)}M`;
+  if (abs >= 1e3) return `${sign}$${k}k`;
   return fmtUsd(n, 0);
 }
 

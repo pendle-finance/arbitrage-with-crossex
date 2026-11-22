@@ -5,15 +5,16 @@ import type { FullPlan, RebalanceJob, RebalanceView } from '../api/types';
 import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { t } from '../i18n';
-import { borrowingBuckets } from '../lib/borrow';
+import { borrowingBuckets, borrowTotalUsd, isRebalanceWallet } from '../lib/borrow';
+import { floorCents } from '../lib/ticks';
 import { fmtAbout, fmtUsd, num } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
 import { VerdictAlert } from './RebalanceBits';
 import { jobSeconds } from './rebalanceStepRows';
 import { abandonedGapText, gapVerdict, hasLeftGap, openGapOf } from './rebalanceCardGap';
-import { CARD_LABEL, realizeBlockedReason, verdictRateUnknown, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
-import { borrowFacts, Facts, hasUnknownRate, HYPERLIQUID_INTEREST_FREE_USDC, isFreeBorrow, WORTH_IT_DAYS, type VerdictTone } from './RebalanceHovers';
+import { CARD_LABEL, realizeBlockedReason, sizeText, verdictRateUnknown, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
+import { borrowFacts, DUST, Facts, hasUnknownRate, HYPERLIQUID_INTEREST_FREE_USDC, isFreeBorrow, WORTH_IT_DAYS, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
 import { isCloseSent, lastRealizeIndex } from './rebalanceJobSteps';
 import { crossexImFull } from './rebalanceImStop';
@@ -24,9 +25,16 @@ const timeLeft = (seconds: number): string =>
     .replace(/(\d+) h\b/, (_all, n: string) => t('accounts.rebalanceSection.hours', { count: Number(n), n }))
     .replace(/(\d+(?:\.\d+)?) (?:min|m)\b/, (_all, n: string) => t('accounts.rebalanceSection.minutes', { count: Number(n), n }));
 
+const isSliced = (job: RebalanceJob): boolean => job.kind === 'realize' || job.kind === 'delever';
+
+const jobWhat = (job: RebalanceJob): string => (job.kind === 'realize' || job.kind === 'delever' ? t(`accounts.rebalanceTabs.${job.kind}` as 'accounts.rebalanceTabs.move') : CARD_LABEL[job.goal]);
+
 function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
-  const what = CARD_LABEL[job.goal];
+  const what = jobWhat(job);
+  if (isSliced(job) && job.status === 'halted') {
+    return t(job.paused ? 'accounts.rebalanceSection.paused' : 'accounts.rebalanceSection.stopped', { what });
+  }
   if (job.status === 'halted') {
     if (job.realize?.legs.length && job.steps[job.stepIndex]?.name === 'Close') {
       const sent = job.realize.legs.some((leg) => isCloseSent(job, leg));
@@ -36,13 +44,15 @@ function jobVerdict(job: RebalanceJob, now: number): string {
       ? t('accounts.rebalanceSection.haltedAtConvert', { what })
       : t('accounts.rebalanceSection.haltedInRound', { what, round: num(round, 0) });
   }
-  const total = jobSeconds(job);
+  const total = isSliced(job) ? 0 : jobSeconds(job);
   const left = Math.max(0, total - Math.max(0, now - job.createdAt) / 1000);
   if (total <= 0) return t('accounts.rebalanceSection.running', { what });
   return left > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.runningLong', { what });
 }
 
 function jobButton(job: RebalanceJob): string {
+  if (isSliced(job) && job.status === 'halted' && job.paused) return t('accounts.rebalanceSection.pausedOpen');
+  if (isSliced(job) && job.status === 'running') return t('common.running');
   if (job.status === 'halted') return job.realize && openGapOf(job) ? t('accounts.borrowCard.reduce') : t('accounts.rebalanceSection.stoppedOpen');
   if (job.realize?.legs.length) {
     const last = lastRealizeIndex(job);
@@ -91,6 +101,15 @@ function borrowVerdict(view: RebalanceView, onDelever: () => void): CardVerdict 
     sub: t('accounts.borrowCard.needs', { line: planLine(plan) }),
     primary: false,
   };
+}
+
+function cashClearsLine(view: RebalanceView): string | null {
+  const plan = view.fullPlan;
+  if (!plan || plan.refused || plan.clearsBorrow || plan.needsRealize) return null;
+  const borrow = borrowTotalUsd(view.buckets);
+  const spare = view.buckets.filter((b) => isRebalanceWallet(b) && floorCents(b.borrow) <= 0).reduce((sum, b) => sum + Math.max(0, b.cash), 0);
+  const cash = Math.min(borrow, floorCents(spare));
+  return borrow - cash < DUST ? null : t('accounts.borrowCard.cashClears', { a: num(cash), b: num(borrow) });
 }
 
 export function RebalanceSection({
@@ -148,7 +167,7 @@ export function RebalanceSection({
 
     let chip: ReactNode = null;
     if (job?.status === 'running') chip = <Chip tone="info">{t('common.running')}</Chip>;
-    if (job?.status === 'halted') chip = <Chip tone="red">{t('common.stopped')}</Chip>;
+    if (job?.status === 'halted') chip = job.paused ? <Chip tone="info">{t('common.paused')}</Chip> : <Chip tone="red">{t('common.stopped')}</Chip>;
 
     const gap = job ? gapVerdict(job, positions) : null;
     let verdict: CardVerdict | null = null;
@@ -157,10 +176,14 @@ export function RebalanceSection({
     else if (job) verdict = { tone: 'info', text: jobVerdict(job, now), sub: null, primary: false };
     else if (!hasBorrow) muted = t('accounts.borrowCard.none');
     else if (isFreeBorrow(buckets)) muted = t('accounts.borrowCard.free', { amount: num(HYPERLIQUID_INTEREST_FREE_USDC, 0) });
-    else verdict = borrowVerdict(view, () => openRebalance({ tab: 'delever' }));
+    else {
+      verdict = borrowVerdict(view, () => openRebalance({ tab: 'delever' }));
+      if (verdict === null) muted = cashClearsLine(view);
+    }
     const leftOpen = view.job ? abandonedGapText(view.job, positions) : null;
+    const borosGap = view.job?.kind === 'delever' && view.job.status !== 'done' && (view.job.notHedgedQty ?? 0) === 0 ? (view.job.borosGapYu ?? 0) : 0;
 
-    let label: ReactNode = t('accounts.borrowCard.reduce');
+    let label: ReactNode = hasBorrow ? t('accounts.borrowCard.reduce') : t('accounts.rebalanceTabs.move');
     if (job) label = jobButton(job);
     else if (moving) label = waitsForTransfer();
     else if (dealWorking) label = waitsForDeal();
@@ -186,7 +209,15 @@ export function RebalanceSection({
     );
     facts = <Facts items={borrowFacts(buckets)} />;
     if (verdict !== null) line = <VerdictAlert tone={verdict.tone} text={verdict.text} sub={verdict.sub} />;
-    if (muted !== null) line = <p className="text-xs text-ink-400">{muted}</p>;
+    if (muted !== null) line = <p className="num text-xs text-ink-400">{muted}</p>;
+    if (borosGap > 0) {
+      line = (
+        <>
+          {line}
+          <p className="num text-xs text-guava">{t('accounts.deleverTab.borosNoPerp', { amount: sizeText(borosGap) })}</p>
+        </>
+      );
+    }
     if (leftOpen !== null) {
       line = (
         <>
@@ -196,7 +227,7 @@ export function RebalanceSection({
       );
     }
     main = (
-      <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => openRebalance()}>
+      <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => openRebalance(!job && !hasBorrow ? { tab: 'move' } : undefined)}>
         {label}
       </button>
     );

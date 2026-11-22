@@ -81,7 +81,16 @@ export function PairPicker({
   };
 
   useEffect(() => {
-    if (open) search.current?.focus({ preventScroll: true });
+    if (!open) return;
+    search.current?.focus({ preventScroll: true });
+    const onEscape = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      hide(true);
+    };
+    window.addEventListener('keydown', onEscape, true);
+    return () => window.removeEventListener('keydown', onEscape, true);
   }, [open]);
 
   const select = (row: PairPickerRow) => {
@@ -100,12 +109,6 @@ export function PairPicker({
   };
 
   const onSearchKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      hide(true);
-      return;
-    }
     if (e.key === 'Tab') {
       e.preventDefault();
       hide(true);

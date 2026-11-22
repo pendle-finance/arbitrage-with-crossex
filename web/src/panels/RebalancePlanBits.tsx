@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowRight, ChevronDown, ChevronRight } from 'lucide-react';
+import { ArrowRight, ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
 import type { EvenPlan, Pool, RebalanceBucket, RoutePlan } from '../api/types';
 import { Chip } from '../components/Chip';
 import { t } from '../i18n';
@@ -71,7 +71,16 @@ export function TotalCost({ rows, chip }: { rows: CostRow[]; chip?: ReactNode })
   );
 }
 
-export const STEPS_HEAD = 'text-xs font-semibold text-ink-50';
+export function NotHedgedLine({ text }: { text: string }) {
+  return (
+    <p className="num flex items-center gap-2 text-xs text-gold">
+      <TriangleAlert size={14} aria-hidden className="shrink-0" />
+      {text}
+    </p>
+  );
+}
+
+export const STEPS_HEAD ='text-xs font-semibold text-ink-50';
 
 export function HowItRuns({ plan, route, lead, children }: { plan: EvenPlan; route: RoutePlan; lead?: ReactNode; children: ReactNode }) {
   const [open, setOpen] = useState(false);
