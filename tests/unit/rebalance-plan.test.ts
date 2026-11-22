@@ -1804,14 +1804,20 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
   const isPool = (pool: Pool) => (w: { coin: string; venue: string }) =>
     w.coin === WALLETS[pool].coin && w.venue === WALLETS[pool].venue;
 
-  // Three pool wallets, a 1 BTC perp $10,000 in profit on the paying venue, and
-  // an available margin of 0, so the reopen needs a Convert of about $2,000.
-  function threeWallets(cash: Record<Pool, number>, payer: 'HYPERLIQUID' | 'CROSSEX', lighterNotional = 0) {
-    const profit = 10_000;
+  // Three pool wallets and a BTC perp in profit on the paying venue. By default
+  // 1 BTC is $10,000 up and available margin is 0, so the reopen needs a
+  // Convert of about $2,000.
+  function threeWallets(
+    cash: Record<Pool, number>,
+    payer: 'HYPERLIQUID' | 'CROSSEX',
+    lighterNotional = 0,
+    { qty = 1, profit = 10_000, available = 0 }: { qty?: number; profit?: number; available?: number } = {},
+  ) {
+    const perCoin = profit / qty;
     const perps =
       payer === 'HYPERLIQUID'
-        ? [perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK + profit, BTC_MARK), perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK, BTC_MARK)]
-        : [perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK - profit, BTC_MARK), perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK, BTC_MARK)];
+        ? [perp('HYPERLIQUID_FUTURE_BTC_USDC', -qty, BTC_MARK + perCoin, BTC_MARK), perp('GATE_FUTURE_BTC_USDT', qty, BTC_MARK, BTC_MARK)]
+        : [perp('GATE_FUTURE_BTC_USDT', qty, BTC_MARK - perCoin, BTC_MARK), perp('HYPERLIQUID_FUTURE_BTC_USDC', -qty, BTC_MARK, BTC_MARK)];
     const upnl = (pool: Pool): number => (pool === payer ? profit : 0);
     const walletAsset = (coin: string, venue: string, balance: number, unrealized: number): AssetLike => {
       const borrow = Math.max(0, -balance);
@@ -1829,9 +1835,9 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
     };
     const marginBalance = sumOf(POOL_LIST.map((pool) => cash[pool] + upnl(pool)));
     const account: AccountLike = {
-      availableMargin: '0',
+      availableMargin: String(available),
       marginBalance: String(marginBalance),
-      initialMargin: String(marginBalance),
+      initialMargin: String(marginBalance - available),
       assets: [
         ...POOL_LIST.map((pool) => walletAsset(WALLETS[pool].coin, WALLETS[pool].venue, cash[pool], upnl(pool))),
         walletAsset('USDC', 'GATE', 0, 0),
@@ -1843,12 +1849,12 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
       spotTakerRate: 0,
       ask: 1.0001,
       bid: 0.9999,
-      notional: { 'USDT/CROSSEX': BTC_MARK, 'USDC/HYPERLIQUID': BTC_MARK, 'USDC/LIGHTER': lighterNotional },
+      notional: { 'USDT/CROSSEX': qty * BTC_MARK, 'USDC/HYPERLIQUID': qty * BTC_MARK, 'USDC/LIGHTER': lighterNotional },
       perps,
       books: { HYPERLIQUID_FUTURE_BTC_USDC: HL_BTC, GATE_FUTURE_BTC_USDT: GATE_BTC },
       feeRows: FEE_ROWS,
       perpRules: PERP_RULES,
-      availableMargin: 0,
+      availableMargin: available,
     };
     return { account, buckets: bucketsFrom(account, RATES, {}), inputs };
   }
@@ -1938,6 +1944,38 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
     expect(sentTo(atMax, 'LIGHTER')).toBeGreaterThanOrEqual(max - 1);
     const over = planFor(book.buckets, book.account, book.inputs, { ...goal, amount: max + 10 });
     expect(over.shortOfEven).toBeGreaterThanOrEqual(9);
+  });
+
+  it('a custom move to Lighter skips a realize whose Convert costs more than the profit it frees', () => {
+    // 1 BTC at 1% profit: the reopen's Convert (about 3.75% of the price at
+    // Gate's 20x) costs more than closing frees, so only the cash moves.
+    const book = threeWallets({ CROSSEX: 3_000, HYPERLIQUID: -5_000, LIGHTER: 0 }, 'CROSSEX', 0, { profit: BTC_MARK * 0.01 });
+    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'LIGHTER', amount: 5_000 };
+    const plan = planFor(book.buckets, book.account, book.inputs, goal);
+    expect(plan.realize?.refused?.reason).toBe('no-margin');
+    expect(sentTo(plan, 'LIGHTER')).toBeGreaterThanOrEqual(3_000 - 0.01);
+    expect(sentTo(plan, 'LIGHTER') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
+    expect(plan.customMaxUsd).toBeGreaterThanOrEqual(3_000 - 0.01);
+  });
+
+  it('a custom move to Lighter stops the close at the size whose reopen needs no Convert', () => {
+    // 3 BTC at 1% profit with $1,000 free margin: about 2 BTC reopen without a
+    // Convert; closing more would pay a Convert worth more than it frees.
+    const book = threeWallets({ CROSSEX: 3_000, HYPERLIQUID: -5_000, LIGHTER: 0 }, 'CROSSEX', 0, {
+      qty: 3,
+      profit: 3 * BTC_MARK * 0.01,
+      available: 1_000,
+    });
+    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'LIGHTER', amount: 5_000 };
+    const plan = planFor(book.buckets, book.account, book.inputs, goal);
+    const legs = plan.realize?.legs ?? [];
+    expect(plan.realize?.refused).toBeNull();
+    expect(legs).toHaveLength(1);
+    expect(legs[0].convert).toBeNull();
+    expect(legs[0].qty).toBeGreaterThan(1.5);
+    expect(legs[0].qty).toBeLessThan(3);
+    expect(sentTo(plan, 'LIGHTER')).toBeGreaterThan(3_000 + 1_000);
+    expect(sentTo(plan, 'LIGHTER') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
   });
 
   it('a custom move to the Convert target still counts the Convert', () => {
