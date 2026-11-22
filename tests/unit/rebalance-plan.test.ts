@@ -1906,6 +1906,43 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
     }
   });
 
+  // What the job sends into the move's receiver: route steps plus realize
+  // Converts that land there. With the short the plan names, it is the ask.
+  const sentTo = (plan: EvenPlan, to: Pool): number => {
+    const route = plan.routes.convert;
+    const job = newJob(
+      { route: 'convert', steps: route.steps, amount: 0, costUsd: 0, target: route.after, userId: null, realize: plan.realize },
+      0,
+    );
+    const converts = job.steps.filter((step) => step.phase === 'realize' && step.name === 'Convert' && step.to === to);
+    return sumOf(route.steps.filter((step) => step.to === to).map((step) => step.move)) + sumOf(converts.map((step) => step.planned ?? 0));
+  };
+
+  it('a custom move to Lighter does not count the Convert that the job sends to Hyperliquid', () => {
+    const book = threeWallets({ CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: 0 }, 'CROSSEX');
+    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'LIGHTER', amount: 5_000 };
+    const plan = planFor(book.buckets, book.account, book.inputs, goal);
+    expect(plan.realize?.refused).toBeNull();
+    expect(sumOf((plan.realize?.legs ?? []).map((leg) => leg.convert?.amount ?? 0))).toBeGreaterThan(1_500);
+    expectReplayMatches(book.buckets, plan);
+    expect(sentTo(plan, 'LIGHTER') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
+
+    const max = plan.customMaxUsd ?? 0;
+    const atMax = planFor(book.buckets, book.account, book.inputs, { ...goal, amount: max });
+    expect(atMax.shortOfEven).toBeLessThan(1);
+    expect(sentTo(atMax, 'LIGHTER')).toBeGreaterThanOrEqual(max - 1);
+  });
+
+  it('a custom move to the Convert target still counts the Convert', () => {
+    const book = threeWallets({ CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: 0 }, 'CROSSEX');
+    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'HYPERLIQUID', amount: 5_000 };
+    const plan = planFor(book.buckets, book.account, book.inputs, goal);
+    expect(plan.realize?.refused).toBeNull();
+    expectReplayMatches(book.buckets, plan);
+    expect(sentTo(plan, 'HYPERLIQUID') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
+    expect(sentTo(plan, 'HYPERLIQUID')).toBeLessThanOrEqual(5_000 + 0.01);
+  });
+
   it('balance with Lighter as the widest receiver and no Lighter borrow funds the reopen from the CrossEx borrow', () => {
     const book = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: 500 }, 'HYPERLIQUID', 300_000);
     const plan = planFor(book.buckets, book.account, book.inputs, EVEN_GOAL);

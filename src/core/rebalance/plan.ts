@@ -983,13 +983,16 @@ interface Paying {
   from: Pool;
   moveUsd: number;
   cashUsd: number;
+  /** The job sends the reopen's Convert to CONVERT_TO[from]; this says whether that wallet is one the move sends to. */
+  convertCounts: boolean;
 }
 
 function payingOf(book: Book, moves: Move[], start: number[], realizable: ReadonlySet<Pool>): Paying | null {
   const senders = [...new Set(moves.map((move) => move.from))].filter((from) => realizable.has(from)).map((from): Paying & { gap: number } => {
     const moveUsd = sum(moves.flatMap((move, index) => (move.from === from ? [start[index]] : [])));
     const cashUsd = sendableCash(book, from);
-    return { from, moveUsd, cashUsd, gap: moveUsd - cashUsd };
+    const convertCounts = moves.some((move) => move.from === from && move.to === CONVERT_TO[from]);
+    return { from, moveUsd, cashUsd, convertCounts, gap: moveUsd - cashUsd };
   });
   const widest = senders.sort((a, b) => b.gap - a.gap)[0];
   return widest && widest.gap >= DUST_USDC ? widest : null;
@@ -1011,6 +1014,7 @@ function realizeInput(
     moveUsd: paying.moveUsd,
     cashUsd: paying.cashUsd,
     borrowUsd: buckets.find(isWallet(poolWallet(CONVERT_TO[paying.from])))?.borrow ?? 0,
+    convertCounts: paying.convertCounts,
     availableMargin: inputs.availableMargin ?? num(account.availableMargin),
     perps: inputs.perps ?? [],
     books: inputs.books ?? {},
@@ -1101,7 +1105,8 @@ function planAfterRealize(
   realize: RealizePlan,
 ): EvenPlan {
   const next = afterStepOne(buckets, account, paying, realize);
-  const rest: Goal = goal.kind === 'custom' ? { ...goal, amount: floorCents(goal.amount - next.converted) } : goal;
+  const counted = paying.convertCounts ? next.converted : 0;
+  const rest: Goal = goal.kind === 'custom' ? { ...goal, amount: floorCents(goal.amount - counted) } : goal;
   const others = (inputs.perps ?? []).filter((perp) => profitPoolOf(perp) !== paying.from);
   const plan = planMoves(
     next.buckets,
@@ -1180,10 +1185,14 @@ function customMaxOf(
     },
     goal.from,
   );
+  const convertCounts = CONVERT_TO[goal.from] === goal.to;
   const whole = planRealize(
-    realizeInput(buckets, account, inputs, { from: goal.from, moveUsd: Infinity, cashUsd }),
+    realizeInput(buckets, account, inputs, { from: goal.from, moveUsd: Infinity, cashUsd, convertCounts }),
   );
-  return floorCents(cashUsd + sum((whole?.legs ?? []).map(realizedNetUsd)));
+  const legs = whole?.legs ?? [];
+  const converted = sum(legs.map((leg) => leg.convert?.amount ?? 0));
+  const elsewhere = convertCounts ? 0 : converted * (1 - CONVERT_RATE);
+  return floorCents(cashUsd + sum(legs.map(realizedNetUsd)) - elsewhere);
 }
 
 export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, goal: Goal = EVEN_GOAL): EvenPlan {

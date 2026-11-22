@@ -77,6 +77,8 @@ export interface RealizeInput {
   moveUsd: number;
   cashUsd: number;
   borrowUsd: number;
+  /** The reopen's Convert lands in a wallet the move sends to, so it counts toward the move. */
+  convertCounts: boolean;
   availableMargin: number;
   perps: RealizePerp[];
   books: Record<string, NormalizedBook | null>;
@@ -104,6 +106,7 @@ interface Paying {
   takerRate: number;
   book: NormalizedBook | null;
   capUsd: number;
+  convertCost: number;
 }
 
 interface Priced {
@@ -208,6 +211,7 @@ function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean 
         takerRate,
         book: input.books[symbol] ?? null,
         capUsd: marketCapUsd(perp, rule, exchange, mark),
+        convertCost: input.convertCounts ? CONVERT_RATE : 1,
       },
     ];
   });
@@ -247,7 +251,7 @@ function orderOf(leg: Paying, qty: number, state: State): Order {
   const convert = convertFor(qty * leg.marginPerCoin, state.available);
   const cashIn = realizedUsd - priced.closeFeeUsd - priced.reopenFeeUsd - priced.closeImpactUsd;
   const overCapUsd = qty * leg.mark > leg.capUsd ? leg.capUsd : null;
-  return { qty, overCapUsd, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * CONVERT_RATE };
+  return { qty, overCapUsd, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * leg.convertCost };
 }
 
 function sizeOrder(leg: Paying, state: State): Order {

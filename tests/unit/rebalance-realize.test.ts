@@ -70,6 +70,7 @@ function input(over: Partial<RealizeInput>): RealizeInput {
     moveUsd: 10_000,
     cashUsd: 0,
     borrowUsd: 1_000_000,
+    convertCounts: true,
     availableMargin: 1_000_000,
     perps: [perp(OWNER_ETH, -66, 2_460, 1_821)],
     books: { [OWNER_ETH]: OWNER_HL_ETH },
@@ -355,6 +356,7 @@ const hlShortInput = (need: number, extra: Partial<RealizeInput> = {}, maxLevera
     moveUsd: need + 100,
     cashUsd: 100,
     borrowUsd: need * 2,
+    convertCounts: true,
     availableMargin: 1e9,
     perps: [
       {
