@@ -824,4 +824,20 @@ describe('Borrow card names the job by kind and state', () => {
     expect(within(card).getByRole('button', { name: 'Paused · open' })).toBeInTheDocument();
     expect(within(card).getByText(/^Boros .+ YU has no perp behind it$/)).toBeInTheDocument();
   });
+
+  it('a stopped Delever with a perp not hedged still shows its Boros gap', async () => {
+    const view = rebalanceViews.deleverPausedGap;
+    serve({ ...view, job: { ...view.job!, paused: false, notHedgedQty: 0.5 } });
+    renderWithClient(withOpener(<RebalanceSection />));
+    const card = await screen.findByRole('region', { name: 'Borrow' });
+    expect(await within(card).findByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
+  });
+
+  it('an abandoned Delever shows its Boros gap', async () => {
+    const view = rebalanceViews.deleverPausedGap;
+    serve({ ...view, job: { ...view.job!, status: 'abandoned', paused: false, notHedgedQty: 0.5 } });
+    renderWithClient(withOpener(<RebalanceSection />));
+    const card = await screen.findByRole('region', { name: 'Borrow' });
+    expect(await within(card).findByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
+  });
 });

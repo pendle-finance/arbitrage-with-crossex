@@ -600,12 +600,18 @@ function realizeBookOf(debt: number, qty: number, cash = 0): RealizeBook {
   };
 }
 
+function lopsidedOf(book: RealizeBook): RealizeBook {
+  const thin = (mid: number): NormalizedBook => ({ ...evenBook(mid, 2000, 500), bids: evenBook(mid, 2000, 5).bids });
+  return { ...book, inputs: { ...book.inputs, books: { HYPERLIQUID_FUTURE_ETH_USDC: thin(2800), GATE_FUTURE_ETH_USDT: thin(2800) } } };
+}
+
 describe('realize cost per slice, the same figure as the dialog', () => {
   const books = [
     ['owner book', ownerBook()],
     ['$1M debt', realizeBookOf(1_000_000, 7_500)],
     ['$6M debt', realizeBookOf(6_000_000, 45_000)],
     ['$50 debt', realizeBookOf(50, 1)],
+    ['$1M debt on a book with thin bids', lopsidedOf(realizeBookOf(1_000_000, 7_500))],
   ] as const;
 
   it.each(books)('server and web price every slice row alike on the %s', (_, book) => {
@@ -617,9 +623,20 @@ describe('realize cost per slice, the same figure as the dialog', () => {
       for (const option of tab.sliceOptions) {
         const web = costOf(priced, exec, sliceOf(tab.sliceOptions, option.sizeUsd, priced.legs[0], true));
         expect(realizeTabEstimateOf(tab, priced, exec, option.sizeUsd).totalUsd).toBeCloseTo(web.totalUsd, 9);
+        if (_.includes('thin bids')) expect(option.reopenImpactUsd).not.toBeCloseTo(option.impactUsd, 2);
       }
       expect(realizeTabEstimateOf(tab, priced, exec, 12_345).totalUsd).toBeCloseTo(priced.estimates[exec].totalUsd, 9);
     }
+  });
+
+  it('a slice prices the close walk only at market and the reopen walk always', () => {
+    const plan = {
+      legs: [{ closeImpactUsd: 10, reopenImpactUsd: 4 }],
+      estimates: { maker: { feeUsd: 1, impactUsd: 4, totalUsd: 5 }, market: { feeUsd: 2, impactUsd: 14, totalUsd: 16 } },
+    } as unknown as RealizePlan;
+    const slice = { impactUsd: 3, reopenImpactUsd: 7 };
+    expect(slicedEstimateOf(plan, 'maker', slice)).toEqual({ feeUsd: 1, impactUsd: 7, totalUsd: 8 });
+    expect(slicedEstimateOf(plan, 'market', slice)).toEqual({ feeUsd: 2, impactUsd: 10, totalUsd: 12 });
   });
 
   it('a plan the slices do not price keeps its whole estimate, as the dialog does', () => {

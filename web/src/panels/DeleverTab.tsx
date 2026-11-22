@@ -22,7 +22,7 @@ import { execModeLabel, poolKey } from './rebalanceCopy';
 import { SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
 import { parsedAmount } from './rebalanceModalPlan';
-import { NotHedgedLine, TotalCost, type CostRow } from './RebalancePlanBits';
+import { NotHedgedLine, realizeText, TotalCost, type CostRow } from './RebalancePlanBits';
 import { SliceSizeRow } from './SliceTable';
 import { useActiveWallet } from './trackedAddress';
 
@@ -51,7 +51,7 @@ function rowOf(pair: OpenPair, now: number): PairPickerRow {
 function closeOf(pair: OpenPair, share: Share, customText: string): { close: number | null; error: string | null } {
   if (share !== 'custom') return { close: (pair.size * Number(share)) / 100, error: null };
   const text = customText.trim();
-  if (text === '') return { close: null, error: null };
+  if (text === '') return { close: null, error: t('app.amount.notPositive') };
   const error = amountError(text);
   if (error !== null) return { close: null, error };
   const close = Number(text);
@@ -157,11 +157,12 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const walletBlocked = needsBoros && wallet.state !== null && !wallet.canTrade;
   const walletReady = !needsBoros || wallet.canTrade;
   const stale = plan !== null && query.isError;
+  const slicePastBook = option?.pastBook === true;
   const ready =
-    plan !== null && !query.isPlaceholderData && !stale && plan.refused === null && lock === null && !start.isPending && walletReady;
+    plan !== null && !query.isPlaceholderData && !stale && plan.refused === null && !slicePastBook && lock === null && !start.isPending && walletReady;
 
   const modeLabel = (mode: RealizeExec): string =>
-    execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(option?.seconds[mode] ?? 0));
+    execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(option ? option.seconds[mode] / Math.max(1, option.count) : 0));
 
   const costRows: CostRow[] = estimate
     ? [
@@ -256,6 +257,8 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
                 : t('accounts.deleverTab.belowMin', { venue, min: qtyText(plan.refused.minQty), coin: plan.refused.coin })
             }
           />
+        ) : slicePastBook ? (
+          <VerdictAlert tone="warn" text={realizeText('bookTitle')} sub={realizeText('sliceBookBody')} />
         ) : walletBlocked && wallet.loginLabel ? (
           <div className="flex flex-col gap-3">
             {costRows.length > 0 && <TotalCost rows={costRows} />}

@@ -361,6 +361,46 @@ describe('RebalanceJobView, sliced runs', () => {
     await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'boros-retry' } }]));
   });
 
+  const unhedged: Partial<RebalanceJob> = {
+    paused: false,
+    haltReason: 'Reopen not filled.',
+    notHedgedQty: 0.5,
+    follow: { symbol: 'GATE_FUTURE_BTC_USDT', exchange: 'GATE', side: 'BUY', qty: 0.5, reduceOnly: true },
+  };
+
+  it('halted delever with a perp not hedged also shows the boros gap and its close hold', async () => {
+    const { posts } = show(rebalanceViews.deleverPausedGap, unhedged);
+    expect(screen.getByText(/^0\.5(0+)? BTC not hedged$/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to close Gate Short 0\.5(0+)? BTC at market$/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
+    expect(screen.getByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
+    hold('Hold to close 52.82 YU on Boros');
+    await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'boros-retry' } }]));
+  });
+
+  it('abandoned delever with a perp not hedged keeps only the boros close hold', () => {
+    show(rebalanceViews.deleverPausedGap, { ...unhedged, status: 'abandoned' });
+    expect(screen.getByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to close 52.82 YU on Boros' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /at market$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to reopen at limit|^Hold to close at limit/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Hold to abandon' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('a part add-back shows only the add-back hold for the rest', async () => {
+    const job = rebalanceViews.deleverStoppedBoros.job!;
+    const steps = job.steps.map((step) =>
+      step.name === 'Close Boros'
+        ? { ...step, addBack: { qty: 36, legs: [{ symbol: 'GATE_FUTURE_BTC_USDT', filled: 36 }, { symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', filled: 0 }] } }
+        : step,
+    );
+    const { posts } = show(rebalanceViews.deleverStoppedBoros, { steps });
+    expect(screen.queryByRole('button', { name: /^Hold to retry closing/ })).not.toBeInTheDocument();
+    hold(/^Hold to add 36(\.0+)? BTC back on both perps$/);
+    await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'add-back' } }]));
+  });
+
   it('boros part fill shows the filled-of line', () => {
     show(rebalanceViews.deleverStoppedBoros);
     expect(within(screen.getByRole('alert')).getByText(/^Boros filled \S+ of \S+ YU$/)).toBeInTheDocument();

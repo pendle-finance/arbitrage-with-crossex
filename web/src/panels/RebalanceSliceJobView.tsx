@@ -71,7 +71,8 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   const running = job.status === 'running';
   const missed = running && (job.followMisses ?? 0) >= FOLLOW_MISSES_RED && followQty > 0;
   const borosPart = delever !== null && halted && !paused && slicesDone && (job.borosLeftYu ?? 0) > 0;
-  const borosGap = delever !== null && (halted || abandoned) && !borosPart && open === 0 && (job.borosGapYu ?? 0) > 0;
+  const gapYu = job.borosGapYu ?? 0;
+  const borosGap = delever !== null && (halted || abandoned) && !borosPart && gapYu > 0;
   const margin = halted && !paused && job.haltKind === 'margin';
 
   const closedQty = leg?.filledQty ?? 0;
@@ -225,9 +226,18 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     );
   }
 
+  const closeBorosHold = (
+    <HoldToConfirmButton tone="cyan" holdMs={holdMs} disabled={pending} onConfirm={() => press('boros-retry')}>
+      <span className="num">{dk('holdCloseBoros', { amount: sizeText(gapYu) })}</span>
+    </HoldToConfirmButton>
+  );
+
   if (borosPart) {
     const left = job.borosLeftYu ?? 0;
-    const addBack = borosTarget > 0 ? (closedQty * left) / borosTarget : 0;
+    const added = job.steps.find((step) => step.addBack)?.addBack ?? null;
+    const addBackRest = added ? Math.max(0, ...added.legs.map((l) => added.qty - l.filled)) : 0;
+    const addBackOpen = added !== null && addBackRest > 0;
+    const addBack = addBackOpen ? addBackRest : borosTarget > 0 ? (closedQty * left) / borosTarget : 0;
     return (
       <>
         {deleverHeader}
@@ -236,10 +246,12 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
           lines={[perpsBoros, sk('borosFilled', { filled: sizeText(Math.max(0, borosTarget - left)), target: sizeText(borosTarget) }), ...haltLine(job.haltReason)]}
         />
         <div className="flex flex-col gap-2">
-          <HoldToConfirmButton tone="cyan" holdMs={holdMs} disabled={pending} onConfirm={() => press('boros-retry')}>
-            <span className="num">{sk('holdRetryBoros', { amount: sizeText(left) })}</span>
-          </HoldToConfirmButton>
-          <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={() => press('add-back')}>
+          {added === null && (
+            <HoldToConfirmButton tone="cyan" holdMs={holdMs} disabled={pending} onConfirm={() => press('boros-retry')}>
+              <span className="num">{sk('holdRetryBoros', { amount: sizeText(left) })}</span>
+            </HoldToConfirmButton>
+          )}
+          <HoldToConfirmButton tone={addBackOpen ? 'cyan' : 'outline'} holdMs={holdMs} disabled={pending} onConfirm={() => press('add-back')}>
             <span className="num">{sk('holdAddBack', { qty: sizeText(addBack), coin })}</span>
           </HoldToConfirmButton>
           {fixError}
@@ -248,12 +260,18 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     );
   }
 
-  if (open > 0 && !paused && !margin) {
+  if (open > 0 && halted && !paused && !margin) {
     return (
       <>
         {deleverHeader}
         <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />
         {fixHolds()}
+        {borosGap && (
+          <>
+            <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={[perpsBoros]} />
+            {closeBorosHold}
+          </>
+        )}
         <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
           <span className="num text-xs text-ink-400">{abandonNote}</span>
           <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={onAbandon}>
@@ -265,17 +283,18 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   }
 
   const pausedLine = paused ? sliceStateLabel(job) : null;
-  const gapYu = job.borosGapYu ?? 0;
   return (
     <>
       {deleverHeader}
       {progress}
       {borosGap ? (
         <>
-          <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={[...(pausedLine ? [pausedLine] : haltLine(job.haltReason)), perpsBoros]} />
-          <HoldToConfirmButton tone="cyan" holdMs={holdMs} disabled={pending} onConfirm={() => press('boros-retry')}>
-            <span className="num">{dk('holdCloseBoros', { amount: sizeText(gapYu) })}</span>
-          </HoldToConfirmButton>
+          {margin && open > 0 && <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />}
+          <StopBox
+            title={dk('borosNoPerp', { amount: sizeText(gapYu) })}
+            lines={[...(pausedLine ? [pausedLine] : margin && open > 0 ? [] : haltLine(job.haltReason)), perpsBoros]}
+          />
+          {closeBorosHold}
           {fixError}
         </>
       ) : margin ? (

@@ -5,6 +5,7 @@ export interface Slice {
   qty: number;
   usd: number;
   impactUsd: number | null;
+  reopenImpactUsd: number | null;
   seconds: { maker: number; market: number };
 }
 
@@ -32,7 +33,7 @@ function leadWalkUsd(leg: RealizeLeg, exec: RealizeExec): number {
 export function sliceOf(options: SliceOption[], sizeUsd: number, lead: RealizeLeg | undefined, priced: boolean): Slice | null {
   const option = options.find((o) => o.sizeUsd === sizeUsd) ?? null;
   if (option && priced) {
-    return { count: option.count, qty: option.notHedgedMaxQty, usd: option.notHedgedMaxUsd, impactUsd: option.impactUsd, seconds: option.seconds };
+    return { count: option.count, qty: option.notHedgedMaxQty, usd: option.notHedgedMaxUsd, impactUsd: option.impactUsd, reopenImpactUsd: option.reopenImpactUsd, seconds: option.seconds };
   }
   const ref = option ?? options[0];
   if (!ref || !lead || !(ref.notHedgedMaxQty > 0) || !(ref.count > 0)) return null;
@@ -45,6 +46,7 @@ export function sliceOf(options: SliceOption[], sizeUsd: number, lead: RealizeLe
     qty,
     usd: qty * mid,
     impactUsd: null,
+    reopenImpactUsd: null,
     seconds: { maker: (ref.seconds.maker / ref.count) * count, market: (ref.seconds.market / ref.count) * count },
   };
 }
@@ -53,10 +55,9 @@ export function costOf(plan: RealizePlan, exec: RealizeExec, slice: Slice | null
   const estimate = estimateOf(plan, exec);
   const convertUsd = sum(plan.legs.map((leg) => leg.convert?.feeUsd ?? 0));
   const lead = plan.legs[0];
-  const walks = exec === 'market' ? 2 : 1;
   const impactUsd =
-    slice?.impactUsd != null && lead
-      ? Math.max(0, estimate.impactUsd - leadWalkUsd(lead, exec) + slice.impactUsd * walks)
+    slice?.impactUsd != null && slice.reopenImpactUsd != null && lead
+      ? Math.max(0, estimate.impactUsd - leadWalkUsd(lead, exec) + (exec === 'market' ? slice.impactUsd : 0) + slice.reopenImpactUsd)
       : estimate.impactUsd;
   return { feeUsd: estimate.feeUsd - convertUsd, convertUsd, impactUsd, totalUsd: estimate.feeUsd + impactUsd };
 }

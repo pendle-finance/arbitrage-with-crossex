@@ -2614,7 +2614,7 @@ function sliceRow(totalUsd: number, mid: number, sizeUsd: number, custom: boolea
   const lead = Math.min(sizeUsd, totalUsd);
   const impactBp = r2((0.9 * lead) / totalUsd);
   return {
-    sizeUsd, custom, count, impactBp, impactUsd: r2((totalUsd * impactBp) / 10_000), notHedgedMaxQty: r2(lead / mid),
+    sizeUsd, custom, count, impactBp, impactUsd: r2((totalUsd * impactBp) / 10_000), reopenImpactUsd: r2((totalUsd * impactBp) / 10_000), pastBook: false, notHedgedMaxQty: r2(lead / mid),
     notHedgedMaxUsd: lead, seconds: { maker: count * 300, market: count * 2 },
   };
 }
@@ -2799,27 +2799,43 @@ const GATE_BTC = 'GATE_FUTURE_BTC_USDT';
 const DELEVER_START_IM = 0.912;
 const DELEVER_END_IM = 0.742;
 
+interface DeleverPairSpec {
+  base: string;
+  mid: number;
+  perps: { symbol: string; exchange: string; side: 'LONG' | 'SHORT' }[];
+}
+
+const BTC_DELEVER: DeleverPairSpec = {
+  base: 'BTC', mid: BTC_MID,
+  perps: [{ symbol: HL_BTC, exchange: 'HYPERLIQUID', side: 'LONG' }, { symbol: GATE_BTC, exchange: 'GATE', side: 'SHORT' }],
+};
+
+const WHALE_ETH_DELEVER: DeleverPairSpec = {
+  base: 'ETH', mid: 2472.74,
+  perps: [
+    { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', side: 'LONG' },
+    { symbol: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', side: 'SHORT' },
+  ],
+};
+
 function deleverPlanOf(
-  size: number, boros: number[], pct: number, over: Partial<DeleverPlan> = {}, twoAccounts = false,
+  size: number, boros: number[], pct: number, over: Partial<DeleverPlan> = {}, pair: DeleverPairSpec = BTC_DELEVER,
 ): DeleverPlan {
   const close = r6((size * pct) / 100);
-  const legs: DeleverPlan['legs'] = [
-    { symbol: HL_BTC, exchange: 'HYPERLIQUID', base: 'BTC', side: 'LONG', before: size, after: r6(size - close), closeQty: close },
-    { symbol: GATE_BTC, exchange: 'GATE', base: 'BTC', side: 'SHORT', before: size, after: r6(size - close), closeQty: close },
-  ];
+  const legs: DeleverPlan['legs'] = pair.perps.map((perp) => ({
+    ...perp, base: pair.base, before: size, after: r6(size - close), closeQty: close,
+  }));
   const borosRows = boros.map((before, index) => {
     const closeSize = r6((before * pct) / 100);
     return { marketId: 101 + index, before, after: r6(before - closeSize), closeSize };
   });
-  const notional = close * BTC_MID;
+  const notional = close * pair.mid;
   const borosClosed = borosRows.reduce((sum, row) => sum + row.closeSize, 0);
-  const options = sliceRowsOf(notional, BTC_MID);
+  const options = sliceRowsOf(notional, pair.mid);
   const lead = options[options.length - 1]!;
   return {
     legs, boros: borosRows,
-    imUsed: twoAccounts
-      ? [{ account: 'CROSSEX', before: DELEVER_START_IM, after: DELEVER_END_IM }, { account: 'HYPERLIQUID', before: 0.55, after: 0.46 }]
-      : [{ account: 'CROSSEX', before: DELEVER_START_IM, after: DELEVER_END_IM }],
+    imUsed: [{ account: 'CROSSEX', before: DELEVER_START_IM, after: DELEVER_END_IM }],
     makerLeg: 1, sliceOptions: options, defaultSliceUsd: lead.sizeUsd,
     estimates: {
       maker: { feePerpsUsd: r2(notional * 0.00065), feeBorosUsd: r2(borosClosed * 0.025), impactUsd: r2(notional * 0.00009 + borosClosed * 0.01), totalUsd: 0 },
@@ -2841,9 +2857,8 @@ export const deleverPlans = {
   })),
   sameSide: withTotals(deleverPlanOf(900, [900], 20, { refused: { reason: 'same-side', coin: 'BTC' } })),
   twoBoros: withTotals(deleverPlanOf(900, [500, 400], 20)),
-  twoAccounts: withTotals(deleverPlanOf(900, [900], 20, {}, true)),
   noBoros: withTotals(deleverPlanOf(900, [], 20)),
-  whale: withTotals(deleverPlanOf(66.7, [66.7], 20, {}, true)),
+  whale: withTotals(deleverPlanOf(4100, [4100], 20, {}, WHALE_ETH_DELEVER)),
 } satisfies Record<string, DeleverPlan>;
 
 const BTC_IM_USD = 4_050_000;
@@ -3328,7 +3343,7 @@ export const whaleRebalanceViews = {
   ownerAccount: acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD),
   realizeRunning: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_JOBS.running),
   deleverRunning: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.running),
-  realizeWhale: { ...WHALE_VIEW, job: null },
+  realizeWhale: { ...WHALE_VIEW, realize: { ...acctTab(WHALE_ACCOUNT, null, null), defaultSliceUsd: 50_000 }, job: null },
   realizeWhaleRunning: { ...WHALE_VIEW, job: whaleJob(REALIZE_RUNNING_JOB) },
   realizeWhaleLegClosed: { ...WHALE_VIEW, job: whaleJob(REALIZE_LEG_CLOSED_JOB) },
   realizeWhaleRetrying: { ...WHALE_VIEW, job: whaleJob(REALIZE_RETRYING_JOB) },

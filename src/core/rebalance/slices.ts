@@ -16,6 +16,8 @@ export interface SliceOption {
   count: number;
   impactBp: number;
   impactUsd: number;
+  reopenImpactUsd: number;
+  pastBook: boolean;
   notHedgedMaxQty: number;
   notHedgedMaxUsd: number;
   seconds: { maker: number; market: number };
@@ -81,28 +83,36 @@ export function sliceOptions(input: {
   lot: string;
   customUsd?: number;
   maxUsd?: number;
+  reopenSide?: Side;
 }): SliceOption[] {
-  const { book, side, mid, totalQty, minQty, lot, customUsd } = input;
+  const { book, side, mid, totalQty, minQty, lot, customUsd, reopenSide } = input;
   if (!book || !touchOf(book) || !(mid > 0) || !(totalQty > 0)) return [];
   const maxUsd = input.maxUsd !== undefined && input.maxUsd > 0 ? input.maxUsd : Infinity;
   const optionFor = (sizeUsd: number, custom: boolean): SliceOption | null => {
     const qtys = sliceQtys(totalQty, Math.min(sizeUsd, maxUsd) / mid, minQty, lot);
     if (qtys.length === 0) return null;
-    const walked = new Map<number, Impact | null>();
-    const impactAt = (qty: number): Impact | null => {
-      if (!walked.has(qty)) walked.set(qty, impactOf(book, side, mid, qty));
-      return walked.get(qty) ?? null;
+    const walksOf = (walkSide: Side): Impact[] | null => {
+      const walked = new Map<number, Impact | null>();
+      const impacts = qtys.map((qty) => {
+        if (!walked.has(qty)) walked.set(qty, impactOf(book, walkSide, mid, qty));
+        return walked.get(qty) ?? null;
+      });
+      return impacts.every((impact) => impact !== null) ? (impacts as Impact[]) : null;
     };
-    const impacts = qtys.map(impactAt).filter((impact) => impact !== null);
+    const impacts = walksOf(side);
+    const reopens = reopenSide ? walksOf(reopenSide) : [];
     const largest = qtys.reduce((max, qty) => Math.max(max, qty), 0);
     const largestImpact = impactOf(book, side, mid, largest);
-    if (impacts.length !== qtys.length || !largestImpact) return null;
+    if (!impacts || !reopens || !largestImpact) return null;
+    const usdOf = (walks: Impact[]): number => walks.reduce((total, impact) => total + impact.usd, 0);
     return {
       sizeUsd,
       custom,
       count: qtys.length,
       impactBp: largestImpact.bp,
-      impactUsd: impacts.reduce((total, impact) => total + impact.usd, 0),
+      impactUsd: usdOf(impacts),
+      reopenImpactUsd: usdOf(reopens),
+      pastBook: [...impacts, ...reopens].some((impact) => impact.pastBook),
       notHedgedMaxQty: largest,
       notHedgedMaxUsd: largest * mid,
       seconds: { maker: qtys.length * MAKER_SLICE_SECONDS, market: qtys.length * MARKET_SLICE_SECONDS },

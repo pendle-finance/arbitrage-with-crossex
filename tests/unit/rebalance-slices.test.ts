@@ -174,6 +174,25 @@ describe('sliceOptions', () => {
     expect(full.impactUsd).toBeCloseTo(25 * 0.3 + 75 * 2, 6);
   });
 
+  it('walks the reopen side per slice and marks a row past the book on either side', () => {
+    const lopsided = book(
+      [
+        [1000.3, 25],
+        [1002, DEEP],
+      ],
+      [[999.9, 60]],
+    );
+    const both = sliceOptions({ book: lopsided, side: 'BUY', mid: MID, totalQty: 100, minQty: 0.01, lot: '0.001', reopenSide: 'SELL' });
+    const [small, half, full] = both;
+    expect(small.reopenImpactUsd).toBeCloseTo(4 * 25 * 0.1, 6);
+    expect(half.reopenImpactUsd).toBeCloseTo(2 * 50 * 0.1, 6);
+    expect(both.map((option) => option.pastBook)).toEqual([false, false, true, true]);
+    expect(full.impactUsd).toBeCloseTo(25 * 0.3 + 75 * 2, 6);
+    const closeOnly = sliceOptions({ book: lopsided, side: 'BUY', mid: MID, totalQty: 100, minQty: 0.01, lot: '0.001' });
+    expect(closeOnly.map((option) => option.reopenImpactUsd)).toEqual([0, 0, 0, 0]);
+    expect(closeOnly.map((option) => option.pastBook)).toEqual([false, false, false, false]);
+  });
+
   it('caps every row at the total', () => {
     const options = sliceOptions({ book: flat(4), side: 'BUY', mid: MID, totalQty: 30, minQty: 0.01, lot: '0.001' });
     expect(options.map((option) => option.count)).toEqual([2, 1, 1, 1]);

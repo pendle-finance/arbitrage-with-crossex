@@ -271,6 +271,8 @@ export interface SliceOption {
   count: number;
   impactBp: number;
   impactUsd: number;
+  reopenImpactUsd: number;
+  pastBook: boolean;
   notHedgedMaxQty: number;
   notHedgedMaxUsd: number;
   seconds: { maker: number; market: number };
@@ -373,6 +375,7 @@ export interface RebalanceStep {
   nextTryAt?: number | null;
   retry?: { reason: 'margin'; convertAmount: number } | null;
   phase?: 'realize' | 'route';
+  addBack?: { qty: number; legs: { symbol: string; filled: number }[] } | null;
 }
 
 export interface RealizeJobLeg {

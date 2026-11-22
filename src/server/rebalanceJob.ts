@@ -147,7 +147,13 @@ export interface ImUsedRow {
 export interface JobDelever {
   pct: number;
   legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number }[];
-  boros: { marketId: number; before: number; after: number; closed: number }[];
+  boros: { marketId: number; before: number; after: number; closed: number; sent?: BorosSend | null }[];
+}
+
+export interface BorosSend {
+  tag: string;
+  size: number;
+  sentAt: number;
 }
 
 export interface DeleverJobInput {
@@ -306,6 +312,14 @@ export const borosPartText = (leftYu: number): string =>
   `Boros did not close ${fmtSize(leftYu)} YU of its share. It has no perp behind it.`;
 
 export const FIX_UNCONFIRMED = 'Gate has not confirmed the last order yet. Try again in two minutes.';
+
+export const borosWaitText = (waitMs: number): string =>
+  `Boros may still fill the last close. Nothing is sent again before then. Try again in ${Math.max(1, Math.ceil(waitMs / 60_000))} min.`;
+
+export const ADD_BACK_FIRST = 'One perp is already added back. Hold to add back to finish the other first.';
+
+export const addBackPartText = (rows: { exchange: string; base: string; filled: number; qty: number }[]): string =>
+  `Add back stopped: ${rows.map((row) => `${venueName(row.exchange)} ${fmtSize(row.filled)} of ${fmtSize(row.qty)} ${row.base}`).join(', ')}. Hold to add back to finish.`;
 
 export const REOPEN_HALT = {
   tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',

@@ -1,6 +1,6 @@
 import { CrossexOrderRequest, type CrossexOrder, type CrossexTransferRecord } from 'gate-api';
 import type { Clients } from '../core/clients';
-import { classifyGateError, refusalReason, type ClassifiedError } from '../core/errors';
+import { classifyGateError, CoreError, refusalReason, type ClassifiedError } from '../core/errors';
 import { DEFAULT_STEP, floorDecimalString, floorToStep, formatRestPrice, parseSymbol, roundToStep, stripZeros } from '../core/numbers';
 import { fetchDeepBook, touchOf, type NormalizedBook } from '../core/estimate/books';
 import { sliceQtys } from '../core/rebalance/slices';
@@ -42,9 +42,12 @@ import { marginPerConvertUsdc, minQtyOf, positiveOf, type PerpRule } from '../co
 import { decodeStatus } from '../engine/loop';
 import { TTL, type TtlCache } from './cache';
 import {
+  ADD_BACK_FIRST,
+  addBackPartText,
   asRealize,
   BOROS_STEP,
   borosPartText,
+  borosWaitText,
   FIX_UNCONFIRMED,
   MAKER_REPEG_MS,
   MAKER_REST_MS,
@@ -373,6 +376,9 @@ function setBorosGap(job: Job): void {
 
 const BOROS_MISSING_TEXT = 'The app has no Boros wallet to close the Boros share with.';
 const BOROS_DUST_YU = 1e-9;
+export const BOROS_LATE_SEND_MS = 10 * 60_000;
+
+class BorosWaitError extends CoreError {}
 
 async function closeBorosRest(deps: RunnerDeps, job: Job): Promise<number> {
   try {
@@ -381,12 +387,20 @@ async function closeBorosRest(deps: RunnerDeps, job: Job): Promise<number> {
       if (!(rest > BOROS_DUST_YU)) continue;
       const boros = deps.boros;
       if (!boros) throw new Error(BOROS_MISSING_TEXT);
+      const waitMs = row.sent ? row.sent.sentAt + BOROS_LATE_SEND_MS - deps.now() : 0;
+      if (waitMs > 0) throw new BorosWaitError(borosWaitText(waitMs), 'validation');
+      row.sent = null;
       job.tagCount += 1;
       const clientOrderId = tagFor(job.id, job.tagCount);
       deps.jobs.write(job);
       const slippagePct = (await boros.slippagePct?.(row.marketId).catch(() => null)) ?? BOROS_CLOSE_FALLBACK_SLIPPAGE_PCT;
       const keep = Math.max(0, Math.abs(row.before) - target);
-      const result = await closeBorosLegs(boros.deps, { address: boros.address, legs: [{ marketId: row.marketId, size: rest, keep }], slippagePct, clientOrderId });
+      const onSend = (): void => {
+        row.sent = { tag: clientOrderId, size: rest, sentAt: deps.now() };
+        deps.jobs.write(job);
+      };
+      const result = await closeBorosLegs(boros.deps, { address: boros.address, legs: [{ marketId: row.marketId, size: rest, keep }], slippagePct, clientOrderId, onSend });
+      row.sent = null;
       const held = result.held.find((leg) => leg.marketId === row.marketId)?.size;
       const goneBefore = held === undefined ? row.closed : Math.max(row.closed, Math.abs(row.before) - held);
       const filled = result.filled.find((leg) => leg.marketId === row.marketId)?.size ?? 0;
@@ -494,6 +508,7 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
   const step = job.steps[job.stepIndex];
   const crossEx = deps.clients().crossEx;
   if (action === 'boros-retry') {
+    if (step?.addBack) throw new CoreError(ADD_BACK_FIRST, 'validation');
     if (job.delever && (job.status === 'abandoned' || step?.name === SLICE_STEP)) {
       await closeBorosRest(deps, job);
       deps.jobs.write(job);
@@ -525,9 +540,18 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
     if (step?.name !== BOROS_STEP || !lead || !(total > 0) || perps.length < 2) return job;
     if (!step.addBack && !(job.borosLeftYu > 0)) return job;
     const plan = (step.addBack ??= { qty: (lead.filledQty * job.borosLeftYu) / total, legs: perps.map((perp) => ({ symbol: perp.symbol, filled: 0, order: null })) });
-    for (const perp of perps) {
-      const row = plan.legs.find((candidate) => candidate.symbol === perp.symbol);
-      if (row) await addBackLeg(deps, job, perp, row, plan.qty);
+    try {
+      for (const perp of perps) {
+        const row = plan.legs.find((candidate) => candidate.symbol === perp.symbol);
+        if (row) await addBackLeg(deps, job, perp, row, plan.qty);
+      }
+    } catch (err) {
+      const rows = perps.map((perp) => ({ exchange: perp.exchange, base: perp.base, filled: plan.legs.find((row) => row.symbol === perp.symbol)?.filled ?? 0, qty: plan.qty }));
+      if (rows.some((row) => row.filled > 0)) {
+        job.haltReason = addBackPartText(rows);
+        deps.jobs.write(job);
+      }
+      throw err;
     }
     job.borosLeftYu = 0;
     job.borosGapYu = 0;
@@ -1855,7 +1879,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       if (left > 0) return halt(borosPartText(left), 'boros');
       finish(step, 0, step.from);
     } catch (err) {
-      halt(err instanceof Error && err.message === BOROS_MISSING_TEXT ? BOROS_MISSING_TEXT : haltReasonFor(err), 'boros');
+      halt(err instanceof BorosWaitError || (err instanceof Error && err.message === BOROS_MISSING_TEXT) ? (err as Error).message : haltReasonFor(err), 'boros');
     }
   };
 

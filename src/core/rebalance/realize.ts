@@ -350,13 +350,14 @@ export function realizeEstimateOf(plan: Pick<RealizePlan, 'legs'>, exec: Realize
 export function slicedEstimateOf(
   plan: Pick<RealizePlan, 'legs' | 'estimates'>,
   exec: RealizeExec,
-  slice: Pick<SliceOption, 'impactUsd'> | null,
+  slice: Pick<SliceOption, 'impactUsd' | 'reopenImpactUsd'> | null,
 ): RealizeEstimate {
   const estimate = plan.estimates[exec];
   const lead = plan.legs[0];
   if (!slice || !lead) return estimate;
   const leadWalkUsd = (exec === 'market' ? lead.closeImpactUsd : 0) + lead.reopenImpactUsd;
-  const impactUsd = Math.max(0, estimate.impactUsd - leadWalkUsd + slice.impactUsd * (exec === 'market' ? 2 : 1));
+  const sliceWalkUsd = (exec === 'market' ? slice.impactUsd : 0) + slice.reopenImpactUsd;
+  const impactUsd = Math.max(0, estimate.impactUsd - leadWalkUsd + sliceWalkUsd);
   return { feeUsd: estimate.feeUsd, impactUsd, totalUsd: estimate.feeUsd + impactUsd };
 }
 

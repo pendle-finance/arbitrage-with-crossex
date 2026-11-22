@@ -181,7 +181,7 @@ export function RebalanceSection({
       if (verdict === null) muted = cashClearsLine(view);
     }
     const leftOpen = view.job ? abandonedGapText(view.job, positions) : null;
-    const borosGap = view.job?.kind === 'delever' && view.job.status !== 'done' && (view.job.notHedgedQty ?? 0) === 0 ? (view.job.borosGapYu ?? 0) : 0;
+    const borosGap = view.job?.kind === 'delever' && view.job.status !== 'done' ? (view.job.borosGapYu ?? 0) : 0;
 
     let label: ReactNode = hasBorrow ? t('accounts.borrowCard.reduce') : t('accounts.rebalanceTabs.move');
     if (job) label = jobButton(job);

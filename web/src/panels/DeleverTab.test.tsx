@@ -185,6 +185,19 @@ describe('DeleverTab guards', () => {
     expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
   });
 
+  it('an empty custom size says why and shows no hold, as 0 does', async () => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await user.click(screen.getByRole('radio', { name: 'Custom' }));
+    expect(screen.getByRole('textbox', { name: 'Custom' })).toHaveValue('');
+    expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    await user.type(screen.getByRole('textbox', { name: 'Custom' }), '0');
+    expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+  });
+
   it('the hold stays disabled until the plan for the picked size returns', async () => {
     const user = userEvent.setup();
     let release: () => void = () => {};
@@ -272,10 +285,11 @@ describe('DeleverTab plan', () => {
     );
   });
 
-  it('im used per account', async () => {
-    servePlan(deleverPlans.twoAccounts);
+  it('im used is one CrossEx row', async () => {
+    servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    expect(await afterRows()).toEqual(expect.arrayContaining(['IM used · CrossEx 91.2% → 74.2%', 'IM used · Hyperliquid 55.0% → 46.0%']));
+    const rows = (await afterRows()).filter((row) => row.startsWith('IM used'));
+    expect(rows).toEqual(['IM used · CrossEx 91.2% → 74.2%']);
   });
 
   it('boros gap line', async () => {
@@ -318,13 +332,23 @@ describe('DeleverTab plan', () => {
     const orders = await screen.findByRole('radiogroup', { name: 'Orders' });
     const [limit, market] = within(orders).getAllByRole('radio');
     const option = defaultOption(plan);
-    expect(limit).toHaveTextContent(`Limit + hedge ${fmtUsd(plan.estimates.maker.totalUsd, 0)} · ${fmtAbout(option.seconds.maker)} per slice`);
+    expect(limit).toHaveTextContent(`Limit + hedge ${fmtUsd(plan.estimates.maker.totalUsd, 0)} · ${fmtAbout(option.seconds.maker / option.count)} per slice`);
     expect(limit).toHaveAttribute('aria-checked', 'true');
-    expect(market).toHaveTextContent(`Market ${fmtUsd(plan.estimates.market.totalUsd, 0)} · ${fmtAbout(option.seconds.market)} per slice`);
+    expect(market).toHaveTextContent(`Market ${fmtUsd(plan.estimates.market.totalUsd, 0)} · ${fmtAbout(option.seconds.market / option.count)} per slice`);
     expect(screen.getByText(new RegExp(`^Slice size \\$[\\d.]+k · ${option.count} slices?$`))).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Change' }));
     const slices = screen.getByRole('radiogroup', { name: 'Slice size' });
     expect(within(slices).getAllByRole('radio').length).toBe(plan.sliceOptions.filter((o) => !o.custom).length + 1);
+  });
+
+  it('a slice past the book refuses in place of the hold', async () => {
+    const plan = deleverPlans.twentyPct;
+    servePlan({ ...plan, sliceOptions: plan.sliceOptions.map((o) => (o.sizeUsd === plan.defaultSliceUsd ? { ...o, pastBook: true } : o)) });
+    show(openPairs.btc900);
+    expect(await screen.findByText('Order book too thin to price.')).toBeInTheDocument();
+    expect(screen.getByText('Pick a smaller slice size.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change' })).toBeInTheDocument();
   });
 
   it('delever hold label', async () => {

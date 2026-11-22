@@ -8,7 +8,8 @@ import { floorToStep } from '../../src/core/numbers';
 import { marginPerConvertUsdc, realizeEstimateOf, type RealizeLeg, type RealizePlan } from '../../src/core/rebalance/realize';
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import { pickCloseMakerLeg } from '../../src/core/estimate/closeMaker';
-import { closeBorosLegs, type BorosCloseDeps, type BorosCloseInput } from '../../src/server/borosClose';
+import { closeBorosLegs, MAY_HAVE_FILLED, type BorosCloseDeps, type BorosCloseInput } from '../../src/server/borosClose';
+import { CoreError } from '../../src/core/errors';
 import {
   bookLevels,
   buyableUsdc,
@@ -29,7 +30,10 @@ import {
   newJob,
   REOPEN_HALT,
   TO_USDC_STEPS,
+  ADD_BACK_FIRST,
+  addBackPartText,
   borosPartText,
+  borosWaitText,
   requestPause,
   RETRY_CONVERT_CAP,
   type DeleverJobInput,
@@ -46,6 +50,7 @@ import {
   QUOTE_FLOOR,
   quoteFloor,
   applyFix,
+  BOROS_LATE_SEND_MS,
   cancelRestingLead,
   runJob,
   STEP_TIMEOUT_MS,
@@ -7359,6 +7364,73 @@ describe('slices: fixes, cost and IM used', () => {
     const job = await applyFix(h.deps, h.jobs.read()!, 'boros-retry');
     expect(borosLegs()).toEqual([[{ marketId: 7, size: 30, keep: 50 }]]);
     expect(job).toMatchObject({ status: 'done', borosLeftYu: 0, delever: { boros: [{ closed: 50 }] } });
+  });
+
+  it.each([0.0166, 2_000])('a Boros close that times out and lands later is never sent twice, %d ETH', async (q) => {
+    borosSpy.calls.length = 0;
+    vi.mocked(closeBorosLegs).mockImplementationOnce(async (_deps, input) => {
+      borosSpy.calls.push({ input, gateCalls: 0 });
+      input.onSend?.();
+      throw new CoreError(`Boros timed out${MAY_HAVE_FILLED}`, 'network');
+    });
+    const venue = sliceVenue();
+    const h = atBorosPart(venue, q);
+    withBoros(h);
+    const sentAt = h.clock.now();
+    await expect(applyFix(h.deps, h.jobs.read()!, 'boros-retry')).rejects.toThrow(MAY_HAVE_FILLED);
+    expect(h.jobs.read()?.delever?.boros[0].sent).toMatchObject({ size: 30, sentAt });
+
+    await h.clock.sleep(BOROS_LATE_SEND_MS - 60_000);
+    await expect(applyFix(h.deps, h.jobs.read()!, 'boros-retry')).rejects.toThrow(borosWaitText(60_000));
+    expect(borosSpy.calls).toHaveLength(1);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', borosLeftYu: 30, delever: { boros: [{ closed: 20 }] } });
+
+    await h.clock.sleep(60_000);
+    vi.mocked(closeBorosLegs).mockImplementationOnce(async (_deps, input) => {
+      borosSpy.calls.push({ input, gateCalls: 0 });
+      const held = 50;
+      const size = Math.min(input.legs[0].size, held - (input.legs[0].keep ?? 0));
+      if (size > 0) input.onSend?.();
+      return { filled: [{ marketId: 7, size }], rest: [{ marketId: 7, size: 0 }], held: [{ marketId: 7, size: held }] };
+    });
+    const job = await applyFix(h.deps, h.jobs.read()!, 'boros-retry');
+    expect(borosLegs()).toEqual([[{ marketId: 7, size: 30, keep: 50 }], [{ marketId: 7, size: 30, keep: 50 }]]);
+    expect(job).toMatchObject({ status: 'done', borosLeftYu: 0, delever: { boros: [{ closed: 50, sent: null }] } });
+  });
+
+  it('a restart inside the relayer window halts the Boros step with the wait line and sends nothing', async () => {
+    borosSpy.calls.length = 0;
+    const venue = sliceVenue();
+    const h = atBorosPart(venue, 5);
+    withBoros(h);
+    const job = h.jobs.read()!;
+    job.delever!.boros[0].sent = { tag: tagFor(job.id, 9), size: 30, sentAt: h.clock.now() - 120_000 };
+    job.status = 'running';
+    job.haltReason = null;
+    job.haltKind = null;
+    h.jobs.write(job);
+    await h.run();
+    expect(borosSpy.calls).toHaveLength(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'boros', haltReason: borosWaitText(BOROS_LATE_SEND_MS - 120_000) });
+  });
+
+  it('boros retry is refused once one perp is added back, and the halt line names what was added', async () => {
+    borosSpy.calls.length = 0;
+    const venue = sliceVenue((req) => (req.symbol === GATE_ETH ? (gateError(400, 'INVALID_PARAM', 'busy') as () => never) : filled(req)));
+    const h = atBorosPart(venue, 5);
+    withBoros(h);
+    await expect(applyFix(h.deps, h.jobs.read()!, 'add-back')).rejects.toBeTruthy();
+    const halted = h.jobs.read()!;
+    expect(halted).toMatchObject({ status: 'halted', borosLeftYu: 30 });
+    expect(halted.haltReason).toBe(
+      addBackPartText([
+        { exchange: 'HYPERLIQUID', base: 'ETH', filled: 3, qty: 3 },
+        { exchange: 'GATE', base: 'ETH', filled: 0, qty: 3 },
+      ]),
+    );
+    await expect(applyFix(h.deps, halted, 'boros-retry')).rejects.toThrow(ADD_BACK_FIRST);
+    expect(borosSpy.calls).toHaveLength(0);
+    expect(h.jobs.read()?.status).toBe('halted');
   });
 
   it('add back sends each perp in chunks no larger than the venue max market size', async () => {

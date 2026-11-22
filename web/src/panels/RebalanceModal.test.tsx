@@ -1824,14 +1824,74 @@ describe('RebalanceModal Realize uPnL tab', () => {
   it('limit + hedge first and default', () => {
     showOn(owner);
     expect(orders()[0]!.textContent).toMatch(/^Limit \+ hedge \$[\d,]+ · /);
-    expect(orders()[0]!.textContent).toContain(fmtAbout(pick.seconds.maker));
+    expect(orders()[0]!.textContent).toContain(`${fmtAbout(pick.seconds.maker / pick.count)} per slice`);
     expect(orders()[0]).toHaveAttribute('aria-checked', 'true');
   });
 
   it('market second', () => {
     showOn(owner);
     expect(orders()[1]!.textContent).toMatch(/^Market \$[\d,]+ · /);
-    expect(orders()[1]!.textContent).toContain(fmtAbout(pick.seconds.market));
+    expect(orders()[1]!.textContent).toContain(`${fmtAbout(pick.seconds.market / pick.count)} per slice`);
+  });
+
+  it('a $6M realize at $50k slices reads about 5 min per slice', () => {
+    const view = whaleRebalanceViews.realizeWhale;
+    const tab = view.realize!;
+    const option = tab.sliceOptions.find((o) => o.sizeUsd === 50_000)!;
+    expect(tab.clearDebt!.legs[0]!.realizedUsd).toBeGreaterThan(5_900_000);
+    expect(option.count).toBeGreaterThan(100);
+    showOn(view, 'realize');
+    expect(orders()[0]!.textContent).toContain(`${fmtAbout(300)} per slice`);
+    expect(orders()[0]!.textContent).not.toContain(fmtAbout(option.seconds.maker));
+    expect(screen.getByText(`Slice size ${fmtNotionalShort(50_000)} · ${option.count} slices`)).toBeInTheDocument();
+  });
+
+  it('a custom slice below the venue minimum shows the slice raised to the minimum', async () => {
+    const raised = { ...ownerSlices.find((o) => !o.custom)!, sizeUsd: 11, custom: true, count: 640 };
+    const sliced = { ...owner, realize: { ...owner.realize!, sliceOptions: [...ownerSlices.filter((o) => !o.custom), raised] } };
+    serve({});
+    server.use(http.get('/api/rebalance', () => HttpResponse.json(env(sliced))));
+    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Custom' }), '1');
+    expect(await screen.findByText(`Slice size ${fmtNotionalShort(11)} · 640 slices`, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText(/^Slice size \$1 · /)).toBeNull();
+  });
+
+  it('a non-default preset slice judges the plan the server prices at that slice', async () => {
+    const other = ownerSlices.find((o) => !o.custom && o.sizeUsd !== owner.realize!.defaultSliceUsd)!;
+    const refused = { reason: 'past-book' as const, bp: null };
+    const tab = owner.realize!;
+    const sliced = {
+      ...owner,
+      realize: { ...tab, clearDebt: tab.clearDebt ? { ...tab.clearDebt, refused } : null, all: tab.all ? { ...tab.all, refused } : null },
+    };
+    const asked: string[] = [];
+    serve({});
+    server.use(http.get('/api/rebalance', ({ request }) => {
+      asked.push(new URL(request.url).search);
+      return HttpResponse.json(env(sliced));
+    }));
+    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    await userEvent.click(slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!);
+    await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${other.sizeUsd}`))).toBe(true), { timeout: 3000 });
+    expect(await screen.findByText('Order book too thin to price.', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
+    expect(screen.getByRole('radiogroup', { name: 'Slice size' })).toBeInTheDocument();
+  });
+
+  it('a preset slice the server marks past the book refuses in place of the hold and keeps the slice table', async () => {
+    const other = ownerSlices.find((o) => !o.custom && o.sizeUsd !== owner.realize!.defaultSliceUsd)!;
+    const marked = { ...owner, realize: { ...owner.realize!, sliceOptions: ownerSlices.map((o) => (o.sizeUsd === other.sizeUsd ? { ...o, pastBook: true } : o)) } };
+    serve({});
+    server.use(http.get('/api/rebalance', () => HttpResponse.json(env(marked))));
+    renderWithClient(<RebalanceModal view={marked} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    await userEvent.click(slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!);
+    expect(await screen.findByText('Pick a smaller slice size.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
+    expect(screen.getByRole('radiogroup', { name: 'Slice size' })).toBeInTheDocument();
   });
 
   it('realize amount chips', async () => {

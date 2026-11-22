@@ -410,6 +410,7 @@
     "marginBody": "请向 {{wallet}} 补充 USDT，然后重试。",
     "bookTitle": "订单簿太薄，无法定价。",
     "bookBody": "请选更小的自定义金额。",
+    "sliceBookBody": "请选更小的切片规模。",
     "feeRateTitle": "费率未加载。",
     "feeRateBody": "利润暂不实现。资金划转照常进行。",
     "gapLine": "{{venue}} {{side}} 少 {{size}} {{base}} · {{usd}} 未对冲",

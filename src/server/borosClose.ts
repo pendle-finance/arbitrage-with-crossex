@@ -112,6 +112,7 @@ export interface BorosSendRequest {
   address: string;
   marketIds: readonly number[];
   clientOrderIds: readonly string[];
+  onSend?: () => void;
 }
 
 export type BorosSendOutcome =
@@ -182,6 +183,7 @@ export async function sendBorosPair(deps: BorosCloseDeps, request: BorosSendRequ
     const raced = recentExecutions.get(memoKey);
     if (raced) return { kind: 'replayed', payload: await raced.result };
     const thrown: unknown[] = [];
+    request.onSend?.();
     const client: BorosOrderClient = {
       ...orders,
       placeMarketOrders: (reqs, opts) =>
@@ -226,6 +228,7 @@ export interface BorosCloseInput {
   legs: (BorosCloseLeg & { keep?: number })[];
   slippagePct: number;
   clientOrderId: string;
+  onSend?: () => void;
 }
 
 export interface BorosCloseResult {
@@ -270,6 +273,7 @@ export async function closeBorosLegs(deps: BorosCloseDeps, input: BorosCloseInpu
     address,
     marketIds: sent.map((l) => l.marketId),
     clientOrderIds: sent.map((l) => l.clientOrderId),
+    onSend: input.onSend,
   });
   if (outcome.kind === 'busy') throw new CoreError(CLOSE_RUNNING, 'validation');
   if (outcome.kind === 'refused') throw new CoreError(outcome.message, 'validation');
@@ -277,5 +281,7 @@ export async function closeBorosLegs(deps: BorosCloseDeps, input: BorosCloseInpu
   if (outcome.kind === 'sent' && outcome.thrown.length > 0 && classifyLegFailure(outcome.thrown[0]) === 'unknown') {
     throw new CoreError(`${describeLegFailure(outcome.thrown[0])}${MAY_HAVE_FILLED}`, 'network');
   }
+  const unsure = outcome.payload.result.legs.find((leg) => leg.failure?.code === 'unknown');
+  if (unsure?.failure) throw new CoreError(unsure.failure.message, 'network');
   return report(outcome.payload.result.legs);
 }

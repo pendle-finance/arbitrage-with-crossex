@@ -1204,6 +1204,36 @@ describe('POST /api/rebalance with a close and reopen', () => {
     h.jobs.write(paused);
     const gap = await h.post(`/api/rebalance/${paused.id}/fix`, { action: 'boros-retry' });
     expect(gap.json().error?.message).not.toBe('Nothing is left to fix.');
+
+    const addedBack = slicedJob({ status: 'halted', borosLeftYu: 5, delever: { pct: 0.2, legs: [], boros: [] } });
+    addedBack.steps[addedBack.stepIndex].addBack = { qty: 3, legs: [{ symbol: HL_ETH, filled: 3, order: null }] };
+    h.jobs.write(addedBack);
+    const retry = await h.post(`/api/rebalance/${addedBack.id}/fix`, { action: 'boros-retry' });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json().error.message).toBe('One perp is already added back. Hold to add back to finish the other first.');
+  });
+
+  it('a fix sent while the boot cancel runs is answered, and Abandon works after it', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    gate().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).delay(300).reply(404, { label: 'ORDER_NOT_FOUND', message: 'not found' });
+    const job = slicedJob({ status: 'running', followMisses: 3 });
+    const slices = job.steps.find((step) => step.name === 'Slices')!;
+    slices.status = 'running';
+    slices.lead = { text: 't-boot-1', venueId: null, sentAt: t, credited: 0, poc: true, price: '2999.9', side: 'BUY', mid: null };
+    job.realize!.legs[0].filledQty = 5;
+    job.notHedgedQty = 5;
+    job.follow = { symbol: 'GATE_FUTURE_ETH_USDT', side: 'SELL', qty: 5 } as Job['follow'];
+    const h = boot({ job });
+    await h.ready();
+
+    const fix = await h.post(`/api/rebalance/${job.id}/fix`, { action: 'market' });
+    expect(fix.statusCode).toBeGreaterThanOrEqual(200);
+    await waitFor(() => h.file().status === 'halted', 'the boot halt');
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+    expect(abandon.json().error?.message).not.toBe('A fix is still running. Wait for it to finish.');
+    expect(abandon.statusCode).toBe(200);
   });
 
   it('plan check allows a 1% size gap at 6M', () => {

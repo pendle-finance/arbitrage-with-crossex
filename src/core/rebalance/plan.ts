@@ -1274,7 +1274,7 @@ function leadSlicesOf(plan: RealizePlan | null, inputs: PlanInputs, customSliceU
   const mark = positiveOf(perp.markPrice) || mid;
   const maxUsd = marketCapUsd(perp, rule, leg.exchange, mark);
   return {
-    sliceOptions: sliceOptions({ book, side, mid, totalQty: leg.qty, minQty: minQtyOf(rule, lot, mark), lot, customUsd: customSliceUsd, maxUsd }),
+    sliceOptions: sliceOptions({ book, side, mid, totalQty: leg.qty, minQty: minQtyOf(rule, lot, mark), lot, customUsd: customSliceUsd, maxUsd, reopenSide: side === 'BUY' ? 'SELL' : 'BUY' }),
     defaultSliceUsd: sliceSizeOf({ book, side, mid, totalUsd: leg.qty * mid }),
   };
 }

@@ -416,6 +416,7 @@
     "marginBody": "Add USDT to {{wallet}}, then try again.",
     "bookTitle": "Order book too thin to price.",
     "bookBody": "Pick a smaller Custom amount.",
+    "sliceBookBody": "Pick a smaller slice size.",
     "feeRateTitle": "Fee rate not loaded.",
     "feeRateBody": "Profit stays open. The cash move runs without it.",
     "gapLine": "{{venue}} {{side}} {{size}} {{base}} smaller · {{usd}} not hedged",

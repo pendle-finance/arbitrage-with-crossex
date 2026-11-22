@@ -15,7 +15,7 @@ import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './Rebalance
 import { VerdictAlert } from './RebalanceBits';
 import { keyOf, SLICE_HOVER, Term } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { NotHedgedLine, refusalOf, TotalCost, type CostRow } from './RebalancePlanBits';
+import { NotHedgedLine, realizeText, refusalOf, TotalCost, type CostRow } from './RebalancePlanBits';
 import { CONVERT_TO, execModeLabel, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
@@ -55,20 +55,26 @@ export function RealizeTab({
   const [customText, setCustomText] = useState('');
 
   const presetOptions = tab?.sliceOptions ?? [];
-  const pricedPlan = clearDebt && clearDebt.legs.length > 0 ? clearDebt : all;
+  const basePriced = clearDebt && clearDebt.legs.length > 0 ? clearDebt : all;
   const customSlice = sliceUsd > 0 && !presetOptions.some((o) => !o.custom && o.sizeUsd === sliceUsd);
+  const sliceQueried = sliceUsd > 0 && sliceUsd !== tab?.defaultSliceUsd;
   const debouncedSlice = useDebounced(sliceUsd, CUSTOM_DEBOUNCE_MS);
-  const baseAllNet = all ? Math.max(0, netOf(all, costOf(all, exec, sliceOf(presetOptions, sliceUsd, all.legs[0], all === pricedPlan)))) : 0;
+  const baseAllNet = all ? Math.max(0, netOf(all, costOf(all, exec, sliceOf(presetOptions, sliceUsd, all.legs[0], all === basePriced)))) : 0;
   const typedUsd = parsedAmount(customText);
   const customUsd = typedUsd !== null && typedUsd > 0 ? Math.min(typedUsd, baseAllNet) : null;
   const debouncedUsd = useDebounced(customUsd, CUSTOM_DEBOUNCE_MS);
-  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, customSlice ? debouncedSlice : null);
+  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, sliceQueried ? debouncedSlice : null);
   const customPlan = customQuery.data?.realize?.custom ?? null;
-  const liveOptions = customSlice ? customQuery.data?.realize?.sliceOptions : undefined;
-  const options = liveOptions?.some((o) => o.sizeUsd === sliceUsd) ? liveOptions : presetOptions;
-  const sliceFor = (plan: RealizePlan): Slice | null => sliceOf(options, sliceUsd, plan.legs[0], plan === pricedPlan);
+  const liveTab = sliceQueried ? (customQuery.data?.realize ?? null) : null;
+  const shownClear = liveTab ? (hasPlan(liveTab.clearDebt) ? liveTab.clearDebt : null) : clearDebt;
+  const shownAll = liveTab ? (hasPlan(liveTab.all) ? liveTab.all : null) : all;
+  const pricedPlan = shownClear && shownClear.legs.length > 0 ? shownClear : shownAll;
+  const options = liveTab?.sliceOptions ?? presetOptions;
+  const customOption = customSlice ? (liveTab?.sliceOptions.find((o) => o.custom) ?? null) : null;
+  const shownSliceUsd = customOption?.sizeUsd ?? sliceUsd;
+  const sliceFor = (plan: RealizePlan): Slice | null => sliceOf(options, shownSliceUsd, plan.legs[0], plan === pricedPlan);
   const costFor = (plan: RealizePlan, mode: RealizeExec): Cost => costOf(plan, mode, sliceFor(plan));
-  const allNet = all ? Math.max(0, netOf(all, costFor(all, exec))) : 0;
+  const allNet = shownAll ? Math.max(0, netOf(shownAll, costFor(shownAll, exec))) : 0;
 
   if (!tab || (!clearDebt && !all)) {
     return (
@@ -86,21 +92,27 @@ export function RealizeTab({
   const sliceInvalid = sliceText.trim() !== '' && !((parsedAmount(sliceText) ?? 0) > 0);
   const customMissing = amount === 'custom' && customUsd === null;
   const customOverAll = amount === 'custom' && typedUsd !== null && customUsd !== null && typedUsd > customUsd;
-  const active = amount === 'clear' ? clearDebt : amount === 'all' ? all : customMissing ? null : customPlan;
-  const slicePricing = customSlice && (debouncedSlice !== sliceUsd || customQuery.isFetching);
+  const active = amount === 'clear' ? shownClear : amount === 'all' ? shownAll : customMissing ? null : customPlan;
+  const slicePricing = sliceQueried && (debouncedSlice !== sliceUsd || customQuery.isFetching);
   const pricing = slicePricing || (amount === 'custom' && customUsd !== null && (customUsd !== debouncedUsd || customQuery.isFetching));
   const slice = active ? sliceFor(active) : null;
   const cost = active ? costFor(active, exec) : null;
   const net = active && cost ? netOf(active, cost) : 0;
   const lead = active?.legs[0];
-  const refusal = active?.refused ? refusalOf({ ...view.plans.repay, realize: active }) : null;
+  const slicePastBook = options.find((o) => o.sizeUsd === shownSliceUsd)?.pastBook === true;
+  const refusal = active?.refused
+    ? refusalOf({ ...view.plans.repay, realize: active })
+    : active && slicePastBook
+      ? { title: realizeText('bookTitle'), body: realizeText('sliceBookBody') }
+      : null;
+  const sliceRefused = slicePastBook || (sliceQueried && active?.refused?.reason === 'past-book');
   const wallet = WALLET_LABEL[poolKey(tab.pool)] ?? poolKey(tab.pool);
   const bucket = view.buckets.find((b) => keyOf(b) === poolKey(tab.pool));
   const cashNow = bucket?.cash ?? 0;
-  const clearNet = clearDebt ? netOf(clearDebt, costFor(clearDebt, exec)) : 0;
+  const clearNet = shownClear ? netOf(shownClear, costFor(shownClear, exec)) : 0;
 
   const execLabel = (mode: RealizeExec): string =>
-    execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode]) : '—');
+    execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode] / Math.max(1, slice.count)) : '—');
 
   const rows: CostRow[] = cost
     ? [
@@ -143,7 +155,7 @@ export function RealizeTab({
       {
         kind: 'realize',
         exec,
-        sliceUsd,
+        sliceUsd: shownSliceUsd,
         realizeUsd: net,
         realizeTarget: TARGET[amount],
         costUsd: cost.totalUsd,
@@ -223,7 +235,7 @@ export function RealizeTab({
         </div>
       )}
 
-      {active && !refusal && active.legs.length > 0 && (
+      {active && (!refusal || sliceRefused) && active.legs.length > 0 && (
         <>
           <div className="flex flex-col gap-1.5">
             <span className={microLabelClass}>{t('accounts.realizeTab.orders')}</span>
@@ -239,11 +251,11 @@ export function RealizeTab({
 
           {slice && (
             <SliceSizeRow
-              sizeUsd={slice.count === 1 ? Math.min(sliceUsd, slice.usd) : sliceUsd}
+              sizeUsd={slice.count === 1 ? Math.min(shownSliceUsd, slice.usd) : shownSliceUsd}
               count={slice.count}
               open={tableOpen}
               onToggle={() => setTableOpen(!tableOpen)}
-              table={{ options, value: sliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, coin: lead?.base }}
+              table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, coin: lead?.base }}
             />
           )}
 

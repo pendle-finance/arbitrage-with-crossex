@@ -78,7 +78,7 @@ export function SliceTable({ options, value, exec, onPick, customText, onCustom,
   const valuesOf = (o: SliceOption): ReactNode[] => [
     num(o.count, 0),
     fmtAbout(o.seconds[exec]),
-    fmtUsd(o.impactUsd * (exec === 'market' ? 2 : 1), 0),
+    fmtUsd((exec === 'market' ? o.impactUsd : 0) + o.reopenImpactUsd, 0),
     coin ? `${sizeText(o.notHedgedMaxQty)} ${coin}` : fmtUsd(o.notHedgedMaxUsd, 0),
   ];
   return (

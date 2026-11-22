@@ -46,6 +46,7 @@ import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { catchRateLimit, sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
+  ADD_BACK_FIRST,
   bannerFor,
   FOLLOW_MISSES_RED,
   gapsLeftBy,
@@ -340,6 +341,8 @@ export function rebalanceRoutes(deps: AppDeps) {
         .catch((err: unknown) => console.error(`rebalance boot: ${describeError(err)}`))
         .finally(() => {
           inflight = null;
+          const left = takeFix();
+          if (left) fixStopped(jobs, left);
         });
     } else if (jobs && bootStep && resumesAtBoot) {
       bootStep.startedAt = now();
@@ -602,6 +605,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (plan.refused) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (plan.legs.length === 0) return conflict(reply, NOTHING_TO_REALIZE);
       const sliceUsd = cappedSliceOf(tab.sliceOptions, shownSlice ?? tab.defaultSliceUsd);
+      if (tab.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const estimate = realizeTabEstimateOf(tab, plan, exec, sliceUsd);
       if (costRoseTooMuch(estimate.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();
@@ -774,6 +778,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           ? job.delever !== null && Math.max(job.borosLeftYu, job.borosGapYu) > 0
           : job.borosLeftYu > 0;
       if (!open) return conflict(reply, NOTHING_TO_FIX);
+      if (action === 'boros-retry' && job.steps[job.stepIndex]?.addBack) return conflict(reply, ADD_BACK_FIRST);
       const working = resumeLock();
       if (working) return conflict(reply, working);
       if (job.userId !== null && (await currentUserId()) !== job.userId) {
