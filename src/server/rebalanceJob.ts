@@ -318,8 +318,35 @@ export const borosWaitText = (waitMs: number): string =>
 
 export const ADD_BACK_FIRST = 'One perp is already added back. Hold to add back to finish the other first.';
 
-export const addBackPartText = (rows: { exchange: string; base: string; filled: number; qty: number }[]): string =>
-  `Add back stopped: ${rows.map((row) => `${venueName(row.exchange)} ${fmtSize(row.filled)} of ${fmtSize(row.qty)} ${row.base}`).join(', ')}. Hold to add back to finish.`;
+type AddBackRow = Pick<RealizeJobLeg, 'exchange' | 'side' | 'base'> & { filled: number; qty: number };
+
+export const addBackRowsOf = (job: Job): AddBackRow[] => {
+  const plan = job.steps[job.stepIndex]?.addBack;
+  if (!plan) return [];
+  return (job.delever?.legs ?? []).map((perp) => ({
+    exchange: perp.exchange,
+    side: perp.side,
+    base: perp.base,
+    filled: plan.legs.find((row) => row.symbol === perp.symbol)?.filled ?? 0,
+    qty: plan.qty,
+  }));
+};
+
+const addBackStoppedText = (rows: Omit<AddBackRow, 'side'>[]): string =>
+  `Add back stopped: ${rows.map((row) => `${venueName(row.exchange)} ${fmtSize(row.filled)} of ${fmtSize(row.qty)} ${row.base}`).join(', ')}.`;
+
+export const addBackPartText = (rows: Omit<AddBackRow, 'side'>[]): string => `${addBackStoppedText(rows)} Hold to add back to finish.`;
+
+export function addBackAbandonText(job: Job): string | null {
+  const rows = addBackRowsOf(job);
+  if (!rows.some((row) => row.filled > 0)) return null;
+  const small = rows.reduce((a, b) => (b.filled < a.filled ? b : a));
+  const large = rows.reduce((a, b) => (b.filled > a.filled ? b : a));
+  const diff = large.filled - small.filled;
+  if (!(diff > 0)) return addBackStoppedText(rows);
+  const leg: OpenLeg = { exchange: small.exchange, side: small.side, base: small.base, hedge: large.exchange };
+  return `${addBackStoppedText(rows)} The ${legGapText(leg, diff)} Close ${fmtSize(diff)} ${leg.base} of the ${otherLegName(leg)} in Positions.`;
+}
 
 export const REOPEN_HALT = {
   tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',

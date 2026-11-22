@@ -47,6 +47,7 @@ import { catchRateLimit, sendError } from '../errorReply';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   ADD_BACK_FIRST,
+  addBackAbandonText,
   bannerFor,
   FOLLOW_MISSES_RED,
   gapsLeftBy,
@@ -807,6 +808,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const job = haltedOr409(store, (req.params as { id: string }).id, reply);
       if (!job) return reply;
       if (fixing) return conflict(reply, FIX_RUNNING);
+      if (job.steps[job.stepIndex]?.addBack) return conflict(reply, ADD_BACK_FIRST);
       // The same rule as the start: the remaining steps move cash a working
       // deal may be counting on.
       const working = resumeLock();
@@ -836,6 +838,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!job) return reply;
       if (fixing) return conflict(reply, FIX_RUNNING);
       job.status = 'abandoned';
+      job.haltReason = addBackAbandonText(job) ?? job.haltReason;
       store.write(job);
       return reply.ok(job);
     });

@@ -328,6 +328,7 @@ describe('RebalanceJobView, sliced runs', () => {
   it('boros part fill holds', async () => {
     const { posts } = show(rebalanceViews.deleverStoppedBoros);
     expect(within(screen.getByRole('alert')).getByText(/^Boros 36(\.0+)? YU not hedged$/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
     hold(/^Hold to retry closing 36(\.0+)? YU on Boros$/);
     await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'boros-retry' } }]));
     hold(/^Hold to add 36(\.0+)? BTC back on both perps$/);
@@ -388,7 +389,7 @@ describe('RebalanceJobView, sliced runs', () => {
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
   });
 
-  it('a part add-back shows only the add-back hold for the rest', async () => {
+  it('a part add-back shows the add-back hold and Hold to abandon, and no Boros retry', async () => {
     const job = rebalanceViews.deleverStoppedBoros.job!;
     const steps = job.steps.map((step) =>
       step.name === 'Close Boros'
@@ -397,6 +398,7 @@ describe('RebalanceJobView, sliced runs', () => {
     );
     const { posts } = show(rebalanceViews.deleverStoppedBoros, { steps });
     expect(screen.queryByRole('button', { name: /^Hold to retry closing/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
     hold(/^Hold to add 36(\.0+)? BTC back on both perps$/);
     await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'add-back' } }]));
   });

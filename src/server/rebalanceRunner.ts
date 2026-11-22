@@ -44,6 +44,7 @@ import { TTL, type TtlCache } from './cache';
 import {
   ADD_BACK_FIRST,
   addBackPartText,
+  addBackRowsOf,
   asRealize,
   BOROS_STEP,
   borosPartText,
@@ -139,7 +140,7 @@ const ROUND_ARRIVALS: readonly string[] = ['To Gate', 'Sell USDC'];
 const INTO_VENUE: readonly string[] = Object.values(TO_VENUE_STEP);
 export const REOPEN_FIRST_WAIT_MS = 2_000;
 export const REOPEN_MAX_WAIT_MS = 60_000;
-export const RATE_LIMIT_HALT_AFTER = 10;
+const RATE_LIMIT_HALT_AFTER = 10;
 const RETRY_CONVERT_HEADROOM = 1.05;
 const DELIST_LABEL = 'TRADE_DELIST_OPEN_PROHIBITED_ERROR';
 const ORDER_ALLOWANCE_LABELS: readonly string[] = ['TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', 'TRADE_LIGHTER_ORDER_LIMIT_ERROR'];
@@ -548,7 +549,7 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
         if (row) await addBackLeg(deps, job, perp, row, plan.qty);
       }
     } catch (err) {
-      const rows = perps.map((perp) => ({ exchange: perp.exchange, base: perp.base, filled: plan.legs.find((row) => row.symbol === perp.symbol)?.filled ?? 0, qty: plan.qty }));
+      const rows = addBackRowsOf(job);
       if (rows.some((row) => row.filled > 0)) {
         job.haltReason = addBackPartText(rows);
         deps.jobs.write(job);

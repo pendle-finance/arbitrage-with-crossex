@@ -1285,6 +1285,30 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(abandonedRetry.statusCode).not.toBe(409);
   });
 
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('a part add back refuses Resume, and Abandon names each perp and the gap without a hold, %d ETH', async (q, size) => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: 'GATE_FUTURE_ETH_USDT', filled: 0, order: null }] };
+    h.jobs.write(job);
+
+    const resume = await h.post(`/api/rebalance/${job.id}/resume`);
+    expect(resume.statusCode).toBe(409);
+    expect(resume.json().error.message).toBe('One perp is already added back. Hold to add back to finish the other first.');
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'Add back stopped.' });
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+    expect(abandon.statusCode).toBe(200);
+    expect(h.file()).toMatchObject({
+      status: 'abandoned',
+      haltReason: `Add back stopped: Hyperliquid ${size} of ${size} ETH, Gate 0 of ${size} ETH. The Gate long is ${size} ETH smaller than the Hyperliquid short. Close ${size} ETH of the Hyperliquid short in Positions.`,
+    });
+  });
+
   it('a fix sent while the boot cancel runs is answered, and Abandon works after it', async () => {
     mockAccount(ownerAccount());
     refuseSends();

@@ -232,6 +232,15 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     </HoldToConfirmButton>
   );
 
+  const abandonBlock = (
+    <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
+      {open > 0 && <span className="num text-xs text-ink-400">{abandonNote}</span>}
+      <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={onAbandon}>
+        {sk('holdAbandon')}
+      </HoldToConfirmButton>
+    </div>
+  );
+
   if (borosPart) {
     const left = job.borosLeftYu ?? 0;
     const added = job.steps.find((step) => step.addBack)?.addBack ?? null;
@@ -256,6 +265,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
           </HoldToConfirmButton>
           {fixError}
         </div>
+        {abandonBlock}
       </>
     );
   }
@@ -272,12 +282,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
             {closeBorosHold}
           </>
         )}
-        <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
-          <span className="num text-xs text-ink-400">{abandonNote}</span>
-          <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={onAbandon}>
-            {sk('holdAbandon')}
-          </HoldToConfirmButton>
-        </div>
+        {abandonBlock}
       </>
     );
   }
