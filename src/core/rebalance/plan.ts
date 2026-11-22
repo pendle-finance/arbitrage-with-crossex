@@ -2,7 +2,15 @@ import { type NormalizedBook, parseBinanceBook } from '../estimate/books';
 import type { VenueFeeRow } from '../estimate/fees';
 import { walkBook } from '../estimate/fill';
 import { floorDecimalString, floorToStep, roundToStep } from '../numbers';
-import { type PerpRule, planRealize, profitPoolOf, type RealizePerp, type RealizePlan, realizedNetUsd } from './realize';
+import {
+  type PerpRule,
+  planRealize,
+  profitPoolOf,
+  type RealizeLeg,
+  type RealizePerp,
+  type RealizePlan,
+  realizedNetUsd,
+} from './realize';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
 export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
@@ -1192,10 +1200,10 @@ function customMaxOf(
   const whole = planRealize(
     realizeInput(buckets, account, inputs, { from: goal.from, moveUsd: Infinity, cashUsd, convertCounts }),
   );
-  const legs = whole?.legs ?? [];
-  const converted = sum(legs.map((leg) => leg.convert?.amount ?? 0));
-  const elsewhere = convertCounts ? 0 : converted * (1 - CONVERT_RATE);
-  return floorCents(cashUsd + sum(legs.map(realizedNetUsd)) - elsewhere);
+  const elsewhere = (leg: RealizeLeg): number => (convertCounts ? 0 : (leg.convert?.amount ?? 0) * (1 - CONVERT_RATE));
+  // A refused realize still lists a leg that frees nothing; it adds nothing to the max.
+  const freed = (whole?.legs ?? []).map((leg) => Math.max(0, realizedNetUsd(leg) - elsewhere(leg)));
+  return floorCents(cashUsd + sum(freed));
 }
 
 export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, goal: Goal = EVEN_GOAL): EvenPlan {

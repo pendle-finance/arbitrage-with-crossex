@@ -254,12 +254,24 @@ function orderOf(leg: Paying, qty: number, state: State): Order {
   return { qty, overCapUsd, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * leg.convertCost };
 }
 
+/** Past the size whose reopen needs no Convert, each coin also pays for its
+ * Convert. When that costs more than the coin frees, a bigger close sends less,
+ * so the leg stops at that size. */
+function topQty(leg: Paying, state: State): number {
+  if (!(leg.marginPerCoin > 0)) return leg.positionQty;
+  const free = (state.available - REOPEN_MARGIN_FLOOR_USD) / (REOPEN_MARGIN_SHARE * leg.marginPerCoin);
+  const capped = Number(roundToStep(Math.min(free, leg.positionQty), leg.lot, 'down'));
+  if (!(capped >= leg.minQty) || capped >= leg.positionQty) return leg.positionQty;
+  return orderOf(leg, capped, state).net >= orderOf(leg, leg.positionQty, state).net ? capped : leg.positionQty;
+}
+
 function sizeOrder(leg: Paying, state: State): Order {
-  const whole = orderOf(leg, leg.positionQty, state);
+  const top = topQty(leg, state);
+  const whole = orderOf(leg, top, state);
   const lot = Number(leg.lot);
   const qtyAt = (lots: number): number => Number(roundToStep(lots * lot, leg.lot, 'nearest'));
   let lo = Math.round(leg.minQty / lot);
-  let hi = Math.floor(leg.positionQty / lot + 1e-9);
+  let hi = Math.floor(top / lot + 1e-9);
   if (whole.net < state.left || lo >= hi) return whole;
   const first = orderOf(leg, qtyAt(lo), state);
   if (first.net >= state.left) return first;
@@ -268,12 +280,13 @@ function sizeOrder(leg: Paying, state: State): Order {
     if (orderOf(leg, qtyAt(mid), state).net >= state.left) hi = mid;
     else lo = mid;
   }
-  return orderOf(leg, Math.min(qtyAt(hi), leg.positionQty), state);
+  return orderOf(leg, Math.min(qtyAt(hi), top), state);
 }
 
 const canFund = (order: Order, state: State): boolean =>
-  order.convert === 0 ||
-  (order.convert <= state.cash + order.cashIn && order.convert * (1 - CONVERT_RATE) <= state.borrowLeft);
+  order.net > 0 &&
+  (order.convert === 0 ||
+    (order.convert <= state.cash + order.cashIn && order.convert * (1 - CONVERT_RATE) <= state.borrowLeft));
 
 function legOf(pool: Pool, leg: Paying, order: Order): RealizeLeg {
   return {
@@ -324,13 +337,18 @@ export function planRealize(input: RealizeInput): RealizePlan | null {
   let state = start;
   let unfunded = first < 0;
   const orders: Order[] = [];
+  const shown: RealizeLeg[] = [];
   const planned: RealizeLeg[] = [];
   for (const leg of ordered) {
     if (state.left <= 0) break;
     const order = sizeOrder(leg, state);
-    unfunded ||= !canFund(order, state);
     orders.push(order);
-    planned.push(legOf(input.pool, leg, order));
+    shown.push(legOf(input.pool, leg, order));
+    // A leg that frees no cash at any size only adds cost, so it is not planned.
+    // A refusal still names and shows it, so a book it runs past says so.
+    if (!(order.net > 0)) continue;
+    unfunded ||= !canFund(order, state);
+    planned.push(shown[shown.length - 1]);
     state = {
       left: state.left - order.net,
       cash: state.cash + order.cashIn - order.convert,
@@ -338,7 +356,8 @@ export function planRealize(input: RealizeInput): RealizePlan | null {
       borrowLeft: state.borrowLeft - order.convert * (1 - CONVERT_RATE),
     };
   }
-  return { legs: planned, refused: refusalOf(orders, unfunded) };
+  const refused = refusalOf(orders, unfunded);
+  return { legs: refused === null ? planned : shown, refused };
 }
 
 export function realizedNetUsd(leg: RealizeLeg): number {
