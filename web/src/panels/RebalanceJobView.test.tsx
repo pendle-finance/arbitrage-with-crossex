@@ -403,6 +403,24 @@ describe('RebalanceJobView, sliced runs', () => {
     await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'add-back' } }]));
   });
 
+  it('a part add-back names each perp size, and an even add-back keeps each', () => {
+    const view = rebalanceViews.deleverStoppedBoros;
+    const withFills = (gate: number, hl: number) =>
+      view.job!.steps.map((step) =>
+        step.name === 'Close Boros'
+          ? { ...step, addBack: { qty: 36, legs: [{ symbol: 'GATE_FUTURE_BTC_USDT', filled: gate }, { symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', filled: hl }] } }
+          : step,
+      );
+    show(view, { steps: withFills(36, 12) });
+    const split = screen.getByText(/^Perps \S+ [\d,.]+ BTC, \S+ [\d,.]+ BTC · Boros [\d,.]+ YU$/);
+    const sizes = [...split.textContent!.matchAll(/([\d,.]+) BTC/g)].map((m) => Number(m[1].replace(/,/g, '')));
+    expect(Math.abs(sizes[0] - sizes[1])).toBeCloseTo(24, 6);
+    expect(screen.queryByText(/ each · Boros/)).not.toBeInTheDocument();
+    cleanup();
+    show(view, { steps: withFills(12, 12) });
+    expect(screen.getByText(/^Perps [\d,.]+ BTC each · Boros [\d,.]+ YU$/)).toBeInTheDocument();
+  });
+
   it('boros part fill shows the filled-of line', () => {
     show(rebalanceViews.deleverStoppedBoros);
     expect(within(screen.getByRole('alert')).getByText(/^Boros filled \S+ of \S+ YU$/)).toBeInTheDocument();

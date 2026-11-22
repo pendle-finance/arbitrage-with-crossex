@@ -85,7 +85,16 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   const realCost = job.totalCostUsd ?? null;
   const estCost = job.estimate?.totalUsd ?? job.costUsd ?? 0;
   const realized = legs.reduce((sum, l) => sum + l.realizedUsd, 0) - (realCost ?? job.feeSoFarUsd ?? 0);
-  const perpsBoros = sk('perpsBorosNow', { perps: sizeText(perpNow), coin, boros: sizeText(borosNow) });
+  const addedLegs = job.steps.find((step) => step.addBack)?.addBack?.legs ?? [];
+  const perpSizes = (delever?.legs ?? []).map((l) => ({
+    venue: prettyVenue(l.exchange),
+    qty: perpNow + (addedLegs.find((row) => row.symbol === l.symbol)?.filled ?? 0),
+  }));
+  const [perpA, perpB] = perpSizes;
+  const perpsBoros =
+    perpA && perpB && perpA.qty !== perpB.qty
+      ? sk('perpsSplitBorosNow', { venueA: perpA.venue, a: sizeText(perpA.qty), venueB: perpB.venue, b: sizeText(perpB.qty), coin, boros: sizeText(borosNow) })
+      : sk('perpsBorosNow', { perps: sizeText(perpA?.qty ?? perpNow), coin, boros: sizeText(borosNow) });
   const longLeg = delever?.legs.find((l) => l.side === 'LONG');
   const shortLeg = delever?.legs.find((l) => l.side === 'SHORT');
   const header = (text: string) => <p className="num text-sm font-semibold text-ink-100">{text}</p>;

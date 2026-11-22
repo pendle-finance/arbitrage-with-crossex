@@ -48,7 +48,9 @@ import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger
 import {
   ADD_BACK_FIRST,
   addBackAbandonText,
+  addBackGapOf,
   bannerFor,
+  FIX_UNCONFIRMED,
   FOLLOW_MISSES_RED,
   gapsLeftBy,
   inTransitOf,
@@ -65,7 +67,7 @@ import {
   type MoneyLock,
   type StepName,
 } from '../rebalanceJob';
-import { applyFix, cancelRestingLead, receivedOf, runJob, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
+import { applyFix, cancelRestingLead, receivedOf, runJob, settleAddBack, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
 import { configuredRoot, createBorosCloseDeps, createPairPricer } from './borosPair';
 
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
@@ -837,10 +839,23 @@ export function rebalanceRoutes(deps: AppDeps) {
       const job = haltedOr409(store, (req.params as { id: string }).id, reply);
       if (!job) return reply;
       if (fixing) return conflict(reply, FIX_RUNNING);
-      job.status = 'abandoned';
-      job.haltReason = addBackAbandonText(job) ?? job.haltReason;
-      store.write(job);
-      return reply.ok(job);
+      const settle = settleAddBack(runnerDeps(store), job).then((unread) => {
+        job.status = 'abandoned';
+        job.haltReason = addBackAbandonText(job, unread) ?? job.haltReason;
+        const gap = addBackGapOf(job);
+        if (gap) job.openGaps = [...(job.openGaps ?? []), gap];
+        store.write(job);
+        return job;
+      });
+      fixing = settle;
+      try {
+        return reply.ok(await settle);
+      } catch (err) {
+        if (err instanceof Error && err.message === FIX_UNCONFIRMED) return conflict(reply, FIX_UNCONFIRMED);
+        throw err;
+      } finally {
+        fixing = null;
+      }
     });
   };
 }

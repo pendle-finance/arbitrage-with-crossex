@@ -614,6 +614,7 @@
     "deleverHeader": "Delever {{coin}} · {{long}} / {{short}}",
     "deleverDoneHeader": "Delever {{pct}}%",
     "perpsBorosNow": "Perps {{perps}} {{coin}} each · Boros {{boros}} YU",
+    "perpsSplitBorosNow": "Perps {{venueA}} {{a}} {{coin}}, {{venueB}} {{b}} {{coin}} · Boros {{boros}} YU",
     "borosFilled": "Boros filled {{filled}} of {{target}} YU"
   }
 }

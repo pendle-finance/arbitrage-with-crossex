@@ -318,34 +318,62 @@ export const borosWaitText = (waitMs: number): string =>
 
 export const ADD_BACK_FIRST = 'One perp is already added back. Hold to add back to finish the other first.';
 
-type AddBackRow = Pick<RealizeJobLeg, 'exchange' | 'side' | 'base'> & { filled: number; qty: number };
+type AddBackRow = Pick<RealizeJobLeg, 'symbol' | 'exchange' | 'side' | 'base'> & { filled: number; qty: number; before: number };
 
 export const addBackRowsOf = (job: Job): AddBackRow[] => {
   const plan = job.steps[job.stepIndex]?.addBack;
   if (!plan) return [];
   return (job.delever?.legs ?? []).map((perp) => ({
+    symbol: perp.symbol,
     exchange: perp.exchange,
     side: perp.side,
     base: perp.base,
     filled: plan.legs.find((row) => row.symbol === perp.symbol)?.filled ?? 0,
     qty: plan.qty,
+    before: perp.before,
   }));
 };
 
-const addBackStoppedText = (rows: Omit<AddBackRow, 'side'>[]): string =>
-  `Add back stopped: ${rows.map((row) => `${venueName(row.exchange)} ${fmtSize(row.filled)} of ${fmtSize(row.qty)} ${row.base}`).join(', ')}.`;
+const lotSize = (qty: number): string => qty.toLocaleString('en-US', { maximumFractionDigits: 8 });
 
-export const addBackPartText = (rows: Omit<AddBackRow, 'side'>[]): string => `${addBackStoppedText(rows)} Hold to add back to finish.`;
+const addBackStoppedText = (rows: Pick<AddBackRow, 'exchange' | 'base' | 'filled' | 'qty'>[]): string =>
+  `Add back stopped: ${rows.map((row) => `${venueName(row.exchange)} ${lotSize(row.filled)} of ${fmtSize(row.qty)} ${row.base}`).join(', ')}.`;
 
-export function addBackAbandonText(job: Job): string | null {
-  const rows = addBackRowsOf(job);
-  if (!rows.some((row) => row.filled > 0)) return null;
+export const addBackPartText = (rows: Pick<AddBackRow, 'exchange' | 'base' | 'filled' | 'qty'>[]): string =>
+  `${addBackStoppedText(rows)} Hold to add back to finish.`;
+
+function addBackSplit(rows: AddBackRow[]): { small: AddBackRow; large: AddBackRow; diff: number } | null {
+  if (rows.length < 2) return null;
   const small = rows.reduce((a, b) => (b.filled < a.filled ? b : a));
   const large = rows.reduce((a, b) => (b.filled > a.filled ? b : a));
-  const diff = large.filled - small.filled;
-  if (!(diff > 0)) return addBackStoppedText(rows);
+  const diff = Math.round((large.filled - small.filled) * 1e8) / 1e8;
+  return diff > 0 ? { small, large, diff } : null;
+}
+
+export function addBackAbandonText(job: Job, unread: readonly string[] = []): string | null {
+  const rows = addBackRowsOf(job);
+  const unconfirmed = rows.filter((row) => unread.includes(row.symbol));
+  if (!rows.some((row) => row.filled > 0) && unconfirmed.length === 0) return null;
+  const split = addBackSplit(rows);
+  const checks = unconfirmed.map(
+    (row) => ` Gate has not confirmed the ${venueName(row.exchange)} add back order. Check the ${legName(row)} in Positions before you trade.`,
+  );
+  if (!split) return `${addBackStoppedText(rows)}${checks.join('')}`;
+  const { small, large, diff } = split;
   const leg: OpenLeg = { exchange: small.exchange, side: small.side, base: small.base, hedge: large.exchange };
-  return `${addBackStoppedText(rows)} The ${legGapText(leg, diff)} Close ${fmtSize(diff)} ${leg.base} of the ${otherLegName(leg)} in Positions.`;
+  const gap = `The ${legName(leg)} is ${lotSize(diff)} ${leg.base} smaller than the ${otherLegName(leg)}. Close ${lotSize(diff)} ${leg.base} of the ${otherLegName(leg)} in Positions.`;
+  return `${addBackStoppedText(rows)} ${gap}${checks.join('')}`;
+}
+
+export function addBackGapOf(job: Job): OpenGap | null {
+  const split = addBackSplit(addBackRowsOf(job));
+  if (!split) return null;
+  const { small, large, diff } = split;
+  return {
+    leg: { symbol: small.symbol, base: small.base, exchange: small.exchange, side: small.side, positionQty: small.before, hedge: large.exchange },
+    qty: diff,
+    hedges: [{ symbol: large.symbol, exchange: large.exchange, side: large.side, qty: large.before }],
+  };
 }
 
 export const REOPEN_HALT = {

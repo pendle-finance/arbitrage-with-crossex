@@ -15,7 +15,8 @@ import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
 import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
 import { InterestFile } from '../../src/server/interestLedger';
-import { JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
+import { gapsLeftBy, JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
+import { LOOKUP_WINDOW_MS } from '../../src/server/rebalanceRunner';
 import { isShownRealize } from '../../src/server/routes/rebalance';
 import { gate, HOST, makeTestApp, mockGateGet, orderBody, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 import { accountA, asset, waitFor } from './helpers/rebalance';
@@ -1307,6 +1308,123 @@ describe('POST /api/rebalance with a close and reopen', () => {
       status: 'abandoned',
       haltReason: `Add back stopped: Hyperliquid ${size} of ${size} ETH, Gate 0 of ${size} ETH. The Gate long is ${size} ETH smaller than the Hyperliquid short. Close ${size} ETH of the Hyperliquid short in Positions.`,
     });
+  });
+
+  const GATE_ETH_PERP = 'GATE_FUTURE_ETH_USDT';
+  const addBackOrder = (venueId: string | null, sentAt: number) => ({ text: `t-ab-${sentAt}`, venueId, sentAt, credited: 0, poc: false, price: null, side: 'SELL' as const, mid: null });
+  const gapText = (size: string) => `The Gate long is ${size} ETH smaller than the Hyperliquid short. Close ${size} ETH of the Hyperliquid short in Positions.`;
+
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('Abandon reads an unconfirmed add back order by tag, credits its fill and names the gap, %d ETH', async (q, size) => {
+    mockAccount(ownerAccount());
+    gate().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).reply(200, orderBody({ order_id: '901', symbol: HL_ETH, side: 'SELL', executed_qty: String(q), state: 'FILLED' }));
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Gate has not confirmed the last order yet. Try again in two minutes.' });
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: 0, order: addBackOrder(null, t) }, { symbol: GATE_ETH_PERP, filled: 0, order: null }] };
+    h.jobs.write(job);
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(abandon.statusCode).toBe(200);
+    const file = h.file();
+    expect(file.status).toBe('abandoned');
+    expect(file.haltReason).toBe(`Add back stopped: Hyperliquid ${size} of ${size} ETH, Gate 0 of ${size} ETH. ${gapText(size)}`);
+    expect(file.steps[file.stepIndex].addBack?.legs[0]).toMatchObject({ filled: q, order: null });
+    expect(file.openGaps).toEqual([
+      {
+        leg: { symbol: GATE_ETH_PERP, base: 'ETH', exchange: 'GATE', side: 'LONG', positionQty: 66, hedge: 'HYPERLIQUID' },
+        qty: q,
+        hedges: [{ symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SHORT', qty: 66 }],
+      },
+    ]);
+  });
+
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('Abandon refuses while an add back order is still unknown inside the lookup window, %d ETH', async (q) => {
+    mockAccount(ownerAccount());
+    gate().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).reply(404, { label: 'ORDER_NOT_FOUND', message: 'not found' });
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    const order = addBackOrder('902', t - 1_000);
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order }] };
+    h.jobs.write(job);
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(abandon.statusCode).toBe(409);
+    expect(abandon.json().error.message).toBe('Gate has not confirmed the last order yet. Try again in two minutes.');
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'Add back stopped.' });
+    expect(h.file().steps[job.stepIndex].addBack?.legs[1].order).toMatchObject({ venueId: '902' });
+    expect(h.file().openGaps).toBeUndefined();
+  });
+
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('after the lookup window with no order found, Abandon goes ahead and names the fills it knows, %d ETH', async (q, size) => {
+    mockAccount(ownerAccount());
+    gate().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).reply(404, { label: 'ORDER_NOT_FOUND', message: 'not found' });
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    const order = addBackOrder('903', t - LOOKUP_WINDOW_MS - 1);
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order }] };
+    h.jobs.write(job);
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(abandon.statusCode).toBe(200);
+    expect(h.file()).toMatchObject({
+      status: 'abandoned',
+      haltReason: `Add back stopped: Hyperliquid ${size} of ${size} ETH, Gate 0 of ${size} ETH. ${gapText(size)} Gate has not confirmed the Gate add back order. Check the Gate long in Positions before you trade.`,
+    });
+    expect(h.file().steps[job.stepIndex].addBack?.legs[1].order).toBeNull();
+  });
+
+  it.each([
+    [0.004, 'BTC', '0.004', '0.004'],
+    [333.3333, 'ETH', '333.3333', '333.33'],
+    [2_000, 'ETH', '2,000', '2,000'],
+  ])('the add back gap prints the whole lot size, %d %s', async (q, coin, size, target) => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    for (const leg of job.delever!.legs) leg.base = coin;
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order: null }] };
+    h.jobs.write(job);
+
+    await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(h.file().haltReason).toBe(
+      `Add back stopped: Hyperliquid ${size} of ${target} ${coin}, Gate 0 of ${target} ${coin}. The Gate long is ${size} ${coin} smaller than the Hyperliquid short. Close ${size} ${coin} of the Hyperliquid short in Positions.`,
+    );
+  });
+
+  it.each([0.0166, 2_000])('an abandoned part add back keeps its perp gap after the Boros close, %d ETH', async (q) => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order: null }] };
+    h.jobs.write(job);
+    await h.post(`/api/rebalance/${job.id}/abandon`);
+    h.jobs.write({ ...h.file(), borosLeftYu: 0, borosGapYu: 0 });
+
+    const closed = h.file();
+    const uneven = [
+      { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SHORT' as const, qty: 33 + q },
+      { symbol: GATE_ETH_PERP, exchange: 'GATE', side: 'LONG' as const, qty: 33 },
+    ];
+    expect(gapsLeftBy(closed, uneven)).toEqual([expect.objectContaining({ qty: q, leg: expect.objectContaining({ symbol: GATE_ETH_PERP, side: 'LONG' }) })]);
+    const even = [{ ...uneven[0], qty: 33 }, uneven[1]];
+    expect(gapsLeftBy(closed, even)).toEqual([]);
   });
 
   it('a fix sent while the boot cancel runs is answered, and Abandon works after it', async () => {

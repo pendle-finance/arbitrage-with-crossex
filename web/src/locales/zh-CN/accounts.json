@@ -607,6 +607,7 @@
     "deleverHeader": "降规模 {{coin}} · {{long}} / {{short}}",
     "deleverDoneHeader": "降规模 {{pct}}%",
     "perpsBorosNow": "永续 每边 {{perps}} {{coin}} · Boros {{boros}} YU",
+    "perpsSplitBorosNow": "永续 {{venueA}} {{a}} {{coin}}，{{venueB}} {{b}} {{coin}} · Boros {{boros}} YU",
     "borosFilled": "Boros 已成交 {{filled}} / {{target}} YU"
   }
 }

@@ -507,6 +507,28 @@ async function addBackLeg(
   }
 }
 
+export async function settleAddBack(deps: RunnerDeps, job: Job): Promise<string[]> {
+  const unread: string[] = [];
+  for (const row of job.steps[job.stepIndex]?.addBack?.legs ?? []) {
+    const order = row.order;
+    if (!order) continue;
+    const body = await readOrder(deps.clients().crossEx, order.venueId ?? order.text);
+    if (!body) {
+      if (deps.now() - order.sentAt < LOOKUP_WINDOW_MS) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+      if (order.venueId !== null) unread.push(row.symbol);
+    } else {
+      order.venueId = order.venueId ?? (body.orderId ? String(body.orderId) : null);
+      const { delta, closed } = creditOrder(job, order, body);
+      row.filled = addQty(row.filled, delta);
+      deps.jobs.write(job);
+      if (!closed) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    }
+    row.order = null;
+    deps.jobs.write(job);
+  }
+  return unread;
+}
+
 export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): Promise<Job> {
   const step = job.steps[job.stepIndex];
   const crossEx = deps.clients().crossEx;
