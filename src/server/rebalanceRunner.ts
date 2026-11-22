@@ -469,7 +469,7 @@ async function addBackLeg(
   const crossEx = deps.clients().crossEx;
   const rule = await sliceRule(deps, perp.symbol);
   const lot = Number(rule.lot);
-  const wantLots = Math.floor(qty / lot + 1e-9);
+  const wantLots = lotsDownOf(qty, rule.lot);
   const max = positiveOf(rule.limits.maxMarketSize);
   const maxLots = max > 0 ? Math.max(1, Math.floor(max / lot + 1e-9)) : Number.POSITIVE_INFINITY;
   const side = perp.side === 'SHORT' ? 'SELL' : 'BUY';
@@ -1658,8 +1658,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const followRateLimited = (step: Step): void => {
-    rateLimits += 1;
-    step.nextTryAt = deps.now() + Math.min(REOPEN_FIRST_WAIT_MS * 2 ** (rateLimits - 1), REOPEN_MAX_WAIT_MS);
+    followRateLimits += 1;
+    step.nextTryAt = deps.now() + Math.min(REOPEN_FIRST_WAIT_MS * 2 ** (followRateLimits - 1), REOPEN_MAX_WAIT_MS);
     deps.jobs.write(job);
   };
 
@@ -1737,7 +1737,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
     try {
       sent.venueId = await placePerp(crossEx(), follow, sent.text, qtyText(lots, rule.lot), { kind: 'ioc', price: priced.price });
-      rateLimits = 0;
+      followRateLimits = 0;
       deps.jobs.write(job);
     } catch (err) {
       const c = classifyGateError(err);
@@ -1750,6 +1750,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   let leadMisses = 0;
   let rateLimits = 0;
+  let followRateLimits = 0;
   const leadMissed = (reason: string): boolean => {
     leadMisses += 1;
     if (leadMisses < FOLLOW_MISSES_RED) return false;
