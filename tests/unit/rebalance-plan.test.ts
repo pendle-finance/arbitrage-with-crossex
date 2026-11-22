@@ -1918,19 +1918,26 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
     return sumOf(route.steps.filter((step) => step.to === to).map((step) => step.move)) + sumOf(converts.map((step) => step.planned ?? 0));
   };
 
-  it('a custom move to Lighter does not count the Convert that the job sends to Hyperliquid', () => {
-    const book = threeWallets({ CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: 0 }, 'CROSSEX');
-    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'LIGHTER', amount: 5_000 };
+  it.each([
+    ['CROSSEX', { CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: 0 }],
+    ['HYPERLIQUID', { CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: 0 }],
+  ] as const)('a custom move from %s to Lighter does not count the Convert the job sends elsewhere', (payer, cash) => {
+    const book = threeWallets(cash, payer);
+    const goal: Goal = { kind: 'custom', from: payer, to: 'LIGHTER', amount: 5_000 };
     const plan = planFor(book.buckets, book.account, book.inputs, goal);
     expect(plan.realize?.refused).toBeNull();
     expect(sumOf((plan.realize?.legs ?? []).map((leg) => leg.convert?.amount ?? 0))).toBeGreaterThan(1_500);
     expectReplayMatches(book.buckets, plan);
     expect(sentTo(plan, 'LIGHTER') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
 
+    // The maximum closes the whole perp and sends it all; $10 more is short.
     const max = plan.customMaxUsd ?? 0;
     const atMax = planFor(book.buckets, book.account, book.inputs, { ...goal, amount: max });
+    expect(sumOf((atMax.realize?.legs ?? []).map((leg) => leg.qty))).toBeCloseTo(1, 6);
     expect(atMax.shortOfEven).toBeLessThan(1);
     expect(sentTo(atMax, 'LIGHTER')).toBeGreaterThanOrEqual(max - 1);
+    const over = planFor(book.buckets, book.account, book.inputs, { ...goal, amount: max + 10 });
+    expect(over.shortOfEven).toBeGreaterThanOrEqual(9);
   });
 
   it('a custom move to the Convert target still counts the Convert', () => {
@@ -1941,6 +1948,31 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
     expectReplayMatches(book.buckets, plan);
     expect(sentTo(plan, 'HYPERLIQUID') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
     expect(sentTo(plan, 'HYPERLIQUID')).toBeLessThanOrEqual(5_000 + 0.01);
+  });
+
+  it('balance where the Convert target is a sender closes no more of the perp than the move needs', () => {
+    // CrossEx borrows 3,000 USDT but its Gate perp is $5,000 in profit, so its
+    // equity is over its share and it is not a receiver of Hyperliquid.
+    const base = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: 0 }, 'HYPERLIQUID', 300_000);
+    const assets = (base.account.assets ?? []).map((asset) =>
+      asset.coin === 'USDT' ? { ...asset, upnl: '5000', equity: String(-3_000 + 5_000) } : asset,
+    );
+    const account: AccountLike = {
+      ...base.account,
+      marginBalance: String(Number(base.account.marginBalance) + 5_000),
+      initialMargin: String(Number(base.account.marginBalance) + 5_000),
+      assets,
+    };
+    const perps = [perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK + 10_000, BTC_MARK), perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK - 5_000, BTC_MARK)];
+    const buckets = bucketsFrom(account, RATES, {});
+    const plan = planFor(buckets, account, { ...base.inputs, perps }, EVEN_GOAL);
+    expect(plan.realize?.refused).toBeNull();
+    expect(plan.realize?.legs.find((leg) => leg.pool === 'HYPERLIQUID')?.convert).not.toBeNull();
+    expectReplayMatches(buckets, plan);
+    expect(plan.shortOfEven).toBeLessThan(1);
+    // Closing more than the move needs would leave the extra as idle Hyperliquid cash.
+    const after = plan.routes[plan.recommended ?? 'convert']?.after ?? [];
+    expect(after.find(isPool('HYPERLIQUID'))?.cash ?? Infinity).toBeLessThan(100);
   });
 
   it('balance with Lighter as the widest receiver and no Lighter borrow funds the reopen from the CrossEx borrow', () => {

@@ -983,15 +983,18 @@ interface Paying {
   from: Pool;
   moveUsd: number;
   cashUsd: number;
-  /** The job sends the reopen's Convert to CONVERT_TO[from]; this says whether that wallet is one the move sends to. */
+  /** The job sends the reopen's Convert to CONVERT_TO[from]. Even and repay re-plan from equity after step 1,
+   * so the Convert always counts as the payer's outflow. A custom move counts it only when it lands in goal.to. */
   convertCounts: boolean;
 }
+
+const convertCountsFor = (goal: Goal, from: Pool): boolean => goal.kind !== 'custom' || CONVERT_TO[from] === goal.to;
 
 function payingOf(book: Book, moves: Move[], start: number[], realizable: ReadonlySet<Pool>): Paying | null {
   const senders = [...new Set(moves.map((move) => move.from))].filter((from) => realizable.has(from)).map((from): Paying & { gap: number } => {
     const moveUsd = sum(moves.flatMap((move, index) => (move.from === from ? [start[index]] : [])));
     const cashUsd = sendableCash(book, from);
-    const convertCounts = moves.some((move) => move.from === from && move.to === CONVERT_TO[from]);
+    const convertCounts = convertCountsFor(book.goal, from);
     return { from, moveUsd, cashUsd, convertCounts, gap: moveUsd - cashUsd };
   });
   const widest = senders.sort((a, b) => b.gap - a.gap)[0];
@@ -1185,7 +1188,7 @@ function customMaxOf(
     },
     goal.from,
   );
-  const convertCounts = CONVERT_TO[goal.from] === goal.to;
+  const convertCounts = convertCountsFor(goal, goal.from);
   const whole = planRealize(
     realizeInput(buckets, account, inputs, { from: goal.from, moveUsd: Infinity, cashUsd, convertCounts }),
   );
