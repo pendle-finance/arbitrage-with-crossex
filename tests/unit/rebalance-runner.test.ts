@@ -7169,12 +7169,12 @@ describe('slices: rate limits', () => {
   it.each([
     [50, 25_000],
     [6_000_000, 100_000],
-  ])('three rate-limited follows in a row never halt and never count as follow misses (%d USD)', async (usd, sliceUsd) => {
+  ])('twelve rate-limited follows in a row never halt and never count as follow misses (%d USD)', async (usd, sliceUsd) => {
     const qty = Number(floorToStep(usd / 3000, '0.0001'));
     let limited = 0;
     const misses: number[] = [];
     const venue = sliceVenue((req) => {
-      if (String(req.side) === 'SELL' && limited < 3) {
+      if (String(req.side) === 'SELL' && limited < 12) {
         limited += 1;
         return RATE_LIMITED;
       }
@@ -7187,7 +7187,7 @@ describe('slices: rate limits', () => {
       write(job);
     };
     await h.run();
-    expect(limited).toBe(3);
+    expect(limited).toBe(12);
     expect(h.onHalt).not.toHaveBeenCalled();
     expect(Math.max(...misses)).toBe(0);
     expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0, follow: null, followMisses: 0 });

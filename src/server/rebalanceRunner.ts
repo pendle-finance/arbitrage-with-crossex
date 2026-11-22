@@ -147,7 +147,11 @@ const DELIST_LABEL = 'TRADE_DELIST_OPEN_PROHIBITED_ERROR';
 const ORDER_ALLOWANCE_LABELS: readonly string[] = ['TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', 'TRADE_LIGHTER_ORDER_LIMIT_ERROR'];
 
 const lotsOf = (qty: number, lot: string): number => Math.round(qty / Number(lot));
-const lotsDownOf = (qty: number, lot: string): number => Math.floor(qty / Number(lot) + 1e-9);
+const lotsDownOf = (qty: number, lot: string): number => {
+  const lots = qty / Number(lot);
+  const near = Math.round(lots);
+  return Math.abs(lots - near) <= 1e-9 * Math.max(1, near) ? near : Math.floor(lots);
+};
 
 const NOT_FOUND = /NOT_FOUND/i;
 const TRANSFER_DEAD = /FAIL|CANCEL|REJECT|EXPIRE/i;
@@ -1655,7 +1659,6 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const followRateLimited = (step: Step): void => {
     rateLimits += 1;
-    if (rateLimits >= RATE_LIMIT_HALT_AFTER) return halt(HALT_TEXT.rateLimited);
     step.nextTryAt = deps.now() + Math.min(REOPEN_FIRST_WAIT_MS * 2 ** (rateLimits - 1), REOPEN_MAX_WAIT_MS);
     deps.jobs.write(job);
   };
