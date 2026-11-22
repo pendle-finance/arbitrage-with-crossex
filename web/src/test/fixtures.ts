@@ -2948,6 +2948,30 @@ function deleverJobs(size: number, sliceUsd: number, b: BorrowBook) {
     ...pausedGap, paused: false, haltKind: 'margin',
     haltReason: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
   };
+  const stoppedBoros: RebalanceJob = {
+    ...base, ...finished(r6(close * 0.8)), steps: steps('done', 'running'), stepIndex: 1, status: 'halted', haltKind: 'boros',
+    haltReason: 'Boros did not close all of its share. The rest has no perp behind it.',
+  };
+  const addBackQty = stoppedBoros.borosLeftYu ?? 0;
+  const addBackText = addBackQty.toLocaleString('en-US', { maximumFractionDigits: 8 });
+  const [firstPerp, secondPerp] = plan.legs;
+  const addBackSteps = (boros: RebalanceStep['status']): RebalanceStep[] =>
+    steps('done', boros).map((step, index) => (index === 1 ? {
+      ...step, addBack: { qty: addBackQty, legs: [{ symbol: firstPerp!.symbol, filled: addBackQty }, { symbol: secondPerp!.symbol, filled: 0 }] },
+    } : step));
+  const addBackStopped = `Add back stopped: Hyperliquid ${addBackText} of ${addBackText} BTC, Gate 0 of ${addBackText} BTC.`;
+  const partAddBack: RebalanceJob = {
+    ...stoppedBoros, steps: addBackSteps('running'), haltReason: `${addBackStopped} Hold to add back to finish.`,
+  };
+  const abandonedAddBack: RebalanceJob = {
+    ...stoppedBoros, ...finished(close), borosGapYu: 0, borosLeftYu: 0, steps: addBackSteps('done'), status: 'abandoned',
+    haltReason: `${addBackStopped} The Gate short is ${addBackText} BTC smaller than the Hyperliquid long. Close ${addBackText} BTC of the Hyperliquid long in Positions.`,
+    openGaps: [{
+      leg: { symbol: secondPerp!.symbol, base: 'BTC', exchange: 'GATE', side: 'SHORT', positionQty: size, hedge: 'HYPERLIQUID' },
+      qty: addBackQty,
+      hedges: [{ symbol: firstPerp!.symbol, exchange: 'HYPERLIQUID', side: 'LONG', qty: size }],
+    }],
+  };
   return {
     running,
     pausing: { ...running, pauseRequested: true } satisfies RebalanceJob,
@@ -2958,10 +2982,9 @@ function deleverJobs(size: number, sliceUsd: number, b: BorrowBook) {
       ...running, slice: { index: doneSlices, count, sizeUsd: sliceUsd }, status: 'halted', paused: true, notHedgedQty: 0, follow: null,
       borosGapYu: r6(doneSlices * sliceQty),
     } satisfies RebalanceJob,
-    stoppedBoros: {
-      ...base, ...finished(r6(close * 0.8)), steps: steps('done', 'running'), stepIndex: 1, status: 'halted', haltKind: 'boros',
-      haltReason: 'Boros did not close all of its share. The rest has no perp behind it.',
-    } satisfies RebalanceJob,
+    stoppedBoros,
+    partAddBack,
+    abandonedAddBack,
     done: {
       ...base, ...finished(close), steps: steps('done', 'done'), stepIndex: 1, status: 'done', totalCostUsd: r2(estimate.totalUsd * 1.03),
       createdAt: REBALANCE_NOW - 3_600_000, updatedAt: REBALANCE_NOW,
@@ -3290,6 +3313,8 @@ export const extraRebalanceViews = {
   deleverPausing: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.pausing),
   deleverHaltedGap: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.haltedGap),
   deleverAbandonedGap: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.abandonedGap),
+  deleverPartAddBack: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.partAddBack),
+  deleverAbandonedAddBack: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.abandonedAddBack),
   deleverFollowMissed: withJob(acctView(OWNER_ACCOUNT), DELEVER_JOBS.followMissed),
   deleverDoneNoBorrow: withJob(
     { ...acctView(OWNER_ACCOUNT), buckets: acctBuckets(borrowBook(0, 55.98, 9400, 0.0596)) }, DELEVER_JOBS.done,
@@ -3339,6 +3364,8 @@ export const whaleRebalanceViews = {
   realizePaused: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_JOBS.paused),
   deleverPausedGap: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.pausedGap),
   deleverStoppedBoros: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.stoppedBoros),
+  deleverPartAddBack: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.partAddBack),
+  deleverAbandonedAddBack: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.abandonedAddBack),
   deleverDone: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_DELEVER_JOBS.done),
   ownerAccount: acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD),
   realizeRunning: withJob(acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD), WHALE_JOBS.running),
@@ -4243,6 +4270,14 @@ const GATE_RISK_TIERS: MarginTiers = {
 
 const HYPE_MARK_STALE_AT = new Date(2026, 8, 21, 14, 32).getTime();
 
+function abandonedAddBackPositions(gateQty: number, hyperliquidQty: number): CrossexPosition[] {
+  const leg = (symbol: string, side: 'LONG' | 'SHORT', qty: number) => makeCrossexPosition({
+    symbol, positionSide: side, positionQty: roundedText(side === 'LONG' ? qty : -qty), positionValue: roundedText(qty * BTC_MID),
+    entryPrice: roundedText(BTC_MID), markPrice: roundedText(BTC_MID),
+  });
+  return [leg(HL_BTC, 'LONG', hyperliquidQty), leg(GATE_BTC, 'SHORT', gateQty)];
+}
+
 export const positionsBodies = {
   ethTwoVenues: {
     positions: [
@@ -4363,6 +4398,8 @@ export const positionsBodies = {
     ],
     marginTiers: GATE_RISK_TIERS,
   },
+  deleverAbandonedAddBack: positionsWithExposure(abandonedAddBackPositions(720, 756)),
+  deleverAbandonedAddBackWhale: positionsWithExposure(abandonedAddBackPositions(53.36, 56.028)),
 } satisfies Record<string, PositionsResponse>;
 
 const MIN_MS = 60_000;

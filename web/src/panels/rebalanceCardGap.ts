@@ -51,7 +51,8 @@ export const hasLeftGap = (job: RebalanceJob): boolean => leftGapsOf(job).length
 function liveGapOf({ leg, qty, hedges }: LeftGap, positions: readonly CrossexPosition[] | undefined): number {
   if (!positions) return qty;
   const live = perpsOf(positions);
-  const otherShrink = hedges ? qtyOf(hedges, () => true) - qtyOf(live, (row) => isOtherLeg(row, leg)) : 0;
+  const stored = (row: PerpRow): boolean => (hedges ?? []).some((hedge) => hedge.symbol === row.symbol && hedge.side === row.side);
+  const otherShrink = hedges ? qtyOf(hedges, () => true) - qtyOf(live, stored) : 0;
   const legShrink = leg.positionQty - qtyOf(live, (row) => row.symbol === leg.symbol && row.side === leg.side);
   return Math.min(qty, legShrink - otherShrink);
 }

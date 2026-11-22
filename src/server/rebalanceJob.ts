@@ -365,14 +365,32 @@ export function addBackAbandonText(job: Job, unread: readonly string[] = []): st
   return `${addBackStoppedText(rows)} ${gap}${checks.join('')}`;
 }
 
-export function addBackGapOf(job: Job): OpenGap | null {
-  const split = addBackSplit(addBackRowsOf(job));
-  if (!split) return null;
-  const { small, large, diff } = split;
+export function addBackGapsOf(job: Job, unread: readonly string[] = []): OpenGap[] {
+  const rows = addBackRowsOf(job);
+  const most = (row: AddBackRow): number => (unread.includes(row.symbol) ? Math.max(row.filled, row.qty) : row.filled);
+  return rows.flatMap((small) =>
+    rows.flatMap((large): OpenGap[] => {
+      const diff = Math.round((most(large) - small.filled) * 1e8) / 1e8;
+      if (large === small || diff <= 0) return [];
+      return [
+        {
+          leg: { symbol: small.symbol, base: small.base, exchange: small.exchange, side: small.side, positionQty: small.before, hedge: large.exchange },
+          qty: diff,
+          hedges: [{ symbol: large.symbol, exchange: large.exchange, side: large.side, qty: large.before }],
+        },
+      ];
+    }),
+  );
+}
+
+export function restGapOf(job: Job, lead: RealizeJobLeg, followSymbol: string, rest: number): OpenGap | null {
+  const other = job.delever?.legs.find((row) => row.symbol === followSymbol && row.symbol !== lead.symbol);
+  if (!other) return null;
+  const { symbol, base, exchange, side, positionQty } = lead;
   return {
-    leg: { symbol: small.symbol, base: small.base, exchange: small.exchange, side: small.side, positionQty: small.before, hedge: large.exchange },
-    qty: diff,
-    hedges: [{ symbol: large.symbol, exchange: large.exchange, side: large.side, qty: large.before }],
+    leg: { symbol, base, exchange, side, positionQty, hedge: other.exchange },
+    qty: rest,
+    hedges: [{ symbol: other.symbol, exchange: other.exchange, side: other.side, qty: other.before }],
   };
 }
 
@@ -743,7 +761,8 @@ const sizeOf = (perps: JobPerp[]): number => perps.reduce((total, perp) => total
 function isGapOpen(gap: OpenGap, live: JobPerp[]): boolean {
   const { leg } = gap;
   const legShrink = leg.positionQty - sizeOf(live.filter((perp) => perp.symbol === leg.symbol && perp.side === leg.side));
-  const hedgeShrink = sizeOf(gap.hedges) - sizeOf(hedgesOf(leg, live));
+  const stored = live.filter((perp) => gap.hedges.some((hedge) => hedge.symbol === perp.symbol && hedge.side === perp.side));
+  const hedgeShrink = sizeOf(gap.hedges) - sizeOf(stored);
   return Math.min(gap.qty, legShrink - hedgeShrink) > leg.positionQty * 1e-9;
 }
 

@@ -594,6 +594,7 @@
     "borosNotHedged": "Boros {{amount}} YU not hedged",
     "holdRetryBoros": "Hold to retry closing {{amount}} YU on Boros",
     "holdAddBack": "Hold to add {{qty}} {{coin}} back on both perps",
+    "holdAddBackOn": "Hold to add back {{rest}}",
     "perpsLine": "Perps · slice {{i}} of {{n}} {{old}} → {{now}} {{coin}} each",
     "borosLine": "Boros {{amount}} → {{end}} YU · closes after perps",
     "notHedgedMax": "Not hedged now max {{qty}} {{coin}} ({{usd}}) per slice",

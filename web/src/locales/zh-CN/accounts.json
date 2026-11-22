@@ -587,6 +587,7 @@
     "borosNotHedged": "Boros {{amount}} YU 未对冲",
     "holdRetryBoros": "长按重试在 Boros 平掉 {{amount}} YU",
     "holdAddBack": "长按在两条永续上各加回 {{qty}} {{coin}}",
+    "holdAddBackOn": "长按加回 {{rest}}",
     "perpsLine": "永续 · 第 {{i}} 片（共 {{n}} 片）{{old}} → {{now}} {{coin}}（每条）",
     "borosLine": "Boros {{amount}} → {{end}} YU · 永续之后平仓",
     "notHedgedMax": "当前未对冲，每片最多 {{qty}} {{coin}}（{{usd}}）",

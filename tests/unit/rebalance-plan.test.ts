@@ -1793,6 +1793,36 @@ describe('fullPlanOf', () => {
     expect(full?.costUsd).toBe(full?.moveCostUsd);
   });
 
+  const ownerShapeAt = (borrow: number, usdcCash = 55.98 * (borrow / 7_169.33)) => {
+    const scale = borrow / 7_169.33;
+    const qty = Number(roundToStep(20 * scale, '0.0001', 'down'));
+    return realizeBook({
+      usdt: { cash: -borrow, upnl: 0 },
+      usdc: { cash: usdcCash, upnl: qty * (2_250 - 1_821) },
+      availableMargin: 2_000 * scale,
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 2_250, 1_821), perp('GATE_FUTURE_ETH_USDT', qty, 1_821, 1_821)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: qty * 1_821,
+    });
+  };
+
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('full plan at every rung of the size ladder (%d USD borrow)', (borrow) => {
+    const book = ownerShapeAt(borrow);
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    const perDay = usdtPerDay(book.buckets);
+    expect(full).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
+    expect(full?.costUsd).toBe(Math.round(((full?.moveCostUsd ?? 0) + (full?.realizeCostUsd ?? 0)) * 100) / 100);
+    expect(full?.days).toBe(Math.ceil(Math.round(((full?.costUsd ?? 0) / perDay) * 1e6) / 1e6));
+    expect(full?.interestPerMonthUsd).toBe(Math.round(perDay * 30 * 100) / 100);
+    expect(full?.interestPerMonthUsd ?? 0).toBeCloseTo(((borrow * 0.0596) / 365) * 30, 1);
+  });
+
+  it.each([0.99, 1.01])('a borrow of %d USD next to the 1 USD dust line', (borrow) => {
+    const book = ownerShapeAt(borrow, 100);
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    expect(full).toMatchObject({ costUsd: 0, days: 0, clearsBorrow: true, needsRealize: false, refused: null });
+  });
+
   it('a refused realize leaves the borrow open and names the refusal', () => {
     const full = fullPlanOf(owner.buckets, owner.account, { ...owner.inputs, feeRows: [] });
     expect(full).toMatchObject({ needsRealize: true, clearsBorrow: false, realizeCostUsd: 0 });

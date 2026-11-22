@@ -399,7 +399,7 @@ describe('RebalanceJobView, sliced runs', () => {
     const { posts } = show(rebalanceViews.deleverStoppedBoros, { steps });
     expect(screen.queryByRole('button', { name: /^Hold to retry closing/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
-    hold(/^Hold to add 36(\.0+)? BTC back on both perps$/);
+    hold(/^Hold to add back Hyperliquid 36(\.0+)? BTC$/);
     await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'add-back' } }]));
   });
 
@@ -416,9 +416,11 @@ describe('RebalanceJobView, sliced runs', () => {
     const sizes = [...split.textContent!.matchAll(/([\d,.]+) BTC/g)].map((m) => Number(m[1].replace(/,/g, '')));
     expect(Math.abs(sizes[0] - sizes[1])).toBeCloseTo(24, 6);
     expect(screen.queryByText(/ each · Boros/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to add back Hyperliquid 24(\.0+)? BTC$/ })).toBeInTheDocument();
     cleanup();
     show(view, { steps: withFills(12, 12) });
     expect(screen.getByText(/^Perps [\d,.]+ BTC each · Boros [\d,.]+ YU$/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to add 24(\.0+)? BTC back on both perps$/ })).toBeInTheDocument();
   });
 
   it('boros part fill shows the filled-of line', () => {

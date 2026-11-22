@@ -8,6 +8,7 @@ import { floorToStep } from '../../src/core/numbers';
 import { marginPerConvertUsdc, realizeEstimateOf, type RealizeLeg, type RealizePlan } from '../../src/core/rebalance/realize';
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import { pickCloseMakerLeg } from '../../src/core/estimate/closeMaker';
+import { clipBandPrice } from '../../src/engine/decide';
 import { closeBorosLegs, MAY_HAVE_FILLED, type BorosCloseDeps, type BorosCloseInput } from '../../src/server/borosClose';
 import { CoreError } from '../../src/core/errors';
 import {
@@ -26,7 +27,10 @@ import { TtlCache } from '../../src/server/cache';
 import {
   convertSteps,
   HALT_TEXT,
+  gapsLeftBy,
   JobFile,
+  MAKER_REST_MS,
+  SLIPPAGE_BAND_BP,
   newJob,
   REOPEN_HALT,
   TO_USDC_STEPS,
@@ -6837,6 +6841,50 @@ describe('slices: lead and follow', () => {
     expect(venue.reqs()[1]).toMatchObject({ type: 'LIMIT', timeInForce: 'IOC', reduceOnly: TRUE, price: '3007.5', qty: '5' });
   });
 
+  it('a resting lead stays post-only at 299,999 ms and turns IOC at 300,000 ms', async () => {
+    const venue = sliceVenue((req, index) => (index === 0 ? { state: 'OPEN', executed: '0' } : filled(req)));
+    const read = venue.handlers.getCrossexOrder;
+    const elapsed = [MAKER_REST_MS - 1, MAKER_REST_MS];
+    const seen: { elapsed: number; cancels: number; orders: number }[] = [];
+    let shift = 0;
+    let h: ReturnType<typeof sliceRun> | null = null;
+    venue.handlers.getCrossexOrder = async (key: never) => {
+      const cutAt = h?.jobs.read()?.steps.find((step) => step.cut)?.cut?.at;
+      const target = elapsed[seen.length];
+      if (h && key === 'o1' && venue.cancels.length === 0 && cutAt !== undefined && target !== undefined) {
+        shift = cutAt + target - h.clock.now();
+        seen.push({ elapsed: target, cancels: venue.cancels.length, orders: venue.placed.length });
+      }
+      return read(key);
+    };
+    h = sliceRun(venue);
+    const clockNow = h.clock.now;
+    Object.assign(h.deps, { now: () => clockNow() + shift });
+    await h.run();
+    expect(seen).toEqual([
+      { elapsed: 299_999, cancels: 0, orders: 1 },
+      { elapsed: 300_000, cancels: 0, orders: 1 },
+    ]);
+    expect(h.sequence.slice(0, h.sequence.indexOf('cancelCrossexOrder')).filter((name) => name === 'getCrossexOrder')).toHaveLength(2);
+    expect(venue.cancels).toEqual(['o1']);
+    expect(venue.reqs()[0]).toMatchObject({ type: 'LIMIT', timeInForce: 'POC', qty: '5' });
+    expect(venue.reqs()[1]).toMatchObject({ side: 'BUY', type: 'LIMIT', timeInForce: 'IOC', reduceOnly: TRUE, qty: '5' });
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it('a mid under 1e-6 never reaches the order body as an exponent', async () => {
+    const mid = 0.00000009;
+    const leg = { contract: GATE_ETH, side: 'BUY' as const, lot: '1', minSize: '0', minNotional: '0', tick: '0.00000001' };
+    expect(String(mid)).toBe('9e-8');
+    expect(() => clipBandPrice(String(mid), leg, SLIPPAGE_BAND_BP)).toThrow('fx: not a plain decimal string: "9e-8"');
+    expect(clipBandPrice('0.00000009', leg, SLIPPAGE_BAND_BP)).toBe('0.00000009');
+    const venue = sliceVenue();
+    const h = sliceRun(venue, { exec: 'market', book: () => bookAt(0.00000008, 0.0000001) });
+    await h.run();
+    expect(h.count('createCrossexOrder')).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: 'fx: not a plain decimal string: "9e-8"' });
+  });
+
   describe('a resting close that fills in part', () => {
     const partRun = () => {
       const venue = sliceVenue((req, index) => (index === 0 ? { state: 'OPEN', executed: '0', later: [{ state: 'OPEN', executed: '2' }] } : filled(req)));
@@ -7094,7 +7142,7 @@ describe('slices: rate limits', () => {
     expect(hedged(venue)).toEqual({ leads: 10, follows: 10 });
   });
 
-  it('a rate-limited follow is retried, counts as one miss, and the job ends hedged', async () => {
+  it('a rate-limited follow is retried, counts as no miss, and the job ends hedged', async () => {
     let limited = 0;
     const misses: number[] = [];
     const venue = sliceVenue((req) => {
@@ -7112,10 +7160,40 @@ describe('slices: rate limits', () => {
     };
     await h.run();
     expect(limited).toBe(1);
-    expect(Math.max(...misses)).toBe(1);
+    expect(Math.max(...misses)).toBe(0);
     expect(h.onHalt).not.toHaveBeenCalled();
     expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0, follow: null, followMisses: 0 });
     expect(hedged(venue)).toEqual({ leads: 10, follows: 10 });
+  });
+
+  it.each([
+    [50, 25_000],
+    [6_000_000, 100_000],
+  ])('three rate-limited follows in a row never halt and never count as follow misses (%d USD)', async (usd, sliceUsd) => {
+    const qty = Number(floorToStep(usd / 3000, '0.0001'));
+    let limited = 0;
+    const misses: number[] = [];
+    const venue = sliceVenue((req) => {
+      if (String(req.side) === 'SELL' && limited < 3) {
+        limited += 1;
+        return RATE_LIMITED;
+      }
+      return filled(req);
+    });
+    const h = sliceRun(venue, { exec: 'market', sliceUsd, leg: { qty, positionQty: qty } });
+    const write = h.jobs.write.bind(h.jobs);
+    h.jobs.write = (job: Job) => {
+      misses.push(job.followMisses);
+      write(job);
+    };
+    await h.run();
+    expect(limited).toBe(3);
+    expect(h.onHalt).not.toHaveBeenCalled();
+    expect(Math.max(...misses)).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0, follow: null, followMisses: 0 });
+    const sum = (side: string) => venue.reqs().filter((req) => String(req.side) === side).reduce((total, req) => total + Number(req.qty), 0);
+    expect(sum('SELL')).toBeCloseTo(qty, 6);
+    expect(sum('BUY')).toBeCloseTo(qty, 6);
   });
 });
 
@@ -7154,6 +7232,64 @@ describe('slices: Boros part-fills after the last perp slice', () => {
       delever: { boros: [{ closed: part }] },
     });
     expect(h.onHalt).toHaveBeenCalled();
+  });
+});
+
+describe('slices: a follow lot coarser than the lead lot', () => {
+  const coarseRun = async (q: number, sliceUsd: number, followMinNotional = '0') => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexRuleSymbols = seq({
+      body: [
+        { symbol: HL_ETH, state: 'live', lotSize: '0.00001', minSize: '0.00001', tickSize: '0.1', businessType: 'FUTURE' },
+        { symbol: GATE_ETH, state: 'live', lotSize: '0.001', minSize: '0.001', minNotional: followMinNotional, tickSize: '0.1', businessType: 'FUTURE' },
+      ],
+    });
+    const h = sliceRun(venue, { delever: deleverAt(q), sliceUsd, exec: 'market' });
+    Object.assign(h.deps, { boros: { deps: {} as BorosCloseDeps, address: '0x00000000000000000000000000000000000000a1' } });
+    await h.run();
+    const sum = (symbol: string) => venue.reqs().filter((req) => req.symbol === symbol).reduce((total, req) => total + Number(req.qty), 0);
+    return { venue, h, job: h.jobs.read(), sum };
+  };
+
+  it.each([
+    [50, 25_000, 0.0004],
+    [6_000_000, 100_000, 0.0004],
+    [50, 25_000, 0.0005],
+    [6_000_000, 100_000, 0.0005],
+  ])('a lead remainder under one follow lot never over-closes the follow, runs the Boros close and stores the rest as a gap (%d USD, %d slice, %d ETH)', async (usd, sliceUsd, rest) => {
+    const q = Number(floorToStep(usd / 3000, '0.001')) + rest;
+    const { job, sum, h } = await coarseRun(q, sliceUsd);
+    expect(sum(HL_ETH)).toBeCloseTo(q, 6);
+    expect(sum(GATE_ETH)).toBeCloseTo(q - rest, 6);
+    expect(job).toMatchObject({ status: 'done', haltReason: null });
+    expect(job?.steps.map((step) => step.status)).toEqual(['done', 'done']);
+    expect(h.onHalt).not.toHaveBeenCalled();
+    expect(job?.openGaps).toHaveLength(1);
+    expect(job?.openGaps?.[0]).toMatchObject({ leg: { symbol: HL_ETH, side: 'SHORT', positionQty: 2 * q }, hedges: [{ symbol: GATE_ETH, side: 'LONG', qty: 2 * q }] });
+    expect(job?.openGaps?.[0].qty).toBeCloseTo(rest, 8);
+    const live = (gateQty: number) => [
+      { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SHORT' as const, qty: q },
+      { symbol: GATE_ETH, exchange: 'GATE', side: 'LONG' as const, qty: gateQty },
+    ];
+    expect(gapsLeftBy(job, live(q + rest))).toHaveLength(1);
+    expect(gapsLeftBy(job, live(q))).toEqual([]);
+  });
+
+  it.each([
+    [50, 25_000, 0],
+    [100_000, 25_000, 2],
+    [6_000_000, 100_000, 60],
+  ])('a last lead slice between the lead and follow minimums still sends the follow (%d USD)', async (_usd, sliceUsd, slices) => {
+    const q = Number((slices * Number(floorToStep(sliceUsd / 3000, '0.00001')) + 0.01).toFixed(5));
+    const { job, sum, venue } = await coarseRun(q, sliceUsd, '50');
+    const followed = Number(floorToStep(q, '0.001'));
+    const rest = Number((q - followed).toFixed(5));
+    expect(sum(HL_ETH)).toBeCloseTo(q, 6);
+    expect(sum(GATE_ETH)).toBeCloseTo(followed, 6);
+    expect(venue.reqs().filter((req) => req.symbol === GATE_ETH).at(-1)?.qty).toBe('0.01');
+    expect(job?.status).toBe('done');
+    expect(job?.steps.map((step) => step.status)).toEqual(['done', 'done']);
+    expect(job?.openGaps?.[0]?.qty ?? 0).toBeCloseTo(rest, 8);
   });
 });
 

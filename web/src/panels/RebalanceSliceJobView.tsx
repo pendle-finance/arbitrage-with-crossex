@@ -256,6 +256,16 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     const addBackRest = added ? Math.max(0, ...added.legs.map((l) => added.qty - l.filled)) : 0;
     const addBackOpen = added !== null && addBackRest > 0;
     const addBack = addBackOpen ? addBackRest : borosTarget > 0 ? (closedQty * left) / borosTarget : 0;
+    const legRests = added
+      ? (delever?.legs ?? []).map((l) => ({
+          venue: prettyVenue(l.exchange),
+          rest: Math.max(0, added.qty - (added.legs.find((row) => row.symbol === l.symbol)?.filled ?? 0)),
+        }))
+      : [];
+    const unevenRest = addBackOpen && legRests.some((l) => l.rest !== addBackRest);
+    const addBackLabel = unevenRest
+      ? sk('holdAddBackOn', { rest: legRests.filter((l) => l.rest > 0).map((l) => `${l.venue} ${sizeText(l.rest)} ${coin}`).join(', ') })
+      : sk('holdAddBack', { qty: sizeText(addBack), coin });
     return (
       <>
         {deleverHeader}
@@ -270,7 +280,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
             </HoldToConfirmButton>
           )}
           <HoldToConfirmButton tone={addBackOpen ? 'cyan' : 'outline'} holdMs={holdMs} disabled={pending} onConfirm={() => press('add-back')}>
-            <span className="num">{sk('holdAddBack', { qty: sizeText(addBack), coin })}</span>
+            <span className="num">{addBackLabel}</span>
           </HoldToConfirmButton>
           {fixError}
         </div>

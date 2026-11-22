@@ -45,6 +45,7 @@ import {
   ADD_BACK_FIRST,
   addBackPartText,
   addBackRowsOf,
+  restGapOf,
   asRealize,
   BOROS_STEP,
   borosPartText,
@@ -146,6 +147,7 @@ const DELIST_LABEL = 'TRADE_DELIST_OPEN_PROHIBITED_ERROR';
 const ORDER_ALLOWANCE_LABELS: readonly string[] = ['TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', 'TRADE_LIGHTER_ORDER_LIMIT_ERROR'];
 
 const lotsOf = (qty: number, lot: string): number => Math.round(qty / Number(lot));
+const lotsDownOf = (qty: number, lot: string): number => Math.floor(qty / Number(lot) + 1e-9);
 
 const NOT_FOUND = /NOT_FOUND/i;
 const TRANSFER_DEAD = /FAIL|CANCEL|REJECT|EXPIRE/i;
@@ -515,7 +517,7 @@ export async function settleAddBack(deps: RunnerDeps, job: Job): Promise<string[
     const body = await readOrder(deps.clients().crossEx, order.venueId ?? order.text);
     if (!body) {
       if (deps.now() - order.sentAt < LOOKUP_WINDOW_MS) throw new CoreError(FIX_UNCONFIRMED, 'validation');
-      if (order.venueId !== null) unread.push(row.symbol);
+      unread.push(row.symbol);
     } else {
       order.venueId = order.venueId ?? (body.orderId ? String(body.orderId) : null);
       const { delta, closed } = creditOrder(job, order, body);
@@ -609,7 +611,7 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
     deps.jobs.write(job);
   }
   const rule = await sliceRule(deps, follow.symbol);
-  const lots = lotsOf(openFollowOf(leg, step), rule.lot);
+  const lots = lotsDownOf(openFollowOf(leg, step), rule.lot);
   if (lots <= 0) return job;
   const priced = await priceFor(deps, follow, rule, false);
   let mode: OrderMode = { kind: 'market' };
@@ -1651,6 +1653,13 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
   };
 
+  const followRateLimited = (step: Step): void => {
+    rateLimits += 1;
+    if (rateLimits >= RATE_LIMIT_HALT_AFTER) return halt(HALT_TEXT.rateLimited);
+    step.nextTryAt = deps.now() + Math.min(REOPEN_FIRST_WAIT_MS * 2 ** (rateLimits - 1), REOPEN_MAX_WAIT_MS);
+    deps.jobs.write(job);
+  };
+
   const pauseNow = (): void => {
     job.status = 'halted';
     job.paused = true;
@@ -1667,7 +1676,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const followRefused = async (step: Step, leg: RealizeJobLeg, err: unknown): Promise<void> => {
     const c = classifyGateError(err);
-    if (c.category === 'price-limit' || c.category === 'rate-limited' || ORDER_ALLOWANCE_LABELS.includes(c.label ?? '')) return miss(step);
+    if (c.category === 'rate-limited') return followRateLimited(step);
+    if (c.category === 'price-limit' || ORDER_ALLOWANCE_LABELS.includes(c.label ?? '')) return miss(step);
     if (c.category === 'auth') return halt(REOPEN_HALT.tradePermission);
     if (c.category === 'insufficient-margin' && job.kind === 'realize') {
       miss(step);
@@ -1717,13 +1727,14 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     if (wait > 0) await deps.sleep(wait);
     const priced = await priceFor(deps, follow, rule, false);
     if (!priced) return miss(step);
-    const lots = lotsOf(openFollowOf(leg, step), rule.lot);
+    const lots = lotsDownOf(openFollowOf(leg, step), rule.lot);
     job.tagCount += 1;
     const sent: PerpOrder = { text: tagFor(job.id, job.tagCount), venueId: null, sentAt: deps.now(), credited: 0, poc: false, price: priced.price, side: follow.side, mid: priced.mid };
     step.hedge = sent;
     deps.jobs.write(job);
     try {
       sent.venueId = await placePerp(crossEx(), follow, sent.text, qtyText(lots, rule.lot), { kind: 'ioc', price: priced.price });
+      rateLimits = 0;
       deps.jobs.write(job);
     } catch (err) {
       const c = classifyGateError(err);
@@ -1879,7 +1890,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const rule = await sliceRule(deps, perp.symbol);
       const followRule = follow.symbol === perp.symbol ? rule : await sliceRule(deps, follow.symbol);
       const openQty = openFollowOf(leg, step);
-      const openLots = lotsOf(openQty, followRule.lot) > 0;
+      const openLots = lotsDownOf(openQty, followRule.lot) > 0;
       const known = Number(step.lead?.price ?? step.hedge?.price ?? 0);
       const mark = known > 0 || !openLots ? known : ((await priceFor(deps, follow, followRule, false))?.mid ?? 0);
       const followMin = mark > 0 ? minQtyOf(followRule.limits, followRule.lot, mark) : positiveOf(followRule.limits.minSize);
@@ -1903,6 +1914,9 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const liveLots = lotsOf(addQty(leg.positionQty, -leg.filledQty), rule.lot);
       if (Math.min(leftLots, liveLots) <= 0) {
         syncFollow(job, step, leg);
+        const rest = openFollowOf(leg, step);
+        const gap = rest > 0 ? restGapOf(job, leg, follow.symbol, rest) : null;
+        if (gap) job.openGaps = [...(job.openGaps ?? []), gap];
         return finish(step, step.qty ?? 0, step.from);
       }
       await startSlice(step, leg, perp, rule);

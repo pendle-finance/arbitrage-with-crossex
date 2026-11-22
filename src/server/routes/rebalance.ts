@@ -48,7 +48,7 @@ import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger
 import {
   ADD_BACK_FIRST,
   addBackAbandonText,
-  addBackGapOf,
+  addBackGapsOf,
   bannerFor,
   FIX_UNCONFIRMED,
   FOLLOW_MISSES_RED,
@@ -389,6 +389,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, { fresh });
     const readPositions = (fresh: boolean) =>
       deps.cache.get('positions', TTL.live, async () => (await crossEx().listCrossexPositions()).body, { fresh });
+    const readRates = () => orEmpty(deps.cache.get('interest:rate', TTL.static, async () => (await crossEx().getCrossexInterestRate()).body));
     const readRules = () => deps.cache.get('rules:all', TTL.static, async () => (await crossEx().listCrossexRuleSymbols()).body);
     const readFees = () => deps.cache.get('fees', TTL.static, async () => (await crossEx().getCrossexFee()).body);
     const perpRulesOf = (rows: Awaited<ReturnType<typeof readRules>>['value']): Record<string, PerpRule> =>
@@ -403,7 +404,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const userId = account.value.userId ? String(account.value.userId) : null;
       const [positions, rates, paid, coins, rules, fees, tickers, depth] = await Promise.all([
         readPositions(fresh),
-        orEmpty(deps.cache.get('interest:rate', TTL.static, async () => (await crossEx().getCrossexInterestRate()).body)),
+        readRates(),
         interestPaid(userId),
         deps.cache.get('transfer:coins', TTL.static, async () => (await crossEx().listCrossexTransferCoins()).body),
         readRules(),
@@ -503,7 +504,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         rules: perpRulesOf(rules.value),
         account: account.value,
       };
-      return { plan: planDelever(input), userId: account.value.userId ? String(account.value.userId) : null };
+      return { plan: planDelever(input), userId: account.value.userId ? String(account.value.userId) : null, account: account.value, perps: positions.value ?? [] };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -651,17 +652,19 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (locked) return conflict(reply, locked);
       const loaded = await catchRateLimit(loadDelever(request, true));
       if (!loaded) return conflict(reply, STALE_TEXT);
-      const { plan, userId } = loaded;
+      const { plan, userId, account } = loaded;
       if (plan.refused) return conflict(reply, belowMinText(plan.refused));
       if (plan.legs.every((leg) => leg.closeQty <= 0)) return conflict(reply, NOTHING_TO_CLOSE);
       const cost = plan.estimates[exec];
       if (costRoseTooMuch(cost.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      const [rates, paid] = await Promise.all([readRates(), interestPaid(userId)]);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
       const sliceUsd = cappedSliceOf(plan.sliceOptions, shownSlice ?? plan.defaultSliceUsd);
       if (plan.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lead = plan.legs[plan.makerLeg];
       const leadUsd = lead ? (lead.closeQty * plan.notHedgedMaxUsd) / Math.max(plan.notHedgedMaxQty, Number.EPSILON) : 0;
+      const livePerps = jobPerpsOf(loaded.perps);
       const job = newJob(
         {
           route: 'mix',
@@ -670,6 +673,8 @@ export function rebalanceRoutes(deps: AppDeps) {
           costUsd: cost.totalUsd,
           target: [],
           userId,
+          before: { buckets: bucketsFrom(account, rates.value, paid.value), perps: livePerps },
+          openGaps: gapsLeftBy(store.read(), livePerps),
           kind: 'delever',
           exec,
           sliceUsd,
@@ -842,8 +847,8 @@ export function rebalanceRoutes(deps: AppDeps) {
       const settle = settleAddBack(runnerDeps(store), job).then((unread) => {
         job.status = 'abandoned';
         job.haltReason = addBackAbandonText(job, unread) ?? job.haltReason;
-        const gap = addBackGapOf(job);
-        if (gap) job.openGaps = [...(job.openGaps ?? []), gap];
+        const gaps = addBackGapsOf(job, unread);
+        if (gaps.length > 0) job.openGaps = [...(job.openGaps ?? []), ...gaps];
         store.write(job);
         return job;
       });

@@ -1025,7 +1025,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
-  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start of %d USD sizes its slices and IM used from the plan', async (usd) => {
+  async function deleverPlanAt(usd: number) {
     const qty = Math.max(0.02, Math.floor((usd / OWNER_MARK) * 100) / 100);
     const half = Math.floor((qty / 2) * 100) / 100;
     const deep: NormalizedBook = { bids: [[1_820.9, 100_000]], asks: [[1_821.1, 100_000]], ts: 0 };
@@ -1049,7 +1049,11 @@ describe('POST /api/rebalance with a close and reopen', () => {
     const ask = { ...DELEVER_ASK, perps: DELEVER_ASK.perps.map((leg) => ({ ...leg, qty: half })) };
     const planned = await h.post('/api/rebalance/delever/plan', ask);
     expect(planned.statusCode).toBe(200);
-    const plan = planned.json().data;
+    return { h, ask, half, plan: planned.json().data };
+  }
+
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start of %d USD sizes its slices and IM used from the plan', async (usd) => {
+    const { h, ask, half, plan } = await deleverPlanAt(usd);
 
     const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: ask });
 
@@ -1063,6 +1067,23 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(job.costUsd).toBeGreaterThan(0);
     expect(job.costUsd).toBeLessThan(closeUsd * 0.01);
     expect(job.imUsedEnd![0].pct).toBeLessThanOrEqual(job.imUsedStart![0].pct);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start refuses a cost rise past max($1, 5%%) at %d USD', async (usd) => {
+    const { h, ask, plan } = await deleverPlanAt(usd);
+    const fresh = Math.round(plan.estimates.maker.totalUsd * 100);
+    const passCents = fresh >= 2100 ? Math.ceil((fresh * 20) / 21) : Math.max(0, fresh - 100);
+    const start = (cents: number) => h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: cents / 100, delever: ask });
+
+    if (passCents > 0) {
+      const refused = await start(passCents - 1);
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+      expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+    }
+    const passed = await start(passCents);
+    expect(passed.statusCode).toBe(202);
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
