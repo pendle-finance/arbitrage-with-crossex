@@ -25,6 +25,8 @@ import { SetupPage } from './panels/setup/SetupPage';
 import { SETUP_SHOWN_KEY, useSetupState, type SetupStep } from './panels/setup/setupState';
 import { TrackedAddressProvider } from './panels/trackedAddress';
 import { RollSignalProvider } from './panels/rollSignal';
+import { RebalanceModalHost } from './panels/RebalanceModal';
+import { RebalanceOpenerProvider } from './panels/rebalanceOpener';
 import { RollOverBanner } from './panels/RollOverBanner';
 import { TradesPanel } from './panels/TradesPanel';
 import { Drawer } from './components/Drawer';
@@ -180,6 +182,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
     <TradeFlowProvider>
       <RollSignalProvider>
       <TrackedAddressProvider onOpenSettings={openSettings} onOpenLogin={openLogin}>
+      <RebalanceOpenerProvider>
         <TooltipLayer />
         <DisclaimerGate />
         {/* Only once the terminal is usable: the disclaimer gate is a locked
@@ -279,6 +282,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
               <OrderTicketDrawer />
             </>
           )}
+          <RebalanceModalHost />
           <SettingsDrawer
             open={settingsOpen}
             focusStep={settingsFocus}
@@ -297,6 +301,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
             </Suspense>
           )}
         </div>
+      </RebalanceOpenerProvider>
       </TrackedAddressProvider>
       </RollSignalProvider>
     </TradeFlowProvider>

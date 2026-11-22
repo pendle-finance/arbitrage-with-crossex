@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { usePositions, useRebalance, useTransfer } from '../api/queries';
-import type { EvenPlan, RebalanceBucket, RebalanceJob, RoutePlan } from '../api/types';
+import type { FullPlan, RebalanceJob, RebalanceView } from '../api/types';
 import { Chip } from '../components/Chip';
 import { FreshnessButton } from '../components/FreshnessIndicator';
 import { t } from '../i18n';
@@ -12,15 +12,12 @@ import { useSettledError } from '../lib/useSettledError';
 import { VerdictAlert } from './RebalanceBits';
 import { jobSeconds } from './rebalanceStepRows';
 import { abandonedGapText, gapVerdict, hasLeftGap, openGapOf } from './rebalanceCardGap';
-import { CARD_LABEL, noLegs, PAYS_BACK, shortOfCash, verdictBalanced, verdictNoBorrow, verdictNoCashToMove } from './rebalanceCopy';
-import { waitsForDeal, waitsForTransfer } from './rebalanceCopy';
-import { borrowFacts, defaultGoal, Facts, isCashLimitedEven, isNotWorthIt, paybackDays, pickedRoute, worthLine, type VerdictTone } from './RebalanceHovers';
+import { CARD_LABEL, realizeBlockedReason, verdictRateUnknown, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
+import { borrowFacts, Facts, hasUnknownRate, HYPERLIQUID_INTEREST_FREE_USDC, isFreeBorrow, WORTH_IT_DAYS, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
 import { isCloseSent, lastRealizeIndex } from './rebalanceJobSteps';
-import { refusalOf } from './RebalancePlanBits';
-import { RebalanceModal } from './RebalanceModal';
-import { plainOf } from './rebalanceModalPlan';
-import type { GateAccount, TransferCoin } from '../api/types';
+import { crossexImFull } from './rebalanceImStop';
+import { useRebalanceOpener } from './rebalanceOpener';
 
 const timeLeft = (seconds: number): string =>
   fmtAbout(seconds)
@@ -45,15 +42,8 @@ function jobVerdict(job: RebalanceJob, now: number): string {
   return left > 0 ? t('accounts.rebalanceSection.runningLeft', { what, left: timeLeft(left) }) : t('accounts.rebalanceSection.runningLong', { what });
 }
 
-function notWorthDays(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): string | null {
-  const days = isNotWorthIt(plan, route, buckets) ? paybackDays(plan, route, buckets) : null;
-  if (days === null) return null;
-  const whole = Math.max(1, Math.ceil(days));
-  return PAYS_BACK(t('accounts.rebalanceHovers.days', { count: whole, n: num(whole, 0) }));
-}
-
 function jobButton(job: RebalanceJob): string {
-  if (job.status === 'halted') return job.realize && openGapOf(job) ? CARD_LABEL[job.goal] : t('accounts.rebalanceSection.stoppedOpen');
+  if (job.status === 'halted') return job.realize && openGapOf(job) ? t('accounts.borrowCard.reduce') : t('accounts.rebalanceSection.stoppedOpen');
   if (job.realize?.legs.length) {
     const last = lastRealizeIndex(job);
     if (last === job.steps.length - 1) return t('common.running');
@@ -65,22 +55,54 @@ function jobButton(job: RebalanceJob): string {
     : t('accounts.rebalanceSection.runningRound', { round: num(round, 0), rounds: num(roundCountOf(job), 0) });
 }
 
-/** The Rebalance part of the Assets card: borrow facts, then the Rebalance
- * button with the card's other actions beside it. */
+type CardVerdict = { tone: VerdictTone | 'recommend'; text: ReactNode; sub: string | null; primary: boolean };
+
+function planLine(plan: FullPlan): string {
+  const values = { cost: fmtUsd(plan.costUsd), interest: fmtUsd(plan.interestPerMonthUsd) };
+  return plan.needsRealize ? t('accounts.borrowCard.lineRealizeThenMove', values) : t('accounts.borrowCard.lineMove', values);
+}
+
+function borrowVerdict(view: RebalanceView, onDelever: () => void): CardVerdict | null {
+  const plan = view.fullPlan ?? null;
+  if (hasUnknownRate(view.buckets)) return { tone: 'warn', text: verdictRateUnknown(), sub: null, primary: false };
+  if (plan?.refused) {
+    const imFull = plan.refused.reason === 'no-margin' ? (crossexImFull(view.imUsed)?.pct ?? null) : null;
+    const reason = imFull === null ? realizeBlockedReason(plan.refused) : t('accounts.borrowCard.imUsed', { pct: num(imFull * 100, 1) });
+    const blocked = t('accounts.borrowCard.blocked', { reason });
+    if (imFull === null) return { tone: 'warn', text: blocked, sub: null, primary: false };
+    const text = (
+      <>
+        <span>{blocked}</span>{' '}
+        <button type="button" className="btn-link" onClick={onDelever}>
+          {t('accounts.borrowCard.deleverLink')}
+        </button>
+      </>
+    );
+    return { tone: 'warn', text, sub: null, primary: false };
+  }
+  if (!plan?.clearsBorrow || plan.days === null) return null;
+  const days = num(plan.days, 0);
+  if (plan.days <= WORTH_IT_DAYS) {
+    return { tone: 'recommend', text: t('accounts.borrowCard.recommended', { days }), sub: planLine(plan), primary: true };
+  }
+  return {
+    tone: 'warn',
+    text: t('accounts.borrowCard.notRecommended', { days, limit: num(WORTH_IT_DAYS, 0) }),
+    sub: t('accounts.borrowCard.needs', { line: planLine(plan) }),
+    primary: false,
+  };
+}
+
 export function RebalanceSection({
-  holdMs,
-  onTransfer,
   actions,
 }: {
-  holdMs?: number;
-  onTransfer?: (coin: TransferCoin, wallet: GateAccount) => void;
   actions?: ReactNode;
 }) {
   const { t } = useTranslation();
   const query = useRebalance();
   const transfer = useTransfer().data;
   const now = useNow();
-  const [open, setOpen] = useState(false);
+  const openRebalance = useRebalanceOpener();
   const [openedWith] = useState(query.dataUpdatedAt);
   const loadError = useSettledError(query.status, query.error);
   const view = query.data;
@@ -101,7 +123,6 @@ export function RebalanceSection({
   let facts: ReactNode = null;
   let line: ReactNode = null;
   let main: ReactNode = null;
-  let modal: ReactNode = null;
 
   if (!view) {
     if (loadError) {
@@ -119,80 +140,32 @@ export function RebalanceSection({
     }
   } else {
     const { buckets } = view;
-    // The card leads with one preset. The dialog holds the other, and the
-    // custom move, so the button opens it even when this preset has nothing
-    // to do.
-    const goal = defaultGoal(view);
-    const refusal = refusalOf(view.plans[goal]);
-    const plan = plainOf(view.plans[goal]);
-    const cta = CARD_LABEL[goal];
     const job = view.job && (view.job.status === 'running' || view.job.status === 'halted') ? view.job : null;
     const showAge = loadError !== null || (openedWith > 0 && query.dataUpdatedAt === openedWith);
-    const picked = pickedRoute(plan, null);
     const hasBorrow = borrowingBuckets(buckets).length > 0;
-    // With every route blocked, the window cannot run, so the card gives no verdict.
-    const worth = hasBorrow && picked.name !== null ? worthLine(plan, picked.route, buckets) : null;
     const moving = transfer?.transfer?.status === 'moving';
     const dealWorking = transfer?.lock === 'deal';
 
     let chip: ReactNode = null;
     if (job?.status === 'running') chip = <Chip tone="info">{t('common.running')}</Chip>;
     if (job?.status === 'halted') chip = <Chip tone="red">{t('common.stopped')}</Chip>;
-    // "Balanced" only when the wallets really match their position share. The
-    // planner also reports a plan with nothing to move when what it WOULD move
-    // is stuck as position margin (`shortOfEven`); that case gets no chip —
-    // the verdict line says the cash cannot move, with no amount (his call
-    // 2026-09-23: a green "Balanced" over a $354k gap lied, an amber chip
-    // read as a to-do, and a figure read as a to-do too).
-    if (!job && goal === 'even' && plan.balanced && !plan.noLegs && !isCashLimitedEven(plan)) {
-      chip = <Chip tone="green">{t('accounts.rebalanceModal.balanced')}</Chip>;
-    }
 
-    let verdict: ReactNode = null;
-    let verdictSub: string | null = null;
-    let tone: VerdictTone = 'info';
     const gap = job ? gapVerdict(job, positions) : null;
-    if (gap) {
-      verdict = gap.text;
-      verdictSub = gap.sub;
-      tone = gap.tone;
-    } else if (job) verdict = jobVerdict(job, now);
-    else if (refusal) {
-      verdict = refusal.title;
-      tone = 'warn';
-    }
-    // What caps a move is cash when there are no positions, and position
-    // margin when there are — the goal on screen does not decide it.
-    else if (isCashLimitedEven(plan) && plan.noLegs) verdict = `${fmtUsd(plan.shortOfEven)} ${shortOfCash()}`;
-    else if (isCashLimitedEven(plan)) {
-      verdict = verdictNoCashToMove();
-      tone = 'warn';
-    }
-    else if (goal === 'repay' && plan.balanced) verdict = verdictNoBorrow();
-    else if (plan.noLegs && goal === 'even') verdict = noLegs();
-    else if (plan.balanced) verdict = verdictBalanced();
-    // No trailing "It moves $X." here: the line now says no rebalancing is
-    // necessary, and naming the amount in the same breath argued the opposite.
-    // The figure is still on the button and inside the modal.
-    else if (!hasBorrow) verdict = verdictNoBorrow();
-    else if (worth) {
-      verdict = worth.text;
-      verdictSub = worth.sub ?? notWorthDays(plan, picked.route, buckets);
-      tone = worth.tone;
-    }
+    let verdict: CardVerdict | null = null;
+    let muted: string | null = null;
+    if (gap) verdict = { tone: gap.tone, text: gap.text, sub: gap.sub, primary: false };
+    else if (job) verdict = { tone: 'info', text: jobVerdict(job, now), sub: null, primary: false };
+    else if (!hasBorrow) muted = t('accounts.borrowCard.none');
+    else if (isFreeBorrow(buckets)) muted = t('accounts.borrowCard.free', { amount: num(HYPERLIQUID_INTEREST_FREE_USDC, 0) });
+    else verdict = borrowVerdict(view, () => openRebalance({ tab: 'delever' }));
     const leftOpen = view.job ? abandonedGapText(view.job, positions) : null;
 
-    let label: ReactNode = cta;
+    let label: ReactNode = t('accounts.borrowCard.reduce');
     if (job) label = jobButton(job);
     else if (moving) label = waitsForTransfer();
     else if (dealWorking) label = waitsForDeal();
-    // No fee on the card (his ruling 2026-09-19): it is the fee of ONE preset,
-    // and the dialog prices every route beside it anyway.
     const disabled = !job && (moving || dealWorking);
-    // The one solid-filled control is spent on the verdict that actually asks
-    // for the move, not on "you are borrowing" generally: a free borrow and a
-    // fee that outruns its interest both leave it an outline.
-    const primary = !job && worth?.tone === 'act';
+    const primary = !job && verdict?.primary === true;
 
     header = (
       <div className="flex items-center gap-3">
@@ -212,9 +185,8 @@ export function RebalanceSection({
       </div>
     );
     facts = <Facts items={borrowFacts(buckets)} />;
-    if (verdict !== null) {
-      line = <VerdictAlert tone={!job && tone === 'act' ? 'good' : tone} text={verdict} sub={verdictSub} />;
-    }
+    if (verdict !== null) line = <VerdictAlert tone={verdict.tone} text={verdict.text} sub={verdict.sub} />;
+    if (muted !== null) line = <p className="text-xs text-ink-400">{muted}</p>;
     if (leftOpen !== null) {
       line = (
         <>
@@ -224,27 +196,14 @@ export function RebalanceSection({
       );
     }
     main = (
-      <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => setOpen(true)}>
+      <button type="button" className={primary ? 'btn btn-primary num' : 'btn num'} disabled={disabled} onClick={() => openRebalance()}>
         {label}
       </button>
     );
-    if (open) {
-      modal = (
-        <RebalanceModal
-          view={view}
-          onClose={() => setOpen(false)}
-          holdMs={holdMs}
-          onTransfer={(coin, wallet) => {
-            setOpen(false);
-            onTransfer?.(coin, wallet);
-          }}
-        />
-      );
-    }
   }
 
   return (
-    <section aria-label={t('accounts.rebalanceModal.title')} className="flex flex-col gap-3 border-t border-ink-800 pt-4">
+    <section aria-label={t('accounts.borrowCard.title')} className="flex flex-col gap-3 border-t border-ink-800 pt-4">
       {header}
       {facts}
       {line}
@@ -252,7 +211,6 @@ export function RebalanceSection({
         {main}
         {actions}
       </div>
-      {modal}
     </section>
   );
 }

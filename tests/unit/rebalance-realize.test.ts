@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { type NormalizedBook, touchOf } from '../../src/core/estimate/books';
+import { deepenBook, type NormalizedBook, sigFigsWidth, touchOf } from '../../src/core/estimate/books';
 import { walkBook } from '../../src/core/estimate/fill';
 import { floorToStep } from '../../src/core/numbers';
 import {
@@ -7,11 +7,10 @@ import {
   bucketsFrom,
   CONVERT_MAX,
   CONVERT_RATE,
-  EVEN_GOAL,
-  type Goal,
+  fullPlanOf,
   planFor,
   REPAY_GOAL,
-  type WalletAfter,
+  realizeTabOf,
 } from '../../src/core/rebalance/plan';
 import {
   convertFor,
@@ -21,6 +20,7 @@ import {
   type RealizeLeg,
   type RealizePlan,
   realizedNetUsd,
+  realizeEstimateOf,
 } from '../../src/core/rebalance/realize';
 import { newJob } from '../../src/server/rebalanceJob';
 import {
@@ -39,25 +39,39 @@ import {
   twoLegs,
 } from './fixtures/realize-books';
 
-const planOf = (book: RealizeBook, goal: Goal = EVEN_GOAL) => planFor(book.buckets, book.account, book.inputs, goal);
+const tabOf = (book: RealizeBook) => realizeTabOf(book.buckets, book.account, book.inputs, null);
 
-const realizeOf = (book: RealizeBook, goal: Goal = EVEN_GOAL): RealizePlan => {
-  const realize = planOf(book, goal).realize;
-  if (!realize) throw new Error('no realize');
+const fullOf = (book: RealizeBook) => fullPlanOf(book.buckets, book.account, book.inputs);
+
+const clearDebtOf = (book: RealizeBook): RealizePlan => {
+  const realize = tabOf(book)?.clearDebt;
+  if (!realize) throw new Error('no clear debt realize');
   return realize;
 };
 
-const walletIn = (after: WalletAfter[], coin: string, venue: string): WalletAfter => {
-  const found = after.find((w) => w.coin === coin && w.venue === venue);
-  if (!found) throw new Error(`no ${coin}/${venue}`);
-  return found;
+const OWNER_EVEN_MOVE = 45_314 - (45_314 - 29_812) / 2;
+
+const bookInput = (book: RealizeBook, pool: 'HYPERLIQUID' | 'CROSSEX', moveUsd: number, over: Partial<RealizeInput> = {}): RealizeInput => {
+  const payer = pool === 'HYPERLIQUID' ? book.spec.usdc : book.spec.usdt;
+  const receiver = pool === 'HYPERLIQUID' ? book.spec.usdt : book.spec.usdc;
+  return {
+    pool,
+    moveUsd,
+    cashUsd: Math.max(0, payer.cash),
+    borrowUsd: Math.max(0, -receiver.cash),
+    availableMargin: book.spec.availableMargin,
+    perps: book.spec.perps,
+    books: book.spec.books,
+    feeRows: FEE_ROWS,
+    rules: PERP_RULES,
+    ...over,
+  };
 };
 
-const pickedAfter = (book: RealizeBook, goal: Goal): WalletAfter[] => {
-  const plan = planOf(book, goal);
-  const route = plan.routes[plan.recommended ?? 'convert'];
-  if (!route) throw new Error('no route');
-  return route.after;
+const ownerRealize = (over: Partial<RealizeInput> = {}): RealizePlan => {
+  const realize = planRealize(bookInput(ownerBook(), 'HYPERLIQUID', OWNER_EVEN_MOVE, over));
+  if (!realize) throw new Error('no realize');
+  return realize;
 };
 
 const costsOf = (legs: RealizeLeg[]): number => legs.reduce((total, leg) => total + leg.realizedUsd - realizedNetUsd(leg), 0);
@@ -70,7 +84,6 @@ function input(over: Partial<RealizeInput>): RealizeInput {
     moveUsd: 10_000,
     cashUsd: 0,
     borrowUsd: 1_000_000,
-    convertCounts: true,
     availableMargin: 1_000_000,
     perps: [perp(OWNER_ETH, -66, 2_460, 1_821)],
     books: { [OWNER_ETH]: OWNER_HL_ETH },
@@ -88,7 +101,7 @@ const flatBook = (mid: number, half: number, size: number): NormalizedBook => ({
 
 describe('planRealize on the owner book', () => {
   it('sizes one order to the need', () => {
-    const realize = realizeOf(ownerBook());
+    const realize = ownerRealize();
     expect(realize.legs).toHaveLength(1);
     expect(realize.legs[0]).toMatchObject({ exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', positionQty: 66 });
     expect(Math.abs(realize.legs[0].qty - 54.0615)).toBeLessThanOrEqual(0.0001);
@@ -96,7 +109,9 @@ describe('planRealize on the owner book', () => {
   });
 
   it('no realize when cash covers', () => {
-    const plan = planOf(ownerBook(), { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 3_000 });
+    const owner = ownerBook();
+    expect(planRealize(bookInput(owner, 'HYPERLIQUID', 3_000))).toBeNull();
+    const plan = planFor(owner.buckets, owner.account, owner.inputs, { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 3_000 });
     expect(plan.realize).toBeNull();
     const steps = plan.routes[plan.recommended ?? 'convert']?.steps ?? [];
     expect(steps.length).toBeGreaterThan(0);
@@ -104,12 +119,12 @@ describe('planRealize on the owner book', () => {
   });
 
   it('one order realizes qty times the move', () => {
-    const leg = realizeOf(ownerBook()).legs[0];
+    const leg = ownerRealize().legs[0];
     expect(Math.abs(leg.realizedUsd - leg.qty * (2_460 - 1_821))).toBeLessThanOrEqual(0.01);
   });
 
   it('converts just enough for the reopen', () => {
-    const leg = realizeOf(ownerBook()).legs[0];
+    const leg = ownerRealize().legs[0];
     const amount = leg.convert?.amount ?? 0;
     const reopenMargin = (leg.qty * 66 * 1_821 * 0.05) / 66;
     const passes = (converted: number) => -1_284 + converted * marginPerConvertUsdc >= 0.15 * reopenMargin + 20;
@@ -121,13 +136,13 @@ describe('planRealize on the owner book', () => {
   });
 
   it('fees at the account\'s taker rate', () => {
-    const leg = realizeOf(ownerBook()).legs[0];
+    const leg = ownerRealize().legs[0];
     expect(Math.abs(leg.closeFeeUsd - leg.qty * 1_821 * 0.00042)).toBeLessThanOrEqual(0.01);
     expect(Math.abs(leg.reopenFeeUsd - leg.qty * 1_821 * 0.00042)).toBeLessThanOrEqual(0.01);
   });
 
   it('impact walks both sides', () => {
-    const leg = realizeOf(ownerBook()).legs[0];
+    const leg = ownerRealize().legs[0];
     const mid = touchOf(OWNER_HL_ETH)?.mid ?? 0;
     const close = walkBook(OWNER_HL_ETH.asks, leg.qty);
     const reopen = walkBook(OWNER_HL_ETH.bids, leg.qty);
@@ -138,7 +153,7 @@ describe('planRealize on the owner book', () => {
   });
 
   it('realized cash covers the move and the fees', () => {
-    const legs = realizeOf(ownerBook()).legs;
+    const legs = ownerRealize().legs;
     const move = 45_314 - (45_314 - 29_812) / 2;
     const realized = legs.reduce((total, leg) => total + leg.realizedUsd, 0);
     expect(realized + 3_140).toBeGreaterThanOrEqual(move + costsOf(legs) - 1);
@@ -147,7 +162,8 @@ describe('planRealize on the owner book', () => {
   it('rounds the order up to the venue minimum', () => {
     const owner = ownerBook();
     const roomy = realizeBook({ ...owner.spec, availableMargin: 50_000 });
-    const realize = realizeOf(roomy, { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 3_141 });
+    const realize = planRealize(bookInput(roomy, 'HYPERLIQUID', 3_141));
+    if (!realize) throw new Error('no realize');
     const leg = realize.legs[0];
     expect(realize.refused).toBeNull();
     expect(leg.convert).toBeNull();
@@ -158,9 +174,9 @@ describe('planRealize on the owner book', () => {
     expect((leg.qty - 0.0001) * 1_821).toBeLessThan(10);
   });
 
-  it('a small custom with no margin refuses', () => {
-    const realize = realizeOf(ownerBook(), { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 3_141 });
-    expect(realize.refused).toEqual({ reason: 'no-margin', bp: null, maxBp: 25 });
+  it('a small realize with no margin refuses', () => {
+    const realize = ownerRealize({ moveUsd: 3_141 });
+    expect(realize.refused).toEqual({ reason: 'no-margin', bp: null });
   });
 
   it('parses the signed gate position strings', () => {
@@ -174,18 +190,18 @@ describe('planRealize on the owner book', () => {
 
 describe('planRealize leg order', () => {
   it('most-moved leg pays first, then the next', () => {
-    const realize = realizeOf(twoLegs(), REPAY_GOAL);
+    const realize = clearDebtOf(twoLegs());
     expect(realize.legs.map((leg) => leg.base)).toEqual(['ETH', 'BTC']);
     expect(realize.legs[0].qty).toBe(20);
     expect(realize.legs[1].qty).toBeLessThan(2);
   });
 
   it('two legs clear the debt', () => {
-    expect(walletIn(pickedAfter(twoLegs(), REPAY_GOAL), 'USDT', 'CROSSEX').cash).toBeGreaterThanOrEqual(-1);
+    expect(fullOf(twoLegs())).toMatchObject({ clearsBorrow: true, needsRealize: true, refused: null });
   });
 
   it('switches leg when the first cannot fund its convert', () => {
-    const realize = realizeOf(bookBb43(), REPAY_GOAL);
+    const realize = clearDebtOf(bookBb43());
     expect(realize.legs[0].base).toBe('BTC');
     expect(realize.legs[0].positionQty).toBeCloseTo(92.7, 1);
     expect(Math.abs(realize.legs[0].qty - 59.07153)).toBeLessThanOrEqual(0.00001);
@@ -194,15 +210,18 @@ describe('planRealize leg order', () => {
   });
 
   it('splits a convert above 500,000', () => {
-    const convert = realizeOf(bookBb43(), REPAY_GOAL).legs[0].convert;
+    const convert = clearDebtOf(bookBb43()).legs[0].convert;
     expect(convert?.amount).toBeGreaterThan(CONVERT_MAX);
     expect(convert?.count).toBe(2);
   });
 
   it('gate long pays when eth rises', () => {
-    const leg = realizeOf(ethUp()).legs[0];
+    const up = ethUp();
+    const leg = planRealize(bookInput(up, 'CROSSEX', 42_900 - (42_900 - 18_400) / 2))?.legs[0];
     expect(leg).toMatchObject({ exchange: 'GATE', base: 'ETH', side: 'LONG', pool: 'CROSSEX' });
-    expect(Math.abs(leg.qty - 47.369)).toBeLessThanOrEqual(0.001);
+    expect(Math.abs((leg?.qty ?? 0) - 47.369)).toBeLessThanOrEqual(0.001);
+    expect(clearDebtOf(up).legs[0]).toMatchObject({ exchange: 'GATE', base: 'ETH', side: 'LONG', pool: 'CROSSEX' });
+    expect(fullOf(up)?.clearsBorrow).toBe(true);
   });
 });
 
@@ -221,47 +240,43 @@ describe('planRealize sizes and refusals', () => {
     expect(realize?.refused).toBeNull();
   });
 
-  it('refuses above 25 bp', () => {
-    const realize = realizeOf(bookC0df(), REPAY_GOAL);
+  it('no bp limit in refusals', () => {
+    const realize = clearDebtOf(bookC0df());
     expect(realize.legs[0]).toMatchObject({ exchange: 'GATE', base: 'ETH' });
-    expect(realize.refused?.reason).toBe('too-thin');
-    expect(Math.abs((realize.refused?.bp ?? 0) - 52.3)).toBeLessThanOrEqual(0.1);
-  });
-
-  it('runs at 25 bp or less', () => {
+    expect(Math.abs(realize.legs[0].impactBp - 52.3)).toBeLessThanOrEqual(0.1);
+    expect(realize.refused).toBeNull();
     const at = (half: number) =>
       planRealize(input({ moveUsd: 1_000, perps: [perp(OWNER_ETH, -10, 1_200, 1_000)], books: { [OWNER_ETH]: flatBook(1_000, half, 100) } }));
-    const runs = at(1.245);
-    expect(runs?.legs[0].impactBp).toBeCloseTo(24.9, 9);
-    expect(runs?.refused).toBeNull();
-    expect(at(1.255)?.refused).toEqual({ reason: 'too-thin', bp: 25.1, maxBp: 25 });
+    const wide = at(1.255);
+    expect(wide?.legs[0].impactBp).toBeCloseTo(25.1, 9);
+    expect(wide?.refused).toBeNull();
+    const refusals = [
+      planRealize(input({ books: { [OWNER_ETH]: null } }))?.refused,
+      planRealize(input({ availableMargin: -1_000_000 }))?.refused,
+      planRealize(input({ feeRows: [] }))?.refused,
+      planRealize(hlShortInput(1_000_000, {}, '5'))?.refused,
+    ];
+    expect(refusals.map((refused) => refused?.reason)).toEqual(['past-book', 'no-margin', 'no-fee-rate', 'over-cap']);
+    for (const refused of refusals) expect(Object.keys(refused ?? {})).not.toContain('maxBp');
   });
 
   it('refuses an order past the fetched book', () => {
     const thin = planRealize(input({ books: { [OWNER_ETH]: flatBook(1_821, 0.5, 1) } }));
-    expect(thin?.refused).toEqual({ reason: 'past-book', bp: null, maxBp: 25 });
+    expect(thin?.refused).toEqual({ reason: 'past-book', bp: null });
     const unread = planRealize(input({ books: { [OWNER_ETH]: null } }));
-    expect(unread?.refused).toEqual({ reason: 'past-book', bp: null, maxBp: 25 });
+    expect(unread?.refused).toEqual({ reason: 'past-book', bp: null });
   });
 
   it('refuses when no leg can fund its convert', () => {
     const realize = planRealize(input({ availableMargin: -1_000_000 }));
     expect(realize?.legs[0].convert?.amount).toBeGreaterThan(10_000);
-    expect(realize?.refused).toEqual({ reason: 'no-margin', bp: null, maxBp: 25 });
+    expect(realize?.refused).toEqual({ reason: 'no-margin', bp: null });
   });
 
   it('no realize when closing loses money even with no Convert', () => {
     // 0.08% profit against a 0.084% Hyperliquid round-trip fee, with margin to spare.
     const thin = planRealize(input({ perps: [perp(OWNER_ETH, -66, 1_821 * 1.0008, 1_821)] }));
     expect(thin).toBeNull();
-  });
-
-  it('a close that loses money only because of its Convert refuses as no margin', () => {
-    const realize = planRealize(
-      input({ perps: [perp(OWNER_ETH, -66, 1_821 * 1.01, 1_821)], availableMargin: 0, convertCounts: false }),
-    );
-    expect(realize?.legs[0].convert?.amount).toBeGreaterThan(0);
-    expect(realize?.refused).toEqual({ reason: 'no-margin', bp: null, maxBp: 25 });
   });
 
   it('never realizes a lighter or binance leg', () => {
@@ -271,8 +286,8 @@ describe('planRealize sizes and refusals', () => {
       perp('BINANCE_FUTURE_ETH_USDT', 66, 1_000, 1_821),
     ];
     const book = { ...owner, inputs: { ...owner.inputs, perps } };
-    expect(planOf(book).realize).toBeNull();
-    expect(planOf(book, REPAY_GOAL).realize).toBeNull();
+    expect(tabOf(book)).toBeNull();
+    expect(fullOf(book)?.needsRealize).toBe(false);
     expect(planRealize(input({ pool: 'LIGHTER', perps }))).toBeNull();
     expect(planRealize(input({ pool: 'CROSSEX', perps }))).toBeNull();
   });
@@ -280,13 +295,12 @@ describe('planRealize sizes and refusals', () => {
 
 describe('planRealize and the free Hyperliquid borrow', () => {
   it('no realize under the free hyperliquid borrow', () => {
-    expect(planOf(ethUp(9_000)).realize).toBeNull();
-    expect(planOf(ethUp(9_000), REPAY_GOAL).realize).toBeNull();
+    expect(fullOf(ethUp(9_000))).toBeNull();
+    expect(tabOf(ethUp(9_000))?.clearDebt).toBeNull();
   });
 
-  it('custom realizes without a charged borrow', () => {
-    const plan = planOf(ethUp(9_000), { kind: 'custom', from: 'CROSSEX', to: 'HYPERLIQUID', amount: 20_000 });
-    expect(plan.realize?.legs[0]).toMatchObject({ exchange: 'GATE', side: 'LONG' });
+  it('the realize tab offers all uPnL without a charged borrow', () => {
+    expect(tabOf(ethUp(9_000))?.all?.legs[0]).toMatchObject({ exchange: 'GATE', side: 'LONG' });
   });
 });
 
@@ -370,7 +384,6 @@ const hlShortInput = (need: number, extra: Partial<RealizeInput> = {}, maxLevera
     moveUsd: need + 100,
     cashUsd: 100,
     borrowUsd: need * 2,
-    convertCounts: true,
     availableMargin: 1e9,
     perps: [
       {
@@ -404,7 +417,7 @@ describe('realize fix round', () => {
         const orderUsd = (plan?.legs[0].qty ?? 0) * 2800;
         if (orderUsd > capUsd) {
           refusedCount += 1;
-          expect(plan?.refused).toEqual({ reason: 'over-cap', bp: null, maxBp: 25, capUsd });
+          expect(plan?.refused).toEqual({ reason: 'over-cap', bp: null, capUsd });
         } else expect(plan?.refused?.reason).not.toBe('over-cap');
       }
     }
@@ -417,38 +430,45 @@ describe('realize fix round', () => {
       books: { GATE_FUTURE_ETH_USDT: evenBook(2800, 2000, 500) },
       rules: { GATE_FUTURE_ETH_USDT: { lotSize: '0.001', minSize: '0.001', maxMarketSize } },
     });
-    expect(planRealize(gate('100'))?.refused).toEqual({ reason: 'over-cap', bp: null, maxBp: 25, capUsd: 280_000 });
+    expect(planRealize(gate('100'))?.refused).toEqual({ reason: 'over-cap', bp: null, capUsd: 280_000 });
     expect(planRealize(gate('100000'))?.refused).toBeNull();
   });
 
   it('a refused realize still carries the plain cash move', () => {
     const book = ownerBook();
     const refused = { ...book.inputs, books: {} };
-    for (const goal of [EVEN_GOAL, REPAY_GOAL]) {
-      const plan = planFor(book.buckets, book.account, refused, goal);
-      expect(plan.realize?.refused?.reason).toBe('past-book');
-      expect(plan.balanced).toBe(false);
-      expect(plan.moves).toBeGreaterThan(3_000);
-      expect(plan.moves).toBeLessThanOrEqual(3_140);
-    }
+    const full = fullPlanOf(book.buckets, book.account, refused);
+    expect(full).toMatchObject({ clearsBorrow: false, needsRealize: true, realizeCostUsd: 0, refused: { reason: 'past-book' } });
+    expect(full?.moveCostUsd).toBeGreaterThan(0);
+    expect(full?.costUsd).toBe(full?.moveCostUsd);
+    const plan = planFor(book.buckets, book.account, refused, REPAY_GOAL);
+    expect(plan.realize).toBeNull();
+    expect(plan.balanced).toBe(false);
+    expect(plan.moves).toBeGreaterThan(3_000);
+    expect(plan.moves).toBeLessThanOrEqual(3_140);
   });
 
   it('a missing fee rate refuses the realize', () => {
     for (const need of LADDER) {
+      const nothing = { feeUsd: 0, impactUsd: 0, totalUsd: 0 };
       expect(planRealize(hlShortInput(need, { feeRows: [] }))).toEqual({
         legs: [],
-        refused: { reason: 'no-fee-rate', bp: null, maxBp: 25 },
+        refused: { reason: 'no-fee-rate', bp: null },
+        estimates: { maker: nothing, market: nothing },
       });
     }
     const book = ownerBook();
-    for (const goal of [EVEN_GOAL, REPAY_GOAL]) {
-      const plan = planFor(book.buckets, book.account, { ...book.inputs, feeRows: [FEE_ROWS[1]] }, goal);
-      expect(plan.realize?.refused?.reason).toBe('no-fee-rate');
-      expect(plan.realize?.legs).toEqual([]);
-      expect(plan.balanced).toBe(false);
-      expect(plan.moves).toBeGreaterThan(3_000);
-      expect(plan.moves).toBeLessThanOrEqual(3_140);
-    }
+    const noFee = { ...book.inputs, feeRows: [FEE_ROWS[1]] };
+    const full = fullPlanOf(book.buckets, book.account, noFee);
+    expect(full).toMatchObject({ clearsBorrow: false, realizeCostUsd: 0, refused: { reason: 'no-fee-rate' } });
+    expect(full?.costUsd).toBe(full?.moveCostUsd);
+    const tab = realizeTabOf(book.buckets, book.account, noFee, null);
+    expect(tab?.clearDebt).toMatchObject({ legs: [], refused: { reason: 'no-fee-rate' } });
+    const plan = planFor(book.buckets, book.account, noFee, REPAY_GOAL);
+    expect(plan.realize).toBeNull();
+    expect(plan.balanced).toBe(false);
+    expect(plan.moves).toBeGreaterThan(3_000);
+    expect(plan.moves).toBeLessThanOrEqual(3_140);
   });
 
   it('a plan convert under 11 USDC is raised to 11 and still passes the margin test', () => {
@@ -466,9 +486,9 @@ describe('realize fix round', () => {
   });
 
   it('clear debt realizes when the paying wallet holds no cash', () => {
-    const gateRealize = planOf(ethUp(), REPAY_GOAL).realize;
-    expect(gateRealize?.refused).toBeNull();
-    expect(gateRealize?.legs[0].pool).toBe('CROSSEX');
+    const gateRealize = clearDebtOf(ethUp());
+    expect(gateRealize.refused).toBeNull();
+    expect(gateRealize.legs[0].pool).toBe('CROSSEX');
     const owner = ownerBook();
     const assets = (owner.account.assets ?? []).map((asset) =>
       asset.coin === 'USDC' && asset.exchangeType === 'HYPERLIQUID'
@@ -477,24 +497,24 @@ describe('realize fix round', () => {
     );
     const account = { ...owner.account, assets };
     const buckets = bucketsFrom(account, [{ coin: 'USDT', exchangeType: 'CROSSEX', hourInterestRate: '0.000006' }], {});
-    const plan = planFor(buckets, account, owner.inputs, REPAY_GOAL);
-    expect(plan.realize?.refused).toBeNull();
-    expect(plan.realize?.legs[0].pool).toBe('HYPERLIQUID');
-    expect(sumNet(plan.realize?.legs ?? [])).toBeGreaterThan(29_000);
-    expect(walletIn(pickedAfter({ ...owner, account, buckets }, REPAY_GOAL), 'USDT', 'CROSSEX').cash).toBeGreaterThan(-1);
+    const noCash = { ...owner, account, buckets };
+    const realize = clearDebtOf(noCash);
+    expect(realize.refused).toBeNull();
+    expect(realize.legs[0].pool).toBe('HYPERLIQUID');
+    expect(sumNet(realize.legs)).toBeGreaterThan(29_000);
+    expect(fullOf(noCash)?.clearsBorrow).toBe(true);
   });
 
   it('clear debt realizes at every rung when the paying wallet holds no cash', () => {
     for (const debt of LADDER) {
       const qty = Math.max(1, (debt / 200) * 1.5);
-      const owner = realizeBookOf(debt, qty);
-      const plan = planFor(owner.buckets, owner.account, owner.inputs, REPAY_GOAL);
-      expect(plan.realize?.refused).toBeNull();
-      expect(sumNet(plan.realize?.legs ?? [])).toBeGreaterThanOrEqual(debt - 0.02);
+      const realize = clearDebtOf(realizeBookOf(debt, qty));
+      expect(realize.refused, `rung ${debt}`).toBeNull();
+      expect(sumNet(realize.legs), `rung ${debt}`).toBeGreaterThanOrEqual(debt - 0.02);
     }
   });
 
-  it('a wider Lighter gap keeps the Hyperliquid realize', () => {
+  it('a Lighter wallet with more equity keeps the Hyperliquid realize', () => {
     const owner = realizeBookOf(60_000, 66, 3_140);
     const lighter = {
       coin: 'USDC',
@@ -513,9 +533,10 @@ describe('realize fix round', () => {
       ...owner.inputs,
       notional: { 'USDT/CROSSEX': 120_000, 'USDC/HYPERLIQUID': 120_000, 'USDC/LIGHTER': 120_000 },
     };
-    const plan = planFor(buckets, account, inputs, EVEN_GOAL);
-    expect(plan.realize?.refused).toBeNull();
-    expect(plan.realize?.legs[0].pool).toBe('HYPERLIQUID');
+    const tab = realizeTabOf(buckets, account, inputs, null);
+    expect(tab?.pool).toBe('HYPERLIQUID');
+    expect(tab?.clearDebt?.refused).toBeNull();
+    expect(tab?.clearDebt?.legs[0].pool).toBe('HYPERLIQUID');
   });
 });
 
@@ -556,3 +577,87 @@ function realizeBookOf(debt: number, qty: number, cash = 0): RealizeBook {
     },
   };
 }
+
+describe('realize estimate per order mode', () => {
+  const R1_FEES = [{ exchangeType: 'HYPERLIQUID', futureMakerFee: '0.0002', futureTakerFee: '0.0005' }];
+  const r1 = (): RealizePlan | null =>
+    planRealize(
+      input({
+        moveUsd: 1_000_000,
+        perps: [perp(OWNER_ETH, -10, 3_900, 3_390)],
+        books: { [OWNER_ETH]: flatBook(3_390, 0.5, 100) },
+        feeRows: R1_FEES,
+      }),
+    );
+
+  it('limit + hedge estimate', () => {
+    const plan = r1();
+    const leg = plan?.legs[0];
+    if (!plan || !leg) throw new Error('no realize');
+    expect(plan.refused).toBeNull();
+    expect(leg.qty * 3_390).toBeCloseTo(33_900, 6);
+    expect(leg.convert).toBeNull();
+    expect(plan.estimates.maker.feeUsd).toBeCloseTo(23.73, 9);
+    expect(plan.estimates.maker.impactUsd).toBeCloseTo(leg.reopenImpactUsd, 9);
+    expect(plan.estimates.maker.impactUsd).toBeCloseTo(5, 9);
+    expect(plan.estimates.maker.totalUsd).toBeCloseTo(28.73, 9);
+    expect(realizeEstimateOf(plan, 'maker')).toEqual(plan.estimates.maker);
+  });
+
+  it('market estimate', () => {
+    const plan = r1();
+    const leg = plan?.legs[0];
+    if (!plan || !leg) throw new Error('no realize');
+    expect(plan.estimates.market.feeUsd).toBeCloseTo(33.9, 9);
+    expect(plan.estimates.market.impactUsd).toBeCloseTo(leg.closeImpactUsd + leg.reopenImpactUsd, 9);
+    expect(plan.estimates.market.impactUsd).toBeCloseTo(10, 9);
+    expect(plan.estimates.market.totalUsd).toBeCloseTo(43.9, 9);
+    expect(realizeEstimateOf(plan, 'market')).toEqual(plan.estimates.market);
+  });
+
+  it('a Convert fee counts in both estimates', () => {
+    const plan = ownerRealize();
+    const leg = plan.legs[0];
+    const convertFee = leg.convert?.feeUsd ?? 0;
+    expect(convertFee).toBeGreaterThan(0);
+    expect(plan.estimates.maker.feeUsd).toBeCloseTo(leg.closeMakerFeeUsd + leg.reopenFeeUsd + convertFee, 9);
+    expect(plan.estimates.market.feeUsd).toBeCloseTo(leg.closeFeeUsd + leg.reopenFeeUsd + convertFee, 9);
+    expect(plan.estimates.maker.totalUsd).toBeLessThan(plan.estimates.market.totalUsd);
+  });
+
+  it.each(LADDER)('a $%d realize prices the maker close below the market close', (need) => {
+    const plan = planRealize(hlShortInput(need));
+    if (!plan) throw new Error(`no realize at ${need}`);
+    expect(plan.refused).toBeNull();
+    const { maker, market } = plan.estimates;
+    expect(market.totalUsd - maker.totalUsd).toBeCloseTo(
+      plan.legs.reduce((total, leg) => total + leg.closeFeeUsd - leg.closeMakerFeeUsd + leg.closeImpactUsd, 0),
+      6,
+    );
+    expect(maker.totalUsd).toBeLessThan(market.totalUsd);
+  });
+});
+
+const DEPTH_MID = 2800;
+
+const depthSide = (sigFigs?: number): NormalizedBook => {
+  const at = (step: number, size: number, edge: number): NormalizedBook => ({
+    bids: Array.from({ length: 20 }, (_, i): [number, number] => [DEPTH_MID - edge - i * step, size]),
+    asks: Array.from({ length: 20 }, (_, i): [number, number] => [DEPTH_MID + edge + i * step, size]),
+    ts: 0,
+  });
+  if (sigFigs === undefined) return at(0.1, 15, 0.05);
+  const step = sigFigsWidth(sigFigs)(DEPTH_MID);
+  return at(step, 15 * step * 10, step);
+};
+
+describe('realize without a price impact cap', () => {
+  it('no price impact refusal', () => {
+    const deep = [4, 3].reduce((book, sigFigs) => deepenBook(book, depthSide(sigFigs), sigFigsWidth(sigFigs)), depthSide());
+    const plan = planRealize(hlShortInput(1_000_000, { books: { HYPERLIQUID_FUTURE_ETH_USDC: deep } }));
+    expect(plan?.refused).toBeNull();
+    expect(plan?.legs).toHaveLength(1);
+    expect(Math.round((plan?.legs[0].impactBp ?? 0) * 10) / 10).toBe(187.5);
+    expect(plan?.estimates.market.impactUsd).toBeGreaterThan(plan?.estimates.maker.impactUsd ?? Infinity);
+  });
+});

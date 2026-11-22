@@ -40,10 +40,14 @@ export function dealsRoutes(deps: AppDeps) {
     /* A rebalance moves cash out of CrossEx for minutes, and its amount was
        sized on the margin that was free when it started. A deal that opens
        meanwhile takes that margin. The rebalance start refuses while a deal
-       works; this is the same rule the other way. Only a running job blocks:
-       a halted one moves nothing until it is resumed, and resume has the
-       same check. */
-    const rebalanceRunning = (): boolean => deps.rebalance?.jobs.read()?.status === 'running';
+       works; this is the same rule the other way. A running or paused job
+       blocks: a paused Delever can hold Boros larger than its perps. Another
+       halted job moves nothing until it is resumed, and resume has the same
+       check. */
+    const rebalanceRunning = (): boolean => {
+      const job = deps.rebalance?.jobs.read();
+      return job?.status === 'running' || (job?.status === 'halted' && job.paused);
+    };
     const refuseForRebalance = (reply: FastifyReply, what: string): FastifyReply =>
       refuse(reply, {
         code: 409,

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { PlannedStep, WalletAfter } from '../../src/core/rebalance/plan';
-import type { RealizeLeg } from '../../src/core/rebalance/realize';
+import { type RealizeLeg, realizeEstimateOf } from '../../src/core/rebalance/realize';
 import {
   bannerFor,
   haltReasonFor,
@@ -278,6 +278,7 @@ const realizeLeg = (over: Partial<RealizeLeg> = {}): RealizeLeg => ({
   realizedUsd: 34386,
   convert: { amount: 10298, count: 1, feeUsd: 20.6 },
   closeFeeUsd: 51.2,
+  closeMakerFeeUsd: 21.94,
   reopenFeeUsd: 51.19,
   closeImpactUsd: 9.44,
   reopenImpactUsd: 9.44,
@@ -293,7 +294,22 @@ const ownerRoute: PlannedStep[] = [
 ];
 
 const realizeJob = (legs: RealizeLeg[], steps: PlannedStep[] = ownerRoute): Job =>
-  newJob({ route: 'loop', steps, amount: 37526, costUsd: 127.27, target: [], userId: '1', realize: { legs, refused: null } }, 4_000_000);
+  newJob(
+    {
+      route: 'loop',
+      steps,
+      amount: 37526,
+      costUsd: 127.27,
+      target: [],
+      userId: '1',
+      realize: {
+        legs,
+        refused: null,
+        estimates: { maker: realizeEstimateOf({ legs }, 'maker'), market: realizeEstimateOf({ legs }, 'market') },
+      },
+    },
+    4_000_000,
+  );
 
 const shape = (job: Job) => job.steps.map((step) => [step.name, step.from, step.to, step.planned]);
 

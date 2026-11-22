@@ -243,17 +243,94 @@ export interface RealizeLeg {
   impactBp: number;
 }
 
+export type RealizeExec = 'maker' | 'market';
+
+export type RealizeRefusalReason = 'no-fee-rate' | 'no-margin' | 'past-book' | 'over-cap';
+
 export interface RealizeRefusal {
-  reason: 'no-fee-rate' | 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
+  reason: RealizeRefusalReason;
   bp: number | null;
-  maxBp: number;
   capUsd?: number;
+}
+
+export interface RealizeEstimate {
+  feeUsd: number;
+  impactUsd: number;
+  totalUsd: number;
 }
 
 export interface RealizePlan {
   legs: RealizeLeg[];
   refused: RealizeRefusal | null;
+  estimates?: { maker: RealizeEstimate; market: RealizeEstimate };
 }
+
+export interface SliceOption {
+  sizeUsd: number;
+  custom: boolean;
+  count: number;
+  impactBp: number;
+  impactUsd: number;
+  notHedgedMaxQty: number;
+  notHedgedMaxUsd: number;
+  seconds: { maker: number; market: number };
+}
+
+export interface RealizeTab {
+  pool: Pool;
+  clearDebt: RealizePlan | null;
+  all: RealizePlan | null;
+  custom: RealizePlan | null;
+  sliceOptions: SliceOption[];
+  defaultSliceUsd: number;
+}
+
+export interface FullPlan {
+  costUsd: number;
+  days: number | null;
+  clearsBorrow: boolean;
+  needsRealize: boolean;
+  moveCostUsd: number;
+  realizeCostUsd: number;
+  interestPerMonthUsd: number;
+  refused: RealizeRefusal | null;
+}
+
+export interface ImUsedRow {
+  account: Pool;
+  pct: number;
+}
+
+export interface DeleverRequest {
+  perps: { symbol: string; qty: number }[];
+  boros: { marketId: number; size: number }[];
+  exec: RealizeExec;
+  sliceUsd?: number;
+}
+
+export interface DeleverEstimate {
+  feePerpsUsd: number;
+  feeBorosUsd: number;
+  impactUsd: number;
+  totalUsd: number;
+}
+
+export interface DeleverPlan {
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number }[];
+  boros: { marketId: number; before: number; after: number; closeSize: number }[];
+  imUsed: { account: Pool; before: number; after: number }[];
+  makerLeg: 0 | 1;
+  sliceOptions: SliceOption[];
+  defaultSliceUsd: number;
+  estimates: { maker: DeleverEstimate; market: DeleverEstimate };
+  notHedgedMaxQty: number;
+  notHedgedMaxUsd: number;
+  refused: { reason: 'below-min'; venue: string; minQty: number; coin: string } | null;
+}
+
+export type RebalanceFixAction = 'market' | 'limit' | 'boros-retry' | 'add-back';
+
+export type HaltKind = 'margin' | 'not-hedged' | 'boros' | 'restart' | 'other';
 
 export interface EvenPlan {
   goal: Goal;
@@ -334,6 +411,28 @@ export interface RebalanceJob {
   before?: RebalanceBefore | null;
   routeImpactUsd?: number;
   openGaps?: RebalanceOpenGap[];
+  kind?: 'move' | 'realize' | 'delever';
+  exec?: RealizeExec;
+  slice?: { index: number; count: number; sizeUsd: number } | null;
+  notHedgedQty?: number;
+  followMisses?: number;
+  follow?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; qty: number; reduceOnly: boolean } | null;
+  borosGapYu?: number;
+  borosLeftYu?: number;
+  feeSoFarUsd?: number;
+  estimate?: RealizeEstimate | null;
+  pauseRequested?: boolean;
+  paused?: boolean;
+  delever?: {
+    pct: number;
+    legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number }[];
+    boros: { marketId: number; before: number; after: number; closed: number }[];
+  } | null;
+  imUsedNow?: ImUsedRow[] | null;
+  imUsedEnd?: ImUsedRow[] | null;
+  imUsedStart?: ImUsedRow[] | null;
+  totalCostUsd?: number | null;
+  haltKind?: HaltKind | null;
 }
 
 export interface RebalanceOpenGap {
@@ -364,6 +463,9 @@ export interface RebalancePlans {
 export interface RebalanceView {
   buckets: RebalanceBucket[];
   plans: RebalancePlans;
+  realize?: RealizeTab | null;
+  fullPlan?: FullPlan | null;
+  imUsed?: ImUsedRow[];
   job: RebalanceJob | null;
 }
 

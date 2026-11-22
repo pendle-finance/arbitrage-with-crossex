@@ -12,17 +12,19 @@ import { markPriceOf, ProgressBar, StepList, type StepRow, type StepState } from
 import { CONVERT_TO, modalFeeLabel, PLATFORM, poolCoin, sideText, sizeText } from './rebalanceCopy';
 import { barRowsOf, roundCountOf, roundOf, ROUTE_LABEL, shownKeys, SpotLines, targetsOf } from './RebalanceHovers';
 import { abandonNote, Actions, CloseButton, gapBoxLines, haltLine, StopBox, stopTitle, type JobViewProps } from './RebalanceJobBits';
-import { convertsOf, dustRestsOf, gapsOf, hasRest, isCloseSent, isShortDone, jobActionLegs, jobCostParts, lastRealizeIndex, legStep, legSteps } from './rebalanceJobSteps';
+import { convertsOf, dustRestsOf, gapsOf, isCloseSent, jobActionLegs, jobCostParts, lastRealizeIndex, legStep, legSteps } from './rebalanceJobSteps';
 import { otherLegText, perpsOf, routeMoveOf, stateOf, type Gap } from './rebalanceJobSteps';
 import { MoveJobView } from './RebalanceMoveJobView';
 import { ImpactLabel, MovePath, moveTitle, realizePools, realizeText, routePools, STEPS_HEAD, walletOf } from './RebalancePlanBits';
 import { RealizeActions, RealizeRow } from './RebalanceRealizeBits';
+import { isSliceJob, SliceJobView } from './RebalanceSliceJobView';
 import { jobSeconds } from './rebalanceStepRows';
 import { NoSpotReadLine } from './TransferBits';
 
 const rk = realizeText;
 
 export function RebalanceJobView(props: JobViewProps) {
+  if (isSliceJob(props.job)) return <SliceJobView {...props} />;
   return props.job.realize?.legs.length ? <RealizeJobView {...props} /> : <MoveJobView {...props} />;
 }
 
@@ -219,6 +221,5 @@ function RouteBody({ job, now, state }: { job: RebalanceJob; now: number; state:
 export function JobChip({ job }: { job: RebalanceJob }) {
   if (job.status === 'running') return <Chip tone="info">{t('common.running')}</Chip>;
   if (job.status === 'halted') return <Chip tone="red">{t('common.stopped')}</Chip>;
-  if (isShortDone(job) || job.goal !== 'even' || hasRest(job)) return <Chip>{t('common.done')}</Chip>;
-  return <Chip tone="green">{t('accounts.rebalanceModal.balanced')}</Chip>;
+  return <Chip>{t('accounts.sliceRun.done')}</Chip>;
 }

@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
 import { Chip } from '../components/Chip';
+import { ExecModeToggle } from '../components/ExecModeToggle';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { fieldValue, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
@@ -279,15 +280,13 @@ export function ClosePairForm({
 
       <div className="flex flex-col gap-1.5">
         <FieldLabel>{t('accounts.closePair.execution')}</FieldLabel>
-        <SegmentedToggle<ExecMode>
+        <ExecModeToggle
           ariaLabel={t('accounts.closePair.executionAria')}
           fill
           value={mode}
           onChange={setMode}
-          options={[
-            { value: 'maker', label: t('pairTicket.pair.limitHedge') },
-            { value: 'market', label: t('pairTicket.pair.twoMarket') },
-          ]}
+          order={['maker', 'market']}
+          labels={{ maker: t('pairTicket.pair.limitHedge'), market: t('pairTicket.pair.twoMarket') }}
         />
       </div>
 

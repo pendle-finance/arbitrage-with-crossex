@@ -12,7 +12,9 @@ import { gateVenue } from '../../src/engine/venueGate';
 import { HALT_TEXT, inTransitOf, JobFile, newJob, type Job, type Step } from '../../src/server/rebalanceJob';
 import { tagFor } from '../../src/server/rebalanceRunner';
 import type { AppDeps } from '../../src/server/app';
-import { gate, HOST, makeTestApp, mockGateGet, mockGatePost, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
+import { gate, HOST, makeTestApp, mockGateGet, mockGatePost, orderBody, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
+import { account as borosAccount, ADDRESS, HL as HL_MARKET, market, relay, wireBook } from '../helpers/boros-pair-fixtures';
+import { borosStub } from '../helpers/boros-stub';
 import { accountA, waitFor } from './helpers/rebalance';
 
 const API = '/api/v4';
@@ -40,7 +42,7 @@ async function reset(): Promise<void> {
   nock.cleanAll();
 }
 
-function boot(over: { store?: Store; job?: unknown; credentials?: AppDeps['credentials'] } = {}) {
+function boot(over: { store?: Store; job?: unknown; credentials?: AppDeps['credentials']; extra?: Partial<AppDeps> } = {}) {
   const dataDir = mkdtempSync(path.join(tmpdir(), 'rebalance-'));
   if (over.job) writeFileSync(path.join(dataDir, 'rebalance.json'), JSON.stringify(over.job));
   const getClients = () => makeClients({ key: TEST_KEY, secret: TEST_SECRET });
@@ -50,6 +52,7 @@ function boot(over: { store?: Store; job?: unknown; credentials?: AppDeps['crede
     rebalance: { jobs, sleep },
     engine: { store: over.store ?? new Store(':memory:'), venue: gateVenue(getClients), clock: { now: () => t } },
     credentials: over.credentials,
+    ...over.extra,
   });
   apps.push(app);
   const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: HOST })).json();
@@ -312,9 +315,10 @@ describe('realize leg fees on the job', () => {
     closeImpactUsd: 9.44 * usd,
     reopenImpactUsd: 9.44 * usd,
     impactBp: 1.9,
+    closeMakerFeeUsd: 20.5 * usd,
   });
   const jobFor = (realize: RealizeLeg) =>
-    newJob({ route: 'convert', steps: [], amount: 0, costUsd: 0, target: [], userId: '1', realize: { legs: [realize], refused: null } }, t);
+    newJob({ route: 'convert', steps: [], amount: 0, costUsd: 0, target: [], userId: '1', realize: { legs: [realize], refused: null, estimates: { maker: { feeUsd: 0, impactUsd: 0, totalUsd: 0 }, market: { feeUsd: 0, impactUsd: 0, totalUsd: 0 } } } }, t);
 
   it.each([1 / 4000, 1, 30])('the job keeps the plan fees per leg at %o of the 53.8 ETH leg', (usd) => {
     const job = jobFor(leg(usd));
@@ -682,5 +686,314 @@ describe('POST /api/rebalance/:id/resume and /abandon', () => {
 
     expect(res.statusCode).toBe(200);
     await waitFor(() => h.file().status === 'done', 'done');
+  });
+});
+
+describe('sliced jobs through the routes', () => {
+  const HL = 'HYPERLIQUID_FUTURE_ETH_USDC';
+  const DELEVER = {
+    makerLeg: 0 as const,
+    legs: [
+      { symbol: HL, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT' as const, before: 66, after: 33, closeQty: 33 },
+      { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', base: 'ETH', side: 'LONG' as const, before: 66, after: 33, closeQty: 33 },
+    ],
+    boros: [],
+  };
+  const sliced = (over: Partial<Job> = {}): Job => ({
+    ...newJob({ route: 'mix', steps: [], amount: 0, costUsd: 30, target: [], userId: '1', kind: 'delever', delever: DELEVER, sliceCount: 14, sliceUsd: 25_000 }, t),
+    slice: { index: 6, count: 14, sizeUsd: 25_000 },
+    ...over,
+  });
+
+  it('pausing state', async () => {
+    const h = boot();
+    await h.alerts();
+    const job = sliced({ status: 'running' });
+    h.jobs.write(job);
+
+    const res = await h.post(`/api/rebalance/${job.id}/pause`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ status: 'running', pauseRequested: true, slice: { index: 6, count: 14 } });
+    expect(h.file().pauseRequested).toBe(true);
+  });
+
+  it('boot cancels a resting lead', async () => {
+    const job = sliced({ status: 'running' });
+    Object.assign(job.steps[0], {
+      status: 'running',
+      lead: { text: tagFor(job.id, 1), venueId: 'L1', sentAt: t, credited: 0, poc: true, price: '1821' },
+    });
+    const cancel = gate().delete(/\/crossex\/orders\/L1/).query(true).reply(200, orderBody({ order_id: 'L1', text: tagFor(job.id, 1) }));
+    gate()
+      .persist()
+      .get(/\/crossex\/orders\/L1/)
+      .query(true)
+      .reply(200, orderBody({ order_id: 'L1', text: tagFor(job.id, 1) }));
+    const h = boot({ job });
+
+    await h.alerts();
+    await waitFor(() => h.file().status === 'halted', 'the boot halt');
+
+    expect(cancel.isDone()).toBe(true);
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restart, paused: false });
+  });
+
+  const GATE_ETH = 'GATE_FUTURE_ETH_USDT';
+  const perpRule = (symbol: string) => ({
+    symbol,
+    state: 'live',
+    business_type: 'FUTURE',
+    lot_size: '0.01',
+    min_size: '0.01',
+    min_notional: '0',
+    tick_size: '0.1',
+    max_market_size: '10000',
+    max_limit_size: '10000',
+  });
+  const levels = { coin: 'ETH', levels: [[{ px: '1820.9', sz: '1000', n: 1 }], [{ px: '1821.1', sz: '1000', n: 1 }]] };
+  const borosDeps = (): Partial<AppDeps> => {
+    process.env.BOROS_ROOT_ADDRESS = ADDRESS;
+    return {
+      borosFetch: borosStub({
+        '/apis/v1/markets': { results: [market(HL_MARKET, 'Hyperliquid', 0.09)] },
+        [`/apis/v1/markets/order-book?marketId=${HL_MARKET}`]: wireBook(900, 920),
+        ...borosAccount(500_000, [{ marketId: HL_MARKET, size: 100 }]),
+      }),
+      getBorosOrders: () => relay(borosCalls),
+    };
+  };
+  let borosCalls: string[] = [];
+
+  afterEach(() => {
+    delete process.env.BOROS_ROOT_ADDRESS;
+    borosCalls = [];
+  });
+
+  type Sent = Record<string, string | number | undefined>;
+  function sliceVenue(sliceNow: () => number | undefined = () => undefined): Sent[] {
+    const sent: Sent[] = [];
+    gate()
+      .persist()
+      .get(`${API}/crossex/rule/symbols`)
+      .query(true)
+      .reply(200, [perpRule(HL), perpRule(GATE_ETH)]);
+    mockView();
+    nock('https://api.hyperliquid.xyz').persist().post('/info', (body) => body.type === 'l2Book').reply(200, levels);
+    nock('https://api.gateio.ws')
+      .persist()
+      .get('/api/v4/futures/usdt/contracts/ETH_USDT')
+      .query(true)
+      .reply(200, { name: 'ETH_USDT', quanto_multiplier: '0.01', order_price_round: '0.01' });
+    nock('https://api.gateio.ws')
+      .persist()
+      .get('/api/v4/futures/usdt/order_book')
+      .query(true)
+      .reply(200, { bids: [{ p: '1820.9', s: 1_000_000 }], asks: [{ p: '1821.1', s: 1_000_000 }] });
+    gate()
+      .persist()
+      .post(`${API}/crossex/orders`)
+      .query(true)
+      .reply(200, (_uri, body) => {
+        const order = body as Record<string, string>;
+        sent.push({ ...order, slice: sliceNow() });
+        return { order_id: `o${sent.length}`, text: order.text };
+      });
+    gate()
+      .persist()
+      .get(/\/crossex\/orders\/o\d+/)
+      .query(true)
+      .reply(200, (uri) => {
+        const index = Number(/orders\/o(\d+)/.exec(uri)![1]);
+        const order = sent[index - 1];
+        return orderBody({ order_id: `o${index}`, text: order.text, symbol: order.symbol, qty: order.qty, executed_qty: order.qty, state: 'FILLED', fee: '0' });
+      });
+    return sent;
+  }
+
+  const midSlice = (filled: number, hedged: number, over: Partial<Job> = {}): Job => {
+    const job = sliced({ status: 'halted', haltReason: HALT_TEXT.restart, exec: 'market', ...over });
+    job.realize!.legs[0].filledQty = filled;
+    Object.assign(job.steps[0], { status: 'running', startedAt: t, qty: hedged, cut: { qty: 2, from: 10, at: t, ioc: true } });
+    const open = filled - hedged;
+    job.notHedgedQty = open;
+    job.follow = open > 0 ? { ...job.steps[0].follow!, qty: open } : null;
+    return job;
+  };
+
+  const atBoros = (): Job => {
+    const job = newJob(
+      {
+        route: 'mix',
+        steps: [],
+        amount: 0,
+        costUsd: 30,
+        target: [],
+        userId: '1',
+        kind: 'delever',
+        delever: { ...DELEVER, boros: [{ marketId: HL_MARKET, before: 100, after: 50, closeSize: 50 }] },
+        sliceCount: 3,
+        sliceUsd: 25_000,
+      },
+      t,
+    );
+    job.realize!.legs[0].filledQty = 33;
+    Object.assign(job.steps[0], { status: 'done', qty: 33, startedAt: t, doneAt: t });
+    job.delever!.boros[0].closed = 20;
+    Object.assign(job, { status: 'halted', haltReason: 'Boros did not close all of its share.', stepIndex: 1, borosLeftYu: 30, borosGapYu: 30 });
+    return job;
+  };
+
+  it('pause after the slice', async () => {
+    const sent = sliceVenue();
+    const job = midSlice(12, 10, { pauseRequested: true });
+    const h = boot({ job });
+
+    expect((await h.post(`/api/rebalance/${job.id}/resume`)).statusCode).toBe(200);
+    await waitFor(() => h.file().paused === true, 'the pause');
+
+    expect(h.file()).toMatchObject({ status: 'halted', paused: true, pauseRequested: false, haltReason: null, slice: { index: 6 } });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ symbol: GATE_ETH, side: 'SELL', qty: '2' });
+    expect(await h.alerts()).toEqual([]);
+  });
+
+  it('resume after pause', async () => {
+    let h: ReturnType<typeof boot> | null = null;
+    const sent = sliceVenue(() => h?.file().slice?.index);
+    const job = midSlice(12, 12, { paused: true, haltReason: null });
+    h = boot({ job, extra: borosDeps() });
+    const booted = h;
+
+    expect((await booted.post(`/api/rebalance/${job.id}/resume`)).statusCode).toBe(200);
+    await waitFor(() => booted.file().status === 'done', 'done');
+
+    expect(sent[0]).toMatchObject({ symbol: HL, side: 'BUY', slice: 7 });
+    expect(booted.file()).toMatchObject({ paused: false, slice: { index: expect.any(Number) } });
+    expect(booted.file().slice!.index).toBeGreaterThan(6);
+  });
+
+  it('resume sends the follow first', async () => {
+    const job = sliced({ status: 'running', exec: 'market' });
+    Object.assign(job.steps[0], {
+      status: 'running',
+      cut: { qty: 5, from: 0, at: t, ioc: true },
+      lead: { text: tagFor(job.id, 1), venueId: 'L1', sentAt: t, credited: 0, poc: false, price: '1821.1' },
+    });
+    job.tagCount = 1;
+    gate().delete(/\/crossex\/orders\/L1/).query(true).reply(200, {});
+    gate()
+      .persist()
+      .get(/\/crossex\/orders\/L1/)
+      .query(true)
+      .reply(200, orderBody({ order_id: 'L1', text: tagFor(job.id, 1), symbol: HL, qty: '5', executed_qty: '2', state: 'CANCELLED', fee: '0' }));
+    const sent = sliceVenue();
+    const h = boot({ job, extra: borosDeps() });
+    await h.alerts();
+    await waitFor(() => h.file().status === 'halted', 'the boot halt');
+    expect(h.file()).toMatchObject({ follow: { qty: 2 }, notHedgedQty: 2 });
+
+    expect((await h.post(`/api/rebalance/${job.id}/resume`)).statusCode).toBe(200);
+    await waitFor(() => h.file().status === 'done', 'done');
+
+    expect(sent[0]).toMatchObject({ symbol: GATE_ETH, side: 'SELL', qty: '2' });
+  });
+
+  it('fix at market', async () => {
+    const sent = sliceVenue();
+    const job = midSlice(12, 10);
+    const h = boot({ job, extra: borosDeps() });
+
+    const res = await h.post(`/api/rebalance/${job.id}/fix`, { action: 'market' });
+
+    expect(res.statusCode).toBe(200);
+    expect(sent[0]).toMatchObject({ symbol: GATE_ETH, side: 'SELL', type: 'MARKET', time_in_force: 'IOC', qty: '2', reduce_only: 'true' });
+    await waitFor(() => h.file().status === 'done', 'done');
+  });
+
+  it('fix at limit', async () => {
+    const sent = sliceVenue();
+    const job = midSlice(12, 10);
+    const h = boot({ job, extra: borosDeps() });
+
+    const res = await h.post(`/api/rebalance/${job.id}/fix`, { action: 'limit' });
+
+    expect(res.statusCode).toBe(200);
+    expect(sent[0]).toMatchObject({ symbol: GATE_ETH, side: 'SELL', type: 'LIMIT', time_in_force: 'IOC', qty: '2', price: '1816.5' });
+    await waitFor(() => h.file().status === 'done', 'done');
+    expect(sent[1]).toMatchObject({ symbol: HL, side: 'BUY' });
+  });
+
+  it('two fix presses send one order', async () => {
+    const sent = sliceVenue();
+    const job = midSlice(12, 10);
+    const h = boot({ job, extra: borosDeps() });
+    await h.alerts();
+
+    const [first, second] = await Promise.all([
+      h.post(`/api/rebalance/${job.id}/fix`, { action: 'market' }),
+      h.post(`/api/rebalance/${job.id}/fix`, { action: 'market' }),
+    ]);
+
+    expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+    await waitFor(() => h.file().status === 'done', 'done');
+    expect(sent.filter((order) => order.type === 'MARKET')).toHaveLength(1);
+  });
+
+  it('fix boros retry', async () => {
+    mockView();
+    const job = atBoros();
+    const h = boot({ job, extra: borosDeps() });
+
+    const res = await h.post(`/api/rebalance/${job.id}/fix`, { action: 'boros-retry' });
+
+    expect(res.json().error).toBeUndefined();
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ status: 'done', borosLeftYu: 0 });
+    expect(h.file().delever!.boros[0].closed).toBe(50);
+    expect(borosCalls.length).toBeGreaterThan(0);
+  });
+
+  it('fix add back', async () => {
+    const sent = sliceVenue();
+    const job = atBoros();
+    const h = boot({ job, extra: borosDeps() });
+
+    const res = await h.post(`/api/rebalance/${job.id}/fix`, { action: 'add-back' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data).toMatchObject({ status: 'done', borosLeftYu: 0 });
+    expect(sent.map(({ symbol, side, type, qty }) => ({ symbol, side, type, qty }))).toEqual([
+      { symbol: HL, side: 'SELL', type: 'MARKET', qty: '19.8' },
+      { symbol: GATE_ETH, side: 'BUY', type: 'MARKET', qty: '19.8' },
+    ]);
+  });
+
+  it('loads a 1.7.9 job', async () => {
+    const old: Record<string, unknown> = { ...sliced({ status: 'halted', haltReason: 'stopped' }) };
+    for (const key of ['kind', 'exec', 'slice', 'notHedgedQty', 'followMisses', 'follow', 'borosGapYu', 'borosLeftYu', 'feeSoFarUsd', 'estimate', 'pauseRequested', 'paused', 'delever', 'imUsedNow', 'imUsedEnd', 'imUsedStart', 'totalCostUsd', 'retryConverts']) delete old[key];
+    const legacy = newJob({ route: 'convert', steps: ONE_ROUND, amount: 300, costUsd: 1, target: [], userId: '1' }, t);
+    const file: Record<string, unknown> = { ...legacy, status: 'halted', haltReason: 'stopped' };
+    for (const key of Object.keys(old)) if (!(key in file)) delete file[key];
+    for (const key of ['kind', 'exec', 'slice', 'pauseRequested', 'paused', 'delever', 'retryConverts']) delete file[key];
+    const h = boot({ job: file });
+    mockView();
+
+    const res = await h.post('/api/rebalance', { route: 'convert', costUsd: 1 });
+
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', kind: 'move', paused: false });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('stop alert is in-app only', async () => {
+    const telegram = nock('https://api.telegram.org').post(/.*/).reply(200, { ok: true });
+    const job = newJob({ route: 'convert', steps: ONE_ROUND, amount: 300, costUsd: 1, target: [], userId: '1' }, t);
+    const h = boot({ job });
+
+    await h.alerts();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+
+    expect((await h.alerts()).some((row) => String(row.pairId ?? row.pair_id).startsWith('rebalance:'))).toBe(true);
+    expect(telegram.isDone()).toBe(false);
   });
 });

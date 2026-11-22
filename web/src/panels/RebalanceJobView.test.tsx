@@ -1,13 +1,14 @@
-import { cleanup, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
-import type { RealizeJobLeg, RebalanceJob, RebalanceStep } from '../api/types';
+import type { RealizeJobLeg, RebalanceJob, RebalanceStep, RebalanceView } from '../api/types';
+import { fmtUsd } from '../lib/fmt';
 import { accountBodies, accountHandler, auditRebalanceViews, REBALANCE_NOW, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { openGapOf } from './rebalanceCardGap';
 import { convertsOf, lastRealizeIndex } from './rebalanceJobSteps';
-import { RebalanceJobView } from './RebalanceJobView';
+import { JobChip, RebalanceJobView } from './RebalanceJobView';
 
 const FEES: Partial<RealizeJobLeg> = {
   closeFeeUsd: 51.2,
@@ -167,5 +168,231 @@ describe('RebalanceJobView', () => {
     expect(value('Price impact')).toBe(impact);
     const cents = (text: string) => Math.round(Number(text.replace(/[$,]/g, '')) * 100);
     expect(cents(fee) + cents(impact)).toBe(cents(total));
+  });
+});
+
+const MARKS = [
+  { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', markPrice: '3200' },
+  { symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', markPrice: '90000' },
+  { symbol: 'GATE_FUTURE_BTC_USDT', markPrice: '90000' },
+];
+
+function show(view: RebalanceView, over: Partial<RebalanceJob> = {}) {
+  const posts: { path: string; body: unknown }[] = [];
+  server.use(
+    transferHandler(transferViews.spotZero),
+    accountHandler(accountBodies.accountA),
+    http.get('/api/positions', () => HttpResponse.json(env({ positions: MARKS, exposure: [] }))),
+    http.post('/api/rebalance/:id/:cmd', async ({ request, params }) => {
+      posts.push({ path: `${String(params.id)}/${String(params.cmd)}`, body: await request.json() });
+      return HttpResponse.json(env(view.job));
+    }),
+  );
+  const job = { ...view.job!, ...over };
+  const onTab = vi.fn();
+  renderWithClient(
+    <RebalanceJobView job={job} view={{ ...view, job }} now={REBALANCE_NOW} holdMs={50} onResume={vi.fn()} onAbandon={vi.fn()} onTab={onTab} />,
+  );
+  return { job, onTab, posts };
+}
+
+const hold = (name: RegExp | string) => fireEvent.pointerDown(screen.getByRole('button', { name }));
+
+describe('RebalanceJobView, sliced runs', () => {
+  it('move header names tab and goal', () => {
+    const word = { repay: 'Clear debt', even: 'Balance positions', custom: 'Custom amount' };
+    for (const view of [rebalanceViews.moveRunning, rebalanceViews.moveStopped, rebalanceViews.moveDone]) {
+      show(view);
+      expect(screen.getByText(`Move cash · ${word[view.job!.goal]}`)).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it('slice counter', () => {
+    show(rebalanceViews.ownerRealizeRunning, { slice: { index: 6, count: 14, sizeUsd: 25_000 } });
+    expect(screen.getByText('Slice 6 of 14')).toBeInTheDocument();
+    expect(screen.getByText('Est. about 45 min left')).toBeInTheDocument();
+  });
+
+  it('realized and not hedged now', async () => {
+    show(rebalanceViews.ownerRealizeRunning);
+    expect(screen.getByText('Realized 2,482 of 7,128 USDC')).toBeInTheDocument();
+    expect(await screen.findByText('Not hedged now 3.9 ETH ($12,480)')).toBeInTheDocument();
+  });
+
+  it('fee so far and pause hold', async () => {
+    const { job, posts } = show(rebalanceViews.ownerRealizeRunning);
+    expect(screen.getByText(`Fee so far ${fmtUsd(job.feeSoFarUsd!)} · est. total ${fmtUsd(job.estimate!.feeUsd)}`)).toBeInTheDocument();
+    hold('Hold to pause after this slice');
+    await waitFor(() => expect(posts.map((p) => p.path)).toEqual(['acct0001/pause']));
+  });
+
+  it('pausing shows the slice it stops after', () => {
+    show(rebalanceViews.realizePausing);
+    expect(screen.getByText('Pausing after slice 1 of 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Hold to pause after this slice' })).not.toBeInTheDocument();
+  });
+
+  it('paused realize view', () => {
+    show(rebalanceViews.realizePaused, { slice: { index: 6, count: 14, sizeUsd: 25_000 } });
+    expect(screen.getByText('Paused after slice 6 of 14')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Abandon' })).toBeInTheDocument();
+  });
+
+  it('missed follow shows holds', async () => {
+    const { posts } = show(rebalanceViews.realizeFollowMissed);
+    expect(within(screen.getByRole('alert')).getByText('3.9 ETH not hedged · reopen not filled yet')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Hold to reopen at limit $3,192.00' })).toBeInTheDocument();
+    hold('Hold to reopen Hyperliquid Short 3.9 ETH at market');
+    await waitFor(() => expect(posts).toEqual([{ path: 'acct0001/fix', body: { action: 'market' } }]));
+    hold('Hold to reopen at limit $3,192.00');
+    await waitFor(() => expect(posts[1]).toEqual({ path: 'acct0001/fix', body: { action: 'limit' } }));
+  });
+
+  it('margin halt shows today\'s text', () => {
+    show(rebalanceViews.realizeStoppedMargin);
+    const box = screen.getByRole('alert');
+    expect(within(box).getByText('Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to reopen/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+  });
+
+  it('not hedged halt view', async () => {
+    show(rebalanceViews.realizeStoppedNotHedged);
+    const box = screen.getByRole('alert');
+    expect(box.className).toContain('alert-red');
+    expect(within(box).getByText('3.9 ETH not hedged')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to reopen Hyperliquid Short 3.9 ETH at market' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Hold to reopen at limit $3,192.00' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
+    expect(screen.getByText('Abandon leaves the short 3.9 ETH smaller.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+  });
+
+  it('realize done receipt', () => {
+    const { job } = show(rebalanceViews.ownerRealizeDone);
+    expect(screen.getByText('Realized 7,128 USDC')).toBeInTheDocument();
+    expect(screen.getByText(`Total cost ${fmtUsd(job.totalCostUsd!)} (est. ${fmtUsd(job.estimate!.totalUsd)})`)).toBeInTheDocument();
+  });
+
+  it('realize done pair pnl', () => {
+    show(rebalanceViews.ownerRealizeDone);
+    const row = screen.getByText('Pair PnL').parentElement!;
+    expect(row).toHaveTextContent('Pair PnLUnchanged, except cost');
+  });
+
+  it('realize done next move cash', () => {
+    const { onTab } = show(rebalanceViews.ownerRealizeDone);
+    const next = screen.getByRole('button', { name: 'Next: Move cash' });
+    expect(next).toHaveClass('btn-primary');
+    fireEvent.click(next);
+    expect(onTab).toHaveBeenCalledWith('move');
+  });
+
+  it('delever running legs', () => {
+    show(rebalanceViews.deleverRunning);
+    expect(screen.getByText(/^Perps · slice 20 of 65 900(\.0+)? → 847\.18 BTC each$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Boros 900(\.0+)? YU · closes after perps$/)).toBeInTheDocument();
+  });
+
+  it('delever running figures', async () => {
+    const { job } = show(rebalanceViews.deleverRunning);
+    expect(await screen.findByText(/^Not hedged now max 2\.7778 BTC \(\$250,000\) per slice$/)).toBeInTheDocument();
+    expect(screen.getByText('IM used 86.2% now · 74.2% at end')).toBeInTheDocument();
+    expect(screen.getByText(`Fee so far ${fmtUsd(job.feeSoFarUsd!)} · Est. fee ${fmtUsd(job.estimate!.feeUsd)}`)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to pause after this slice' })).toBeInTheDocument();
+  });
+
+  it('delever boros gap on pause', async () => {
+    const { posts } = show(rebalanceViews.deleverPausedGap);
+    const box = screen.getByRole('alert');
+    expect(box.className).toContain('alert-red');
+    expect(within(box).getByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
+    expect(within(box).getByText('Paused after slice 19 of 65')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    hold('Hold to close 52.82 YU on Boros');
+    await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'boros-retry' } }]));
+  });
+
+  it('boros part fill holds', async () => {
+    const { posts } = show(rebalanceViews.deleverStoppedBoros);
+    expect(within(screen.getByRole('alert')).getByText(/^Boros 36(\.0+)? YU not hedged$/)).toBeInTheDocument();
+    hold(/^Hold to retry closing 36(\.0+)? YU on Boros$/);
+    await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'boros-retry' } }]));
+    hold(/^Hold to add 36(\.0+)? BTC back on both perps$/);
+    await waitFor(() => expect(posts[1]).toEqual({ path: 'delv0001/fix', body: { action: 'add-back' } }));
+  });
+
+  it('delever done receipt', () => {
+    const { job } = show(rebalanceViews.deleverDone);
+    expect(screen.getByText(/^Hyperliquid Long · Gate Short 900(\.0+)? → 720(\.0+)? BTC each$/)).toBeInTheDocument();
+    expect(screen.getByText(/^Boros 900(\.0+)? → 720(\.0+)? YU$/)).toBeInTheDocument();
+    expect(screen.getByText('IM used 91.2% → 74.2%')).toBeInTheDocument();
+    expect(screen.getByText(`Total cost ${fmtUsd(job.totalCostUsd!)} (est. ${fmtUsd(job.estimate!.totalUsd)})`)).toBeInTheDocument();
+  });
+
+  it('delever done next', () => {
+    const { onTab } = show(rebalanceViews.deleverDone);
+    fireEvent.click(screen.getByRole('button', { name: 'Next: Move cash' }));
+    expect(onTab).toHaveBeenCalledWith('move');
+    cleanup();
+    show({ ...rebalanceViews.deleverDone, buckets: rebalanceViews.deleverDone.buckets.map((b) => ({ ...b, borrow: 0 })) });
+    expect(screen.queryByRole('button', { name: 'Next: Move cash' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('done chip', () => {
+    for (const view of [rebalanceViews.moveDone, rebalanceViews.ownerRealizeDone, rebalanceViews.deleverDone, rebalanceViews.balancedDone]) {
+      renderWithClient(<JobChip job={view.job!} />);
+      expect(screen.getByText('Done')).toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it('margin halt reads the halt kind', async () => {
+    show(rebalanceViews.realizeStoppedNotHedged, { haltKind: 'margin' });
+    expect(screen.queryByRole('button', { name: /^Hold to reopen/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    cleanup();
+    show(rebalanceViews.realizeStoppedMargin, { haltKind: 'not-hedged' });
+    expect(await screen.findByRole('button', { name: 'Hold to reopen at limit $3,192.00' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+  });
+
+  it('realized and total cost come from the job', () => {
+    const view = rebalanceViews.ownerRealizeRunning;
+    const leg = view.job!.realize!.legs[0]!;
+    show(view, { realize: { legs: [{ ...leg, realizedUsd: 1_000 }] } });
+    expect(screen.getByText('Realized 1,000 of 7,128 USDC')).toBeInTheDocument();
+    cleanup();
+    show(rebalanceViews.ownerRealizeDone, { totalCostUsd: null });
+    expect(screen.queryByText(/^Total cost/)).not.toBeInTheDocument();
+  });
+
+  it('delever im used now starts at the start reading', () => {
+    show(rebalanceViews.deleverRunning, { imUsedNow: null });
+    expect(screen.getByText('IM used 91.2% now · 74.2% at end')).toBeInTheDocument();
+  });
+
+  it('delever missed follow says close', async () => {
+    const { job, posts } = show(rebalanceViews.deleverRunning, { followMisses: 3 });
+    const follow = job.follow!;
+    const followLeg = job.delever!.legs.find((l) => l.exchange === follow.exchange)!;
+    const venue = follow.exchange === 'GATE' ? 'Gate' : 'Hyperliquid';
+    const side = followLeg.side === 'LONG' ? 'Long' : 'Short';
+    expect(within(screen.getByRole('alert')).getByText(/^[\d.,]+ BTC not hedged · close not filled yet$/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Hold to close at limit \$[\d,.]+$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /reopen/ })).not.toBeInTheDocument();
+    hold(new RegExp(`^Hold to close ${venue} ${side} [\\d.,]+ BTC at market$`));
+    await waitFor(() => expect(posts).toEqual([{ path: 'delv0001/fix', body: { action: 'market' } }]));
+  });
+
+  it.each([
+    ['realize', whaleRebalanceViews.realizeRunning, 'Realized 99,406 of 5,965,174 USDC'],
+    ['delever', whaleRebalanceViews.deleverRunning, /^Perps · slice \d+ of \d+ 66\.7\d* → .+ BTC each$/],
+  ])('the %s run reads at $6M', (_name, view, line) => {
+    show(view);
+    expect(screen.getByText(line)).toBeInTheDocument();
   });
 });

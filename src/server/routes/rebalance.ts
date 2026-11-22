@@ -1,17 +1,34 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { classifyPlain, CoreError, describeError } from '../../core/errors';
+import { fetchBorosOrderBook, resolveBorosFetch, resolveCollateralPricesUsd } from '../../core/boros/client';
+import { halfCapSeedPct } from '../../core/boros/rollProbe';
+import { borosTimeToMaturitySec } from '../../core/boros/opportunities';
 import { fetchDeepBook, type NormalizedBook } from '../../core/estimate/books';
 import { DEFAULT_STEP, parseSymbol } from '../../core/numbers';
+import { type DeleverInput, type DeleverPlan, type DeleverRequest, planDelever } from '../../core/rebalance/delever';
 import { computeExposure } from '../../core/positions';
-import { isInProfit, realizeCostUsd, type PerpRule, type PerpSide, type RealizeLeg, type RealizePerp } from '../../core/rebalance/realize';
+import {
+  isInProfit,
+  positiveOf,
+  type PerpRule,
+  type PerpSide,
+  type RealizeExec,
+  type RealizeLeg,
+  type RealizePerp,
+} from '../../core/rebalance/realize';
+import type { SliceOption } from '../../core/rebalance/slices';
 import {
   bookLevels,
   bucketsFrom,
   EVEN_GOAL,
   floorCents,
+  fullPlanOf,
+  imUsedOf,
+  nearestCents,
   notionalByWallet,
   planFor,
   POOLS,
+  realizeTabOf,
   REPAY_GOAL,
   SPOT_PAIR,
   SPOT_SYMBOL,
@@ -34,12 +51,18 @@ import {
   LOCK_TEXT,
   moneyLockFor,
   newJob,
+  requestPause,
+  SLICE_STEP,
+  type FixAction,
   type Job,
   type JobFile,
+  type JobKind,
+  type JobPerp,
   type MoneyLock,
   type StepName,
 } from '../rebalanceJob';
-import { receivedOf, runJob, STEPS, transferRow } from '../rebalanceRunner';
+import { applyFix, cancelRestingLead, receivedOf, runJob, STEPS, transferRow, type RunnerDeps } from '../rebalanceRunner';
+import { configuredRoot, createBorosCloseDeps, createPairPricer } from './borosPair';
 
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
 const GOAL_KINDS: readonly string[] = ['even', 'repay', 'custom'];
@@ -51,6 +74,19 @@ const CUSTOM_NEEDS = 'A custom move needs from, to and amount.';
 const RELOAD_TEXT = 'This page is out of date. Reload it and check the plan before you rebalance.';
 const PLAN_CHANGED_TEXT = 'The plan changed. Check the new route before you rebalance.';
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
+const JOB_KINDS: readonly string[] = ['move', 'realize', 'delever'];
+const EXECS: readonly string[] = ['maker', 'market'];
+const FIX_ACTIONS: readonly string[] = ['market', 'limit', 'boros-retry', 'add-back'];
+const NOTHING_TO_REALIZE = 'No perp in profit to realize.';
+const NOTHING_TO_CLOSE = 'Nothing to close.';
+const NOTHING_TO_FIX = 'Nothing is left to fix.';
+const FIX_RUNNING = 'A fix is still running. Wait for it to finish.';
+const NOT_SLICED = 'Only a sliced run can pause.';
+const REALIZE_TARGET_NEEDED = 'Pick Clear debt, All or Custom before you realize.';
+const CUSTOM_NEEDS_USD = 'Enter the Custom amount before you realize.';
+const DELEVER_NEEDS = 'A Delever needs perps, Boros legs and an order mode.';
+const NO_BOROS_WALLET = 'The app has no Boros wallet to close the Boros share with.';
+const YEAR_SEC = 365 * 86_400;
 
 export const STALE_TEXT = 'Gate is limiting requests from this account. Try again in a few seconds.';
 
@@ -78,6 +114,70 @@ const isGoalKind = (value: unknown): value is GoalKind => typeof value === 'stri
 const isPool = (value: unknown): value is Pool => typeof value === 'string' && (POOLS as readonly string[]).includes(value);
 
 const isShownCost = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+
+const isPositive = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0;
+
+const isExec = (value: unknown): value is RealizeExec => typeof value === 'string' && EXECS.includes(value);
+
+const isJobKind = (value: unknown): value is JobKind => typeof value === 'string' && JOB_KINDS.includes(value);
+
+const isFixAction = (value: unknown): value is FixAction => typeof value === 'string' && FIX_ACTIONS.includes(value);
+
+function positiveQueryOf(raw: unknown, name: string): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = typeof raw === 'string' ? Number(raw) : raw;
+  if (!isPositive(value)) throw new CoreError(`${name} must be a positive number`);
+  return value;
+}
+
+function deleverRequestOf(value: unknown): DeleverRequest | null {
+  const raw = (value ?? {}) as Partial<Record<keyof DeleverRequest, unknown>>;
+  if (!Array.isArray(raw.perps) || !Array.isArray(raw.boros) || !isExec(raw.exec)) return null;
+  if (raw.sliceUsd !== undefined && !isPositive(raw.sliceUsd)) return null;
+  const perps = raw.perps.map((leg: unknown) => {
+    const { symbol, qty } = (leg ?? {}) as { symbol?: unknown; qty?: unknown };
+    return typeof symbol === 'string' && isPositive(qty) ? { symbol, qty } : null;
+  });
+  const boros = raw.boros.map((leg: unknown) => {
+    const { marketId, size } = (leg ?? {}) as { marketId?: unknown; size?: unknown };
+    return typeof marketId === 'number' && Number.isInteger(marketId) && isPositive(size) ? { marketId, size } : null;
+  });
+  if (perps.some((leg) => leg === null) || boros.some((leg) => leg === null)) return null;
+  return {
+    perps: perps.filter((leg) => leg !== null),
+    boros: boros.filter((leg) => leg !== null),
+    exec: raw.exec,
+    ...(raw.sliceUsd === undefined ? {} : { sliceUsd: raw.sliceUsd }),
+  };
+}
+
+const REALIZE_TARGETS = { 'clear-debt': 'clearDebt', all: 'all', custom: 'custom' } as const;
+type RealizeTarget = keyof typeof REALIZE_TARGETS;
+const isRealizeTarget = (value: unknown): value is RealizeTarget => typeof value === 'string' && Object.hasOwn(REALIZE_TARGETS, value);
+
+const sliceCountOf = (options: SliceOption[], sliceUsd: number, notionalUsd: number): number =>
+  options.find((option) => option.sizeUsd === sliceUsd)?.count ?? Math.max(1, Math.ceil(notionalUsd / sliceUsd));
+
+const belowMinText = (refused: NonNullable<DeleverPlan['refused']>): string =>
+  `${refused.venue} takes at least ${refused.minQty} ${refused.coin}.`;
+
+interface LivePerp extends JobPerp {
+  base: string;
+  markPrice: number;
+  initialMargin: number;
+}
+
+const livePerpsOf = (perps: RealizePerp[]): LivePerp[] =>
+  perps.flatMap((perp) => {
+    const qty = Number(perp.positionQty);
+    if (!perp.symbol || !Number.isFinite(qty) || qty === 0) return [];
+    const { exchange, base } = parseSymbol(perp.symbol);
+    const side: PerpSide = qty < 0 ? 'SHORT' : 'LONG';
+    return [{ symbol: perp.symbol, exchange, base, side, qty: Math.abs(qty), markPrice: positiveOf(perp.markPrice), initialMargin: positiveOf(perp.initialMargin) }];
+  });
+
+const jobPerpsOf = (perps: RealizePerp[]): JobPerp[] =>
+  livePerpsOf(perps).map(({ symbol, exchange, side, qty }) => ({ symbol, exchange, side, qty }));
 
 /** The custom goal from a query or body: null when none of its three parts
  * is given, the goal when all three are, and an error in between. */
@@ -161,9 +261,21 @@ export function rebalanceRoutes(deps: AppDeps) {
       return jobs;
     };
 
-    const start = (store: JobFile, pollOnly = false): void => {
-      if (inflight) return;
-      inflight = runJob({
+    const pricer = createPairPricer(deps);
+    const borosFetch = resolveBorosFetch(deps.borosFetch);
+    const borosCloseDeps = createBorosCloseDeps(deps, pricer);
+    const envTakerFee = Number(process.env.BOROS_TAKER_FEE_OVERRIDE);
+    const takerFeeOverride = Number.isFinite(envTakerFee) ? envTakerFee : undefined;
+    let fixing: Promise<Job> | null = null;
+
+    const borosSlippagePct = async (marketId: number): Promise<number | null> => {
+      const market = (await pricer.loadMarkets(false)).find((m) => m.marketId === marketId);
+      return halfCapSeedPct([market?.maxRateDeviationApr ?? 0]);
+    };
+
+    const runnerDeps = (store: JobFile, pollOnly = false): RunnerDeps => {
+      const address = configuredRoot();
+      return {
         clients: () => deps.getClients(),
         jobs: store,
         cache: deps.cache,
@@ -172,7 +284,13 @@ export function rebalanceRoutes(deps: AppDeps) {
         onHalt,
         onDone: deps.rebalance?.onDone,
         pollOnly,
-      })
+        ...(address ? { boros: { deps: borosCloseDeps, address, slippagePct: borosSlippagePct } } : {}),
+      };
+    };
+
+    const start = (store: JobFile, pollOnly = false): void => {
+      if (inflight) return;
+      inflight = runJob(runnerDeps(store, pollOnly))
         .then(() => {
           const job = store.read();
           if (job?.status === 'done') ackAlerts(job);
@@ -189,7 +307,16 @@ export function rebalanceRoutes(deps: AppDeps) {
       bootJob !== null &&
       bootStep !== undefined &&
       (bootStep.venueId !== null || bootStep.text !== null || leadsToReopen(bootJob));
-    if (jobs && bootStep && resumesAtBoot) {
+    if (jobs && bootJob && bootStep?.name === SLICE_STEP) {
+      inflight = cancelRestingLead(runnerDeps(jobs), bootJob)
+        .then(() => {
+          if (!bootJob.paused) onHalt(bootJob);
+        })
+        .catch((err: unknown) => console.error(`rebalance boot: ${describeError(err)}`))
+        .finally(() => {
+          inflight = null;
+        });
+    } else if (jobs && bootStep && resumesAtBoot) {
       bootStep.startedAt = now();
       jobs.write(bootJob);
       start(jobs, true);
@@ -226,19 +353,30 @@ export function rebalanceRoutes(deps: AppDeps) {
       return Object.fromEntries(await Promise.all(symbols.map(async (symbol) => [symbol, await read(symbol)] as const)));
     };
 
-    const loadView = async (fresh: boolean, custom: Goal | null) => {
-      const crossEx = () => deps.getClients().crossEx;
-      const account = await deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, {
-        fresh,
-      });
+    const crossEx = () => deps.getClients().crossEx;
+    const readAccount = (fresh: boolean) =>
+      deps.cache.get('account', TTL.live, async () => (await crossEx().getCrossexAccount()).body, { fresh });
+    const readPositions = (fresh: boolean) =>
+      deps.cache.get('positions', TTL.live, async () => (await crossEx().listCrossexPositions()).body, { fresh });
+    const readRules = () => deps.cache.get('rules:all', TTL.static, async () => (await crossEx().listCrossexRuleSymbols()).body);
+    const readFees = () => deps.cache.get('fees', TTL.static, async () => (await crossEx().getCrossexFee()).body);
+    const perpRulesOf = (rows: Awaited<ReturnType<typeof readRules>>['value']): Record<string, PerpRule> =>
+      Object.fromEntries(
+        rows.flatMap((rule) =>
+          rule.symbol ? [[rule.symbol, { lotSize: rule.lotSize, minSize: rule.minSize, minNotional: rule.minNotional, maxMarketSize: rule.maxMarketSize }]] : [],
+        ),
+      );
+
+    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, sliceUsd?: number) => {
+      const account = await readAccount(fresh);
       const userId = account.value.userId ? String(account.value.userId) : null;
       const [positions, rates, paid, coins, rules, fees, tickers, depth] = await Promise.all([
-        deps.cache.get('positions', TTL.live, async () => (await crossEx().listCrossexPositions()).body, { fresh }),
+        readPositions(fresh),
         orEmpty(deps.cache.get('interest:rate', TTL.static, async () => (await crossEx().getCrossexInterestRate()).body)),
         interestPaid(userId),
         deps.cache.get('transfer:coins', TTL.static, async () => (await crossEx().listCrossexTransferCoins()).body),
-        deps.cache.get('rules:all', TTL.static, async () => (await crossEx().listCrossexRuleSymbols()).body),
-        deps.cache.get('fees', TTL.static, async () => (await crossEx().getCrossexFee()).body),
+        readRules(),
+        readFees(),
         deps.cache.get(
           'spot:usdc',
           TTL.live,
@@ -254,11 +392,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const buckets = bucketsFrom(account.value, rates.value, paid.value);
       const perps: RealizePerp[] = positions.value ?? [];
       const books = await perpBooks(perps.filter(isInProfit).flatMap((perp) => (perp.symbol ? [perp.symbol] : [])));
-      const perpRules: Record<string, PerpRule> = Object.fromEntries(
-        rules.value.flatMap((rule) =>
-          rule.symbol ? [[rule.symbol, { lotSize: rule.lotSize, minSize: rule.minSize, minNotional: rule.minNotional, maxMarketSize: rule.maxMarketSize }]] : [],
-        ),
-      );
+      const perpRules = perpRulesOf(rules.value);
       const gateFees = fees.value.find((f) => f.exchangeType === 'GATE');
       const special = gateFees?.specialFeeList?.find((s) => s.symbol === SPOT_SYMBOL);
       const ask = Number(tickers.value[0]?.lowestAsk);
@@ -285,8 +419,60 @@ export function rebalanceRoutes(deps: AppDeps) {
         repay: planFor(buckets, account.value, inputs, REPAY_GOAL),
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
+      const realize = realizeTabOf(buckets, account.value, inputs, realizeUsd, sliceUsd);
+      const fullPlan = fullPlanOf(buckets, account.value, inputs);
+      const imUsed = imUsedOf(account.value);
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plans, stale, userId, perpRules, perps };
+      return { buckets, plans, realize, fullPlan, imUsed, stale, userId, perpRules, perps };
+    };
+
+    const borosLegsOf = async (request: DeleverRequest, fresh: boolean): Promise<DeleverInput['boros']> => {
+      if (request.boros.length === 0) return [];
+      const address = configuredRoot();
+      if (!address) throw new CoreError(NO_BOROS_WALLET);
+      const [markets, account] = await Promise.all([pricer.loadMarkets(fresh), pricer.loadAccount(address, fresh)]);
+      const prices = resolveCollateralPricesUsd(markets);
+      const nowSec = Math.floor(now() / 1000);
+      const legs = request.boros.flatMap(({ marketId }) => {
+        const size = account.positionByMarket.get(marketId) ?? 0;
+        const market = markets.find((m) => m.marketId === marketId);
+        return size !== 0 && market ? [{ marketId, size, market }] : [];
+      });
+      return Promise.all(
+        legs.map(async ({ marketId, size, market }) => {
+          const collateralPriceUsd = prices.get(market.tokenId);
+          if (!isPositive(collateralPriceUsd)) throw new CoreError(`No collateral price for Boros market ${marketId}.`);
+          return {
+            marketId,
+            size,
+            book: await fetchBorosOrderBook(borosFetch, marketId).catch(() => null),
+            collateralPriceUsd,
+            feeRate: takerFeeOverride ?? market.takerFeeRate,
+            yearsToMaturity: borosTimeToMaturitySec(market, nowSec) / YEAR_SEC,
+          };
+        }),
+      );
+    };
+
+    const loadDelever = async (request: DeleverRequest, fresh: boolean) => {
+      const [account, positions, rules, fees, books, boros] = await Promise.all([
+        readAccount(fresh),
+        readPositions(fresh),
+        readRules(),
+        readFees(),
+        perpBooks(request.perps.map((leg) => leg.symbol)),
+        borosLegsOf(request, fresh),
+      ]);
+      const input: DeleverInput = {
+        request,
+        positions: livePerpsOf(positions.value ?? []),
+        boros,
+        books,
+        feeRows: fees.value,
+        rules: perpRulesOf(rules.value),
+        account: account.value,
+      };
+      return { plan: planDelever(input), userId: account.value.userId ? String(account.value.userId) : null };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -339,24 +525,149 @@ export function rebalanceRoutes(deps: AppDeps) {
     };
 
     app.get('/rebalance', async (req, reply) => {
-      const custom = customGoalOf((req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown });
-      const { buckets, plans, stale } = await loadView(false, custom);
+      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; sliceUsd?: unknown };
+      const custom = customGoalOf(query);
+      const realizeUsd = positiveQueryOf(query.realizeUsd, 'realizeUsd') ?? null;
+      const sliceUsd = positiveQueryOf(query.sliceUsd, 'sliceUsd');
+      const { buckets, plans, realize, fullPlan, imUsed, stale } = await loadView(false, custom, realizeUsd, sliceUsd);
       const job = jobs?.read() ?? null;
-      return reply.ok({ buckets, plans, job: job ? { ...job, inTransit: await loadInTransit(job) } : null }, { stale });
+      return reply.ok(
+        { buckets, plans, realize, fullPlan, imUsed, job: job ? { ...job, inTransit: await loadInTransit(job) } : null },
+        { stale },
+      );
     });
+
+    app.post('/rebalance/delever/plan', async (req, reply) => {
+      const request = deleverRequestOf(req.body);
+      if (!request) throw new CoreError(DELEVER_NEEDS);
+      return reply.ok((await loadDelever(request, false)).plan);
+    });
+
+    interface StartBody {
+      kind?: unknown;
+      goal?: unknown;
+      route?: unknown;
+      costUsd?: unknown;
+      from?: unknown;
+      to?: unknown;
+      amount?: unknown;
+      realizeQty?: unknown;
+      exec?: unknown;
+      sliceUsd?: unknown;
+      realizeUsd?: unknown;
+      realizeTarget?: unknown;
+      delever?: unknown;
+    }
+
+    const startRealize = async (body: StartBody, exec: RealizeExec, reply: FastifyReply): Promise<FastifyReply> => {
+      const target = body.realizeTarget;
+      if (!isRealizeTarget(target)) throw new CoreError(REALIZE_TARGET_NEEDED);
+      if (target === 'custom' && body.realizeUsd === undefined) throw new CoreError(CUSTOM_NEEDS_USD);
+      const realizeUsd = target !== 'custom' ? null : isPositive(body.realizeUsd) ? body.realizeUsd : undefined;
+      if (realizeUsd === undefined) return conflict(reply, RELOAD_TEXT);
+      const store = requireJobs();
+      const locked = findLock();
+      if (locked) return conflict(reply, locked);
+      const shownSlice = isPositive(body.sliceUsd) ? body.sliceUsd : undefined;
+      const view = await catchRateLimit(loadView(true, null, realizeUsd, shownSlice));
+      if (!view) return conflict(reply, STALE_TEXT);
+      const tab = view.realize;
+      const plan = tab ? tab[REALIZE_TARGETS[target]] : null;
+      if (!tab || !plan) return conflict(reply, NOTHING_TO_REALIZE);
+      if (plan.refused) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      if (plan.legs.length === 0) return conflict(reply, NOTHING_TO_REALIZE);
+      const estimate = plan.estimates[exec];
+      if (costRoseTooMuch(estimate.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      const lockedNow = findLock();
+      if (lockedNow) return conflict(reply, lockedNow);
+      const sliceUsd = shownSlice ?? tab.defaultSliceUsd;
+      const live = livePerpsOf(view.perps);
+      const notionalUsd = plan.legs.reduce((total, leg) => total + leg.qty * (live.find((perp) => perp.symbol === leg.symbol)?.markPrice ?? 0), 0);
+      const livePerps = jobPerpsOf(view.perps);
+      const job = newJob(
+        {
+          route: 'mix',
+          steps: [],
+          amount: nearestCents(plan.legs.reduce((total, leg) => total + leg.realizedUsd, 0)),
+          costUsd: estimate.totalUsd,
+          target: [],
+          userId: view.userId,
+          realize: plan,
+          realizeCostUsd: estimate.totalUsd,
+          before: { buckets: view.buckets, perps: livePerps },
+          openGaps: gapsLeftBy(store.read(), livePerps),
+          kind: 'realize',
+          exec,
+          sliceUsd,
+          sliceCount: sliceCountOf(tab.sliceOptions, sliceUsd, notionalUsd),
+          estimate,
+        },
+        now(),
+      );
+      store.write(job);
+      start(store);
+      return reply.code(202).ok({ id: job.id });
+    };
+
+    const startDelever = async (body: StartBody, exec: RealizeExec, reply: FastifyReply): Promise<FastifyReply> => {
+      const asked = deleverRequestOf(body.delever);
+      if (!asked) throw new CoreError(DELEVER_NEEDS);
+      const shownSlice = isPositive(body.sliceUsd) ? body.sliceUsd : asked.sliceUsd;
+      const request: DeleverRequest = { ...asked, exec, ...(shownSlice === undefined ? {} : { sliceUsd: shownSlice }) };
+      const store = requireJobs();
+      const locked = findLock();
+      if (locked) return conflict(reply, locked);
+      const loaded = await catchRateLimit(loadDelever(request, true));
+      if (!loaded) return conflict(reply, STALE_TEXT);
+      const { plan, userId } = loaded;
+      if (plan.refused) return conflict(reply, belowMinText(plan.refused));
+      if (plan.legs.every((leg) => leg.closeQty <= 0)) return conflict(reply, NOTHING_TO_CLOSE);
+      const cost = plan.estimates[exec];
+      if (costRoseTooMuch(cost.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      const lockedNow = findLock();
+      if (lockedNow) return conflict(reply, lockedNow);
+      const sliceUsd = shownSlice ?? plan.defaultSliceUsd;
+      const lead = plan.legs[plan.makerLeg];
+      const leadUsd = lead ? (lead.closeQty * plan.notHedgedMaxUsd) / Math.max(plan.notHedgedMaxQty, Number.EPSILON) : 0;
+      const job = newJob(
+        {
+          route: 'mix',
+          steps: [],
+          amount: 0,
+          costUsd: cost.totalUsd,
+          target: [],
+          userId,
+          kind: 'delever',
+          exec,
+          sliceUsd,
+          sliceCount: sliceCountOf(plan.sliceOptions, sliceUsd, leadUsd),
+          estimate: { feeUsd: cost.feePerpsUsd + cost.feeBorosUsd, impactUsd: cost.impactUsd, totalUsd: cost.totalUsd },
+          delever: plan,
+          imUsedStart: plan.imUsed.map((row) => ({ account: row.account, pct: row.before })),
+        },
+        now(),
+      );
+      job.imUsedEnd = plan.imUsed.map((row) => ({ account: row.account, pct: row.after }));
+      store.write(job);
+      start(store);
+      return reply.code(202).ok({ id: job.id });
+    };
 
     app.post('/rebalance', async (req, reply) => {
       const envPath = deps.credentials?.envPath;
       if (envPath && !isDisclaimerAccepted(envPath)) return reply.code(403).send(DISCLAIMER_NOT_ACCEPTED);
-      const body = (req.body ?? {}) as {
-        goal?: unknown;
-        route?: unknown;
-        costUsd?: unknown;
-        from?: unknown;
-        to?: unknown;
-        amount?: unknown;
-        realizeQty?: unknown;
-      };
+      const body = (req.body ?? {}) as StartBody;
+      const kind: JobKind = body.kind === undefined ? 'move' : isJobKind(body.kind) ? body.kind : (() => {
+        throw new CoreError(`unknown kind ${String(body.kind)}`);
+      })();
+      if (kind !== 'move') {
+        const exec: RealizeExec = body.exec === undefined ? 'maker' : isExec(body.exec) ? body.exec : (() => {
+          throw new CoreError(`unknown order mode ${String(body.exec)}`);
+        })();
+        if (!isShownCost(body.costUsd)) return conflict(reply, RELOAD_TEXT);
+        if (body.sliceUsd !== undefined && !isPositive(body.sliceUsd)) return conflict(reply, RELOAD_TEXT);
+        return kind === 'realize' ? startRealize(body, exec, reply) : startDelever(body, exec, reply);
+      }
       const { route, costUsd } = body;
       const goal: GoalKind = body.goal === undefined ? 'even' : isGoalKind(body.goal) ? body.goal : (() => {
         throw new CoreError(`unknown goal ${String(body.goal)}`);
@@ -379,31 +690,22 @@ export function rebalanceRoutes(deps: AppDeps) {
       const picked = plan.routes[route];
       if (!picked) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (!picked.available) return conflict(reply, picked.reason ?? PLAN_CHANGED_TEXT);
-      const legs = plan.realize && !plan.realize.refused ? plan.realize.legs : [];
-      if (picked.steps.length === 0 && legs.length === 0) return conflict(reply, nothingText(plan));
-      if (!isShownRealize(legs, shownLegs, perpRules)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
-      const totalUsd = picked.costUsd + realizeCostUsd(legs);
-      if (costRoseTooMuch(totalUsd, costUsd)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      if (picked.steps.length === 0) return conflict(reply, nothingText(plan));
+      if (!isShownRealize([], shownLegs, perpRules)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      if (costRoseTooMuch(picked.costUsd, costUsd)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
       const moved = picked.steps.reduce((total, step) => total + step.move, 0);
-      const livePerps = perps.flatMap((perp) => {
-        const qty = Number(perp.positionQty);
-        if (!perp.symbol || !Number.isFinite(qty) || qty === 0) return [];
-        const side: PerpSide = qty < 0 ? 'SHORT' : 'LONG';
-        return [{ symbol: perp.symbol, exchange: parseSymbol(perp.symbol).exchange, side, qty: Math.abs(qty) }];
-      });
+      const livePerps = jobPerpsOf(perps);
       const job = newJob(
         {
           goal,
           route,
           steps: picked.steps,
           amount: floorCents(moved),
-          costUsd: totalUsd,
+          costUsd: picked.costUsd,
           target: picked.after,
           userId,
-          realize: legs.length > 0 ? plan.realize : null,
-          realizeCostUsd: realizeCostUsd(legs),
           before: { buckets, perps: livePerps },
           routeImpactUsd: picked.priceImpactUsd,
           openGaps: gapsLeftBy(store.read(), livePerps),
@@ -415,10 +717,52 @@ export function rebalanceRoutes(deps: AppDeps) {
       return reply.code(202).ok({ id: job.id });
     });
 
+    const jobOr404 = (store: JobFile, id: string): Job => {
+      const job = store.read();
+      if (!job || job.id !== id) throw new CoreError(`unknown rebalance ${id}`);
+      return job;
+    };
+
+    app.post('/rebalance/:id/pause', async (req, reply) => {
+      const store = requireJobs();
+      const job = jobOr404(store, (req.params as { id: string }).id);
+      if (job.status !== 'running') return conflict(reply, `rebalance ${job.id} is ${job.status}`);
+      if (job.slice === null) return conflict(reply, NOT_SLICED);
+      if (!job.pauseRequested) store.write(requestPause(job));
+      return reply.ok(job);
+    });
+
+    app.post('/rebalance/:id/fix', async (req, reply) => {
+      const { action } = (req.body ?? {}) as { action?: unknown };
+      if (!isFixAction(action)) throw new CoreError(`unknown fix ${String(action)}`);
+      const store = requireJobs();
+      if (fixing) return reply.ok(await fixing);
+      const job = haltedOr409(store, (req.params as { id: string }).id, reply);
+      if (!job) return reply;
+      const open = action === 'market' || action === 'limit' ? (job.follow?.qty ?? 0) > 0 : job.borosLeftYu > 0;
+      if (!open) return conflict(reply, NOTHING_TO_FIX);
+      const working = resumeLock();
+      if (working) return conflict(reply, working);
+      if (job.userId !== null && (await currentUserId()) !== job.userId) {
+        return conflict(reply, 'This rebalance was started on another Gate account. Abandon it.');
+      }
+      if (fixing) return reply.ok(await fixing);
+      const run = applyFix(runnerDeps(store), job, action);
+      fixing = run;
+      try {
+        const fixed = await run;
+        if (fixed.status === 'running') start(store);
+        return reply.ok(fixed);
+      } finally {
+        fixing = null;
+      }
+    });
+
     app.post('/rebalance/:id/resume', async (req, reply) => {
       const store = requireJobs();
       const job = haltedOr409(store, (req.params as { id: string }).id, reply);
       if (!job) return reply;
+      if (fixing) return conflict(reply, FIX_RUNNING);
       // The same rule as the start: the remaining steps move cash a working
       // deal may be counting on.
       const working = resumeLock();
@@ -446,6 +790,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const job = haltedOr409(store, (req.params as { id: string }).id, reply);
       if (!job) return reply;
+      if (fixing) return conflict(reply, FIX_RUNNING);
       job.status = 'abandoned';
       store.write(job);
       return reply.ok(job);

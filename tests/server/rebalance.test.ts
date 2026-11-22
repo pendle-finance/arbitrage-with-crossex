@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -9,7 +9,7 @@ import { roundToStep } from '../../src/core/numbers';
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import type { AccountLike, EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
 import type { RealizeLeg, RealizePerp, RealizePlan } from '../../src/core/rebalance/realize';
-import { FEE_ROWS, OWNER_HL_ETH, ownerBook, PERP_RULES } from '../unit/fixtures/realize-books';
+import { FEE_ROWS, GATE_ETH, OWNER_HL_ETH, ownerBook, perp, PERP_RULES, realizeBook, type RealizeBook } from '../unit/fixtures/realize-books';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
 import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
@@ -37,6 +37,7 @@ vi.mock(import('../../src/core/rebalance/plan'), async (importOriginal) => {
 
 const API = '/api/v4';
 const DAY_MS = 24 * 60 * 60 * 1000;
+const NO_ESTIMATES = { maker: { feeUsd: 0, impactUsd: 0, totalUsd: 0 }, market: { feeUsd: 0, impactUsd: 0, totalUsd: 0 } };
 
 let t: number;
 let apps: FastifyInstance[];
@@ -187,16 +188,19 @@ function boot(over: { job?: unknown } = {}) {
   const getClients = () => makeClients({ key: TEST_KEY, secret: TEST_SECRET });
   const jobs = new JobFile(dataDir);
   const transfers = new TransferFile(dataDir);
+  const store = new Store(':memory:');
   const app = makeTestApp({
     getClients,
     rebalance: { jobs, sleep },
     transfer: { jobs: transfers },
-    engine: { store: new Store(':memory:'), venue: gateVenue(getClients), clock: { now: () => t } },
+    engine: { store, venue: gateVenue(getClients), clock: { now: () => t } },
   });
   apps.push(app);
   return {
     jobs,
     transfers,
+    store,
+    dataDir,
     ready: () => app.ready(),
     file: () => JSON.parse(readFileSync(path.join(dataDir, 'rebalance.json'), 'utf8')) as Job,
     get: (url: string) => app.inject({ method: 'GET', url, headers: HOST }),
@@ -841,59 +845,343 @@ describe('POST /api/rebalance with a close and reopen', () => {
     };
   };
 
-  it('the view carries the realize plan', async () => {
-    mockOwnerBook();
+  const OWNER_MARK = 1_821;
+  const ownerAccount = (): RealizeBook =>
+    realizeBook({
+      usdt: { cash: -7_169.33, upnl: 0 },
+      usdc: { cash: 55.98, upnl: 66 * (2_100 - OWNER_MARK) },
+      availableMargin: 2_000,
+      perps: [perp(HL_ETH, -66, 2_100, OWNER_MARK), perp('GATE_FUTURE_ETH_USDT', 66, OWNER_MARK, OWNER_MARK)],
+      books: { [HL_ETH]: OWNER_HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: 66 * OWNER_MARK,
+    });
+
+  function mockAccount(book: RealizeBook): void {
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(OWNER_HL_ETH.bids), levels(OWNER_HL_ETH.asks)] });
+  }
+
+  function mockGateEthBook(): void {
+    nock('https://api.gateio.ws')
+      .persist()
+      .get('/api/v4/futures/usdt/contracts/ETH_USDT')
+      .query(true)
+      .reply(200, { name: 'ETH_USDT', quanto_multiplier: '0.01', order_price_round: '0.01' });
+    nock('https://api.gateio.ws')
+      .persist()
+      .get('/api/v4/futures/usdt/order_book')
+      .query(true)
+      .reply(200, { bids: [{ p: '1820.9', s: 1_000_000 }], asks: [{ p: '1821.1', s: 1_000_000 }] });
+  }
+
+  const DELEVER_ASK = {
+    perps: [
+      { symbol: HL_ETH, qty: 100 },
+      { symbol: 'GATE_FUTURE_ETH_USDT', qty: 100 },
+    ],
+    boros: [],
+    exec: 'maker',
+  };
+
+  it('full plan priced at limit + hedge', async () => {
+    mockAccount(ownerAccount());
     const h = boot();
 
-    const res = await h.get('/api/rebalance?from=HYPERLIQUID&to=CROSSEX&amount=20000');
+    const res = await h.get('/api/rebalance');
 
     expect(res.statusCode).toBe(200);
-    const { plans } = res.json().data;
-    for (const plan of [plans.even, plans.repay, plans.custom] as EvenPlan[]) {
-      expect(plan.realize).toMatchObject({ legs: expect.any(Array), refused: null });
-      expect(plan.realize!.legs[0]).toMatchObject({ symbol: HL_ETH, side: 'SHORT', positionQty: 66 });
-    }
-    expect(typeof plans.custom.customMaxUsd).toBe('number');
+    const { fullPlan, realize, imUsed, plans } = res.json().data;
+    expect(fullPlan.costUsd).toBeGreaterThanOrEqual(40);
+    expect(fullPlan.costUsd).toBeLessThanOrEqual(42);
+    expect(fullPlan).toMatchObject({ days: 36, clearsBorrow: true, needsRealize: true });
+    expect(realize.clearDebt.legs[0]).toMatchObject({ symbol: HL_ETH, side: 'SHORT' });
+    expect(imUsed).toEqual([{ account: 'CROSSEX', pct: expect.any(Number) }]);
+    expect(plans.repay.realize).toBeNull();
   });
 
-  it('refused realize still runs the plain move', async () => {
-    mockOwnerBook(THIN_HL_ETH);
-    refuseSends();
-    refuseQuotes();
+  it('a custom slice size gets its own slice row', async () => {
+    mockAccount(ownerAccount());
     const h = boot();
-    const plan = await h.plan();
-    expect(plan.realize?.refused).toMatchObject({ reason: 'too-thin' });
 
-    const res = await h.post('/api/rebalance', { route: 'convert', costUsd: plan.routes.convert.costUsd, realizeQty: [] });
+    const res = await h.get('/api/rebalance?sliceUsd=30000');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.realize.sliceOptions).toContainEqual(expect.objectContaining({ sizeUsd: 30_000, custom: true }));
+  });
+
+  it('a realize job is rebuilt from realizeUsd and ignores sent leg sizes', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const plan = realize.clearDebt;
+
+    const res = await h.post('/api/rebalance', {
+      kind: 'realize',
+      realizeTarget: 'clear-debt',
+      exec: 'maker',
+      costUsd: plan.estimates.maker.totalUsd,
+      realizeQty: [{ symbol: HL_ETH, qty: 999 }],
+    });
 
     expect(res.statusCode).toBe(202);
-    const names = h.file().steps.map((step) => step.name);
-    expect(names.length).toBeGreaterThan(0);
-    expect(names.filter((name) => name === 'Close' || name === 'Reopen')).toEqual([]);
-    expect(h.file().realize).toBeNull();
+    const job = h.file();
+    expect(job).toMatchObject({ kind: 'realize', exec: 'maker', slice: { index: 1, sizeUsd: realize.defaultSliceUsd } });
+    expect(job.realize!.legs.map((leg) => leg.qty)).toEqual(plan.legs.map((leg: RealizeLeg) => leg.qty));
+    expect(job.steps.map((step) => step.name)).toContain('Slices');
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
-  it('stores the before snapshot at POST', async () => {
-    mockOwnerBook();
+  it('a realize job needs the picked target', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+
+    const bare = await h.post('/api/rebalance', { kind: 'realize', exec: 'maker', costUsd: realize.clearDebt.estimates.maker.totalUsd });
+    const custom = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'custom', exec: 'maker', costUsd: 1 });
+
+    expect(bare.statusCode).toBe(400);
+    expect(bare.json().error.message).toBe('Pick Clear debt, All or Custom before you realize.');
+    expect(custom.statusCode).toBe(400);
+    expect(custom.json().error.message).toBe('Enter the Custom amount before you realize.');
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+
+    const all = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd: realize.all.estimates.maker.totalUsd });
+
+    expect(all.statusCode).toBe(202);
+    expect(h.file().realize!.legs.map((leg) => leg.qty)).toEqual(realize.all.legs.map((leg: RealizeLeg) => leg.qty));
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('realize cost counts in plan changed', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    const plan = (await h.view()).data.realize.clearDebt;
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'market', costUsd: plan.estimates.maker.totalUsd / 2 });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+  });
+
+  it('a move job carries no realize', async () => {
+    mockAccount(ownerAccount());
     refuseSends();
     refuseQuotes();
     const h = boot();
-    const shown = shownOf(await h.plan());
-    const view = (await h.get('/api/rebalance')).json().data;
+    const plan = (await h.view()).data.plans.repay as EvenPlan;
+    const route = plan.recommended ?? 'convert';
 
-    const res = await h.post('/api/rebalance', shown);
+    const res = await h.post('/api/rebalance', { goal: 'repay', route, costUsd: plan.routes[route]!.costUsd });
 
     expect(res.statusCode).toBe(202);
-    const perps = owner.spec.perps.map((perp) => ({
-      symbol: perp.symbol,
-      exchange: perp.symbol!.split('_')[0],
-      side: Number(perp.positionQty) < 0 ? 'SHORT' : 'LONG',
-      qty: Math.abs(Number(perp.positionQty)),
-    }));
-    expect(h.file().before).toEqual({ buckets: view.buckets, perps });
-    expect(h.file().realize?.legs[0].hedge).toBe('GATE');
+    expect(h.file()).toMatchObject({ kind: 'move', realize: null });
+    expect(h.file().steps.map((step) => step.name)).not.toContain('Slices');
     await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('delever clamps to the position', async () => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+
+    const planned = await h.post('/api/rebalance/delever/plan', DELEVER_ASK);
+
+    expect(planned.statusCode).toBe(200);
+    const plan = planned.json().data;
+    for (const leg of plan.legs) expect(leg.closeQty).toBeLessThanOrEqual(66);
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
+
+    expect(res.statusCode).toBe(202);
+    const job = h.file();
+    expect(job.kind).toBe('delever');
+    for (const leg of job.delever!.legs) expect(leg.before - leg.after).toBeLessThanOrEqual(66);
+    expect(job.imUsedStart).toEqual([{ account: 'CROSSEX', pct: plan.imUsed[0].before }]);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever job starts with the plan IM used at end', async () => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
+
+    expect(res.statusCode).toBe(202);
+    expect(plan.imUsed[0].after).toBeLessThan(plan.imUsed[0].before);
+    expect(h.file().imUsedEnd).toEqual([{ account: 'CROSSEX', pct: plan.imUsed[0].after }]);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start of %d USD sizes its slices and IM used from the plan', async (usd) => {
+    const qty = Math.max(0.02, Math.floor((usd / OWNER_MARK) * 100) / 100);
+    const half = Math.floor((qty / 2) * 100) / 100;
+    const deep: NormalizedBook = { bids: [[1_820.9, 100_000]], asks: [[1_821.1, 100_000]], ts: 0 };
+    const book = realizeBook({
+      usdt: { cash: usd * 0.5, upnl: 0 },
+      usdc: { cash: usd * 0.5, upnl: 0 },
+      availableMargin: usd * 0.6,
+      perps: [perp(HL_ETH, -qty, OWNER_MARK, OWNER_MARK), perp('GATE_FUTURE_ETH_USDT', qty, OWNER_MARK, OWNER_MARK)],
+      books: { [HL_ETH]: deep, GATE_FUTURE_ETH_USDT: deep },
+      notionalUsd: qty * OWNER_MARK,
+    });
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(deep.bids), levels(deep.asks)] });
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const ask = { ...DELEVER_ASK, perps: DELEVER_ASK.perps.map((leg) => ({ ...leg, qty: half })) };
+    const planned = await h.post('/api/rebalance/delever/plan', ask);
+    expect(planned.statusCode).toBe(200);
+    const plan = planned.json().data;
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: ask });
+
+    expect(res.statusCode).toBe(202);
+    const job = h.file();
+    const closeUsd = half * OWNER_MARK;
+    for (const leg of job.delever!.legs) expect(leg.before - leg.after).toBeCloseTo(half, 8);
+    expect(job.slice!.sizeUsd).toBeLessThanOrEqual(100_000);
+    expect(job.slice!.count * job.slice!.sizeUsd).toBeGreaterThanOrEqual(closeUsd * 0.99);
+    expect((job.slice!.count - 1) * job.slice!.sizeUsd).toBeLessThan(closeUsd * 1.01);
+    expect(job.costUsd).toBeGreaterThan(0);
+    expect(job.costUsd).toBeLessThan(closeUsd * 0.01);
+    expect(job.imUsedEnd![0].pct).toBeLessThanOrEqual(job.imUsedStart![0].pct);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize job amount is the plan realized total', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const plan = (await h.view()).data.realize.clearDebt;
+    const gross = plan.legs.reduce((total: number, leg: RealizeLeg) => total + leg.realizedUsd, 0);
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd: plan.estimates.maker.totalUsd });
+
+    expect(res.statusCode).toBe(202);
+    expect(gross).toBeGreaterThan(plan.estimates.maker.totalUsd);
+    expect(Math.abs(h.file().amount - gross)).toBeLessThanOrEqual(0.005 + 1e-9);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each(['realize', 'delever'] as const)('two %s starts at once make one job', async (kind) => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const body =
+      kind === 'realize'
+        ? { kind, realizeTarget: 'clear-debt', exec: 'maker', costUsd: (await h.view()).data.realize.clearDebt.estimates.maker.totalUsd }
+        : { kind, exec: 'maker', costUsd: (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data.estimates.maker.totalUsd, delever: DELEVER_ASK };
+
+    const [a, b] = await Promise.all([h.post('/api/rebalance', body), h.post('/api/rebalance', body)]);
+
+    expect([a.statusCode, b.statusCode].sort()).toEqual([202, 409]);
+    expect(h.file().kind).toBe(kind);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a running job refuses a realize and a delever start', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    h.jobs.write(slicedJob({ status: 'running' }));
+
+    const realize = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd: 1 });
+    const delever = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: 1, delever: DELEVER_ASK });
+
+    expect(realize.statusCode).toBe(409);
+    expect(delever.statusCode).toBe(409);
+    expect(h.file().id).toBe(slicedJob({}).id);
+  });
+
+  const DEAL = { id: 'deal-1', a: { symbol: 'GATE_FUTURE_ETH_USDT' }, b: { symbol: HL_ETH } };
+
+  const slicedJob = (over: Partial<Job>): Job => ({
+    ...newJob({ route: 'mix', steps: [], amount: 0, costUsd: 30, target: [], userId: '1', kind: 'delever', delever: DELEVER_JOB, sliceCount: 14, sliceUsd: 25_000 }, t),
+    ...over,
+  });
+
+  const DELEVER_JOB = {
+    makerLeg: 0 as const,
+    legs: [
+      { symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT' as const, before: 66, after: 33, closeQty: 33 },
+      { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', base: 'ETH', side: 'LONG' as const, before: 66, after: 33, closeQty: 33 },
+    ],
+    boros: [],
+  };
+
+  it('delever holds the money lock', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    h.jobs.write(slicedJob({ status: 'running' }));
+
+    const rebalance = await h.post('/api/rebalance', { goal: 'repay', route: 'convert', costUsd: 1 });
+    const deal = await h.post('/api/deals', DEAL);
+
+    expect(rebalance.statusCode).toBe(409);
+    expect(deal.statusCode).toBe(409);
+  });
+
+  it('paused job keeps the lock, no alert', async () => {
+    mockAccount(ownerAccount());
+    const h = boot({ job: slicedJob({ status: 'halted', paused: true, haltReason: null }) });
+    await h.ready();
+
+    const rebalance = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', costUsd: 1 });
+    const deal = await h.post('/api/deals', DEAL);
+
+    expect(rebalance.statusCode).toBe(409);
+    expect(deal.statusCode).toBe(409);
+    expect(h.store.listAlerts({ unackedOnly: true })).toEqual([]);
+  });
+
+  it('pause needs a running job', async () => {
+    const h = boot({ job: slicedJob({ status: 'halted', haltReason: 'stopped' }) });
+    await h.ready();
+
+    const res = await h.post(`/api/rebalance/${h.file().id}/pause`);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.file().pauseRequested).toBe(false);
+  });
+
+  it('pause and fix are idempotent', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'running' });
+    h.jobs.write(job);
+
+    const [first, second] = await Promise.all([h.post(`/api/rebalance/${job.id}/pause`), h.post(`/api/rebalance/${job.id}/pause`)]);
+
+    expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+    expect(h.file()).toMatchObject({ status: 'running', pauseRequested: true });
+
+    const halted = slicedJob({ status: 'halted', haltReason: 'stopped', borosLeftYu: 0, follow: null });
+    h.jobs.write(halted);
+    const fixes = await Promise.all([
+      h.post(`/api/rebalance/${halted.id}/fix`, { action: 'market' }),
+      h.post(`/api/rebalance/${halted.id}/fix`, { action: 'market' }),
+    ]);
+    expect(fixes.map((res) => res.statusCode)).toEqual([409, 409]);
+    expect(fixes[0].json().error.message).toBe('Nothing is left to fix.');
   });
 
   it('plan check allows a 1% size gap at 6M', () => {
@@ -908,141 +1196,6 @@ describe('POST /api/rebalance with a close and reopen', () => {
     const small = [{ symbol: HL_ETH, qty: 0.01 } as RealizeLeg];
     expect(isShownRealize(small, [{ symbol: HL_ETH, qty: 0.01 + lot }], PERP_RULES)).toBe(true);
     expect(isShownRealize(small, [{ symbol: HL_ETH, qty: 0.01 + 2 * lot }], PERP_RULES)).toBe(false);
-  });
-
-  it('realize cost counts in plan changed', async () => {
-    mockOwnerBook();
-    const h = boot();
-    const plan = await h.plan();
-    const shown = shownOf(plan);
-    const routeOnly = plan.routes[shown.route]!.costUsd;
-    expect(shown.costUsd - routeOnly).toBeGreaterThan(Math.max(1, routeOnly / 20));
-
-    const res = await h.post('/api/rebalance', { ...shown, costUsd: routeOnly });
-
-    expect(res.statusCode).toBe(409);
-    expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
-    expect(() => h.file()).toThrow();
-  });
-
-  it('refuses a realize the trader was not shown', async () => {
-    mockOwnerBook();
-    refuseSends();
-    refuseQuotes();
-    const h = boot();
-    const shown = shownOf(await h.plan());
-    const [leg] = shown.realizeQty;
-    const lot = Number(PERP_RULES[HL_ETH].lotSize);
-
-    for (const realizeQty of [
-      [],
-      [{ symbol: leg.symbol, qty: leg.qty * 1.02 }],
-      [{ symbol: leg.symbol, qty: leg.qty * 0.98 }],
-      [leg, { symbol: 'GATE_FUTURE_ETH_USDT', qty: 1 }],
-    ]) {
-      const res = await h.post('/api/rebalance', { ...shown, realizeQty });
-
-      expect(res.statusCode, JSON.stringify(realizeQty)).toBe(409);
-      expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
-      expect(() => h.file()).toThrow();
-    }
-
-    const oneLot = await h.post('/api/rebalance', { ...shown, realizeQty: [{ symbol: leg.symbol, qty: leg.qty + 50 * lot }] });
-    expect(oneLot.statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-  });
-
-  it('writes close, convert, reopen before the route', async () => {
-    mockOwnerBook();
-    refuseSends();
-    refuseQuotes();
-    const h = boot();
-    const plan = await h.plan();
-    const shown = shownOf(plan);
-    const route = plan.routes[shown.route]!;
-
-    const res = await h.post('/api/rebalance', shown);
-
-    expect(res.statusCode).toBe(202);
-    const file = h.file();
-    const names = file.steps.map((step) => step.name);
-    const reopenAt = names.indexOf('Reopen');
-    expect(names[0]).toBe('Close');
-    expect(reopenAt).toBeGreaterThan(1);
-    expect(names.slice(1, reopenAt).every((name) => name === 'Convert')).toBe(true);
-    const routeNames = newJob({ route: shown.route, steps: route.steps, amount: 0, costUsd: 0, target: [], userId: null }, t).steps.map(
-      (step) => step.name,
-    );
-    expect(names.slice(reopenAt + 1)).toEqual(routeNames);
-    expect(file.realize?.legs).toEqual([expect.objectContaining({ symbol: HL_ETH, qty: plan.realize!.legs[0].qty, filledQty: 0 })]);
-    expect(file.costUsd).toBeCloseTo(shown.costUsd, 6);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file().steps[0]).toMatchObject({ name: 'Close', status: 'running', venueId: null });
-  });
-
-  it('legs in two pools run in order', async () => {
-    mockOwnerBook();
-    refuseSends();
-    refuseQuotes();
-    const h = boot();
-    const [hyperliquidLeg] = (await h.plan()).realize!.legs;
-    const gateLeg: RealizeLeg = {
-      ...hyperliquidLeg,
-      pool: 'CROSSEX',
-      symbol: 'GATE_FUTURE_ETH_USDT',
-      exchange: 'GATE',
-      side: 'LONG',
-      qty: 10,
-      convert: { amount: 2_000, count: 1, feeUsd: 4 },
-    };
-    planEdit.realize = { legs: [hyperliquidLeg, gateLeg], refused: null };
-    const shown = shownOf(await h.plan());
-
-    const res = await h.post('/api/rebalance', shown);
-
-    expect(res.statusCode).toBe(202);
-    const file = h.file();
-    const realizeEnd = file.steps.map((step) => step.name).lastIndexOf('Reopen') + 1;
-    const hyperliquidConverts = Array.from({ length: hyperliquidLeg.convert?.count ?? 0 }, () => ['Convert', 'HYPERLIQUID', 'CROSSEX']);
-    expect(file.steps.slice(0, realizeEnd).map((step) => [step.name, step.from, step.to])).toEqual([
-      ['Close', 'HYPERLIQUID', 'HYPERLIQUID'],
-      ...hyperliquidConverts,
-      ['Reopen', 'HYPERLIQUID', 'HYPERLIQUID'],
-      ['Close', 'CROSSEX', 'CROSSEX'],
-      ['Convert', 'CROSSEX', 'HYPERLIQUID'],
-      ['Reopen', 'CROSSEX', 'CROSSEX'],
-    ]);
-    expect(file.steps.slice(0, realizeEnd).filter((step) => step.perp).map((step) => step.perp?.symbol)).toEqual([
-      HL_ETH,
-      HL_ETH,
-      'GATE_FUTURE_ETH_USDT',
-      'GATE_FUTURE_ETH_USDT',
-    ]);
-    expect(file.realize?.legs.map((leg) => [leg.symbol, leg.pool])).toEqual([
-      [HL_ETH, 'HYPERLIQUID'],
-      ['GATE_FUTURE_ETH_USDT', 'CROSSEX'],
-    ]);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file().steps[0]).toMatchObject({ name: 'Close', status: 'running', venueId: null });
-  });
-
-  it('job stores the realize cost apart', async () => {
-    mockOwnerBook();
-    refuseSends();
-    refuseQuotes();
-    const h = boot();
-    const plan = await h.plan();
-    const shown = shownOf(plan);
-    const routeCost = plan.routes[shown.route]!.costUsd;
-
-    const res = await h.post('/api/rebalance', shown);
-
-    expect(res.statusCode).toBe(202);
-    const file = h.file();
-    expect(file.realize!.costUsd).toBeGreaterThan(0);
-    expect(file.realize!.costUsd).toBeCloseTo(shown.costUsd - routeCost, 6);
-    expect(file.costUsd! - file.realize!.costUsd).toBeCloseTo(routeCost, 6);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
   it('job stores the route price impact apart', async () => {
@@ -1078,45 +1231,6 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
-  it('a new job carries an abandoned open gap while positions still show it', async () => {
-    mockOwnerBook();
-    refuseSends();
-    refuseQuotes();
-    const h = boot();
-    const shown = shownOf(await h.plan());
-    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    const abandon = (job: Job, positionQty: number): Job => {
-      const legs = job.realize!.legs.map((leg) => ({ ...leg, positionQty, filledQty: 53.8 }));
-      const steps = job.steps.map((step) => (step.name === 'Close' ? { ...step, status: 'done' as const, qty: 53.8 } : step));
-      return { ...job, status: 'abandoned', realize: { ...job.realize!, legs }, steps, stepIndex: steps.findIndex((step) => step.name === 'Reopen') };
-    };
-    const first = h.file();
-    h.jobs.write(abandon(first, 66 + 53.8));
-
-    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
-
-    const carried = h.file();
-    expect(carried.status).not.toBe('abandoned');
-    expect(carried.openGaps).toEqual([
-      {
-        leg: { symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', side: 'SHORT', positionQty: 66 + 53.8, hedge: 'GATE' },
-        qty: 53.8,
-        hedges: first.before!.perps.filter((perp) => perp.symbol !== HL_ETH && perp.side === 'LONG' && perp.symbol.includes('ETH')),
-      },
-    ]);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-    h.jobs.write({ ...h.file(), status: 'done' });
-    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
-    expect(h.file().openGaps).toEqual(carried.openGaps);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-
-    h.jobs.write({ ...abandon(h.file(), 66), openGaps: [] });
-    expect((await h.post('/api/rebalance', shown)).statusCode).toBe(202);
-    expect(h.file().openGaps).toBeUndefined();
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-  });
-
   it('a second post while the realize runs is refused', async () => {
     mockOwnerBook(OWNER_HL_ETH, { accountDelayMs: 50 });
     refuseSends();
@@ -1148,9 +1262,10 @@ describe('POST /api/rebalance with a close and reopen', () => {
       closeImpactUsd: 9.44,
       reopenImpactUsd: 9.44,
       impactBp: 1.9,
+      closeMakerFeeUsd: 16.46,
     };
     const job = newJob(
-      { route: 'convert', steps: [], amount: 0, costUsd: 101.18, target: [], userId: '1', realize: { legs: [leg], refused: null } },
+      { route: 'convert', steps: [], amount: 0, costUsd: 101.18, target: [], userId: '1', realize: { legs: [leg], refused: null, estimates: NO_ESTIMATES } },
       t,
     );
     Object.assign(job.steps[0], { status: 'done', qty: 53.8, text: `t-rb${job.id}1`, venueId: 'c1', doneAt: t });

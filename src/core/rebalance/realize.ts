@@ -1,12 +1,11 @@
 import { type NormalizedBook, touchOf } from '../estimate/books';
 import { resolveFeeRates, type VenueFeeRow } from '../estimate/fees';
-import { walkBook } from '../estimate/fill';
 import { DEFAULT_STEP, parseSymbol, roundToStep } from '../numbers';
 import { ceilCents, CONVERT_MAX, CONVERT_RATE, HYPERLIQUID_MIN_USDC, marginPerConvertUsdc, type Pool } from './plan';
+import { impactOf } from './slices';
 
 export { marginPerConvertUsdc };
 
-const REFUSE_IMPACT_BP = 25;
 const REOPEN_MARGIN_SHARE = 0.15;
 const REOPEN_MARGIN_FLOOR_USD = 20;
 const MIN_ORDER_USD = 10;
@@ -52,24 +51,33 @@ export interface RealizeLeg {
   realizedUsd: number;
   convert: RealizeConvert | null;
   closeFeeUsd: number;
+  closeMakerFeeUsd: number;
   reopenFeeUsd: number;
   closeImpactUsd: number;
   reopenImpactUsd: number;
   impactBp: number;
 }
 
-export type RealizeRefusalReason = 'no-fee-rate' | 'too-thin' | 'no-margin' | 'past-book' | 'over-cap';
+export type RealizeRefusalReason = 'no-fee-rate' | 'no-margin' | 'past-book' | 'over-cap';
 
 export interface RealizeRefusal {
   reason: RealizeRefusalReason;
   bp: number | null;
-  maxBp: number;
   capUsd?: number;
+}
+
+export type RealizeExec = 'maker' | 'market';
+
+export interface RealizeEstimate {
+  feeUsd: number;
+  impactUsd: number;
+  totalUsd: number;
 }
 
 export interface RealizePlan {
   legs: RealizeLeg[];
   refused: RealizeRefusal | null;
+  estimates: Record<RealizeExec, RealizeEstimate>;
 }
 
 export interface RealizeInput {
@@ -77,8 +85,6 @@ export interface RealizeInput {
   moveUsd: number;
   cashUsd: number;
   borrowUsd: number;
-  /** The reopen's Convert lands in a wallet the move sends to, so it counts toward the move. */
-  convertCounts: boolean;
   availableMargin: number;
   perps: RealizePerp[];
   books: Record<string, NormalizedBook | null>;
@@ -103,14 +109,15 @@ interface Paying {
   marginPerCoin: number;
   lot: string;
   minQty: number;
+  makerRate: number;
   takerRate: number;
   book: NormalizedBook | null;
   capUsd: number;
-  convertCost: number;
 }
 
 interface Priced {
   closeFeeUsd: number;
+  closeMakerFeeUsd: number;
   reopenFeeUsd: number;
   closeImpactUsd: number;
   reopenImpactUsd: number;
@@ -135,10 +142,12 @@ interface State {
   borrowLeft: number;
 }
 
-export const positiveOf = (raw: string | undefined): number => {
+export const positiveOf = (raw: number | string | undefined): number => {
   const value = Number(raw);
   return Number.isFinite(value) && value > 0 ? value : 0;
 };
+
+export const lotOf = (rule: PerpRule): string => (rule.lotSize && positiveOf(rule.lotSize) > 0 ? rule.lotSize : DEFAULT_STEP);
 
 export const isInProfit = (perp: RealizePerp): boolean => {
   const qty = Number(perp.positionQty);
@@ -178,15 +187,15 @@ function marketCapUsd(perp: RealizePerp, rule: PerpRule, exchange: string, mark:
   return Math.min(ruleCap > 0 ? ruleCap : Infinity, venueCap);
 }
 
-const NO_FEE_RATE: RealizeRefusal = { reason: 'no-fee-rate', bp: null, maxBp: REFUSE_IMPACT_BP };
+const NO_FEE_RATE: RealizeRefusal = { reason: 'no-fee-rate', bp: null };
 
 function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean } {
   const inProfit = input.perps.filter((perp) => profitPoolOf(perp) === input.pool);
   const legs = inProfit.flatMap((perp): Paying[] => {
     const symbol = perp.symbol ?? '';
     const { exchange, base } = parseSymbol(symbol);
-    const takerRate = resolveFeeRates(input.feeRows, symbol)?.takerRate;
-    if (takerRate === undefined) return [];
+    const rates = resolveFeeRates(input.feeRows, symbol);
+    if (!rates) return [];
     const signed = Number(perp.positionQty);
     const entry = Number(perp.entryPrice);
     const mark = Number(perp.markPrice);
@@ -194,7 +203,7 @@ function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean 
     const profitPerCoin = side === 'SHORT' ? entry - mark : mark - entry;
     const positionQty = Math.abs(signed);
     const rule = input.rules[symbol] ?? {};
-    const lot = rule.lotSize && positiveOf(rule.lotSize) > 0 ? rule.lotSize : DEFAULT_STEP;
+    const lot = lotOf(rule);
     return [
       {
         symbol,
@@ -208,10 +217,10 @@ function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean 
         marginPerCoin: Math.abs(Number(perp.initialMargin) || 0) / positionQty,
         lot,
         minQty: minQtyOf(rule, lot, mark),
-        takerRate,
+        makerRate: rates.makerRate,
+        takerRate: rates.takerRate,
         book: input.books[symbol] ?? null,
         capUsd: marketCapUsd(perp, rule, exchange, mark),
-        convertCost: input.convertCounts ? CONVERT_RATE : 1,
       },
     ];
   });
@@ -220,23 +229,19 @@ function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean 
 
 function priceOrder(leg: Paying, qty: number): Priced {
   const fee = qty * leg.mark * leg.takerRate;
-  const unpriced = { closeFeeUsd: fee, reopenFeeUsd: fee, closeImpactUsd: 0, reopenImpactUsd: 0, impactBp: 0, pastBook: true };
+  const fees = { closeFeeUsd: fee, closeMakerFeeUsd: qty * leg.mark * leg.makerRate, reopenFeeUsd: fee };
+  const unpriced = { ...fees, closeImpactUsd: 0, reopenImpactUsd: 0, impactBp: 0, pastBook: true };
   const touch = touchOf(leg.book);
   if (!leg.book || !touch) return unpriced;
-  const buys = leg.book.asks;
-  const sells = leg.book.bids;
-  const close = walkBook(leg.side === 'SHORT' ? buys : sells, qty);
-  const reopen = walkBook(leg.side === 'SHORT' ? sells : buys, qty);
+  const close = impactOf(leg.book, leg.side === 'SHORT' ? 'BUY' : 'SELL', touch.mid, qty);
+  const reopen = impactOf(leg.book, leg.side === 'SHORT' ? 'SELL' : 'BUY', touch.mid, qty);
   if (!close || !reopen) return unpriced;
-  const closeImpactUsd = Math.abs(close.avgPrice - touch.mid) * qty;
-  const reopenImpactUsd = Math.abs(reopen.avgPrice - touch.mid) * qty;
   return {
-    closeFeeUsd: fee,
-    reopenFeeUsd: fee,
-    closeImpactUsd,
-    reopenImpactUsd,
-    impactBp: ((closeImpactUsd + reopenImpactUsd) / (qty * touch.mid)) * 10_000,
-    pastBook: close.exhausted || reopen.exhausted,
+    ...fees,
+    closeImpactUsd: close.usd,
+    reopenImpactUsd: reopen.usd,
+    impactBp: ((close.usd + reopen.usd) / (qty * touch.mid)) * 10_000,
+    pastBook: close.pastBook || reopen.pastBook,
   };
 }
 
@@ -251,7 +256,7 @@ function orderOf(leg: Paying, qty: number, state: State): Order {
   const convert = convertFor(qty * leg.marginPerCoin, state.available);
   const cashIn = realizedUsd - priced.closeFeeUsd - priced.reopenFeeUsd - priced.closeImpactUsd;
   const overCapUsd = qty * leg.mark > leg.capUsd ? leg.capUsd : null;
-  return { qty, overCapUsd, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * leg.convertCost };
+  return { qty, overCapUsd, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * CONVERT_RATE };
 }
 
 /** Past the size whose reopen needs no Convert, each coin also pays for its
@@ -303,6 +308,7 @@ function legOf(pool: Pool, leg: Paying, order: Order): RealizeLeg {
         ? { amount: order.convert, count: Math.ceil(order.convert / CONVERT_MAX), feeUsd: order.convert * CONVERT_RATE }
         : null,
     closeFeeUsd: order.priced.closeFeeUsd,
+    closeMakerFeeUsd: order.priced.closeMakerFeeUsd,
     reopenFeeUsd: order.priced.reopenFeeUsd,
     closeImpactUsd: order.priced.closeImpactUsd,
     reopenImpactUsd: order.priced.reopenImpactUsd,
@@ -312,18 +318,32 @@ function legOf(pool: Pool, leg: Paying, order: Order): RealizeLeg {
 
 function refusalOf(orders: Order[], unfunded: boolean): RealizeRefusal | null {
   const capUsd = orders.find((order) => order.overCapUsd !== null)?.overCapUsd;
-  if (capUsd != null) return { reason: 'over-cap', bp: null, maxBp: REFUSE_IMPACT_BP, capUsd };
-  if (orders.some((order) => order.priced.pastBook)) return { reason: 'past-book', bp: null, maxBp: REFUSE_IMPACT_BP };
-  const worst = Math.max(...orders.map((order) => order.priced.impactBp));
-  if (worst > REFUSE_IMPACT_BP) return { reason: 'too-thin', bp: Math.round(worst * 10) / 10, maxBp: REFUSE_IMPACT_BP };
-  return unfunded ? { reason: 'no-margin', bp: null, maxBp: REFUSE_IMPACT_BP } : null;
+  if (capUsd != null) return { reason: 'over-cap', bp: null, capUsd };
+  if (orders.some((order) => order.priced.pastBook)) return { reason: 'past-book', bp: null };
+  return unfunded ? { reason: 'no-margin', bp: null } : null;
 }
+
+export function realizeEstimateOf(plan: Pick<RealizePlan, 'legs'>, exec: RealizeExec): RealizeEstimate {
+  const atMaker = exec === 'maker';
+  const feeUsd = plan.legs.reduce(
+    (total, leg) => total + (atMaker ? leg.closeMakerFeeUsd : leg.closeFeeUsd) + leg.reopenFeeUsd + (leg.convert?.feeUsd ?? 0),
+    0,
+  );
+  const impactUsd = plan.legs.reduce((total, leg) => total + (atMaker ? 0 : leg.closeImpactUsd) + leg.reopenImpactUsd, 0);
+  return { feeUsd, impactUsd, totalUsd: feeUsd + impactUsd };
+}
+
+export const realizePlanOf = (legs: RealizeLeg[], refused: RealizeRefusal | null): RealizePlan => ({
+  legs,
+  refused,
+  estimates: { maker: realizeEstimateOf({ legs }, 'maker'), market: realizeEstimateOf({ legs }, 'market') },
+});
 
 export function planRealize(input: RealizeInput): RealizePlan | null {
   const need = input.moveUsd - input.cashUsd;
   if (!(need > 0)) return null;
   const paying = payingLegs(input);
-  if (paying.feeMissing) return { legs: [], refused: NO_FEE_RATE };
+  if (paying.feeMissing) return realizePlanOf([], NO_FEE_RATE);
   const legs = paying.legs.sort((a, b) => b.moved - a.moved);
   if (legs.length === 0) return null;
   const start: State = {
@@ -360,7 +380,7 @@ export function planRealize(input: RealizeInput): RealizePlan | null {
   // Every close loses money even with no Convert: there is nothing to realize,
   // and "no margin" would send the trader to add margin that does not help.
   if (planned.length === 0 && refused?.reason === 'no-margin' && orders.every((order) => order.convert === 0)) return null;
-  return { legs: refused === null ? planned : shown, refused };
+  return realizePlanOf(refused === null ? planned : shown, refused);
 }
 
 export function realizedNetUsd(leg: RealizeLeg): number {

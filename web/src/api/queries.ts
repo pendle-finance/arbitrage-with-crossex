@@ -37,6 +37,8 @@ import type {
   CredentialsInput,
   DisclaimerStatus,
   CrossexAccount,
+  DeleverPlan,
+  DeleverRequest,
   EntryMode,
   ExitMode,
   OpenOrder,
@@ -45,6 +47,8 @@ import type {
   Rebate,
   GoalKind,
   Pool,
+  RealizeExec,
+  RebalanceFixAction,
   RebalanceJob,
   RebalanceView,
   RouteName,
@@ -613,11 +617,39 @@ export function useCustomPlan(custom: CustomMove | null) {
   });
 }
 
+export function useRealizeCustom(usd: number | null, sliceUsd: number | null = null) {
+  const query = [usd !== null && usd > 0 ? `realizeUsd=${usd}` : null, sliceUsd !== null && sliceUsd > 0 ? `sliceUsd=${sliceUsd}` : null]
+    .filter((part) => part !== null)
+    .join('&');
+  return useQuery({
+    queryKey: [...qk.rebalance, 'realize', usd ?? 0, sliceUsd ?? 0] as const,
+    queryFn: () => fetchJson<RebalanceView>(`/rebalance?${query}`),
+    enabled: query !== '',
+    placeholderData: keepPreviousData,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useDeleverPlan(request: DeleverRequest | null) {
+  return useQuery({
+    queryKey: [...qk.rebalance, 'delever', request] as const,
+    queryFn: () => postJson<DeleverPlan>('/rebalance/delever/plan', request),
+    enabled: request !== null,
+    placeholderData: keepPreviousData,
+    refetchInterval: 10_000,
+  });
+}
+
 export interface StartRebalanceBody extends Partial<CustomMove> {
-  goal: GoalKind;
-  route: RouteName;
+  kind?: 'move' | 'realize' | 'delever';
+  goal?: GoalKind;
+  route?: RouteName;
+  exec?: RealizeExec;
+  sliceUsd?: number;
+  realizeUsd?: number;
+  realizeTarget?: 'clear-debt' | 'all' | 'custom';
+  delever?: DeleverRequest;
   costUsd: number;
-  realizeQty?: { symbol: string; qty: number }[];
 }
 
 export function useStartRebalance() {
@@ -634,10 +666,22 @@ export function useStartRebalance() {
   });
 }
 
-export function useRebalanceCommand(cmd: 'resume' | 'abandon') {
+export function useRebalanceCommand(cmd: 'resume' | 'abandon' | 'pause') {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => postJson<RebalanceJob>(`/rebalance/${encodeURIComponent(id)}/${cmd}`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.rebalance });
+      void qc.invalidateQueries({ queryKey: qk.transfer });
+    },
+  });
+}
+
+export function useRebalanceFix() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action }: { id: string; action: RebalanceFixAction }) =>
+      postJson<RebalanceJob>(`/rebalance/${encodeURIComponent(id)}/fix`, { action }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.rebalance });
       void qc.invalidateQueries({ queryKey: qk.transfer });

@@ -37,7 +37,6 @@ const shortInput = (need: number, book: NormalizedBook | null): RealizeInput => 
     moveUsd: need + 100,
     cashUsd: 100,
     borrowUsd: need * 2,
-    convertCounts: true,
     availableMargin: 1e9,
     perps: [
       {

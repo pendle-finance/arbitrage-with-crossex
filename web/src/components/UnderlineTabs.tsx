@@ -1,12 +1,4 @@
 /**
- * A row of pill tabs — the mock's order-ticket tab style.
- *
- * The segmented control this sits beside (`SegmentedToggle`) reads as a
- * setting — a boxed switch inside a form. These read as NAVIGATION: which of
- * several tickets am I looking at. Same job as the venue/mode switches at the
- * top of the order rail, which are choosing a surface rather than configuring
- * one, so they get the lighter treatment and the form below keeps the boxes.
- *
  * Radio semantics, not tablist: the panel is a sibling rather than a labelled
  * tabpanel, and `radiogroup` is what the existing tests and screen readers
  * already expect from the control this replaces.
@@ -28,7 +20,7 @@ export function UnderlineTabs<T extends string>({
     <div
       role="radiogroup"
       aria-label={ariaLabel}
-      className={`flex flex-wrap items-center gap-1.5 ${className ?? ''}`}
+      className={`flex flex-wrap items-stretch border-b border-ink-800 ${className ?? ''}`}
     >
       {options.map((o) => {
         const active = o.value === value;
@@ -39,12 +31,8 @@ export function UnderlineTabs<T extends string>({
             role="radio"
             aria-checked={active}
             onClick={() => onChange(o.value)}
-            // The mock's ticket tabs: outlined pills, the chosen one filled
-            // with the info tint — the same marker as every other selection.
-            className={`rounded-full border px-[13px] py-[6px] text-[11.5px] font-medium transition-colors ${
-              active
-                ? 'border-info/50 bg-info/[0.14] text-pastel-blue'
-                : 'border-ink-600 text-ink-300 hover:border-ink-500 hover:text-ink-100'
+            className={`-mb-px border-b-2 px-2.5 pb-2.5 pt-3 text-pp-md font-semibold transition-colors ${
+              active ? 'border-info text-ink-50' : 'border-transparent text-ink-400 hover:text-ink-100'
             }`}
           >
             {o.label}

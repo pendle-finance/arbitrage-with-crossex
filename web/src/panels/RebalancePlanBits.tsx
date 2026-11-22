@@ -1,14 +1,13 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowRight, ChevronDown, ChevronRight } from 'lucide-react';
-import type { EvenPlan, Pool, RealizeLeg, RebalanceBucket, RoutePlan } from '../api/types';
+import type { EvenPlan, Pool, RebalanceBucket, RoutePlan } from '../api/types';
 import { Chip } from '../components/Chip';
 import { t } from '../i18n';
 import { fmtUsd, num } from '../lib/fmt';
-import { EstimateRow } from '../trade/PairTicketBits';
 import { StepList, type StepRow } from './RebalanceBits';
 import { planActionLeg, RealizeActions, RealizeRow } from './RebalanceRealizeBits';
-import { HOVER, modalFeeLabel, modalImpactLabel, modalSteps, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
+import { HOVER, modalFeeLabel, modalImpactLabel, modalSteps, poolCoin, poolKey, WALLET_LABEL } from './rebalanceCopy';
 import { daysText, paybackDays, planSteps, totalCostUsd, WORTH_IT_DAYS, worthChip } from './RebalanceHovers';
 import { realizeFeeUsd, realizeImpactUsd, routeFeeUsd, routeImpactUsd, Term } from './RebalanceHovers';
 
@@ -24,41 +23,50 @@ export function refusalOf(plan: EvenPlan): { title: string; body: string } | nul
   if (refused.reason === 'no-fee-rate') return { title: rk('feeRateTitle'), body: rk('feeRateBody') };
   if (refused.reason === 'no-margin') return { title: rk('marginTitle'), body: rk('marginBody', { wallet }) };
   if (refused.reason === 'past-book') return { title: rk('bookTitle'), body: rk('bookBody') };
-  if (refused.reason === 'over-cap') {
-    return { title: rk('capTitle', { cap: fmtUsd(refused.capUsd ?? 0, 0) }), body: rk('capBody') };
-  }
-  const legs = plan.realize?.legs ?? [];
-  const worst = legs.reduce<RealizeLeg | null>((top, leg) => (top === null || leg.impactBp > top.impactBp ? leg : top), null);
-  const bp = refused.bp ?? worst?.impactBp ?? 0;
-  const values = { size: sizeText(worst?.qty ?? 0), base: worst?.base ?? '', bp: num(bp, 1), max: num(refused.maxBp, 0), wallet };
-  return { title: rk('impactTitle'), body: rk('impactBody', values) };
+  return { title: rk('capTitle', { cap: fmtUsd(refused.capUsd ?? 0, 0) }), body: rk('capBody') };
 }
 
 export function ImpactLabel() {
   return <Term label={modalImpactLabel()} text={HOVER.priceImpact} />;
 }
 
-export function TotalCost({ plan, route, buckets }: { plan: EvenPlan; route: RoutePlan; buckets: RebalanceBucket[] }) {
-  const chip = worthChip(plan, route, buckets);
+export interface CostRow {
+  label: string;
+  usd: number;
+  strong?: boolean;
+  hover?: string;
+}
+
+export function legacyCostOf(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): { rows: CostRow[]; chip: ReactNode; daysLine: string | null } {
+  const kind = worthChip(plan, route, buckets);
   const days = paybackDays(plan, route, buckets);
   const impact = realizeImpactUsd(plan) + routeImpactUsd(route);
+  const rows: CostRow[] = [
+    { label: modalFeeLabel(), usd: realizeFeeUsd(plan) + routeFeeUsd(route) },
+    ...(impact > 0 ? [{ label: modalImpactLabel(), usd: impact, hover: HOVER.priceImpact }] : []),
+    { label: rk('totalCost'), usd: totalCostUsd(plan, route), strong: true },
+  ];
+  const chip = kind === null ? null : <Chip tone={kind === 'worth' ? 'info' : 'amber'} sm>{rk(kind === 'worth' ? 'worthIt' : 'notWorthItYet')}</Chip>;
+  const daysLine = kind !== null && days !== null ? rk('daysLine', { days: daysText(days), max: num(WORTH_IT_DAYS, 0) }) : null;
+  return { rows, chip, daysLine };
+}
+
+export function TotalCost({ rows, chip }: { rows: CostRow[]; chip?: ReactNode }) {
   return (
     <div className="card flex flex-col gap-1.5 p-3 text-xs">
-      <div className="flex items-center justify-between gap-3">
-        <span className="flex items-center gap-2 font-semibold text-ink-50">
-          {rk('totalCost')}
-          {chip === 'worth' && <Chip tone="green" sm>{rk('worthIt')}</Chip>}
-          {chip === 'notYet' && <Chip tone="amber" sm>{rk('notWorthItYet')}</Chip>}
-        </span>
-        <span className="num font-semibold text-ink-50">{fmtUsd(totalCostUsd(plan, route))}</span>
+      <div className="flex items-center gap-2 text-[14px] font-semibold text-ink-50">
+        {t('accounts.moveCash.cost')}
+        {chip}
       </div>
-      {chip !== null && days !== null && (
-        <span className="num text-ink-400">{rk('daysLine', { days: daysText(days), max: num(WORTH_IT_DAYS, 0) })}</span>
-      )}
-      <div className="flex flex-col gap-1 pl-3">
-        <EstimateRow label={modalFeeLabel()} value={fmtUsd(realizeFeeUsd(plan) + routeFeeUsd(route))} />
-        {impact > 0 && <EstimateRow label={<ImpactLabel />} value={fmtUsd(impact)} />}
-      </div>
+      {rows.map((row) => (
+        <div
+          key={row.label}
+          className={`flex items-center justify-between gap-3 ${row.strong ? 'mt-0.5 border-t border-ink-800 pt-1.5 font-semibold text-ink-50' : 'text-ink-300'}`}
+        >
+          <span>{row.hover ? <Term label={row.label} text={row.hover} /> : row.label}</span>
+          <span className={`num ${row.strong ? 'font-semibold text-ink-50' : 'text-ink-100'}`}>{fmtUsd(row.usd)}</span>
+        </div>
+      ))}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { num, parseSymbol } from '../lib/fmt';
 /** Severity of a rebalance verdict — see `VerdictTone` in RebalanceHovers. */
 const VERDICT_STYLE = {
   info: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Info size={14} aria-hidden className="block" />, sr: null },
+  recommend: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Check size={14} aria-hidden className="block" />, sr: null },
   // The glyph is decorative (aria-hidden), so the level reaches a screen
   // reader as a word instead. `info` needs none: a neutral note reads fine
   // without a prefix, and "Note:" on every quiet line is just noise.
@@ -28,7 +29,7 @@ export function VerdictAlert({
   text,
   sub,
 }: {
-  tone: 'info' | 'warn' | 'act' | 'good';
+  tone: 'info' | 'warn' | 'act' | 'good' | 'recommend';
   text: ReactNode;
   sub?: string | null;
 }) {

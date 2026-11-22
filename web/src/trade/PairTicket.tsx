@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
 import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
+import { ExecModeToggle } from '../components/ExecModeToggle';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
@@ -460,7 +461,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
 
       <div className="flex flex-col gap-1.5">
         <FieldLabel>{t('pairTicket.pair.execution')}</FieldLabel>
-        <SegmentedToggle<ExecMode>
+        <ExecModeToggle
           ariaLabel={t('pairTicket.pair.executionAria')}
           fill
           value={mode}
@@ -468,10 +469,8 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
             setMode(m);
             setPricePinned(false);
           }}
-          options={[
-            { value: 'maker', label: t('pairTicket.pair.limitHedge') },
-            { value: 'market', label: t('pairTicket.pair.twoMarket') },
-          ]}
+          order={['maker', 'market']}
+          labels={{ maker: t('pairTicket.pair.limitHedge'), market: t('pairTicket.pair.twoMarket') }}
         />
       </div>
 

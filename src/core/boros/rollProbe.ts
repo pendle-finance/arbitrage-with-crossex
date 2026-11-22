@@ -1,5 +1,6 @@
 import { entryAprOf } from '../../../web/src/panels/assets/assetModel';
 import { fitAtBand, planBatch, suggestedRollSize } from '../../../web/src/panels/assets/rollSizing';
+import { sigFigsDirectional } from '../numbers';
 import type { BorosMarket } from './client';
 import type { BorosPairSimulation, SimulatedLeg } from './pair';
 import { findSpread, isSpreadMarket } from './spread';
@@ -57,20 +58,17 @@ export interface RollOpportunity {
   size: number;
 }
 
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  return Number((Math.floor(x / step) * step).toPrecision(12));
+export function halfCapSeedPct(caps: ReadonlyArray<number>): number | null {
+  const valid = caps.filter((c) => Number.isFinite(c) && c > 0);
+  if (valid.length === 0) return null;
+  const meanHalf = valid.reduce((sum, c) => sum + c / 2, 0) / valid.length;
+  const pct = sigFigsDirectional(meanHalf * 100, 1, 'down');
+  return pct > 0 ? pct : null;
 }
 
 export function seedSlippageApr(markets: ReadonlyArray<BorosMarket>, ids: ReadonlyArray<number>): number {
-  const caps = ids
-    .map((id) => markets.find((m) => m.marketId === id)?.maxRateDeviationApr)
-    .filter((c): c is number => typeof c === 'number' && c > 0);
-  if (caps.length === 0) return ROLL_FALLBACK_SLIP_APR;
-  const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-  const pctVal = floorTo1Sf(meanHalf * 100);
-  return pctVal > 0 ? pctVal / 100 : ROLL_FALLBACK_SLIP_APR;
+  const pct = halfCapSeedPct(ids.map((id) => markets.find((m) => m.marketId === id)?.maxRateDeviationApr ?? 0));
+  return pct === null ? ROLL_FALLBACK_SLIP_APR : pct / 100;
 }
 
 export function rollTargetsFor(

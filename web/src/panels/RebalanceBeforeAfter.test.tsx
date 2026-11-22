@@ -126,7 +126,7 @@ describe('RebalanceBeforeAfter', () => {
   });
 
   it('a refused realize still shows the plain move', () => {
-    const refused = { ...owner.plans.even, realize: { legs: owner.plans.even.realize!.legs, refused: { reason: 'too-thin' as const, bp: 54.5, maxBp: 25 } } };
+    const refused = { ...owner.plans.even, realize: { legs: owner.plans.even.realize!.legs, refused: { reason: 'past-book' as const, bp: 54.5 } } };
     const rows = walletChanges(owner, refused, ownerRoute());
     expect(rows).toEqual(walletChanges(owner, owner.plans.even, ownerRoute()));
     expect(rows.length).toBeGreaterThan(0);
@@ -194,5 +194,42 @@ describe('RebalanceBeforeAfter', () => {
     const live = [{ symbol: job.realize!.legs[0]!.symbol, exchange: 'HYPERLIQUID', side: 'SHORT' as const, qty: 60 }];
     render(<RebalanceBeforeAfter rows={receiptChanges(job, owner.buckets, live)} mode="now" />);
     expect(valuesOf(group('Perps'), 'Hyperliquid short')).toEqual(['66.0 ETH', '60.0 ETH']);
+  });
+
+  it('after mode leads with an After heading at 14px semibold; now mode has none', () => {
+    planCard(owner, ownerRoute());
+    const heading = screen.getByRole('caption');
+    expect(heading.textContent).toBe('After');
+    expect(heading.className).toContain('text-[14px]');
+    expect(heading.className).toContain('font-semibold');
+    cleanup();
+    render(<RebalanceBeforeAfter rows={receiptChanges(REALIZE_DONE_JOB, owner.buckets, null)} mode="now" />);
+    expect(screen.queryByRole('caption')).toBeNull();
+  });
+
+  it('pct, text and suffix rows', () => {
+    const rows: WalletChange[] = [
+      {
+        key: 'delever',
+        label: 'Delever',
+        rows: [
+          { label: 'Gate Long · Hyperliquid Short', before: 900, after: 720, unit: 'coin', coin: 'BTC', suffix: 'each' },
+          { label: 'IM used · CrossEx', before: 0.88, after: 0.7, unit: 'pct' },
+          { label: 'Pair PnL', before: null, after: 0, unit: 'text', text: { before: '', after: 'Unchanged, except cost' } },
+          { label: 'Mode', before: null, after: 0, unit: 'text', text: { before: 'Limit', after: 'Market' } },
+        ],
+      },
+    ];
+    render(<RebalanceBeforeAfter rows={rows} mode="after" />);
+    const g = group('Delever');
+    expect(valuesOf(g, 'Gate Long · Hyperliquid Short')).toEqual(['900.0 BTC', '720.0 BTC each']);
+    expect(valuesOf(g, 'IM used · CrossEx')).toEqual(['88.0%', '70.0%']);
+    expect(valuesOf(g, 'Pair PnL')).toEqual(['', 'Unchanged, except cost']);
+    expect(valuesOf(g, 'Mode')).toEqual(['Limit', 'Market']);
+    const arrows = (label: string) =>
+      linesOf(g).find((r) => within(r).getByRole('rowheader').textContent === label)!.querySelectorAll('svg.lucide-arrow-right').length;
+    expect(arrows('Pair PnL')).toBe(0);
+    expect(arrows('Mode')).toBe(1);
+    expect(arrows('IM used · CrossEx')).toBe(1);
   });
 });

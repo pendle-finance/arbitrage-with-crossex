@@ -1,0 +1,255 @@
+import { ArrowRight, TriangleAlert } from 'lucide-react';
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useRealizeCustom, useStartRebalance } from '../api/queries';
+import type { RealizeExec, RealizePlan, RebalanceView } from '../api/types';
+import { EmptyState } from '../components/EmptyState';
+import { ExecModeToggle } from '../components/ExecModeToggle';
+import { SegmentedToggle } from '../components/SegmentedToggle';
+import { microLabelClass } from '../components/Th';
+import { useToast } from '../components/Toast';
+import { apiErrorText } from '../lib/apiErrorText';
+import { fmtAbout, fmtUsd, num } from '../lib/fmt';
+import { useDebounced } from '../lib/useDebounced';
+import { RebalanceBeforeAfter, type WalletChange } from './RebalanceBeforeAfter';
+import { VerdictAlert } from './RebalanceBits';
+import { keyOf } from './RebalanceHovers';
+import { RebalanceModalFooter } from './RebalanceModalFooter';
+import { refusalOf, type CostRow } from './RebalancePlanBits';
+import { CONVERT_TO, execModeLabel, HOVER, hoverCash, poolCoin, poolKey, sideText, sizeText, WALLET_LABEL } from './rebalanceCopy';
+import { parsedAmount } from './rebalanceModalPlan';
+import type { RebalanceTab } from './rebalanceOpener';
+import { costOf, hasPlan, netOf, sliceOf, type Cost, type Slice } from './realizeTabCost';
+import { SliceSizeRow } from './SliceTable';
+
+type AmountPick = 'clear' | 'all' | 'custom';
+
+const TARGET: Record<AmountPick, 'clear-debt' | 'all' | 'custom'> = { clear: 'clear-debt', all: 'all', custom: 'custom' };
+
+const EXEC_ORDER: RealizeExec[] = ['maker', 'market'];
+const CUSTOM_DEBOUNCE_MS = 300;
+
+export function RealizeTab({
+  view,
+  holdMs,
+  lock,
+  onTab,
+  onStarted,
+}: {
+  view: RebalanceView;
+  holdMs?: number;
+  lock: string | null;
+  onTab: (tab: RebalanceTab) => void;
+  onStarted: () => void;
+}) {
+  const { t } = useTranslation();
+  const toast = useToast();
+  const start = useStartRebalance();
+  const tab = view.realize ?? null;
+  const clearDebt = hasPlan(tab?.clearDebt ?? null) ? (tab?.clearDebt ?? null) : null;
+  const all = hasPlan(tab?.all ?? null) ? (tab?.all ?? null) : null;
+  const [amount, setAmount] = useState<AmountPick>(() => (clearDebt ? 'clear' : 'all'));
+  const [exec, setExec] = useState<RealizeExec>('maker');
+  const [sliceUsd, setSliceUsd] = useState(() => tab?.defaultSliceUsd ?? 0);
+  const [sliceText, setSliceText] = useState('');
+  const [tableOpen, setTableOpen] = useState(false);
+  const [customText, setCustomText] = useState('');
+
+  const presetOptions = tab?.sliceOptions ?? [];
+  const pricedPlan = clearDebt && clearDebt.legs.length > 0 ? clearDebt : all;
+  const customSlice = sliceUsd > 0 && !presetOptions.some((o) => !o.custom && o.sizeUsd === sliceUsd);
+  const debouncedSlice = useDebounced(sliceUsd, CUSTOM_DEBOUNCE_MS);
+  const baseAllNet = all ? Math.max(0, netOf(all, costOf(all, exec, sliceOf(presetOptions, sliceUsd, all.legs[0], all === pricedPlan)))) : 0;
+  const typedUsd = parsedAmount(customText);
+  const customUsd = typedUsd !== null && typedUsd > 0 ? Math.min(typedUsd, baseAllNet) : null;
+  const debouncedUsd = useDebounced(customUsd, CUSTOM_DEBOUNCE_MS);
+  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, customSlice ? debouncedSlice : null);
+  const customPlan = customQuery.data?.realize?.custom ?? null;
+  const liveOptions = customSlice ? customQuery.data?.realize?.sliceOptions : undefined;
+  const options = liveOptions?.some((o) => o.sizeUsd === sliceUsd) ? liveOptions : presetOptions;
+  const sliceFor = (plan: RealizePlan): Slice | null => sliceOf(options, sliceUsd, plan.legs[0], plan === pricedPlan);
+  const costFor = (plan: RealizePlan, mode: RealizeExec): Cost => costOf(plan, mode, sliceFor(plan));
+  const allNet = all ? Math.max(0, netOf(all, costFor(all, exec))) : 0;
+
+  if (!tab || (!clearDebt && !all)) {
+    return (
+      <EmptyState
+        title={t('accounts.realizeTab.noUpnl')}
+        action={
+          <button type="button" className="btn" onClick={() => onTab('move')}>
+            {t('accounts.rebalanceTabs.move')}
+          </button>
+        }
+      />
+    );
+  }
+
+  const active = amount === 'clear' ? clearDebt : amount === 'all' ? all : customPlan;
+  const slicePricing = customSlice && (debouncedSlice !== sliceUsd || customQuery.isFetching);
+  const pricing = slicePricing || (amount === 'custom' && (customUsd === null || customUsd !== debouncedUsd || customQuery.isFetching));
+  const slice = active ? sliceFor(active) : null;
+  const cost = active ? costFor(active, exec) : null;
+  const net = active && cost ? netOf(active, cost) : 0;
+  const lead = active?.legs[0];
+  const refusal = active?.refused ? refusalOf({ ...view.plans.repay, realize: active }) : null;
+  const wallet = WALLET_LABEL[poolKey(tab.pool)] ?? poolKey(tab.pool);
+  const cashNow = view.buckets.find((bucket) => keyOf(bucket) === poolKey(tab.pool))?.cash ?? 0;
+  const clearNet = clearDebt ? netOf(clearDebt, costFor(clearDebt, exec)) : 0;
+
+  const execLabel = (mode: RealizeExec): string =>
+    execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode]) : '—');
+
+  const rows: CostRow[] = cost
+    ? [
+        { label: t('accounts.realizeTab.tradingFee'), usd: cost.feeUsd },
+        ...(cost.convertUsd > 0 ? [{ label: t('accounts.moveCash.convertFee'), usd: cost.convertUsd }] : []),
+        { label: t('accounts.realizeTab.priceImpact'), usd: cost.impactUsd, hover: HOVER.priceImpact },
+        { label: t('accounts.realizeTab.totalCost'), usd: cost.totalUsd, strong: true },
+      ]
+    : [];
+
+  const after: WalletChange[] = active
+    ? [{
+        key: poolKey(tab.pool),
+        label: wallet,
+        rows: [
+          { label: t('accounts.realizeTab.realizedAfterCost'), before: null, after: net, unit: 'coin' },
+          { label: hoverCash(), before: cashNow, after: cashNow + net, unit: 'coin' },
+          { label: t('accounts.sliceRun.pairPnl'), before: 0, after: 0, unit: 'text', text: { before: '', after: t('accounts.sliceRun.pairPnlValue') } },
+        ],
+      }]
+    : [];
+
+  const pickSlice = (sizeUsd: number) => setSliceUsd(sizeUsd);
+  const typeSlice = (text: string) => {
+    setSliceText(text);
+    const parsed = parsedAmount(text);
+    if (parsed !== null && parsed > 0) setSliceUsd(parsed);
+  };
+
+  const confirm = () => {
+    if (!active || !cost) return;
+    start.mutate(
+      {
+        kind: 'realize',
+        exec,
+        sliceUsd,
+        realizeUsd: net,
+        realizeTarget: TARGET[amount],
+        costUsd: cost.totalUsd,
+      },
+      { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
+    );
+  };
+
+  return (
+    <>
+      <div className="flex flex-col gap-2">
+        <SegmentedToggle<AmountPick>
+          ariaLabel={t('accounts.realizeTab.custom')}
+          fill
+          value={amount}
+          onChange={setAmount}
+          options={[
+            { value: 'clear', label: t('accounts.realizeTab.clearDebtChip', { amount: num(Math.max(0, clearNet), 0) }), disabled: !clearDebt },
+            { value: 'all', label: t('accounts.realizeTab.all'), disabled: !all },
+            { value: 'custom', label: t('accounts.realizeTab.custom'), disabled: !all },
+          ]}
+        />
+        {amount === 'custom' && (
+          <div className="flex items-center gap-3">
+            <input
+              className="input num h-9 w-40"
+              inputMode="decimal"
+              aria-label={t('accounts.realizeTab.custom')}
+              placeholder={num(allNet, 0)}
+              value={customText}
+              onChange={(e) => setCustomText(e.target.value)}
+            />
+            <span className="num text-xs text-ink-400">{t('accounts.realizeTab.upTo', { amount: num(allNet, 0), coin: poolCoin(tab.pool) })}</span>
+          </div>
+        )}
+      </div>
+
+      {active && active.legs.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className={microLabelClass}>{t('accounts.realizeTab.closeReopen')}</span>
+          <ol className="flex flex-col gap-1">
+            {active.legs.flatMap((leg) => {
+              const close = (
+                <span className="num">
+                  {t('accounts.realizeTab.legPart', { coin: leg.base, side: sideText(leg.side), size: sizeText(leg.qty), held: sizeText(leg.positionQty) })}
+                </span>
+              );
+              const convert = leg.convert && leg.convert.feeUsd > 0 ? (
+                <span className="num inline-flex items-center gap-1.5">
+                  {t('accounts.rebalanceRealize.convertAction', { amount: num(leg.convert.amount, 0), coin: poolCoin(leg.pool) })}
+                  <ArrowRight size={12} aria-hidden className="shrink-0 text-ink-500" />
+                  {WALLET_LABEL[poolKey(CONVERT_TO[leg.pool])]}
+                </span>
+              ) : null;
+              return convert ? [{ key: `${leg.symbol}:convert`, text: convert }, { key: leg.symbol, text: close }] : [{ key: leg.symbol, text: close }];
+            }).map((line, index) => (
+              <li key={line.key} className="flex items-center gap-3 rounded border border-ink-800 px-3 py-1.5 text-xs text-ink-100">
+                <span className="num w-4 shrink-0 text-ink-400">{index + 1}</span>
+                {line.text}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {active && !refusal && active.legs.length > 0 && (
+        <>
+          <div className="flex flex-col gap-1.5">
+            <span className={microLabelClass}>{t('accounts.realizeTab.orders')}</span>
+            <ExecModeToggle
+              ariaLabel={t('accounts.realizeTab.orders')}
+              fill
+              value={exec}
+              onChange={setExec}
+              order={EXEC_ORDER}
+              labels={{ maker: execLabel('maker'), market: execLabel('market') }}
+            />
+          </div>
+
+          {slice && (
+            <SliceSizeRow
+              sizeUsd={sliceUsd}
+              count={slice.count}
+              open={tableOpen}
+              onToggle={() => setTableOpen(!tableOpen)}
+              table={{ options, value: sliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, coin: lead?.base }}
+            />
+          )}
+
+          <RebalanceBeforeAfter rows={after} mode="after" />
+
+          {slice && lead && (
+            <p className="num flex items-center gap-2 text-xs text-gold">
+              <TriangleAlert size={14} aria-hidden className="shrink-0" />
+              {t('accounts.realizeTab.notHedged', { qty: sizeText(slice.qty), coin: lead.base, usd: fmtUsd(slice.usd, 0) })}
+            </p>
+          )}
+        </>
+      )}
+
+      {refusal ? (
+        <VerdictAlert tone="warn" text={refusal.title} sub={refusal.body} />
+      ) : (
+        <RebalanceModalFooter
+          rows={rows}
+          holdLabel={t('accounts.realizeTab.holdRealize', { amount: num(Math.max(0, net), 0) })}
+          optional={false}
+          stale={false}
+          lock={lock}
+          pricing={pricing}
+          holdMs={holdMs}
+          disabled={lock !== null || start.isPending || pricing || !active || active.legs.length === 0 || !(net > 0)}
+          onRefresh={() => undefined}
+          onConfirm={confirm}
+        />
+      )}
+    </>
+  );
+}

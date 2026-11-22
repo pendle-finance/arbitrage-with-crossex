@@ -39,7 +39,7 @@ import {
 import { findPath } from './TransferBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
-const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
+export const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
 export const DUST = 1;
 const TRANSIT_WALLET = 'USDC/GATE';
 
@@ -600,59 +600,12 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
 
 export function RebalanceInfo() {
   const { t } = useTranslation();
-  const card = HOVER.rebalanceTitle;
-  const cell = 'whitespace-nowrap px-2 py-1';
   return (
-    <HoverCard widthPx={600} underline={false} label={t('accounts.rebalanceModal.title')}>
+    <HoverCard widthPx={360} underline={false} label={t('accounts.borrowCard.title')}>
       <div className="flex flex-col gap-2 text-xs leading-snug">
-        <p>{card.equity}</p>
-        <table className="w-full border border-ink-700">
-          <thead>
-            <tr>
-              <Th className="text-left">{card.walletHead.wallet}</Th>
-              <Th className="text-left">{card.walletHead.legs}</Th>
-              <Th className="text-left">{card.walletHead.interest}</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {card.wallets.map((row) => (
-              <tr key={row.wallet} className="border-t border-ink-700">
-                <td className={cell}>{row.wallet}</td>
-                <td className={cell}>{row.legs}</td>
-                <td className={cell}>{row.interest}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p>{card.borrow}</p>
-        <p>{card.rounds}</p>
-        <table className="w-full border border-ink-700">
-          <thead>
-            <tr>
-              <Th className="text-left">{card.routeHead.route}</Th>
-              <Th className="text-left">{card.routeHead.path}</Th>
-              <Th className="text-right">{card.routeHead.time}</Th>
-              <Th className="text-right">{card.routeHead.cost}</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {card.routes.flatMap((group) =>
-              group.paths.map((row, index) => (
-                <tr key={`${group.route} ${row.path}`} className={index === 0 ? 'border-t border-ink-700' : undefined}>
-                  {index === 0 && (
-                    <td rowSpan={group.paths.length} className={`${cell} align-top`}>
-                      {group.route}
-                    </td>
-                  )}
-                  <td className={cell}>{row.path}</td>
-                  <td className={`${cell} text-right`}>{row.time}</td>
-                  <td className={`${cell} text-right`}>{row.cost}</td>
-                </tr>
-              )),
-            )}
-          </tbody>
-        </table>
-        <p>{card.recommended}</p>
+        <p>{t('accounts.borrowCard.infoBorrow')}</p>
+        <p>{t('accounts.borrowCard.infoReduce')}</p>
+        <p>{t('accounts.borrowCard.infoRealize')}</p>
       </div>
     </HoverCard>
   );
