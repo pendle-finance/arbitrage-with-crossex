@@ -5,7 +5,21 @@ import { touchOf } from '../../src/core/estimate/books';
 import { walkBook } from '../../src/core/estimate/fill';
 import { roundToStep } from '../../src/core/numbers';
 import { marginPerConvertUsdc, realizedNetUsd } from '../../src/core/rebalance/realize';
-import { ETH_MARK, GATE_ETH, HL_ETH, OWNER_HL_ETH, ownerBook, perp, realizeBook } from './fixtures/realize-books';
+import { newJob } from '../../src/server/rebalanceJob';
+import {
+  BTC_MARK,
+  ETH_MARK,
+  FEE_ROWS,
+  GATE_BTC,
+  GATE_ETH,
+  HL_BTC,
+  HL_ETH,
+  OWNER_HL_ETH,
+  ownerBook,
+  PERP_RULES,
+  perp,
+  realizeBook,
+} from './fixtures/realize-books';
 import {
   bookLevels,
   routeScore,
@@ -1772,5 +1786,130 @@ describe('planFor realize at $6,000,000', () => {
     expect(legs.reduce((total, leg) => total + realizedNetUsd(leg), 0)).toBeGreaterThanOrEqual(907_225.67);
     expect(plan.balanced).toBe(false);
     expect(plan.shortOfEven).toBeLessThan(1);
+  });
+});
+
+describe('planFor credits a realize Convert to the wallet the job sends it to', () => {
+  const POOL_LIST: Pool[] = ['CROSSEX', 'HYPERLIQUID', 'LIGHTER'];
+  const WALLETS: Record<Pool, { coin: string; venue: string }> = {
+    CROSSEX: USDT_WALLET,
+    HYPERLIQUID: USDC_WALLET,
+    LIGHTER: { coin: 'USDC', venue: 'LIGHTER' },
+  };
+  const RATES: RateLike[] = POOL_LIST.map((pool) => ({
+    coin: WALLETS[pool].coin,
+    exchangeType: WALLETS[pool].venue,
+    hourInterestRate: String(0.05 / 8760),
+  }));
+  const isPool = (pool: Pool) => (w: { coin: string; venue: string }) =>
+    w.coin === WALLETS[pool].coin && w.venue === WALLETS[pool].venue;
+
+  // Three pool wallets, a 1 BTC perp $10,000 in profit on the paying venue, and
+  // an available margin of 0, so the reopen needs a Convert of about $2,000.
+  function threeWallets(cash: Record<Pool, number>, payer: 'HYPERLIQUID' | 'CROSSEX', lighterNotional = 0) {
+    const profit = 10_000;
+    const perps =
+      payer === 'HYPERLIQUID'
+        ? [perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK + profit, BTC_MARK), perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK, BTC_MARK)]
+        : [perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK - profit, BTC_MARK), perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK, BTC_MARK)];
+    const upnl = (pool: Pool): number => (pool === payer ? profit : 0);
+    const walletAsset = (coin: string, venue: string, balance: number, unrealized: number): AssetLike => {
+      const borrow = Math.max(0, -balance);
+      return {
+        coin,
+        exchangeType: venue,
+        balance: String(balance),
+        availableBalance: String(Math.max(0, balance)),
+        upnl: String(unrealized),
+        equity: String(balance + unrealized),
+        liability: String(borrow),
+        borrowingInitialMargin: String(borrow * 0.2),
+        borrowingMaintenanceMargin: String(borrow * 0.1),
+      };
+    };
+    const marginBalance = sumOf(POOL_LIST.map((pool) => cash[pool] + upnl(pool)));
+    const account: AccountLike = {
+      availableMargin: '0',
+      marginBalance: String(marginBalance),
+      initialMargin: String(marginBalance),
+      assets: [
+        ...POOL_LIST.map((pool) => walletAsset(WALLETS[pool].coin, WALLETS[pool].venue, cash[pool], upnl(pool))),
+        walletAsset('USDC', 'GATE', 0, 0),
+      ],
+    };
+    const inputs: PlanInputs = {
+      coins: [{ coin: 'USDC', minTransAmount: 11, estFee: 1, isDisabled: 0 }],
+      spotRule: { state: 'live' },
+      spotTakerRate: 0,
+      ask: 1.0001,
+      bid: 0.9999,
+      notional: { 'USDT/CROSSEX': BTC_MARK, 'USDC/HYPERLIQUID': BTC_MARK, 'USDC/LIGHTER': lighterNotional },
+      perps,
+      books: { HYPERLIQUID_FUTURE_BTC_USDC: HL_BTC, GATE_FUTURE_BTC_USDT: GATE_BTC },
+      feeRows: FEE_ROWS,
+      perpRules: PERP_RULES,
+      availableMargin: 0,
+    };
+    return { account, buckets: bucketsFrom(account, RATES, {}), inputs };
+  }
+  const sumOf = (values: number[]): number => values.reduce((total, value) => total + value, 0);
+
+  // Runs the job built from the plan on the starting cash: each leg's close,
+  // its realize Converts where the job sends them, then the Convert route.
+  function replay(buckets: ReturnType<typeof bucketsFrom>, plan: EvenPlan): Record<Pool, number> {
+    const route = plan.routes.convert;
+    const cash = Object.fromEntries(
+      POOL_LIST.map((pool) => [pool, buckets.find(isPool(pool))?.cash ?? 0]),
+    ) as Record<Pool, number>;
+    const job = newJob(
+      { route: 'convert', steps: route.steps, amount: 0, costUsd: 0, target: route.after, userId: null, realize: plan.realize },
+      0,
+    );
+    for (const leg of plan.realize?.legs ?? []) {
+      cash[leg.pool] += leg.realizedUsd - leg.closeFeeUsd - leg.reopenFeeUsd - leg.closeImpactUsd;
+    }
+    const realizeConverts = job.steps.filter((step) => step.phase === 'realize' && step.name.startsWith('Convert'));
+    expect(realizeConverts.length).toBeGreaterThan(0);
+    for (const step of realizeConverts) {
+      expect(step.name).toBe('Convert');
+      cash[step.from] -= step.planned ?? 0;
+      cash[step.to] += (step.planned ?? 0) * (1 - CONVERT_RATE);
+    }
+    for (const step of route.steps) {
+      cash[step.from] -= step.move;
+      cash[step.to] += step.arrives;
+    }
+    return cash;
+  }
+
+  function expectReplayMatches(buckets: ReturnType<typeof bucketsFrom>, plan: EvenPlan): void {
+    const ran = replay(buckets, plan);
+    for (const pool of POOL_LIST) {
+      const after = plan.routes.convert.after.find(isPool(pool));
+      expect(Math.abs((after?.cash ?? 0) - ran[pool]), pool).toBeLessThanOrEqual(1);
+    }
+  }
+
+  it.each([
+    ['HYPERLIQUID', { CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: -5_000 }],
+    ['CROSSEX', { CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: -5_000 }],
+  ] as const)('clear borrow with %s paying and two borrowing wallets clears both in the job', (payer, cash) => {
+    const book = threeWallets(cash, payer);
+    const plan = planFor(book.buckets, book.account, book.inputs, REPAY_GOAL);
+    expect(plan.realize?.refused).toBeNull();
+    expect(sumOf((plan.realize?.legs ?? []).map((leg) => leg.convert?.amount ?? 0))).toBeGreaterThan(1_500);
+    expectReplayMatches(book.buckets, plan);
+    // The Convert route pays a fee the recommended route does not, so only the
+    // recommended route is held to clearing every borrow.
+    for (const wallet of plan.routes[plan.recommended ?? 'convert']?.after ?? []) {
+      expect(wallet.cash, wallet.venue).toBeGreaterThanOrEqual(-1);
+    }
+  });
+
+  it('balance with Lighter as the widest receiver and no Lighter borrow funds the reopen from the CrossEx borrow', () => {
+    const book = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: 500 }, 'HYPERLIQUID', 300_000);
+    const plan = planFor(book.buckets, book.account, book.inputs, EVEN_GOAL);
+    expect(plan.realize?.refused).toBeNull();
+    expectReplayMatches(book.buckets, plan);
   });
 });
