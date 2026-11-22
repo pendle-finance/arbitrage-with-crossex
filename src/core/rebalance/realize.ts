@@ -357,6 +357,9 @@ export function planRealize(input: RealizeInput): RealizePlan | null {
     };
   }
   const refused = refusalOf(orders, unfunded);
+  // Every close loses money even with no Convert: there is nothing to realize,
+  // and "no margin" would send the trader to add margin that does not help.
+  if (planned.length === 0 && refused?.reason === 'no-margin' && orders.every((order) => order.convert === 0)) return null;
   return { legs: refused === null ? planned : shown, refused };
 }
 

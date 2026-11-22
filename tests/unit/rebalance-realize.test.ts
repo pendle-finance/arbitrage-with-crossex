@@ -250,6 +250,20 @@ describe('planRealize sizes and refusals', () => {
     expect(realize?.refused).toEqual({ reason: 'no-margin', bp: null, maxBp: 25 });
   });
 
+  it('no realize when closing loses money even with no Convert', () => {
+    // 0.08% profit against a 0.084% Hyperliquid round-trip fee, with margin to spare.
+    const thin = planRealize(input({ perps: [perp(OWNER_ETH, -66, 1_821 * 1.0008, 1_821)] }));
+    expect(thin).toBeNull();
+  });
+
+  it('a close that loses money only because of its Convert refuses as no margin', () => {
+    const realize = planRealize(
+      input({ perps: [perp(OWNER_ETH, -66, 1_821 * 1.01, 1_821)], availableMargin: 0, convertCounts: false }),
+    );
+    expect(realize?.legs[0].convert?.amount).toBeGreaterThan(0);
+    expect(realize?.refused).toEqual({ reason: 'no-margin', bp: null, maxBp: 25 });
+  });
+
   it('never realizes a lighter or binance leg', () => {
     const owner = ownerBook();
     const perps = [
