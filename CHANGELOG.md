@@ -13,7 +13,9 @@ for lower fees. The roll-over signal compares against what holding still earns.
   A realize the plan refuses (price impact over 25 bp, no margin to reopen, past the book, over
   the market-order cap) says why in one line, and the plain move still runs. The reopen retries
   until it is whole and stops only for a reason it names. Resume checks both legs before it
-  reopens.
+  reopens. The plan counts the reopen's Convert in the wallet it lands in and never closes more
+  than frees cash, so a plan with two borrowing wallets, or a custom move to Lighter, shows what
+  the run does.
 - **Close a perp pair with Limit + hedge.** The Close perps dialog has a `Perp exit` toggle. One
   leg rests a reduce-only post-only order that follows the book; each fill closes on the other
   leg at once with a market order. On Gate CrossEx that is 2 bp + 5 bp instead of 5 bp + 5 bp.
