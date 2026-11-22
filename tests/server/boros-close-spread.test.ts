@@ -4,7 +4,7 @@ import { halfCapSeedPct } from '../../src/core/boros/rollProbe';
 import type { BorosLegFill, BorosMarketOrderRequest, BorosOrderClient } from '../../src/core/boros/orders';
 import type { AppDeps } from '../../src/server/app';
 import { TtlCache } from '../../src/server/cache';
-import { closeBorosLegs, forgetBorosExecutions, type BorosCloseDeps } from '../../src/server/borosClose';
+import { closeBorosLegs, forgetBorosExecutions, MAY_HAVE_FILLED, type BorosCloseDeps } from '../../src/server/borosClose';
 import { createPairPricer } from '../../src/server/routes/borosPair';
 import { marketAcc, raw } from '../helpers/boros-fixtures';
 import { borosStub } from '../helpers/boros-stub';
@@ -164,5 +164,63 @@ describe('closeBorosLegs on a spread market', () => {
     expect(res.filled[0].size).toBeCloseTo(0.06, 6);
     expect(res.rest[0].size).toBeCloseTo(0.06, 6);
     expect(res.held[0].size).toBeCloseTo(held, 6);
+  });
+
+  it.each([
+    ['$50', 50 / ETH_USD],
+    ['$6M', 6_000_000 / ETH_USD],
+  ])('onSend runs once before the submit, so a submit that times out still leaves the send recorded (%s)', async (_label, held) => {
+    const { deps } = setup(held, 1);
+    const events: string[] = [];
+    const client = deps.getBorosOrders!()!;
+    deps.getBorosOrders = () => ({
+      ...client,
+      placeMarketOrders: async () => {
+        events.push('submit');
+        throw new Error('timeout of 30000ms exceeded');
+      },
+    });
+    const row: { sent: { size: number } | null } = { sent: null };
+    const share = held * 0.4;
+
+    await expect(
+      closeBorosLegs(deps, {
+        address: ADDRESS,
+        legs: [{ marketId: SPREAD, size: share, keep: held * 0.5 }],
+        slippagePct: 1,
+        clientOrderId: 'dl-timeout',
+        onSend: () => {
+          events.push('onSend');
+          row.sent = { size: share };
+        },
+      }),
+    ).rejects.toThrow(MAY_HAVE_FILLED);
+    expect(events).toEqual(['onSend', 'submit']);
+    expect(row.sent).toEqual({ size: share });
+  });
+
+  it('a leg that comes back unknown without an error rejects the close', async () => {
+    const held = 0.3;
+    const { deps } = setup(held, 1);
+    const client = deps.getBorosOrders!()!;
+    deps.getBorosOrders = () => ({
+      ...client,
+      placeMarketOrders: async (reqs) =>
+        reqs.map((r) => ({ ...fillOf(r, 0), execApr: null, feeSize: null, failure: { code: 'unknown' as const, message: 'Boros did not confirm the order' } })),
+    });
+    let sent = false;
+
+    await expect(
+      closeBorosLegs(deps, {
+        address: ADDRESS,
+        legs: [{ marketId: SPREAD, size: 0.12, keep: 0.1 }],
+        slippagePct: 1,
+        clientOrderId: 'dl-unknown',
+        onSend: () => {
+          sent = true;
+        },
+      }),
+    ).rejects.toThrow('Boros did not confirm the order');
+    expect(sent).toBe(true);
   });
 });

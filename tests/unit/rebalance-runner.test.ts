@@ -7277,6 +7277,108 @@ describe('slices: delever', () => {
     expect((borosSpy.calls[0].input as BorosCloseInput).slippagePct).toBe(0.4);
   });
 
+  describe('a slice past the book', () => {
+    const SIZES = [
+      ['$50', 0.02, 60, 0.005],
+      ['$300k', 100, 90_000, 20],
+      ['$6M', 2_000, 1_500_000, 20],
+    ] as const;
+    const pastBookRun = (decide: (req: OrderReq, index: number) => Outcome | (() => never), q = 100, sliceUsd = 90_000, depth = 20, exec: 'maker' | 'market' = 'maker') => {
+      const venue = sliceVenue(decide);
+      const shallow: NormalizedBook = { bids: [[2999.9, depth]], asks: [[3000.1, depth]], ts: 0 };
+      const h = sliceRun(venue, { delever: deleverAt(q), sliceUsd, exec, book: () => shallow });
+      Object.assign(h.deps, { boros: { deps: {} as BorosCloseDeps, address: '0x00000000000000000000000000000000000000a1' } });
+      let turns = 0;
+      const waits: number[] = [];
+      Object.assign(h.deps, {
+        sleep: async (ms: number) => {
+          turns += 1;
+          waits.push(ms);
+          if (turns > 200) throw new Error('turn cap');
+          await h.clock.sleep(ms);
+        },
+      });
+      return { venue, h, waits, turns: () => turns };
+    };
+
+    const CASES = [
+      ['refused', gateError(400, 'INVALID_PARAM_VALUE', 'refused by the test'), 2, 'Refused by the test.'],
+      ['unclear', gateError(500, 'INTERNAL_SERVER_ERROR', 'Server error'), 3, HALT_TEXT.unconfirmed],
+      ['lost', networkError, 3, HALT_TEXT.unconfirmed],
+    ] as const;
+    const RATE_LIMITED = gateError(429, 'TOO_MANY_REQUESTS', 'Too many requests');
+
+    it.each(SIZES)('%s, every send rate-limited: the maker close waits 2 s doubling to 60 s and halts after 10', async (_size, q, sliceUsd, depth) => {
+      const { h, waits, turns } = pastBookRun(() => RATE_LIMITED, q, sliceUsd, depth);
+      await h.run();
+      expect(turns()).toBeLessThanOrEqual(200);
+      expect(h.sent('createCrossexOrder').map((arg) => String(arg.crossexOrderRequest.timeInForce))).toEqual(Array(10).fill('POC'));
+      expect(waits).toEqual([2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000, 60_000]);
+      expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.rateLimited, notHedgedQty: 0 });
+    });
+
+    it.each(SIZES)('%s, two rate limits then a fill: no halt and the wait starts at 2 s again', async (_size, q, sliceUsd, depth) => {
+      let leads = 0;
+      const { h, waits, turns } = pastBookRun(
+        (req) => {
+          if (req.symbol !== HL_ETH) return filled(req);
+          leads += 1;
+          return leads % 3 === 0 ? filled(req) : RATE_LIMITED;
+        },
+        q,
+        sliceUsd,
+        depth,
+      );
+      await h.run();
+      expect(turns()).toBeLessThanOrEqual(200);
+      expect(leads).toBeGreaterThanOrEqual(3);
+      expect(waits.filter((ms) => ms >= 2_000)).toEqual(Array(leads / 3).fill([2_000, 4_000]).flat());
+      expect(h.onHalt).not.toHaveBeenCalled();
+      expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+    });
+
+    it.each(SIZES.flatMap(([size, q, sliceUsd, depth]) => CASES.map(([name, fail, sends, reason]) => [size, name, q, sliceUsd, depth, fail, sends, reason] as const)))(
+      '%s, every send %s: the job halts after a bounded number of sends',
+      async (_size, _name, q, sliceUsd, depth, fail, sends, reason) => {
+        const { venue, h, turns } = pastBookRun(() => fail, q, sliceUsd, depth);
+        await h.run();
+        expect(turns()).toBeLessThanOrEqual(200);
+        expect(h.count('createCrossexOrder')).toBe(sends);
+        expect(venue.placed).toHaveLength(0);
+        expect(h.jobs.read()).toMatchObject({ status: 'halted', notHedgedQty: 0 });
+        expect(h.jobs.read()?.haltReason).toContain(reason);
+        expect(h.onHalt).toHaveBeenCalled();
+      },
+    );
+
+    it.each(SIZES)('%s, every lead fills nothing: the job halts after one post-only and three IOC sends', async (_size, q, sliceUsd, depth) => {
+      const { h, turns } = pastBookRun(() => ({ state: 'CANCELLED', executed: '0' }), q, sliceUsd, depth);
+      await h.run();
+      expect(turns()).toBeLessThanOrEqual(200);
+      expect(h.sent('createCrossexOrder').map((arg) => String(arg.crossexOrderRequest.timeInForce))).toEqual(['POC', 'IOC', 'IOC', 'IOC']);
+      expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.nothingFilled, notHedgedQty: 0 });
+    });
+
+    it.each(SIZES)('%s, a lead that fills between misses keeps the job going to the end', async (_size, q, sliceUsd, depth) => {
+      let leads = 0;
+      const { h, turns } = pastBookRun(
+        (req) => {
+          if (req.symbol !== HL_ETH) return filled(req);
+          leads += 1;
+          return leads % 3 === 0 ? filled(req) : { state: 'CANCELLED', executed: '0' };
+        },
+        q,
+        sliceUsd,
+        depth,
+        'market',
+      );
+      await h.run();
+      expect(turns()).toBeLessThanOrEqual(200);
+      expect(h.onHalt).not.toHaveBeenCalled();
+      expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+    });
+  });
+
   it('a delever job keeps its start IM used after the end is written', () => {
     const dir = fs.mkdtempSync(path.join(tmpdir(), 'rebalance-'));
     const jobs = new JobFile(dir);
@@ -7431,6 +7533,50 @@ describe('slices: fixes, cost and IM used', () => {
     await expect(applyFix(h.deps, halted, 'boros-retry')).rejects.toThrow(ADD_BACK_FIRST);
     expect(borosSpy.calls).toHaveLength(0);
     expect(h.jobs.read()?.status).toBe('halted');
+  });
+
+  it.each([0.0166, 2_000])('an add back Gate refuses outright clears the add back, so boros retry closes the Boros rest, %d ETH', async (q) => {
+    borosSpy.calls.length = 0;
+    const venue = sliceVenue((req) => (req.symbol === HL_ETH ? (gateError(400, 'INVALID_PARAM', 'busy') as () => never) : filled(req)));
+    const h = atBorosPart(venue, q);
+    withBoros(h);
+    await expect(applyFix(h.deps, h.jobs.read()!, 'add-back')).rejects.toBeTruthy();
+    const halted = h.jobs.read()!;
+    expect(halted).toMatchObject({ status: 'halted', borosLeftYu: 30, haltReason: borosPartText(30) });
+    expect(halted.steps[1].addBack).toBeNull();
+    expect(venue.reqs().filter((req) => req.symbol === GATE_ETH)).toHaveLength(0);
+    const job = await applyFix(h.deps, halted, 'boros-retry');
+    expect(borosLegs()).toEqual([[{ marketId: 7, size: 30, keep: 50 }]]);
+    expect(job).toMatchObject({ status: 'done', borosLeftYu: 0, delever: { boros: [{ closed: 50 }] } });
+  });
+
+  it('an add back with an order still open keeps the add back and refuses boros retry', async () => {
+    borosSpy.calls.length = 0;
+    const venue = sliceVenue((req) => (req.symbol === HL_ETH ? (gateError(503, 'SERVER_ERROR', 'timeout') as () => never) : filled(req)));
+    const h = atBorosPart(venue, 5);
+    withBoros(h);
+    await expect(applyFix(h.deps, h.jobs.read()!, 'add-back')).rejects.toBeTruthy();
+    const halted = h.jobs.read()!;
+    expect(halted.steps[1].addBack?.legs.map((leg) => leg.filled)).toEqual([0, 0]);
+    expect(halted.steps[1].addBack?.legs[0].order).not.toBeNull();
+    await expect(applyFix(h.deps, halted, 'boros-retry')).rejects.toThrow(ADD_BACK_FIRST);
+    expect(borosSpy.calls).toHaveLength(0);
+  });
+
+  it.each([0.0166, 2_000])('an abandoned delever with one perp added back still closes the Boros rest on boros retry, %d ETH', async (q) => {
+    borosSpy.calls.length = 0;
+    const venue = sliceVenue((req) => (req.symbol === GATE_ETH ? (gateError(400, 'INVALID_PARAM', 'busy') as () => never) : filled(req)));
+    const h = atBorosPart(venue, q);
+    withBoros(h);
+    await expect(applyFix(h.deps, h.jobs.read()!, 'add-back')).rejects.toBeTruthy();
+    expect(h.jobs.read()!.steps[1].addBack?.legs[0].filled).toBeGreaterThan(0);
+    await expect(applyFix(h.deps, h.jobs.read()!, 'boros-retry')).rejects.toThrow(ADD_BACK_FIRST);
+    const abandoned = h.jobs.read()!;
+    abandoned.status = 'abandoned';
+    h.jobs.write(abandoned);
+    const job = await applyFix(h.deps, h.jobs.read()!, 'boros-retry');
+    expect(borosLegs()).toEqual([[{ marketId: 7, size: 30, keep: 50 }]]);
+    expect(job).toMatchObject({ status: 'abandoned', borosLeftYu: 0, delever: { boros: [{ closed: 50 }] } });
   });
 
   it('add back sends each perp in chunks no larger than the venue max market size', async () => {

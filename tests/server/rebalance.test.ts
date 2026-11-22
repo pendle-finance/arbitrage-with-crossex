@@ -9,6 +9,7 @@ import { roundToStep } from '../../src/core/numbers';
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import type { AccountLike, EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
 import type { RealizeLeg, RealizePerp, RealizePlan } from '../../src/core/rebalance/realize';
+import type { SliceOption } from '../../src/core/rebalance/slices';
 import { FEE_ROWS, GATE_ETH, OWNER_HL_ETH, ownerBook, perp, PERP_RULES, realizeBook, type RealizeBook } from '../unit/fixtures/realize-books';
 import { Store } from '../../src/engine/db';
 import { gateVenue } from '../../src/engine/venueGate';
@@ -1064,6 +1065,70 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
+  const SHALLOW_HL_ETH: NormalizedBook = { bids: [[1_820.9, 20]], asks: [[1_821.1, 20]], ts: 0 };
+
+  function mockShallowHlBook(): void {
+    const book = ownerAccount();
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(SHALLOW_HL_ETH.bids), levels(SHALLOW_HL_ETH.asks)] });
+  }
+
+  it('a realize start at a slice past the book is refused, and a slice inside the book starts', async () => {
+    mockShallowHlBook();
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const options = realize.sliceOptions as SliceOption[];
+    const past = options.find((option) => option.pastBook);
+    const inside = options.find((option) => !option.pastBook);
+    expect(past).toBeDefined();
+    expect(inside).toBeDefined();
+    const startAt = async (sliceUsd: number) => {
+      const plan = (await h.get(`/api/rebalance?sliceUsd=${sliceUsd}`)).json().data.realize.all;
+      return h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', sliceUsd, costUsd: plan.estimates.maker.totalUsd });
+    };
+
+    const refused = await startAt(past!.sizeUsd);
+
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+
+    const started = await startAt(inside!.sizeUsd);
+
+    expect(started.statusCode).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever start at a slice past the book is refused, and a slice inside the book starts', async () => {
+    mockShallowHlBook();
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
+    const options = plan.sliceOptions as SliceOption[];
+    const past = options.find((option) => option.pastBook);
+    const inside = options.find((option) => !option.pastBook);
+    expect(past).toBeDefined();
+    expect(inside).toBeDefined();
+    const startAt = (sliceUsd: number) => h.post('/api/rebalance', { kind: 'delever', exec: 'maker', sliceUsd, costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
+
+    const refused = await startAt(past!.sizeUsd);
+
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+
+    const started = await startAt(inside!.sizeUsd);
+
+    expect(started.statusCode).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
   it('a realize job amount is the plan realized total', async () => {
     mockAccount(ownerAccount());
     refuseSends();
@@ -1211,6 +1276,13 @@ describe('POST /api/rebalance with a close and reopen', () => {
     const retry = await h.post(`/api/rebalance/${addedBack.id}/fix`, { action: 'boros-retry' });
     expect(retry.statusCode).toBe(409);
     expect(retry.json().error.message).toBe('One perp is already added back. Hold to add back to finish the other first.');
+
+    const abandonedAddBack = slicedJob({ status: 'abandoned', borosLeftYu: 5, delever: { pct: 0.2, legs: [], boros: [] } });
+    abandonedAddBack.steps[abandonedAddBack.stepIndex].addBack = { qty: 3, legs: [{ symbol: HL_ETH, filled: 3, order: null }] };
+    h.jobs.write(abandonedAddBack);
+    const abandonedRetry = await h.post(`/api/rebalance/${abandonedAddBack.id}/fix`, { action: 'boros-retry' });
+    expect(abandonedRetry.json().error?.message).not.toBe('One perp is already added back. Hold to add back to finish the other first.');
+    expect(abandonedRetry.statusCode).not.toBe(409);
   });
 
   it('a fix sent while the boot cancel runs is answered, and Abandon works after it', async () => {

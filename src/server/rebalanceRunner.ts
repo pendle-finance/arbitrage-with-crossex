@@ -49,6 +49,7 @@ import {
   borosPartText,
   borosWaitText,
   FIX_UNCONFIRMED,
+  FOLLOW_MISSES_RED,
   MAKER_REPEG_MS,
   MAKER_REST_MS,
   RETRY_CONVERT_CAP,
@@ -138,6 +139,7 @@ const ROUND_ARRIVALS: readonly string[] = ['To Gate', 'Sell USDC'];
 const INTO_VENUE: readonly string[] = Object.values(TO_VENUE_STEP);
 export const REOPEN_FIRST_WAIT_MS = 2_000;
 export const REOPEN_MAX_WAIT_MS = 60_000;
+export const RATE_LIMIT_HALT_AFTER = 10;
 const RETRY_CONVERT_HEADROOM = 1.05;
 const DELIST_LABEL = 'TRADE_DELIST_OPEN_PROHIBITED_ERROR';
 const ORDER_ALLOWANCE_LABELS: readonly string[] = ['TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', 'TRADE_LIGHTER_ORDER_LIMIT_ERROR'];
@@ -508,7 +510,7 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
   const step = job.steps[job.stepIndex];
   const crossEx = deps.clients().crossEx;
   if (action === 'boros-retry') {
-    if (step?.addBack) throw new CoreError(ADD_BACK_FIRST, 'validation');
+    if (step?.addBack && job.status === 'halted') throw new CoreError(ADD_BACK_FIRST, 'validation');
     if (job.delever && (job.status === 'abandoned' || step?.name === SLICE_STEP)) {
       await closeBorosRest(deps, job);
       deps.jobs.write(job);
@@ -549,6 +551,9 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
       const rows = perps.map((perp) => ({ exchange: perp.exchange, base: perp.base, filled: plan.legs.find((row) => row.symbol === perp.symbol)?.filled ?? 0, qty: plan.qty }));
       if (rows.some((row) => row.filled > 0)) {
         job.haltReason = addBackPartText(rows);
+        deps.jobs.write(job);
+      } else if (plan.legs.every((row) => row.filled === 0 && row.order === null)) {
+        step.addBack = null;
         deps.jobs.write(job);
       }
       throw err;
@@ -1706,6 +1711,15 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
+  let leadMisses = 0;
+  let rateLimits = 0;
+  const leadMissed = (reason: string): boolean => {
+    leadMisses += 1;
+    if (leadMisses < FOLLOW_MISSES_RED) return false;
+    halt(reason);
+    return true;
+  };
+
   const cancelLead = async (step: Step, leg: RealizeJobLeg, order: PerpOrder & { venueId: string }): Promise<void> => {
     await crossEx()
       .cancelCrossexOrder(order.venueId)
@@ -1714,6 +1728,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     if (!body) return deps.sleep(POLL_MS);
     const { delta, closed } = creditOrder(job, order, body, leg);
     leg.filledQty = addQty(leg.filledQty, delta);
+    if (delta > 0) leadMisses = 0;
     if (closed) step.lead = null;
     syncFollow(job, step, leg);
     deps.jobs.write(job);
@@ -1737,6 +1752,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         step.lead = null;
       } else order.venueId = found;
       deps.jobs.write(job);
+      if (found === null) leadMissed(HALT_TEXT.unconfirmed);
       return;
     }
     const venueId = order.venueId;
@@ -1744,13 +1760,14 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     if (!body) return deps.sleep(POLL_MS);
     const { delta, closed } = creditOrder(job, order, body, leg);
     leg.filledQty = addQty(leg.filledQty, delta);
+    if (delta > 0) leadMisses = 0;
     if (closed) {
       step.lead = null;
       const pocRefused = order.poc && order.credited === 0;
       if (pocRefused && cut) cut.ioc = true;
       syncFollow(job, step, leg);
       deps.jobs.write(job);
-      if (!order.poc && order.credited === 0) await deps.sleep(REOPEN_FIRST_WAIT_MS);
+      if (!order.poc && order.credited === 0 && !leadMissed(HALT_TEXT.nothingFilled)) await deps.sleep(REOPEN_FIRST_WAIT_MS);
       return;
     }
     syncFollow(job, step, leg);
@@ -1804,14 +1821,19 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
     try {
       order.venueId = await placePerp(crossEx(), perp, order.text, qtyText(lots, rule.lot), { kind: poc ? 'poc' : 'ioc', price: priced.price });
+      rateLimits = 0;
       deps.jobs.write(job);
     } catch (err) {
       const c = classifyGateError(err);
+      rateLimits = c.category === 'rate-limited' ? rateLimits + 1 : 0;
       const definite = isRefusal(c) || c.category === 'rate-limited' || c.category === 'post-only-would-cross';
       if (!definite) return deps.sleep(POLL_MS);
       step.lead = null;
       deps.jobs.write(job);
-      if (c.category === 'rate-limited') return deps.sleep(REOPEN_FIRST_WAIT_MS);
+      if (c.category === 'rate-limited') {
+        if (rateLimits >= RATE_LIMIT_HALT_AFTER) return halt(HALT_TEXT.rateLimited);
+        return deps.sleep(Math.min(REOPEN_FIRST_WAIT_MS * 2 ** (rateLimits - 1), REOPEN_MAX_WAIT_MS));
+      }
       if (poc && (c.category === 'post-only-would-cross' || POC_REJECT.test(c.label ?? '') || isRefusal(c))) {
         cut.ioc = true;
         deps.jobs.write(job);

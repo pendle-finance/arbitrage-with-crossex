@@ -656,6 +656,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
       const sliceUsd = cappedSliceOf(plan.sliceOptions, shownSlice ?? plan.defaultSliceUsd);
+      if (plan.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lead = plan.legs[plan.makerLeg];
       const leadUsd = lead ? (lead.closeQty * plan.notHedgedMaxUsd) / Math.max(plan.notHedgedMaxQty, Number.EPSILON) : 0;
       const job = newJob(
@@ -778,7 +779,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           ? job.delever !== null && Math.max(job.borosLeftYu, job.borosGapYu) > 0
           : job.borosLeftYu > 0;
       if (!open) return conflict(reply, NOTHING_TO_FIX);
-      if (action === 'boros-retry' && job.steps[job.stepIndex]?.addBack) return conflict(reply, ADD_BACK_FIRST);
+      if (action === 'boros-retry' && job.status === 'halted' && job.steps[job.stepIndex]?.addBack) return conflict(reply, ADD_BACK_FIRST);
       const working = resumeLock();
       if (working) return conflict(reply, working);
       if (job.userId !== null && (await currentUserId()) !== job.userId) {
