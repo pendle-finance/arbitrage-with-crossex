@@ -981,7 +981,6 @@ const sum = (values: number[]): number => values.reduce((total, value) => total 
 
 interface Paying {
   from: Pool;
-  to: Pool;
   moveUsd: number;
   cashUsd: number;
 }
@@ -990,8 +989,7 @@ function payingOf(book: Book, moves: Move[], start: number[], realizable: Readon
   const senders = [...new Set(moves.map((move) => move.from))].filter((from) => realizable.has(from)).map((from): Paying & { gap: number } => {
     const moveUsd = sum(moves.flatMap((move, index) => (move.from === from ? [start[index]] : [])));
     const cashUsd = sendableCash(book, from);
-    const to = moves.find((move) => move.from === from)?.to ?? from;
-    return { from, to, moveUsd, cashUsd, gap: moveUsd - cashUsd };
+    return { from, moveUsd, cashUsd, gap: moveUsd - cashUsd };
   });
   const widest = senders.sort((a, b) => b.gap - a.gap)[0];
   return widest && widest.gap >= DUST_USDC ? widest : null;
@@ -1012,7 +1010,7 @@ function realizeInput(
     pool: paying.from,
     moveUsd: paying.moveUsd,
     cashUsd: paying.cashUsd,
-    borrowUsd: buckets.find(isWallet(poolWallet(paying.to)))?.borrow ?? 0,
+    borrowUsd: buckets.find(isWallet(poolWallet(CONVERT_TO[paying.from])))?.borrow ?? 0,
     availableMargin: inputs.availableMargin ?? num(account.availableMargin),
     perps: inputs.perps ?? [],
     books: inputs.books ?? {},
@@ -1041,7 +1039,8 @@ function afterStepOne(buckets: Bucket[], account: AccountLike, paying: Paying, r
   const converted = sum(legs.map((leg) => leg.convert?.amount ?? 0));
   const arrives = converted * (1 - CONVERT_RATE);
   const payer = isWallet(poolWallet(paying.from));
-  const receiver = isWallet(poolWallet(paying.to));
+  // The job sends every realize Convert to CONVERT_TO, not to the move's receiver.
+  const receiver = isWallet(poolWallet(CONVERT_TO[paying.from]));
   const freed = repayment(buckets.find(receiver), arrives).marginFreedUsd;
   const adjusted = buckets.map((bucket): Bucket => {
     if (payer(bucket)) {
@@ -1182,7 +1181,7 @@ function customMaxOf(
     goal.from,
   );
   const whole = planRealize(
-    realizeInput(buckets, account, inputs, { from: goal.from, to: goal.to, moveUsd: Infinity, cashUsd }),
+    realizeInput(buckets, account, inputs, { from: goal.from, moveUsd: Infinity, cashUsd }),
   );
   return floorCents(cashUsd + sum((whole?.legs ?? []).map(realizedNetUsd)));
 }
