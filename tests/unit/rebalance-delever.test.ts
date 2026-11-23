@@ -306,3 +306,92 @@ describe('planDelever', () => {
     expect(free.notHedgedMaxQty).toBe(180);
   });
 });
+
+describe('planDelever: a 100% Delever closes the whole position', () => {
+  const unevenOf = (hl: number, gate: number, pct: number): DeleverInput => {
+    const base = inputOf({ held: Math.min(hl, gate), perps: [{ symbol: HL, qty: hl * pct }, { symbol: GATE, qty: gate * pct }] });
+    const sizeOf = (symbol: string): number => (symbol === HL ? hl : gate);
+    return {
+      ...base,
+      positions: base.positions.map((row) => ({ ...row, qty: sizeOf(row.symbol), initialMargin: (sizeOf(row.symbol) * BTC_MARK) / (row.symbol === HL ? 40 : 25) })),
+    };
+  };
+  const SIZES = [
+    [0.01659, 0.0166],
+    [63.15789, 63.1579],
+  ];
+
+  it.each(SIZES)('100%% of %d BTC on Hyperliquid and %d BTC on Gate closes both legs whole', (hl, gate) => {
+    const plan = planDelever(unevenOf(hl, gate, 1));
+    expect(plan.legs.map(({ before, after, closeQty, closeAll }) => ({ before, after, closeQty, closeAll }))).toEqual([
+      { before: hl, after: 0, closeQty: Number(floorToStep(hl, LOT)), closeAll: true },
+      { before: gate, after: 0, closeQty: Number(floorToStep(hl, LOT)), closeAll: true },
+    ]);
+    expect(plan.imUsed[0].after).toBe(0);
+    expect(plan.refused).toBeNull();
+  });
+
+  it.each(SIZES)('50%% of %d BTC on Hyperliquid and %d BTC on Gate keeps the rest open', (hl, gate) => {
+    const plan = planDelever(unevenOf(hl, gate, 0.5));
+    const closeQty = Number(floorToStep(hl * 0.5, LOT));
+    expect(plan.legs.map(({ after, closeQty: qty, closeAll }) => ({ after, qty, closeAll }))).toEqual([
+      { after: Number((hl - closeQty).toFixed(5)), qty: closeQty, closeAll: false },
+      { after: Number((gate - closeQty).toFixed(4)), qty: closeQty, closeAll: false },
+    ]);
+  });
+
+  it('a typed size 0.00005 BTC under the $6M pair closes both perps and every asked Boros leg in full', () => {
+    const hl = 63.15789;
+    const typed = hl - 0.00005;
+    const base = unevenOf(hl, 63.1579, 1);
+    const input: DeleverInput = {
+      ...base,
+      boros: [borosLeg(155, hl), borosLeg(156, -30)],
+      request: { ...base.request, perps: [{ symbol: HL, qty: typed }, { symbol: GATE, qty: typed }], boros: [{ marketId: 155, size: typed }, { marketId: 156, size: 0 }] },
+    };
+    const plan = planDelever(input);
+    expect(plan.legs.map(({ closeAll, after }) => [closeAll, after])).toEqual([
+      [true, 0],
+      [true, 0],
+    ]);
+    expect(plan.boros).toEqual([
+      { marketId: 155, before: hl, after: 0, closeSize: hl },
+      { marketId: 156, before: -30, after: -30, closeSize: 0 },
+    ]);
+    const half = planDelever({ ...input, request: { ...input.request, perps: [{ symbol: HL, qty: hl / 2 }, { symbol: GATE, qty: hl / 2 }], boros: [{ marketId: 155, size: hl / 2 }] } });
+    expect(half.boros).toEqual([{ marketId: 155, before: hl, after: hl - hl / 2, closeSize: hl / 2 }]);
+  });
+
+  it('a $6M Boros market held at twice the pair share closes only the asked share on a 100% Delever', () => {
+    const hl = 63.15789;
+    const base = unevenOf(hl, 63.1579, 1);
+    const input: DeleverInput = {
+      ...base,
+      boros: [borosLeg(155, 2 * hl)],
+      request: { ...base.request, perps: [{ symbol: HL, qty: hl }, { symbol: GATE, qty: 63.1579 }], boros: [{ marketId: 155, size: hl }] },
+    };
+    const plan = planDelever(input);
+    expect(plan.legs.map(({ closeAll }) => closeAll)).toEqual([true, true]);
+    expect(plan.boros).toEqual([{ marketId: 155, before: 2 * hl, after: 2 * hl - hl, closeSize: hl }]);
+    const typed = planDelever({ ...input, request: { ...input.request, boros: [{ marketId: 155, size: hl - 0.00005 }] } });
+    expect(typed.boros[0].closeSize).toBe(hl - 0.00005);
+  });
+
+  it.each([
+    [0.0165, 0.0166],
+    [0.01659, 0.0167],
+    [63.1578, 63.1579],
+    [63.15789, 63.158],
+  ])('a Gate leg one lot or more above the %d BTC pair is not closed whole', (hl, gate) => {
+    const input = unevenOf(hl, gate, 1);
+    const plan = planDelever(input);
+    const closeQty = Number(floorToStep(hl, LOT));
+    expect(plan.legs.map(({ closeAll }) => closeAll)).toEqual([true, false]);
+    expect(plan.legs[0].after).toBe(0);
+    expect(plan.legs[1].after).toBe(Number((gate - closeQty).toFixed(4)));
+    expect(plan.legs[1].after).toBeGreaterThanOrEqual(Number(LOT));
+    const freed = (hl * BTC_MARK) / 40 + (closeQty / gate) * ((gate * BTC_MARK) / 25);
+    const account = input.account;
+    expect(plan.imUsed[0].after).toBeCloseTo(Math.max(0, Number(account.initialMargin) - freed) / Number(account.marginBalance), 12);
+  });
+});

@@ -115,6 +115,7 @@ export interface PerpOrder {
   side?: 'BUY' | 'SELL';
   mid?: number | null;
   entry?: number | null;
+  sweep?: boolean;
 }
 
 export interface SliceCut {
@@ -146,7 +147,7 @@ export interface ImUsedRow {
 
 export interface JobDelever {
   pct: number;
-  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number }[];
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeAll?: boolean }[];
   boros: { marketId: number; before: number; after: number; closed: number; sent?: BorosSend | null }[];
 }
 
@@ -158,7 +159,7 @@ export interface BorosSend {
 
 export interface DeleverJobInput {
   makerLeg: 0 | 1;
-  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number }[];
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number; closeAll?: boolean }[];
   boros: { marketId: number; before: number; after: number; closeSize: number }[];
 }
 
@@ -545,6 +546,7 @@ function deleverParts(input: DeleverJobInput): { leg: RealizeJobLeg; steps: Step
   const perp = { symbol: lead.symbol, exchange: lead.exchange, side: sideOf(lead.side, true), reduceOnly: true };
   const follow = { symbol: other.symbol, exchange: other.exchange, side: sideOf(other.side, true), reduceOnly: true };
   const boros = input.boros.filter((row) => row.closeSize > 0);
+  const qty = lead.closeAll === true ? lead.before : lead.closeQty;
   const borosStep = { ...pendingStep(BOROS_STEP, { from: pool, to: pool, round: null, planned: null, arrives: null, borrowLeft: null }), phase: 'realize' as const };
   const leg: RealizeJobLeg = {
     symbol: lead.symbol,
@@ -553,17 +555,17 @@ function deleverParts(input: DeleverJobInput): { leg: RealizeJobLeg; steps: Step
     pool,
     side: lead.side,
     positionQty: lead.before,
-    qty: lead.closeQty,
+    qty,
     filledQty: 0,
     realizedUsd: 0,
     hedge: other.exchange,
   };
   return {
     leg,
-    steps: [sliceStep(pool, lead.closeQty, perp, follow), ...(boros.length > 0 ? [borosStep] : [])],
+    steps: [sliceStep(pool, qty, perp, follow), ...(boros.length > 0 ? [borosStep] : [])],
     delever: {
-      pct: lead.closeQty / lead.before,
-      legs: input.legs.map(({ symbol, exchange, base, side, before, after }) => ({ symbol, exchange, base, side, before, after })),
+      pct: qty / lead.before,
+      legs: input.legs.map(({ symbol, exchange, base, side, before, after, closeAll }) => ({ symbol, exchange, base, side, before, after, closeAll: closeAll === true })),
       boros: input.boros.map(({ marketId, before, after }) => ({ marketId, before, after, closed: 0 })),
     },
   };

@@ -26,7 +26,7 @@ export interface DeleverEstimate {
 }
 
 export interface DeleverPlan {
-  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number }[];
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number; closeAll: boolean }[];
   boros: { marketId: number; before: number; after: number; closeSize: number }[];
   imUsed: { account: Pool; before: number; after: number }[];
   makerLeg: 0 | 1;
@@ -134,6 +134,13 @@ function sameSizeOf(legs: Leg[], lot: string): number {
   return qty > held ? Number(floorToStep(held, lot)) : qty;
 }
 
+function closesWhole(legs: Leg[], leg: Leg, closeQty: number, lot: string): boolean {
+  const pair = Math.min(...legs.map((row) => row.held));
+  const fine = legs.map((row) => row.lot).reduce((a, b) => (Number(b) < Number(a) ? b : a));
+  const underLot = (qty: number): boolean => Number(roundToStep(qty, fine, 'nearest')) < Number(lot);
+  return underLot(pair - closeQty) && underLot(leg.held - pair);
+}
+
 function impactUsdOf(leg: Leg, qtys: number[]): number {
   return qtys.reduce((total, qty) => total + (impactOf(leg.book, closeSideOf(leg), leg.mid, qty)?.usd ?? 0), 0);
 }
@@ -178,10 +185,10 @@ function borosLegOf(input: DeleverInput, asked: DeleverRequest['boros'][number])
   };
 }
 
-function imUsedAfterOf(account: AccountLike, legs: Leg[], closeQty: number): DeleverPlan['imUsed'] {
+function imUsedAfterOf(account: AccountLike, legs: Leg[], closeQtys: number[]): DeleverPlan['imUsed'] {
   const marginBalance = Number(account.marginBalance);
   const initialMargin = Math.max(0, Number(account.initialMargin) || 0);
-  const freed = legs.reduce((total, leg) => total + (leg.held > 0 ? leg.initialMargin * (closeQty / leg.held) : 0), 0);
+  const freed = legs.reduce((total, leg, index) => total + (leg.held > 0 ? leg.initialMargin * (closeQtys[index] / leg.held) : 0), 0);
   return imUsedOf(account).map((row) => ({
     account: row.account,
     before: row.pct,
@@ -227,7 +234,15 @@ export function planDelever(input: DeleverInput): DeleverPlan {
   const chosenUsd = Math.min(customUsd ?? defaultSliceUsd, maxUsd);
   const qtys = sliceQtys(closeQty, chosenUsd > 0 ? chosenUsd / mid : 0, minQty, lot);
   const notHedgedMaxQty = qtys.reduce((max, qty) => Math.max(max, qty), 0);
-  const boros = request.boros.map((asked) => borosLegOf(input, asked));
+  const whole = legs.map((leg) => closeQty > 0 && closesWhole(legs, leg, closeQty, lot));
+  const heldOf = (marketId: number): number => Math.abs(input.boros.find((row) => row.marketId === marketId)?.size ?? 0);
+  const pairQty = Math.min(...legs.map((leg) => leg.held));
+  const borosAsked = (asked: DeleverRequest['boros'][number]): DeleverRequest['boros'][number] => {
+    const held = heldOf(asked.marketId);
+    const sliver = pairQty > 0 ? ((held * Number(lot)) / pairQty) * (1 + 1e-9) : 0;
+    return whole.every(Boolean) && asked.size > 0 && held - asked.size <= sliver ? { ...asked, size: held } : asked;
+  };
+  const boros = request.boros.map((asked) => borosLegOf(input, borosAsked(asked)));
   const feeBorosUsd = boros.reduce((total, leg) => total + leg.feeUsd, 0);
   const borosImpactUsd = boros.reduce((total, leg) => total + leg.impactUsd, 0);
   const feeOf = (leg: Leg, rate: number): number => closeQty * leg.mark * rate;
@@ -237,17 +252,18 @@ export function planDelever(input: DeleverInput): DeleverPlan {
   };
   const followImpactUsd = impactUsdOf(follow, qtys);
   return {
-    legs: legs.map((leg) => ({
+    legs: legs.map((leg, index) => ({
       symbol: leg.symbol,
       exchange: leg.exchange,
       base: leg.base,
       side: leg.side,
       before: leg.held,
-      after: Number(roundToStep(leg.held - closeQty, leg.lot, 'nearest')),
+      after: whole[index] ? 0 : Number(roundToStep(leg.held - closeQty, leg.lot, 'nearest')),
       closeQty,
+      closeAll: whole[index],
     })),
     boros: boros.map(({ marketId, before, after, closeSize }) => ({ marketId, before, after, closeSize })),
-    imUsed: imUsedAfterOf(input.account, legs, closeQty),
+    imUsed: imUsedAfterOf(input.account, legs, legs.map((leg, index) => (whole[index] ? leg.held : closeQty))),
     makerLeg,
     sliceOptions: sliceOptions({ ...slice, totalQty: closeQty, minQty, lot, customUsd, maxUsd }),
     defaultSliceUsd,

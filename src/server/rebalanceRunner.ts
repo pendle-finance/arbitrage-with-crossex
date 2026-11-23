@@ -362,8 +362,16 @@ const legFor = (job: Job, step: Step | undefined): RealizeJobLeg | undefined =>
 
 const openFollowOf = (leg: RealizeJobLeg, step: Step): number => Math.max(0, addQty(leg.filledQty, -(step.qty ?? 0)));
 
+const wholeLegOf = (job: Job, symbol: string): NonNullable<Job['delever']>['legs'][number] | null =>
+  job.delever?.legs.find((row) => row.symbol === symbol && row.closeAll === true) ?? null;
+
+function followOpenOf(job: Job, step: Step, leg: RealizeJobLeg): number {
+  const whole = step.follow ? wholeLegOf(job, step.follow.symbol) : null;
+  return whole && addQty(whole.before, -(step.qty ?? 0)) <= 0 ? 0 : openFollowOf(leg, step);
+}
+
 function syncFollow(job: Job, step: Step, leg: RealizeJobLeg): void {
-  const open = openFollowOf(leg, step);
+  const open = followOpenOf(job, step, leg);
   job.notHedgedQty = open;
   job.follow = open > 0 && step.follow ? { ...step.follow, qty: open } : null;
 }
@@ -615,7 +623,7 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction): P
     deps.jobs.write(job);
   }
   const rule = await sliceRule(deps, follow.symbol);
-  const lots = lotsDownOf(openFollowOf(leg, step), rule.lot);
+  const lots = lotsDownOf(followOpenOf(job, step, leg), rule.lot);
   if (lots <= 0) return job;
   const priced = await priceFor(deps, follow, rule, false);
   let mode: OrderMode = { kind: 'market' };
@@ -1677,8 +1685,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const findOrder = async (step: Step, perp: StepPerp, tag: string): Promise<string | null | undefined> =>
     (await lookUpInWindow(deps, () => lookup(STEPS.Close, tag))) ?? (await sweep({ ...step, perp }, STEPS.Close, tag));
 
-  const followRefused = async (step: Step, leg: RealizeJobLeg, err: unknown): Promise<void> => {
+  const followRefused = async (step: Step, leg: RealizeJobLeg, err: unknown, order: PerpOrder): Promise<void> => {
     const c = classifyGateError(err);
+    if (c.category === 'size-too-small' && order.sweep) {
+      sweepRefused = true;
+      return;
+    }
     if (c.category === 'rate-limited') return followRateLimited(step);
     if (c.category === 'price-limit' || ORDER_ALLOWANCE_LABELS.includes(c.label ?? '')) return miss(step);
     if (c.category === 'auth') return halt(REOPEN_HALT.tradePermission);
@@ -1693,7 +1705,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     halt(REOPEN_HALT.refused(leg, open, haltReasonFor(err)));
   };
 
-  const runFollow = async (step: Step, leg: RealizeJobLeg, follow: StepPerp, rule: SliceRule): Promise<void> => {
+  const runFollow = async (step: Step, leg: RealizeJobLeg, follow: StepPerp, rule: SliceRule, sweepLots: number): Promise<void> => {
     syncFollow(job, step, leg);
     const order = step.hedge;
     if (order) {
@@ -1723,16 +1735,26 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         return;
       }
       const state = String(body.state ?? '');
-      if (/REJECT|FAIL/i.test(state)) return followRefused(step, leg, errorFromReason(String(body.reason ?? '') || state));
+      if (/REJECT|FAIL/i.test(state)) return followRefused(step, leg, errorFromReason(String(body.reason ?? '') || state), order);
       return miss(step);
     }
     const wait = (step.nextTryAt ?? 0) - deps.now();
     if (wait > 0) await deps.sleep(wait);
     const priced = await priceFor(deps, follow, rule, false);
     if (!priced) return miss(step);
-    const lots = lotsDownOf(openFollowOf(leg, step), rule.lot);
+    const lots = sweepLots > 0 ? sweepLots : lotsDownOf(followOpenOf(job, step, leg), rule.lot);
     job.tagCount += 1;
-    const sent: PerpOrder = { text: tagFor(job.id, job.tagCount), venueId: null, sentAt: deps.now(), credited: 0, poc: false, price: priced.price, side: follow.side, mid: priced.mid };
+    const sent: PerpOrder = {
+      text: tagFor(job.id, job.tagCount),
+      venueId: null,
+      sentAt: deps.now(),
+      credited: 0,
+      poc: false,
+      price: priced.price,
+      side: follow.side,
+      mid: priced.mid,
+      ...(sweepLots > 0 ? { sweep: true } : {}),
+    };
     step.hedge = sent;
     deps.jobs.write(job);
     try {
@@ -1744,13 +1766,14 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       if (!isRefusal(c) && c.category !== 'rate-limited' && c.category !== 'auth') return deps.sleep(POLL_MS);
       step.hedge = null;
       deps.jobs.write(job);
-      return followRefused(step, leg, err);
+      return followRefused(step, leg, err, sent);
     }
   };
 
   let leadMisses = 0;
   let rateLimits = 0;
   let followRateLimits = 0;
+  let sweepRefused = false;
   const leadMissed = (reason: string): boolean => {
     leadMisses += 1;
     if (leadMisses < FOLLOW_MISSES_RED) return false;
@@ -1846,7 +1869,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const capLots = sizeUsd > 0 ? Math.floor(sizeUsd / priced.mid / Number(rule.lot) + 1e-9) : Number.POSITIVE_INFINITY;
     const minLots = Math.ceil(minQtyOf(rule.limits, rule.lot, priced.mid) / Number(rule.lot) - 1e-9);
     const wanted = Math.min(restLots, liveLots);
-    const lots = wanted > capLots && wanted - capLots >= minLots ? capLots : wanted;
+    const planned = wanted > capLots && wanted - capLots >= minLots ? capLots : wanted;
+    const lots = planned > 0 && planned === liveLots && wholeLegOf(job, leg.symbol) ? await wholeLotsOf(leg, rule.lot, planned) : planned;
     if (lots <= 0) {
       cut.qty = addQty(leg.filledQty, -cut.from);
       deps.jobs.write(job);
@@ -1882,6 +1906,21 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
+  const liveQtyOf = async (symbol: string, side: RealizeJobLeg['side']): Promise<number> => {
+    const signed = Number(((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === symbol)?.positionQty ?? 0);
+    if (!Number.isFinite(signed)) throw new Error(`Gate sent no position size for ${symbol}`);
+    return Math.max(0, side === 'SHORT' ? -signed : signed);
+  };
+
+  const wholeLotsOf = async (leg: RealizeJobLeg, lot: string, planned: number): Promise<number> => {
+    const live = lotsDownOf(await liveQtyOf(leg.symbol, leg.side), lot);
+    if (live >= planned) return planned;
+    leg.positionQty = addQty(leg.filledQty, Number(qtyText(live, lot)));
+    leg.qty = leg.positionQty;
+    deps.jobs.write(job);
+    return live;
+  };
+
   const entryOf = async (symbol: string): Promise<number | null> => {
     const held = ((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === symbol);
     return positiveOf(held?.entryPrice) || null;
@@ -1893,13 +1932,17 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     try {
       const rule = await sliceRule(deps, perp.symbol);
       const followRule = follow.symbol === perp.symbol ? rule : await sliceRule(deps, follow.symbol);
-      const openQty = openFollowOf(leg, step);
+      const openQty = followOpenOf(job, step, leg);
       const openLots = lotsDownOf(openQty, followRule.lot) > 0;
       const known = Number(step.lead?.price ?? step.hedge?.price ?? 0);
       const mark = known > 0 || !openLots ? known : ((await priceFor(deps, follow, followRule, false))?.mid ?? 0);
       const followMin = mark > 0 ? minQtyOf(followRule.limits, followRule.lot, mark) : positiveOf(followRule.limits.minSize);
       const leadLeft = Math.min(lotsOf(addQty(leg.qty, -leg.filledQty), rule.lot), lotsOf(addQty(leg.positionQty, -leg.filledQty), rule.lot)) > 0;
-      const open = openLots && (openQty >= followMin - 1e-12 || !leadLeft);
+      const ending = leadLeft ? null : wholeLegOf(job, follow.symbol);
+      const sweep = ending && !sweepRefused && !step.lead && !step.hedge && openQty > 0 ? ending : null;
+      const remaining = sweep ? Math.max(0, addQty(sweep.before, -(step.qty ?? 0))) : 0;
+      const sweepLots = sweep ? lotsDownOf(Math.min(await liveQtyOf(follow.symbol, sweep.side), remaining), followRule.lot) : 0;
+      const open = ending ? sweepLots > 0 : openLots && (openQty >= followMin - 1e-12 || !leadLeft);
       if (!step.lead && !step.hedge) {
         const queued = deps.takeFix?.();
         if (queued) {
@@ -1908,7 +1951,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         }
       }
       if (step.lead) return await runLead(step, leg, perp, rule, open);
-      if (open || step.hedge) return await runFollow(step, leg, follow, followRule);
+      if (open || step.hedge) return await runFollow(step, leg, follow, followRule, sweepLots);
       const cut = step.cut ?? null;
       const sliceDone = cut !== null && lotsOf(addQty(addQty(leg.filledQty, -cut.from), -cut.qty), rule.lot) >= 0;
       if (cut !== null && !sliceDone) return await sendLead(step, leg, perp, rule);
@@ -1918,7 +1961,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const liveLots = lotsOf(addQty(leg.positionQty, -leg.filledQty), rule.lot);
       if (Math.min(leftLots, liveLots) <= 0) {
         syncFollow(job, step, leg);
-        const rest = openFollowOf(leg, step);
+        const rest = job.notHedgedQty;
         const gap = rest > 0 ? restGapOf(job, leg, follow.symbol, rest) : null;
         if (gap) job.openGaps = [...(job.openGaps ?? []), gap];
         return finish(step, step.qty ?? 0, step.from);

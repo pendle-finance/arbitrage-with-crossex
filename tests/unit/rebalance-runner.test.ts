@@ -7869,3 +7869,169 @@ describe('job file defaults', () => {
     });
   });
 });
+
+describe('slices: a 100% Delever leaves no dust', () => {
+  const BTC_RULES = {
+    body: [
+      { symbol: HL_ETH, state: 'live', lotSize: '0.00001', minSize: '0.00001', minNotional: '10', tickSize: '0.1', businessType: 'FUTURE' },
+      { symbol: GATE_ETH, state: 'live', lotSize: '0.0001', minSize: '0.0001', minNotional: '0', tickSize: '0.1', businessType: 'FUTURE' },
+    ],
+  };
+  const BTC_BOOK = bookAt(94_999.9, 95_000.1);
+  const TOO_SMALL: Outcome = { state: 'REJECT', executed: '0', reason: 'label: TRADE_ORDER_QUANTITY_MIN_ERROR' };
+  const wholeAt = (hl: number, gate: number, makerLeg: 0 | 1 = 0): DeleverJobInput => {
+    const closeQty = Number(floorToStep(Math.min(hl, gate), '0.0001'));
+    return {
+      makerLeg,
+      legs: [
+        { symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'BTC', side: 'LONG', before: hl, after: 0, closeQty, closeAll: true },
+        { symbol: GATE_ETH, exchange: 'GATE', base: 'BTC', side: 'SHORT', before: gate, after: 0, closeQty, closeAll: true },
+      ],
+      boros: [{ marketId: 7, before: hl, after: 0, closeSize: hl }],
+    };
+  };
+  const wholeRun = async (o: { hl: number; gate: number; sliceUsd: number; exec: 'maker' | 'market'; added?: number; refuseSweep?: boolean; makerLeg?: 0 | 1 }) => {
+    let hlSent = 0;
+    const venue = sliceVenue((req) => {
+      if (req.symbol === HL_ETH) hlSent += Number(req.qty);
+      return o.refuseSweep && req.symbol === GATE_ETH && hlSent >= o.hl - 1e-9 ? TOO_SMALL : filled(req);
+    });
+    const done = (symbol: string): number => venue.placed.filter((p) => p.req.symbol === symbol).reduce((total, p) => total + Number(p.fill.executed), 0);
+    const live = { hl: () => o.hl + (o.added ?? 0) - done(HL_ETH), gate: () => o.gate - done(GATE_ETH) };
+    venue.handlers.listCrossexRuleSymbols = seq(BTC_RULES);
+    venue.handlers.listCrossexPositions = async () => ({
+      body: [
+        { symbol: HL_ETH, positionQty: String(live.hl()), initialMargin: '1' },
+        { symbol: GATE_ETH, positionQty: String(-live.gate()), initialMargin: '1' },
+      ],
+    });
+    const h = sliceRun(venue, { delever: wholeAt(o.hl, o.gate, o.makerLeg), sliceUsd: o.sliceUsd, exec: o.exec, book: () => BTC_BOOK });
+    Object.assign(h.deps, { boros: { deps: {} as BorosCloseDeps, address: '0x00000000000000000000000000000000000000a1' } });
+    borosSpy.calls.length = 0;
+    await h.run();
+    const orders = (symbol: string) => venue.reqs().filter((req) => req.symbol === symbol);
+    const sum = (symbol: string) => orders(symbol).reduce((total, req) => total + Number(req.qty), 0);
+    return { h, job: h.jobs.read(), orders, sum, live };
+  };
+  const CASES = [
+    ['maker', 0.01659, 0.0166, 25_000, '0.01659'],
+    ['market', 0.01659, 0.0166, 25_000, '0.01659'],
+    ['maker', 63.15789, 63.1579, 100_000, '1.05272'],
+    ['market', 63.15789, 63.1579, 100_000, '1.05272'],
+  ] as const;
+
+  it.each(CASES)('%s: %d BTC on Hyperliquid and %d BTC on Gate both end flat, with no gap and Boros closed in full', async (exec, hl, gate, sliceUsd, lastLead) => {
+    const { h, job, orders, sum, live } = await wholeRun({ hl, gate, sliceUsd, exec });
+    expect(job).toMatchObject({ status: 'done', haltReason: null, notHedgedQty: 0, borosLeftYu: 0 });
+    expect(h.onHalt).not.toHaveBeenCalled();
+    expect(job?.openGaps ?? []).toHaveLength(0);
+    expect(live.hl()).toBeCloseTo(0, 9);
+    expect(live.gate()).toBeCloseTo(0, 9);
+    expect(sum(HL_ETH)).toBeCloseTo(hl, 9);
+    expect(sum(HL_ETH) - Number(floorToStep(hl, '0.0001'))).toBeCloseTo(0.00009, 9);
+    expect(sum(GATE_ETH)).toBeCloseTo(gate, 9);
+    expect(orders(HL_ETH).at(-1)?.qty).toBe(lastLead);
+    expect(orders(HL_ETH).every((req) => Number(req.qty) <= sliceUsd / 95_000 + 0.00011)).toBe(true);
+    expect(job?.delever?.boros[0].closed).toBeCloseTo(hl, 9);
+    expect((borosSpy.calls[0].input as BorosCloseInput).legs).toEqual([{ marketId: 7, size: hl, keep: 0 }]);
+  });
+
+  it.each([
+    [0.01659, 0.0166, 25_000, 0.005],
+    [63.15789, 63.1579, 100_000, 0.5],
+  ])('%d BTC: Hyperliquid reports less in the last slice, so the last order is the smaller live size', async (hl, gate, sliceUsd, less) => {
+    const { job, orders, sum, live } = await wholeRun({ hl, gate, sliceUsd, exec: 'market', added: -less });
+    const planned = hl > 1 ? 1.05272 : hl;
+    expect(Number(orders(HL_ETH).at(-1)?.qty)).toBeCloseTo(planned - less, 9);
+    expect(sum(HL_ETH)).toBeCloseTo(hl - less, 9);
+    expect(live.hl()).toBeCloseTo(0, 9);
+    expect(live.gate()).toBeCloseTo(0, 9);
+    expect(job).toMatchObject({ status: 'done', borosLeftYu: 0 });
+    expect(job?.openGaps ?? []).toHaveLength(0);
+    expect(job?.delever?.boros[0].closed).toBeCloseTo(hl, 9);
+  });
+
+  it.each([
+    [0.01659, 0.0166, 25_000, 0.01],
+    [63.15789, 63.1579, 100_000, 1],
+  ])('%d BTC: Hyperliquid reports more in the last slice, so the last order stays at the planned whole size', async (hl, gate, sliceUsd, added) => {
+    const { job, orders, sum, live } = await wholeRun({ hl, gate, sliceUsd, exec: 'market', added });
+    expect(orders(HL_ETH).at(-1)?.qty).toBe(hl > 1 ? '1.05272' : '0.01659');
+    expect(sum(HL_ETH)).toBeCloseTo(hl, 9);
+    expect(live.hl()).toBeCloseTo(added, 9);
+    expect(live.gate()).toBeCloseTo(0, 9);
+    expect(job).toMatchObject({ status: 'done', borosLeftYu: 0 });
+  });
+
+  it.each([
+    [0.01659, 0.0166, 25_000],
+    [63.15789, 63.1579, 100_000],
+  ])('%d BTC: a follow sweep refused as too small stores the rest as a gap and the job ends done', async (hl, gate, sliceUsd) => {
+    const { h, job, orders, live } = await wholeRun({ hl, gate, sliceUsd, exec: 'market', refuseSweep: true });
+    expect(job).toMatchObject({ status: 'done', haltReason: null });
+    expect(h.onHalt).not.toHaveBeenCalled();
+    expect(job?.steps.map((step) => step.status)).toEqual(['done', 'done']);
+    expect(job?.openGaps).toHaveLength(1);
+    expect(job?.openGaps?.[0]).toMatchObject({ leg: { symbol: HL_ETH, side: 'LONG' }, hedges: [{ symbol: GATE_ETH, side: 'SHORT', qty: gate }] });
+    expect(job?.openGaps?.[0].qty).toBeCloseTo(hl - (gate - live.gate()), 9);
+    expect(orders(GATE_ETH).at(-1)?.qty).toBe(String(Number((gate - (gate - live.gate())).toFixed(4))));
+    expect(live.hl()).toBeCloseTo(0, 9);
+  });
+
+  const LEAD_BIGGER = [
+    ['Gate leads', 0.01659, 0.0166, 25_000, 1],
+    ['Gate leads', 63.15789, 63.1579, 100_000, 1],
+    ['Hyperliquid leads and is bigger', 0.01669, 0.0166, 25_000, 0],
+    ['Hyperliquid leads and is bigger', 63.15799, 63.1579, 100_000, 0],
+  ] as const;
+
+  it.each(LEAD_BIGGER)('%s on %d BTC Hyperliquid and %d BTC Gate: both end flat with nothing left not hedged', async (_name, hl, gate, sliceUsd, makerLeg) => {
+    for (const exec of ['maker', 'market'] as const) {
+      const { h, job, sum, live } = await wholeRun({ hl, gate, sliceUsd, exec, makerLeg });
+      expect(job).toMatchObject({ status: 'done', haltReason: null, notHedgedQty: 0, follow: null, borosLeftYu: 0 });
+      expect(h.onHalt).not.toHaveBeenCalled();
+      expect(job?.openGaps ?? []).toHaveLength(0);
+      expect(live.hl()).toBeCloseTo(0, 9);
+      expect(live.gate()).toBeCloseTo(0, 9);
+      expect(sum(HL_ETH)).toBeCloseTo(hl, 9);
+      expect(sum(GATE_ETH)).toBeCloseTo(gate, 9);
+    }
+  });
+
+  it.each(LEAD_BIGGER)('%s on %d BTC Hyperliquid and %d BTC Gate: a Boros halt after the perps offers no perp hold', async (_name, hl, gate, sliceUsd, makerLeg) => {
+    vi.mocked(closeBorosLegs).mockImplementationOnce(async () => {
+      throw new Error('Boros gave no answer');
+    });
+    const { job, live } = await wholeRun({ hl, gate, sliceUsd, exec: 'market', makerLeg });
+    expect(job).toMatchObject({ status: 'halted', haltKind: 'boros', notHedgedQty: 0, follow: null });
+    expect(job?.openGaps ?? []).toHaveLength(0);
+    expect(live.hl()).toBeCloseTo(0, 9);
+    expect(live.gate()).toBeCloseTo(0, 9);
+  });
+
+  it.each(LEAD_BIGGER)('%s on %d BTC Hyperliquid and %d BTC Gate: a restart right after the sweep filled shows nothing not hedged', async (_name, hl, gate, sliceUsd, makerLeg) => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexRuleSymbols = seq(BTC_RULES);
+    const lead = makerLeg === 1 ? gate : hl;
+    const follow = makerLeg === 1 ? hl : gate;
+    const subLot = Number((lead - follow).toFixed(5));
+    const h = sliceRun(venue, {
+      delever: wholeAt(hl, gate, makerLeg),
+      sliceUsd,
+      exec: 'market',
+      book: () => BTC_BOOK,
+      edit: (job) => {
+        const step = job.steps[0];
+        job.realize!.legs[0].filledQty = lead;
+        step.qty = follow;
+        step.cut = { qty: lead, from: 0, at: 1_000_000, ioc: true };
+        job.notHedgedQty = subLot;
+        job.follow = { ...step.follow!, qty: subLot };
+      },
+    });
+    expect(subLot).toBeGreaterThan(0);
+    await cancelRestingLead(h.deps, h.jobs.read()!);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'restart', notHedgedQty: 0, follow: null });
+    expect(venue.reqs()).toHaveLength(0);
+  });
+});

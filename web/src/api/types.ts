@@ -318,7 +318,7 @@ export interface DeleverEstimate {
 }
 
 export interface DeleverPlan {
-  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number }[];
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number; closeAll?: boolean }[];
   boros: { marketId: number; before: number; after: number; closeSize: number }[];
   imUsed: { account: Pool; before: number; after: number }[];
   makerLeg: 0 | 1;
@@ -428,7 +428,7 @@ export interface RebalanceJob {
   paused?: boolean;
   delever?: {
     pct: number;
-    legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number }[];
+    legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeAll?: boolean }[];
     boros: { marketId: number; before: number; after: number; closed: number }[];
   } | null;
   imUsedNow?: ImUsedRow[] | null;
