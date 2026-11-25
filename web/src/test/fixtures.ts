@@ -3335,7 +3335,7 @@ interface TwapFixtureBook {
 }
 
 type TwapFixtureState =
-  | 'running' | 'pausing' | 'paused' | 'restart' | 'sleep' | 'refused' | 'hedgeMargin' | 'error' | 'stopped' | 'done'
+  | 'running' | 'pausing' | 'paused' | 'restart' | 'sleep' | 'refused' | 'restUnderMin' | 'hedgeMargin' | 'error' | 'stopped' | 'done'
   | 'never' | 'singleLeg' | 'deleverRunning' | 'deleverBorosRefused' | 'closeRunning' | 'singleClose' | 'shortOpenRunning'
   | 'hedgeMarginClose' | 'refusedMargin' | 'cappedRest' | 'repegRefused' | 'neverBehind' | 'doneGap' | 'stoppedGap'
   | 'runningFeeEst' | 'sleepLong' | 'waitingChild';
@@ -3544,7 +3544,18 @@ function twapFixturesOf(book: TwapFixtureBook): Record<TwapFixtureState, { rebal
     }),
     refused: at({
       slice: run.slices, maker: 0, hedge: 0, live: false, total: r6(firstSlices * run.sliceQty + 0.0004),
-      over: { status: 'halted', haltKind: 'refused', haltReason: `Slice ${run.slices} is under Gate's 0.001 ETH minimum` },
+      over: {
+        status: 'halted', haltKind: 'refused', haltReason: `Slice ${run.slices} is under Gate's 0.001 ETH minimum`,
+        sizeRefusal: { slice: run.slices, venue: 'Gate', limit: '0.001 ETH', bound: 'min', wholeRest: false },
+      },
+    }),
+    restUnderMin: at({
+      slice: run.slices, maker: 0, hedge: 0, live: false, total: r6(firstSlices * run.sliceQty + 0.0004),
+      over: {
+        status: 'halted', haltKind: 'refused',
+        haltReason: "Rest 0.0004 ETH is under Gate's 0.001 ETH minimum. Resume cannot send it. Stop ends the run.",
+        sizeRefusal: { slice: run.slices, venue: 'Gate', limit: '0.001 ETH', bound: 'min', wholeRest: true },
+      },
     }),
     hedgeMargin: at({
       slice: 3, maker: part[0], hedge: part[1], live: false,

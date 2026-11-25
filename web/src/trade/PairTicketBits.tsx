@@ -8,11 +8,12 @@ import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
-import { bpsOf, fmtAge, fmtUsd, num, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
+import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
 import { EstimateHeadline } from './EstimateHeadline';
-import { BookOpen, ChevronDown, RotateCw } from 'lucide-react';
+import { BookToggle, fmtTradeCost, PlanLine } from './TicketEstimateBits';
+import { ChevronDown, RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
 
@@ -393,31 +394,6 @@ function isMakerLeg(p: PreviewResult): boolean {
   return 'pairRole' in p.input && p.input.pairRole === 'maker';
 }
 
-const SIDE_MARK = '\u0001';
-
-function LegRoleRow({ p, side, base }: { p: PreviewResult | undefined; side: 'LONG' | 'SHORT'; base: string }) {
-  const { t } = useTranslation();
-  if (!p) return null;
-  const [before, after] = t(isMakerLeg(p) ? 'pairTicket.estimate.legRole.rests' : 'pairTicket.estimate.legRole.hedges', {
-    side: SIDE_MARK,
-    venue: prettyVenue(parseSymbol(p.symbol).exchange),
-  }).split(SIDE_MARK);
-  return (
-    <EstimateRow
-      label={
-        <>
-          {before}
-          <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
-            {t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
-          </Chip>
-          {after}
-        </>
-      }
-      value={`${qtyGrouped(p.qty)}${base ? ` ${base}` : ''}`}
-    />
-  );
-}
-
 function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: PreviewResult | undefined }) {
   const { t } = useTranslation();
   if (!p) return null;
@@ -533,19 +509,7 @@ export function PairEstimate({
       isError={isError}
       sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
       aside={
-        <button
-          type="button"
-          aria-pressed={showBook}
-          onClick={() => setShowBook((v) => !v)}
-          title={t('pairTicket.bits.bookHint')}
-          className={`btn-ghost-xs ${
-            showBook
-              ? '!border-info/50 bg-info/[0.14] !text-pastel-blue'
-              : ''
-          }`}
-        >
-          <BookOpen size={12} aria-hidden /> {t('pairTicket.bits.book')}
-        </button>
+        <BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} />
       }
     >
       {previews ? (
@@ -553,13 +517,17 @@ export function PairEstimate({
           <EstimateHeadline
             label={t('pairTicket.bits.tradeCost')}
             sub={mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
-            value={tradeCost !== null ? `≈ ${num(tradeCost, 2)} USDT` : '—'}
+            value={fmtTradeCost(tradeCost)}
           />
 
           {showRoles && (
             <div className="flex flex-col gap-1.5">
-              <LegRoleRow p={legLong} side="LONG" base={base} />
-              <LegRoleRow p={legShort} side="SHORT" base={base} />
+              {legLong && (
+                <PlanLine side="LONG" symbol={legLong.symbol} role={isMakerLeg(legLong) ? 'rests' : 'hedges'} qty={legLong.qty} />
+              )}
+              {legShort && (
+                <PlanLine side="SHORT" symbol={legShort.symbol} role={isMakerLeg(legShort) ? 'rests' : 'hedges'} qty={legShort.qty} />
+              )}
             </div>
           )}
 

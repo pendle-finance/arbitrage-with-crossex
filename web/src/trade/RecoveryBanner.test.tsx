@@ -256,4 +256,38 @@ describe('RecoveryBanner', () => {
     );
     expect(await screen.findByRole('button', { name: 'View' })).toBeInTheDocument();
   });
+
+  describe('own account line', () => {
+    const NOTE = "This TWAP runs on this terminal's Gate account.";
+    const A = '0x1111111111111111111111111111111111111111';
+    const B = '0x2222222222222222222222222222222222222222';
+    const agent = (root: string | null) =>
+      http.get('/api/boros/agent', () =>
+        HttpResponse.json(env({ configured: root !== null, root, rootMasked: null, accountId: 1, expiry: null, expired: false, canProvision: true, approval: 'approved' })),
+      );
+
+    afterEach(() => localStorage.clear());
+
+    it('shows in view-only mode', async () => {
+      localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: B, walletUpgraded: true }));
+      server.use(agent(A));
+      renderTwap(twapJob());
+      expect(await screen.findByText(NOTE)).toBeTruthy();
+    });
+
+    it('shows when logged out', async () => {
+      server.use(agent(null));
+      renderTwap(twapJob());
+      expect(await screen.findByText(NOTE)).toBeTruthy();
+    });
+
+    it('is absent in normal mode', async () => {
+      localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: A, walletUpgraded: true }));
+      server.use(agent(A));
+      renderTwap(twapJob());
+      await screen.findByText(/TWAP · ETH pair open/);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(screen.queryByText(NOTE)).toBeNull();
+    });
+  });
 });

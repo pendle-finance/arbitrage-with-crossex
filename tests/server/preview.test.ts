@@ -226,6 +226,89 @@ describe('POST /api/preview with twap', () => {
     });
   });
 
+  describe('close perps with unequal legs', () => {
+    const rule = (symbol: string, lot: string) => ({
+      symbol,
+      exchange_type: symbol.split('_')[0],
+      business_type: 'FUTURE',
+      state: 'live',
+      min_size: lot,
+      min_notional: '10',
+      lot_size: lot,
+      tick_size: '0.1',
+      max_num_orders: '100',
+      max_market_size: null,
+      max_limit_size: null,
+      contract_size: '1',
+      liquidation_fee: '0.001',
+      delist_time: '0',
+    });
+    const position = (symbol: string, qty: string, mark: string) => ({
+      symbol,
+      position_side: Number(qty) < 0 ? 'SHORT' : 'LONG',
+      position_qty: qty,
+      position_value: '1000',
+      entry_price: mark,
+      mark_price: mark,
+      leverage: '5',
+      upnl: '0',
+      funding_fee: '0',
+      fee: '0',
+      initial_margin: '200',
+    });
+    const closeStack = (coin: string, mark: string, held: Array<[string, string, string]>) => {
+      app = makeTestApp();
+      mockGateGet('/rule/symbols', { body: held.map(([symbol, , lot]) => rule(symbol, lot)), times: 10 });
+      mockGateGet('/fee', { fixture: 'fee.json', times: 10 });
+      mockGateGet('/positions', { body: held.map(([symbol, qty]) => position(symbol, qty, mark)), times: 10 });
+      mockSpotTicker(`${coin}_USDT`, mark);
+    };
+    const close = (symbol: string, qty?: string) => ({ kind: 'close-position', symbol, slippagePct: 0.5, pairGroupId: 'pg', ...(qty ? { qty } : {}) });
+
+    it('gate 4.40 against hyperliquid 4.03 btc plans 4.03 on both legs and leaves 0.37 on gate', async () => {
+      closeStack('BTC', '90000', [
+        ['GATE_FUTURE_BTC_USDT', '4.4', '0.0001'],
+        ['HYPERLIQUID_FUTURE_BTC_USDC', '-4.03', '0.00001'],
+      ]);
+
+      const whole = await previewTwap([close('GATE_FUTURE_BTC_USDT'), close('HYPERLIQUID_FUTURE_BTC_USDC')]);
+      expect(whole.data.twap).toBeNull();
+
+      const { status, data } = await previewTwap([close('GATE_FUTURE_BTC_USDT', '4.03'), close('HYPERLIQUID_FUTURE_BTC_USDC')]);
+      expect(status).toBe(200);
+      expect(data.previews.map((p) => Number(p.qty))).toEqual([4.03, 4.03]);
+      expect(data.previews.map((p) => p.reduceOnly)).toEqual([true, true]);
+      expect(data.twap?.refusal).toBeNull();
+      expect(data.twap?.plan).toMatchObject({ slices: 12, sliceQty: '0.3358', lastQty: '0.3362' });
+      expect(Number(data.previews[0].closing?.positionQty) - Number(data.previews[0].qty)).toBeCloseTo(0.37, 12);
+    });
+
+    it('a $6M book of 1,000.37 against 1,000 eth plans 1000 on both legs', async () => {
+      closeStack('ETH', '6000', [
+        ['GATE_FUTURE_ETH_USDT', '1000.37', '0.001'],
+        ['HYPERLIQUID_FUTURE_ETH_USDC', '-1000', '0.0001'],
+      ]);
+
+      const { status, data } = await previewTwap([close('GATE_FUTURE_ETH_USDT', '1000'), close('HYPERLIQUID_FUTURE_ETH_USDC')]);
+
+      expect(status).toBe(200);
+      expect(data.previews.map((p) => Number(p.qty))).toEqual([1000, 1000]);
+      expect(data.twap?.refusal).toBeNull();
+      expect(data.twap?.plan).toMatchObject({ slices: 12, sliceQty: '83.333', lastQty: '83.337' });
+    });
+
+    it('equal legs plan their whole size', async () => {
+      closeStack('BTC', '90000', [
+        ['GATE_FUTURE_BTC_USDT', '4.03', '0.0001'],
+        ['HYPERLIQUID_FUTURE_BTC_USDC', '-4.03', '0.00001'],
+      ]);
+
+      const { data } = await previewTwap([close('GATE_FUTURE_BTC_USDT'), close('HYPERLIQUID_FUTURE_BTC_USDC')]);
+
+      expect(data.twap?.plan).toMatchObject({ slices: 12, sliceQty: '0.3358', lastQty: '0.3362' });
+    });
+  });
+
   it('a twap with one field or a wrong type is a 400', async () => {
     mockPairStack();
 

@@ -25,7 +25,7 @@ import { refuse } from '../errorReply';
 import { perpLimitBreach } from '../perpLimit';
 import { dealLockFor, isChildOf, type Job } from '../rebalanceJob';
 import { accountFeeRowsOf, cachedTradesOf } from '../dealFees';
-import { feesOf } from '../twapRun';
+import { feesOf, repegRefusalOf } from '../twapRun';
 import { positionLimitFor } from './leverage';
 import { autoMakerLeg, readChildFees } from './rebalance';
 
@@ -217,11 +217,31 @@ export async function createDeal(deps: AppDeps, raw: DealBody): Promise<DealOutc
 
 type DealFees = { rows: VenueFeeRow[]; read: Record<string, number> };
 
+const FEE_READ_DEADLINE_MS = 1_500;
+const FEE_READ_RETRY_MS = 10_000;
+const feeReadFailedAt = new WeakMap<AppDeps, number>();
+
+async function readFeesWithin(deps: AppDeps, pairs: PairRow[]): Promise<Record<string, number>> {
+  const failedAt = feeReadFailedAt.get(deps);
+  if (failedAt !== undefined && Date.now() - failedAt < FEE_READ_RETRY_MS) return {};
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('fee read timed out')), FEE_READ_DEADLINE_MS);
+  });
+  try {
+    const read = readChildFees(deps.engine!.store, cachedTradesOf(deps), pairs.map((pair) => pair.id));
+    read.catch(() => undefined);
+    return await Promise.race([read, deadline]);
+  } catch {
+    feeReadFailedAt.set(deps, Date.now());
+    return {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function dealFeesFor(deps: AppDeps, pairs: PairRow[]): Promise<DealFees> {
-  const [rows, read] = await Promise.all([
-    accountFeeRowsOf(deps),
-    readChildFees(deps.engine!.store, cachedTradesOf(deps), pairs.map((pair) => pair.id)).catch(() => ({}) as Record<string, number>),
-  ]);
+  const [rows, read] = await Promise.all([accountFeeRowsOf(deps), readFeesWithin(deps, pairs)]);
   return { rows, read };
 }
 
@@ -238,6 +258,7 @@ function dealView(store: Store, pair: PairRow, fees: DealFees) {
     ),
     avgPrice: { a: store.avgFillPrice(pair.id, 'A'), b: store.avgFillPrice(pair.id, 'B') },
     endedAt: pair.mode === 'DONE' && resolved.length > 0 ? Math.max(...resolved) : null,
+    repegRefused: pair.mode === 'OPENING' && repegRefusalOf(orders) ? parseSymbol(pair.a.contract).exchange : null,
   };
 }
 

@@ -22,8 +22,6 @@ import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
 import { AffixedInput, EstimateCard, EstimateRow, LeverageValue } from './PairTicketBits';
 import {
   estimateMargin,
-  feeAmount,
-  feeKind,
   PREFLIGHT_MARGIN_BUFFER,
   PreviewFallback,
   SlippageBadge,
@@ -31,6 +29,7 @@ import {
   ViolationList,
 } from './previewBits';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
+import { BookToggle, fmtTradeCost, OneLegBook, PlanLine } from './TicketEstimateBits';
 import { useTradeFlowOptional } from './TradeFlow';
 import { TRACKED_PRICE_TOLERANCE } from './trackedPriceDrift';
 import { TwapArea, twapControlOf, useTwapInput } from './TwapArea';
@@ -51,6 +50,7 @@ export function SingleTicket() {
   const [sizeStr, setSizeStr] = useState('');
   const [typedPrice, setTypedPrice] = useState<string | null>(null);
   const [reduceOnly, setReduceOnly] = useState(false);
+  const [showBook, setShowBook] = useState(false);
   const taker = useTakerAfter();
   const [repeg, setRepeg] = useState<Repeg>(REPEG_DEFAULT_BP);
   const twap = useTwapInput();
@@ -396,32 +396,61 @@ export function SingleTicket() {
           estimating={estimating}
           isError={preview.isError}
           sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
+          aside={<BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} />}
         >
           {p ? (
             <>
-              {type === 'MARKET' && p.fillEstimate && (
+              {type === 'LIMIT' ? (
                 <EstimateHeadline
-                  label={t('trade.single.tentativeFill')}
-                  sub={t('trade.single.fillMeta', {
-                    source: t(`trade.single.source.${p.fillEstimate.source}` as const),
-                    confidence: t(`trade.single.confidence.${p.fillEstimate.confidence}` as const),
-                  })}
-                  value={
-                    <span className="flex items-baseline gap-1.5">
-                      {sig(p.fillEstimate.avgPrice)}
-                      <span className="text-[12px] font-medium">
-                        <SlippageBadge est={p.fillEstimate} />
-                      </span>
-                    </span>
-                  }
+                  label={t('pairTicket.bits.tradeCost')}
+                  sub={t('pairTicket.bits.maker')}
+                  value={fmtTradeCost(p.fees?.est.maker ?? p.fees?.est.taker ?? null, p.fees?.quote)}
+                />
+              ) : (
+                <EstimateHeadline
+                  label={t('pairTicket.bits.tradeCost')}
+                  sub={t('trade.ticketEstimate.taker')}
+                  value={fmtTradeCost(p.fees?.est.taker ?? p.fees?.est.maker ?? null, p.fees?.quote)}
                 />
               )}
-              {type === 'LIMIT' && p.price && (
-                <EstimateHeadline
-                  label={t('trade.single.restsAt')}
-                  sub={t('trade.single.restsAtSub')}
-                  value={sig(p.price)}
+              <div className="flex flex-col gap-1.5">
+                <PlanLine
+                  side={isLong ? 'LONG' : 'SHORT'}
+                  symbol={p.symbol}
+                  role={type === 'LIMIT' ? 'rests' : 'market'}
+                  qty={p.qty}
                 />
+                {sizeMode === 'usdt' && p.estNotional > 0 && p.estNotional < sizeNum - 1e-9 && (
+                  <span className="text-[11px] text-amber-400">
+                    {t('trade.single.realNotional', { amount: fmtUsd(p.estNotional) })}
+                  </span>
+                )}
+                {type === 'MARKET' && p.fillEstimate && (
+                  <EstimateRow
+                    label={t('trade.single.tentativeFill')}
+                    sub={t('trade.single.fillMeta', {
+                      source: t(`trade.single.source.${p.fillEstimate.source}` as const),
+                      confidence: t(`trade.single.confidence.${p.fillEstimate.confidence}` as const),
+                    })}
+                    value={
+                      <span className="flex items-baseline gap-1.5">
+                        {sig(p.fillEstimate.avgPrice)}
+                        <SlippageBadge est={p.fillEstimate} />
+                      </span>
+                    }
+                  />
+                )}
+              </div>
+              {showBook && symbol && (
+                <div className="pt-1">
+                  <OneLegBook
+                    symbol={symbol}
+                    side={side}
+                    limitPx={type === 'LIMIT' && p.price ? Number(p.price) : null}
+                    fill={type === 'MARKET' ? p.fillEstimate : undefined}
+                    estimating={estimating}
+                  />
+                </div>
               )}
               {type === 'MARKET' && p.fillEstimate?.partialDepth && (
                 <div
@@ -437,24 +466,12 @@ export function SingleTicket() {
                 </div>
               )}
               <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
-                {p.qty && (
-                  <EstimateRow
-                    label={t('trade.single.qtyLabel')}
-                    sub={
-                      sizeMode === 'usdt' && p.estNotional > 0 && p.estNotional < sizeNum - 1e-9 ? (
-                        <span className="text-amber-400">{t('trade.single.realNotional', { amount: fmtUsd(p.estNotional) })}</span>
-                      ) : undefined
-                    }
-                    value={`${qtyGrouped(p.qty)}${base ? ` ${base}` : ''}`}
-                  />
-                )}
-                <EstimateRow label={t('trade.single.estFee')} sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
                 <EstimateRow
                   label={t('trade.single.leverage')}
                   value={<LeverageValue text={levMax > 0 ? `${levMax}x` : symbol ? t('common.loading') : null} />}
                 />
                 <EstimateRow
-                  label={t('trade.single.marginRequired')}
+                  label={t('common.margin')}
                   title={t('trade.single.marginTitle')}
                   value={marginRequired !== null ? `≈ ${fmtUsd(marginRequired)}` : '—'}
                   strong

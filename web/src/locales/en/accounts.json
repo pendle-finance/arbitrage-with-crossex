@@ -349,7 +349,8 @@
       "start": "Start TWAP close",
       "reduceOnly": "Reduce-only. Each fill is hedged at once.",
       "marketSlippage": "Market slippage",
-      "marketSlippageHint": "The most the market step may move the price."
+      "marketSlippageHint": "The most the market step may move the price.",
+      "restOpen": "<n>{{qty}} {{coin}}</n> {{venue}} {{side}} stays open. Close it as one leg."
     }
   },
   "tracked": {

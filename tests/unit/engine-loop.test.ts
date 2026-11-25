@@ -1679,6 +1679,27 @@ describe('resolveDeal: close and reopen on one contract', () => {
 });
 
 describe('an order-count refusal on a re-peg', () => {
+  it('leaves no order resting once refused, and the next accepted order rests alone', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    await stepChecked(w);
+    w.venue.nextCreate = ['reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR'];
+    w.venue.bestA = '2501.5';
+    const liveOnVenue = () => [...w.venue.orders.values()].filter((o) => o.rawStatus === 'NEW' || o.rawStatus === 'OPEN');
+    const refusedRow = () =>
+      w.store.listOrders(w.pairId).find((o) => o.closeReason === 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR');
+    for (let i = 0; i < 90 && !refusedRow(); i++) await stepChecked(w);
+    const refused = refusedRow()!;
+    expect(refused).toBeDefined();
+    expect(liveOnVenue()).toHaveLength(0);
+    expect(w.store.listOrders(w.pairId).filter((o) => o.state === 'OPEN' || o.state === 'PENDING')).toHaveLength(0);
+    for (let i = 0; i < 90 && liveOnVenue().length === 0; i++) await stepChecked(w);
+    expect(liveOnVenue()).toHaveLength(1);
+    const open = w.store.listOrders(w.pairId).filter((o) => o.leg === 'A' && o.kind === 'maker' && o.state === 'OPEN');
+    expect(open).toHaveLength(1);
+    expect(open[0].seq).toBeGreaterThan(refused.seq);
+  });
+
   it('keeps the old price, sends no storm and keeps one live order', async () => {
     const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
     w.store.updatePair(w.pairId, { repegBehindBp: 5 });

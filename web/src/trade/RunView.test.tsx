@@ -321,7 +321,7 @@ describe('RunView, TWAP running', () => {
   it('refused re-peg line', () => {
     const child = restingChild({ makerLeg: 'b', side: 'SELL', repegRefused: { kind: 'order-allowance', at: NOW - 5_000 } });
     renderRun(job({ child }, { makerLeg: 'b', takerAfterSec: null }));
-    expect(screen.getByText('Re-peg refused by Hyperliquid · resting at 1,729.80')).toBeTruthy();
+    expect(screen.getByText('Re-peg refused by Hyperliquid · no order resting · retry in 1 min')).toBeTruthy();
   });
 
   it('delever twap shows graph and price box', async () => {
@@ -492,5 +492,38 @@ describe('RunView, fix round', () => {
   it('a sleep over days names the dates', () => {
     renderRun(paused({ paused: false, haltKind: 'sleep', sleptFrom: at(14, 11) - 2 * 86_400_000, sleptTo: at(14, 51), updatedAt: at(14, 51) }));
     expect(screen.getByText(/^This Mac slept from 23 Nov 14:11 to 25 Nov 14:51\./)).toBeTruthy();
+  });
+});
+
+describe('RunView, own account line', () => {
+  const NOTE = "This TWAP runs on this terminal's Gate account.";
+  const A = '0x1111111111111111111111111111111111111111';
+  const B = '0x2222222222222222222222222222222222222222';
+  const agent = (root: string | null) =>
+    http.get('/api/boros/agent', () =>
+      HttpResponse.json(env({ configured: root !== null, root, rootMasked: null, accountId: 1, expiry: null, expired: false, canProvision: true, approval: 'approved' })),
+    );
+
+  afterEach(() => localStorage.clear());
+
+  it('shows in view-only mode', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: B, walletUpgraded: true }));
+    server.use(agent(A));
+    renderRun(job());
+    expect(await screen.findByText(NOTE)).toBeTruthy();
+  });
+
+  it('shows when logged out', async () => {
+    server.use(agent(null));
+    renderRun(job());
+    expect(await screen.findByText(NOTE)).toBeTruthy();
+  });
+
+  it('is absent in normal mode', async () => {
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: A, walletUpgraded: true }));
+    server.use(agent(A));
+    renderRun(job());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText(NOTE)).toBeNull();
   });
 });

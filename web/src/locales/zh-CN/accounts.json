@@ -345,7 +345,8 @@
       "start": "开始 TWAP 平仓",
       "reduceOnly": "只减仓。每笔成交立即对冲。",
       "marketSlippage": "市价滑点",
-      "marketSlippageHint": "市价步骤最多可让价格移动的幅度。"
+      "marketSlippageHint": "市价步骤最多可让价格移动的幅度。",
+      "restOpen": "<n>{{qty}} {{coin}}</n> {{venue}} {{side}}仍保持持仓。请按单腿平仓。"
     }
   },
   "tracked": {

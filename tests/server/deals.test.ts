@@ -120,6 +120,25 @@ describe('POST /api/deals', () => {
     expect(view.projection.bFilled).toBe('0.152');
   });
 
+  it('names the venue on the deal view while a re-peg is refused, and clears it once an order is accepted', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    const pair = w.store.getPair('deal-000001')!;
+    const place = (price: string) =>
+      w.store.insertPendingOrder({ pairId: pair.id, leg: 'A', kind: 'maker', side: pair.a.side, qty: pair.targetQty, price, tif: 'poc', now: 1 });
+    const refusedOf = async () => (await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST })).json().data.repegRefused;
+    const refused = place('2400');
+    w.store.updateOrder(pair.id, 'A', refused.seq, { state: 'DEAD', closeReason: 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', resolvedAt: 2 });
+    expect(await refusedOf()).toBe('HYPERLIQUID');
+    const accepted = place('2401');
+    w.store.updateOrder(pair.id, 'A', accepted.seq, { state: 'OPEN' });
+    expect(await refusedOf()).toBeNull();
+  });
+
   it('refuses to start or resume a deal while a rebalance is running, and not while one is halted', async () => {
     const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
     const store = new Store(':memory:');
@@ -1075,6 +1094,39 @@ describe('deal window fee', () => {
     expect(fees.readUsd).toBeCloseTo(0.07, 10);
     expect(fees.estUsd).toBe(0);
     expect(fees.est).toBe(false);
+  });
+
+  it('returns the estimate inside the deadline when the trade read hangs, then skips the read on the next poll', async () => {
+    let reads = 0;
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/fee', { body: feeWire }).persist();
+    gate()
+      .get((uri) => uri.includes('/history_trades'))
+      .query(true)
+      .delay(8000)
+      .reply(200, () => {
+        reads += 1;
+        return [];
+      })
+      .persist();
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    await tickPair(w.loop, 'deal-000001');
+    w.store.updateOrder('deal-000001', 'A', 1, { venueOrderId: 'v1', cumQty: '0.1', avgFillPrice: '2500' });
+    const started = Date.now();
+    const first = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(first.json().data.fees.est).toBe(true);
+    expect(first.json().data.fees.estUsd).toBeCloseTo(0.1 * 2500 * 0.00015, 10);
+    const readsAfterFirst = reads;
+    const again = Date.now();
+    const second = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - again).toBeLessThan(500);
+    expect(second.json().data.fees.est).toBe(true);
+    expect(reads).toBe(readsAfterFirst);
   });
 });
 

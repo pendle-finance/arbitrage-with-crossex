@@ -84,6 +84,10 @@
     "long": "Long",
     "short": "Short"
   },
+  "ticketEstimate": {
+    "taker": "Taker",
+    "atMarket": "{{side}} {{venue}} · at market"
+  },
   "symbol": {
     "quickPick": "Quick pick coin",
     "otherCoin": "Other coin",
@@ -237,6 +241,7 @@
     "adverse": "Adverse"
   },
   "twap": {
+    "ownAccount": "This TWAP runs on this terminal's Gate account.",
     "area": {
       "title": "TWAP",
       "priceImpact": "Price impact",
@@ -376,7 +381,7 @@
       "resume": "Resume",
       "restarted": "The app restarted at {{time}}. Slice {{i}} stopped: its rest is cancelled and what filled is hedged.",
       "slept": "This Mac slept from {{from}} to {{to}}. Slice {{i}} stopped: its rest is cancelled and what filled is hedged.",
-      "repegRefused": "Re-peg refused by {{venue}} · resting at {{price}}",
+      "repegRefused": "Re-peg refused by {{venue}} · no order resting · retry in 1 min",
       "holdOpenHedge": "Hold to open {{venue}} {{side}} {{qty}} {{coin}} at market",
       "holdCloseFilled": "Hold to close {{venue}} {{side}} {{qty}} {{coin}} at market",
       "titlePairOpen": "TWAP · {{coin}} pair open",

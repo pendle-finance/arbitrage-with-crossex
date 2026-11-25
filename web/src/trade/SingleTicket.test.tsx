@@ -176,8 +176,8 @@ describe('SingleTicket', () => {
     expect(await screen.findByText(/Est\. avg fill/)).toBeInTheDocument();
     expect(screen.getByText('65010.5')).toBeInTheDocument();
     expect(screen.getByText(/Thin book/)).toBeInTheDocument();
-    expect(screen.getByText('0.0488 USDT')).toBeInTheDocument();
-    expect(screen.getByText('Taker · 5.0 bps')).toBeInTheDocument();
+    expect(screen.getByText('≈ 0.05 USDT')).toBeInTheDocument();
+    expect(screen.getByText('Taker')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Execute now' })).toBeEnabled();
   });
 
@@ -235,7 +235,8 @@ describe('SingleTicket', () => {
     await pickBinanceBtc();
     await userEvent.type(screen.getByLabelText('Size'), '100');
 
-    expect(await screen.findByText(/^Post-only · (?!fills)/)).toBeInTheDocument();
+    expect(await screen.findByText('≈ 0.02 USDT')).toBeInTheDocument();
+    expect(screen.getByText('Maker')).toBeInTheDocument();
     expect(screen.queryByText(/maker–taker/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Limit orders are post-only/)).toBeInTheDocument();
   });
@@ -281,7 +282,42 @@ describe('no Review card on a single order', () => {
 
     await waitFor(() => expect(screen.queryByText('Review')).toBeNull());
     expect(screen.queryByRole('tooltip')).toBeNull();
-    expect(await screen.findByText('Est. fee')).toBeInTheDocument();
+    expect(await screen.findByText('Trade cost')).toBeInTheDocument();
+  });
+});
+
+describe('SingleTicket: the Estimate card', () => {
+  const fees = { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { maker: 13.84, taker: 34.6 } };
+
+  it('limit shows the maker trade cost, the plan line, a Book button, leverage and margin', async () => {
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), echoPreviewHandler({ overrides: { fees, qty: '1.5' } }));
+    renderWithClient(<SingleTicket />);
+    await pickBinanceBtc();
+    await userEvent.type(screen.getByPlaceholderText(/Size \(BTC\)/), '1.5');
+
+    expect(await screen.findByText('≈ 13.84 USDT')).toBeInTheDocument();
+    expect(screen.getByText('Trade cost')).toBeInTheDocument();
+    expect(screen.getByText('Maker')).toBeInTheDocument();
+    expect(screen.getByText(/Binance · rests as maker/)).toBeInTheDocument();
+    expect(screen.getByText('1.5 BTC')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Book' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('Leverage')).toBeInTheDocument();
+    expect(screen.getByText('Margin')).toBeInTheDocument();
+    expect(screen.queryByText('Rests at')).toBeNull();
+    expect(screen.queryByText('Est. fee')).toBeNull();
+    expect(screen.queryByText('Margin required')).toBeNull();
+  });
+
+  it('market shows the taker trade cost and the at-market plan line', async () => {
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), echoPreviewHandler({ overrides: { fees, qty: '1.5' } }));
+    renderWithClient(<SingleTicket />);
+    await pickBinanceBtc();
+    await marketMode();
+    await userEvent.type(screen.getByPlaceholderText(/Size \(BTC\)/), '1.5');
+
+    expect(await screen.findByText('≈ 34.60 USDT')).toBeInTheDocument();
+    expect(screen.getByText('Taker')).toBeInTheDocument();
+    expect(screen.getByText(/Binance · at market/)).toBeInTheDocument();
   });
 });
 
@@ -334,7 +370,7 @@ describe('SingleTicket with TWAP', () => {
     expect(screen.getByRole('radio', { name: 'Market' })).toBeInTheDocument();
     expect(screen.getByLabelText('Limit price')).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('Size'), '100');
-    expect(await screen.findByText('Est. fee')).toBeInTheDocument();
+    expect(await screen.findByText('Trade cost')).toBeInTheDocument();
   });
 
   it('long short with no buy sell', async () => {

@@ -49,7 +49,7 @@ function reportSleep(deps: LoopDeps, gap: SleepGap): void {
   }
 }
 
-const isOrderAllowanceRefusal = (label: string): boolean =>
+export const isOrderAllowanceRefusal = (label: string): boolean =>
   classifyGateError({ response: { data: { label } } }).category === 'order-allowance';
 
 // Open-world status decoder: known strings map; anything else is quarantined,

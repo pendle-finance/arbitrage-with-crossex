@@ -20,7 +20,7 @@ import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip } from '../components/VenueChip';
-import { fieldValue, fmtUsd, num, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
 import type { DealOpts } from './deal';
 import { EstimateHeadline } from './EstimateHeadline';
@@ -28,6 +28,7 @@ import { ExecuteControl } from './ExecuteControl';
 import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { feeAmount, feeKind, PreviewFallback, ViolationList } from './previewBits';
+import { BookToggle, fmtTradeCost, OneLegBook, PlanLine } from './TicketEstimateBits';
 import { FieldLabel } from './SymbolCombobox';
 import { TwapArea, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
@@ -259,6 +260,7 @@ export function ClosePopover({
 
   /** The tolerance editor — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
+  const [showBook, setShowBook] = useState(false);
   const { exchange } = parseSymbol(position.symbol);
   const notionalUsd = markOk ? posQty * mark : null;
   const heldSide: 'LONG' | 'SHORT' = Number(position.positionQty) < 0 ? 'SHORT' : 'LONG';
@@ -439,7 +441,12 @@ export function ClosePopover({
         )}
 
         {action && (
-          <EstimateCard dataUpdatedAt={preview.dataUpdatedAt} estimating={estimating} isError={preview.isError}>
+          <EstimateCard
+            dataUpdatedAt={preview.dataUpdatedAt}
+            estimating={estimating}
+            isError={preview.isError}
+            aside={twapOn ? <BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} /> : undefined}
+          >
             {p ? (
               <>
                 <EstimateHeadline
@@ -448,19 +455,26 @@ export function ClosePopover({
                   value={upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
                 />
                 {twapOn ? (
-                  <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
-                    <EstimateRow
-                      label={t('pairTicket.estimate.legRole.rests', {
-                        side: t(heldSide === 'LONG' ? 'common.longUpper' : 'common.shortUpper'),
-                        venue: prettyVenue(exchange),
-                      })}
-                      value={p.qty ? `${qtyGrouped(p.qty)} ${base}` : '—'}
-                    />
-                    <EstimateRow
-                      label={t('pairTicket.bits.tradeCost')}
-                      value={makerFee !== null ? `≈ ${num(makerFee)} USDT` : '—'}
-                    />
-                  </div>
+                  <>
+                    <PlanLine side={heldSide} symbol={position.symbol} role="rests" qty={p.qty} />
+                    {showBook && (
+                      <div className="pt-1">
+                        <OneLegBook
+                          symbol={position.symbol}
+                          side={p.side}
+                          limitPx={restPrice > 0 ? restPrice : null}
+                          fill={undefined}
+                          estimating={estimating}
+                        />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
+                      <EstimateRow
+                        label={t('pairTicket.bits.tradeCost')}
+                        value={fmtTradeCost(makerFee, p.fees?.quote)}
+                      />
+                    </div>
+                  </>
                 ) : (
                 <>
                 <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">

@@ -223,6 +223,8 @@ export function dealRunProps(
   }
   const latestReason = [...orders].sort((x, y) => y.createdAt - x.createdAt).find((o) => o.venueReason);
   if (latestReason) lines.push(<span className="text-ink-400">{venueReasonText(latestReason.venueReason)}</span>);
+  const refused = view.repegRefused ?? null;
+  if (refused) lines.push(<span className="text-amber-300">{t('trade.twap.run.repegRefused', { venue: prettyVenue(refused) })}</span>);
   if (report && /crossing the market/i.test(report.reason)) {
     lines.push(
       <span role="alert" className="block rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 leading-relaxed text-amber-200">
@@ -263,10 +265,10 @@ export function dealRunProps(
   }
 
   const rows: RunRow[] = [];
-  if (opening && pair.deadlineAt !== null) {
+  if (opening && !refused && pair.deadlineAt !== null) {
     const left = pair.deadlineAt - now;
     rows.push({ label: t('trade.twap.run.limitResting'), value: t('trade.deal.untilConvert', { time: left <= 0 ? t('trade.deal.now') : clockSpan(left / 1000) }) });
-  } else if (opening) {
+  } else if (opening && !refused) {
     rows.push({ label: t('trade.twap.run.noMarket'), value: '' });
   }
   rows.push(...filledRows(), ...avgRows(), ...slippageRow(t('trade.twap.run.slippageSoFar')), ...gapRow(unhedged), {

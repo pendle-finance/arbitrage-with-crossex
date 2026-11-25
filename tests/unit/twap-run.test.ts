@@ -678,6 +678,33 @@ describe('twapViewOf', () => {
     expect(view.child?.behindPct).toBeCloseTo(3 / 3003, 10);
   });
 
+  it('says a re-peg was refused until a new maker order is accepted', async () => {
+    const job = startJob(ethOpen('60'));
+    await pass(job);
+    const id = `${job.id}-s1-1`;
+    const pair = w.store.getPair(id) as PairRow;
+    const place = (price: string) =>
+      w.store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'maker', side: pair.a.side, qty: pair.targetQty, price, tif: 'poc', now: w.t });
+    const refusal = async () => {
+      const read = w.jobs.read() as Job;
+      return twapViewOf(read, await loadTwapChildren(w.deps, read)).child?.repegRefused;
+    };
+    const first = place('3000');
+    w.store.updateOrder(id, 'A', first.seq, { state: 'CLOSED', closeReason: 'cancelled', resolvedAt: w.t });
+    expect(await refusal()).toBeNull();
+    const refused = place('3001');
+    w.store.updateOrder(id, 'A', refused.seq, { state: 'DEAD', closeReason: 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', resolvedAt: w.t + 500 });
+    expect(await refusal()).toEqual({ kind: 'order-allowance', at: w.t + 500 });
+    const retry = place('3000');
+    expect(await refusal()).toEqual({ kind: 'order-allowance', at: w.t + 500 });
+    w.store.updateOrder(id, 'A', retry.seq, { state: 'OPEN' });
+    expect(await refusal()).toBeNull();
+    w.store.updateOrder(id, 'A', retry.seq, { state: 'CLOSED', closeReason: 'cancelled', resolvedAt: w.t + 9_000 });
+    const margin = place('3002');
+    w.store.updateOrder(id, 'A', margin.seq, { state: 'DEAD', closeReason: 'rejected:INSUFFICIENT_MARGIN', resolvedAt: w.t + 9_500 });
+    expect(await refusal()).toBeNull();
+  });
+
   it('closes name each leg by the position it closes', () => {
     const job = startJob(ethClose('60'));
     expect(twapViewOf(job, []).legs.map((leg) => [leg.symbol, leg.side, leg.reduceOnly])).toEqual([

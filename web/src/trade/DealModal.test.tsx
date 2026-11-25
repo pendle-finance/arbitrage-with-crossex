@@ -74,6 +74,28 @@ describe('DealModal', () => {
     expect(screen.getByText('Running')).toBeInTheDocument();
   });
 
+  const refusedMaker: DealOrder = {
+    ...dealOrder('A', 'maker'),
+    seq: 2,
+    state: 'DEAD',
+    cumQty: '0',
+    closeReason: 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR',
+  };
+  const refusedLine = 'Re-peg refused by Gate · no order resting · retry in 1 min';
+
+  it('a refused re-peg says no order rests', async () => {
+    renderModal({ ...makeDealView({ pair: { mode: 'OPENING', deadlineAt: null }, orders: [dealOrder('A', 'maker'), refusedMaker] }), repegRefused: 'GATE' });
+    expect(await screen.findByText(refusedLine)).toBeInTheDocument();
+    expect(screen.queryByText('Limit resting · no market order')).not.toBeInTheDocument();
+  });
+
+  it('the refused line goes once a new maker order is accepted', async () => {
+    const accepted: DealOrder = { ...dealOrder('A', 'maker'), seq: 3, state: 'OPEN', cumQty: '0', closeReason: null };
+    renderModal(makeDealView({ pair: { mode: 'OPENING', deadlineAt: null }, orders: [dealOrder('A', 'maker'), refusedMaker, accepted] }));
+    expect(await screen.findByText('Limit resting · no market order')).toBeInTheDocument();
+    expect(screen.queryByText(refusedLine)).not.toBeInTheDocument();
+  });
+
   it('first line under never', async () => {
     renderModal(makeDealView({ pair: { mode: 'OPENING', deadlineAt: null } }));
     expect(await screen.findByText('Limit resting · no market order')).toBeInTheDocument();

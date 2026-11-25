@@ -1318,6 +1318,7 @@ export interface DealView {
   fees: { readUsd: number; estUsd: number; totalUsd?: number; est: boolean };
   avgPrice: { a: string | null; b: string | null };
   endedAt: number | null;
+  repegRefused?: string | null;
 }
 
 export interface DealReport {

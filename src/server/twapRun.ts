@@ -8,8 +8,8 @@ import type { DealRequest } from '../engine/create';
 import type { Store } from '../engine/db';
 import { hasMarginRefusalLabel, project } from '../engine/decide';
 import { type Fx, FX_DECIMALS, FX_ZERO, fx, fxMax, fxMin, fxStr } from '../engine/fx';
-import { commands, SLEEP_GAP_MS } from '../engine/loop';
-import { type OrderRow, type PairMode, type PairRow, type Side, TUNING } from '../engine/types';
+import { commands, isOrderAllowanceRefusal, SLEEP_GAP_MS } from '../engine/loop';
+import { type OrderRow, type PairMode, type PairRow, type Side } from '../engine/types';
 import {
   childIdFor,
   HALT_TEXT,
@@ -612,8 +612,17 @@ function childViewOf(id: string | null, slice: number, makerLeg: 'a' | 'b', chil
     restPrice,
     bestPrice,
     behindPct,
-    repegRefused: pair.repegNotBefore > 0 ? { kind: 'order-allowance', at: pair.repegNotBefore - TUNING.REPEG_REFUSED_WAIT_MS } : null,
+    repegRefused: repegRefusalOf(view.orders),
   };
+}
+
+export function repegRefusalOf(orders: OrderRow[]): TwapChildView['repegRefused'] {
+  const last = orders
+    .filter((order) => order.leg === 'A' && order.kind === 'maker' && order.state !== 'PENDING')
+    .reduce<OrderRow | null>((top, order) => (top && top.seq > order.seq ? top : order), null);
+  const label = last?.state === 'DEAD' && last.closeReason?.startsWith('rejected:') ? last.closeReason.slice('rejected:'.length) : null;
+  if (!last || label === null || !isOrderAllowanceRefusal(label)) return null;
+  return { kind: 'order-allowance', at: last.resolvedAt ?? last.createdAt };
 }
 
 function borosViewOf(job: Job, slice: number): TwapBorosView | null {

@@ -576,6 +576,35 @@ describe('ClosePopover: TWAP', () => {
     expect(screen.getByText('Realized as each slice fills')).toBeInTheDocument();
   });
 
+  it('twap on shows the plan line, the maker trade cost and a Book button that opens the graph', async () => {
+    server.use(
+      ...baseHandlers(),
+      twapPreviewHandler(),
+      http.get('/api/books/:symbol', ({ params }) =>
+        HttpResponse.json(env({ symbol: String(params.symbol), bestBid: 1729.9, bestAsk: 1730, mid: 1729.95 })),
+      ),
+    );
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+    await turnOnTwap();
+
+    expect(await screen.findByText('≈ 51.90 USDT')).toBeInTheDocument();
+    expect(screen.getByText('Trade cost')).toBeInTheDocument();
+    expect(screen.getByText(/Gate · rests as maker/)).toBeInTheDocument();
+    expect(screen.getAllByText('150 ETH').length).toBeGreaterThan(1);
+    const book = screen.getByRole('button', { name: 'Book' });
+    expect(book).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(book);
+    expect(book).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('SELL')).toBeNull();
+  });
+
+  it('twap off has no Book button', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+    expect(await screen.findByText('Reduce-only IOC')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
+  });
+
   it('names the leg by the position it closes, never buy or sell', async () => {
     server.use(...baseHandlers(), twapPreviewHandler());
     renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);

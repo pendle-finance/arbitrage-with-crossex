@@ -14,6 +14,7 @@ import { Spinner } from '../components/Spinner';
 import { useToast } from '../components/Toast';
 import { useRebalanceOpener } from '../panels/rebalanceOpener';
 import { useTradeFlow } from './TradeFlow';
+import { useOwnAccountNote } from './RunView';
 import { runShapeOf } from './RunViewBits';
 import { isTwapChildId, liveTwapJob } from './twapJob';
 import { localizeServerText } from '../i18n/serverMessages';
@@ -68,6 +69,7 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
   const twap = job.twap!;
   const key = stripKeyOf(job);
   const tone = STRIP_TONES[stripToneOf(key)];
+  const ownAccount = useOwnAccountNote();
   const { what, makerVenue, hedgeVenue } = runLabelOf(job, t);
   const venue = key === 'hedge' ? hedgeVenue : makerVenue;
   const size = key === 'refused' ? (job.sizeRefusal ?? null) : null;
@@ -89,6 +91,7 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
           {icon}
           <span className="num">{text}</span>
         </span>
+        {ownAccount && <span>{t('trade.twap.ownAccount')}</span>}
         <button type="button" className={`btn-ghost-xs ${tone.button}`} onClick={() => open()}>
           {t('trade.recovery.view')}
         </button>

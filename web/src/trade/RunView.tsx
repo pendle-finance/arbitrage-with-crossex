@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
+import { useBorosAgent } from '../api/queries';
+import { useActiveWallet } from '../panels/trackedAddress';
 import type { RebalanceJob, RunLegView, RunOrderView } from '../api/types';
 import { Chip } from '../components/Chip';
 import { t } from '../i18n';
@@ -45,6 +47,13 @@ export interface RunViewProps {
   lines: ReactNode[];
   acts: ReactNode;
   footer: boolean;
+  ownAccount?: boolean;
+}
+
+export function useOwnAccountNote(): boolean {
+  const agent = useBorosAgent();
+  const { viewOnly } = useActiveWallet();
+  return viewOnly || agent.data?.configured === false;
 }
 
 const TITLE_KEY = {
@@ -61,8 +70,9 @@ const marginCoinOf = (leg: RunLegView | undefined): string => (leg && USDC_VENUE
 
 const isMac = (): boolean => typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
-export function RunView({ title, chip, progress, firstLine, rows, graph, priceBox, orders, lines, acts, footer }: RunViewProps) {
+export function RunView({ title, chip, progress, firstLine, rows, graph, priceBox, orders, lines, acts, footer, ownAccount }: RunViewProps) {
   const { t: tr } = useTranslation();
+  const showOwnAccount = useOwnAccountNote();
   const [ordersOpen, setOrdersOpen] = useState(false);
   return (
     <div className="flex flex-col gap-3">
@@ -70,6 +80,7 @@ export function RunView({ title, chip, progress, firstLine, rows, graph, priceBo
         <div className="min-w-0 text-sm font-semibold text-ink-50">{title}</div>
         <div className="shrink-0">{chip}</div>
       </div>
+      {ownAccount && showOwnAccount && <div className="text-[12px] text-ink-300">{tr('trade.twap.ownAccount')}</div>}
       {progress && <ProgressBar ratio={progress.ratio} tone={progress.tone} />}
       {firstLine}
       {rows.length > 0 && (
@@ -234,7 +245,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   }
   if (!pair && (running || halted)) lines.push(t('trade.single.notHedged'));
 
-  const base = { title, chip, progress, graph, priceBox, orders: job.orders ?? [], lines, footer: running || halted };
+  const base = { title, chip, progress, graph, priceBox, orders: job.orders ?? [], lines, footer: running || halted, ownAccount: true };
   const sliceLabel = t('trade.twap.run.slice', { i: slice, n: of });
 
   if (job.status === 'done' || job.status === 'abandoned') {
