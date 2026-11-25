@@ -8,7 +8,7 @@ import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
-import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
+import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
 import { EstimateHeadline } from './EstimateHeadline';
@@ -416,7 +416,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
           </span>
         </td>
         <td className="num py-1.5 text-right text-[12.5px] text-ink-50">
-          {p.fillEstimate ? sig(p.fillEstimate.avgPrice) : isMaker && p.price ? sig(p.price) : '—'}
+          {p.fillEstimate ? sigGrouped(p.fillEstimate.avgPrice) : isMaker && p.price ? sigGrouped(p.price) : '—'}
         </td>
         <td className="num py-1.5 text-right text-[12px] text-ink-300">
           {p.fillEstimate ? <SlippageBadge est={p.fillEstimate} /> : isMaker ? t('pairTicket.bits.rests') : '—'}
@@ -424,7 +424,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
         <td className="num py-1.5 text-right text-[12px] text-ink-50">
           {p.fees ? (
             <>
-              {sig(estFeeOf(p))} <span className="text-[10.5px] text-ink-400">{p.fees.quote}</span>
+              {sigGrouped(estFeeOf(p))} <span className="text-[10.5px] text-ink-400">{p.fees.quote}</span>
             </>
           ) : (
             '—'

@@ -12,7 +12,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { SideChip } from '../components/VenueChip';
 import { SignedNumber } from '../components/SignedNumber';
-import { bps, fmtUsd, sig } from '../lib/fmt';
+import { bps, fmtUsd, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -37,10 +37,10 @@ export function feeText(fees: FeeEstimate | undefined): string {
   if (!fees) return '—';
   const { est, quote } = fees;
   if (est.maker !== undefined && est.taker !== undefined) {
-    return t('pairTicket.fee.rangeText', { maker: sig(est.maker), taker: sig(est.taker), quote });
+    return t('pairTicket.fee.rangeText', { maker: sigGrouped(est.maker), taker: sigGrouped(est.taker), quote });
   }
-  if (est.taker !== undefined) return t('pairTicket.fee.takerText', { amount: sig(est.taker), quote, rate: bps(fees.takerRate) });
-  if (est.maker !== undefined) return t('pairTicket.fee.makerText', { amount: sig(est.maker), quote, rate: bps(fees.makerRate) });
+  if (est.taker !== undefined) return t('pairTicket.fee.takerText', { amount: sigGrouped(est.taker), quote, rate: bps(fees.takerRate) });
+  if (est.maker !== undefined) return t('pairTicket.fee.makerText', { amount: sigGrouped(est.maker), quote, rate: bps(fees.makerRate) });
   return '—';
 }
 
@@ -59,9 +59,9 @@ export function feeKind(fees: FeeEstimate | undefined): string {
 export function feeAmount(fees: FeeEstimate | undefined): string {
   if (!fees) return '—';
   const { est, quote } = fees;
-  if (est.maker !== undefined && est.taker !== undefined) return `${sig(est.maker)}–${sig(est.taker)} ${quote}`;
-  if (est.taker !== undefined) return `${sig(est.taker)} ${quote}`;
-  if (est.maker !== undefined) return `${sig(est.maker)} ${quote}`;
+  if (est.maker !== undefined && est.taker !== undefined) return `${sigGrouped(est.maker)}–${sigGrouped(est.taker)} ${quote}`;
+  if (est.taker !== undefined) return `${sigGrouped(est.taker)} ${quote}`;
+  if (est.maker !== undefined) return `${sigGrouped(est.maker)} ${quote}`;
   return '—';
 }
 
@@ -240,7 +240,7 @@ export function ClosePreviewPanel({
             <span className="flex items-center gap-1.5 text-ink-300">
               <SideChip side={p.side} />
               <span className="text-ink-200">{labelFor(p, i)}</span>
-              <span className="num ml-auto text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
+              <span className="num ml-auto text-ink-100">{p.qty ? qtyGrouped(p.qty) : '—'}</span>
             </span>
             {hedgeAtMarket && i > 0 ? (
               <span className="flex justify-between text-ink-400">
@@ -250,7 +250,7 @@ export function ClosePreviewPanel({
             ) : (
               <span className="flex justify-between text-ink-400">
                 <span title={t('trade.close.limitPxTitle')}>{t('pairTicket.preview.limitPx')}</span>
-                <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
+                <span className="num text-ink-100">{p.price ? sigGrouped(p.price) : '—'}</span>
               </span>
             )}
             {p.fillEstimate && (

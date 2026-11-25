@@ -11,7 +11,7 @@ import {
 import type { ActionInput, Side } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
 import { formatRestPrice } from '../lib/ticks';
@@ -434,7 +434,7 @@ export function SingleTicket() {
                     })}
                     value={
                       <span className="flex items-baseline gap-1.5">
-                        {sig(p.fillEstimate.avgPrice)}
+                        {sigGrouped(p.fillEstimate.avgPrice)}
                         <SlippageBadge est={p.fillEstimate} />
                       </span>
                     }

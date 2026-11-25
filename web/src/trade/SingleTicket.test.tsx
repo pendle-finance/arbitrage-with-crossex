@@ -174,7 +174,7 @@ describe('SingleTicket', () => {
     await userEvent.type(screen.getByLabelText('Size'), '100');
 
     expect(await screen.findByText(/Est\. avg fill/)).toBeInTheDocument();
-    expect(screen.getByText('65010.5')).toBeInTheDocument();
+    expect(screen.getByText('65,010.5')).toBeInTheDocument();
     expect(screen.getByText(/Thin book/)).toBeInTheDocument();
     expect(screen.getByText('≈ 0.05 USDT')).toBeInTheDocument();
     expect(screen.getByText('Taker')).toBeInTheDocument();
