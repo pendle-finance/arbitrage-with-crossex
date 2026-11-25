@@ -90,7 +90,7 @@ function DealPriceBox({ pair, restPrice }: { pair: DealPair; restPrice: string |
   );
 }
 
-function DealActs({ dealId, mode }: { dealId: string; mode: DealPair['mode'] }) {
+function DealActs({ dealId, mode, nothingRests }: { dealId: string; mode: DealPair['mode']; nothingRests: boolean }) {
   const { t } = useTranslation();
   const convert = useDealCommand('convert');
   const stop = useDealCommand('stop');
@@ -110,7 +110,7 @@ function DealActs({ dealId, mode }: { dealId: string; mode: DealPair['mode'] }) 
         </button>
       ) : mode === 'OPENING' ? (
         <div className="grid grid-cols-2 gap-2">
-          <button type="button" className="btn" disabled={pending} title={t('trade.deal.convertTitle')} onClick={() => convert.mutate({ id: dealId })}>
+          <button type="button" className="btn" disabled={pending} title={t(nothingRests ? 'trade.deal.convertTitleNoRest' : 'trade.deal.convertTitle')} onClick={() => convert.mutate({ id: dealId })}>
             {t('trade.deal.convertNow')}
           </button>
           {holdStop}
@@ -284,11 +284,11 @@ export function dealRunProps(
       makerSide={pair.a.side}
       hedgeContract={b?.contract ?? null}
       limitPrice={restPrice}
-      limitQty={open?.qty ?? proj.residualA}
+      limitQty={refused ? null : (open?.qty ?? proj.residualA)}
       hedgeQty={remainderQty(pair.targetQty, proj.bReserved)}
     />
   ) : null;
   const priceBox = opening ? <DealPriceBox pair={pair} restPrice={restPrice} /> : null;
   const firstLine = pair.mode === 'HALTED' && pair.haltReason ? <span className="text-[12px] text-amber-300">{localizeServerText(pair.haltReason)}</span> : null;
-  return { ...base, firstLine, rows, graph, priceBox, acts: <DealActs dealId={pair.id} mode={pair.mode} />, footer: true };
+  return { ...base, firstLine, rows, graph, priceBox, acts: <DealActs dealId={pair.id} mode={pair.mode} nothingRests={refused !== null} />, footer: true };
 }

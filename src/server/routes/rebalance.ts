@@ -507,18 +507,12 @@ export function rebalanceRoutes(deps: AppDeps) {
       createChild,
       now,
       jobs: store,
-      readFees: (dealIds) => readChildFees(deps.engine!.store, cachedTrades, dealIds),
+      readFees: (dealIds) =>
+        feeReadWithin(deps, { kind: 'read', work: () => readChildFees(deps.engine!.store, cachedTrades, dealIds), fallback: {} as Record<string, number> }),
     });
 
     const twapViewFor = async (store: JobFile, job: Job) => {
-      const children = await loadTwapChildren(
-        {
-          store: deps.engine!.store,
-          readFees: (dealIds) =>
-            feeReadWithin(deps, { kind: 'read', work: () => readChildFees(deps.engine!.store, cachedTrades, dealIds), fallback: {} as Record<string, number> }),
-        },
-        job,
-      );
+      const children = await loadTwapChildren(twapDeps(store), job);
       const withBest = await Promise.all(
         children.map(async (child) =>
           child.pair.mode === 'OPENING'

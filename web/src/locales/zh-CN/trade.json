@@ -226,6 +226,7 @@
     "now": "现在",
     "resolving": "正在交易所确认一笔订单的状态 — 确认前不会下新单",
     "convertTitle": "撤销剩余挂单，并立即在两个交易所以市价单完成",
+    "convertTitleNoRest": "立即在两个交易所以市价单完成",
     "convertNow": "立即市价成交",
     "customAria": "自定义重挂价格",
     "resumeTitle": "重试对冲并完成该交易任务（请先处理保证金或交易所问题）",

@@ -95,6 +95,7 @@ describe('DealModal', () => {
     expect(await screen.findByText(refusedLine)).toBeInTheDocument();
     expect(screen.getByText(/^Market order in 3m [45]\ds$/)).toBeInTheDocument();
     expect(screen.queryByText('Limit resting')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Complete both venues as market orders now')).toBeInTheDocument();
   });
 
   it('the refused line goes once a new maker order is accepted', async () => {

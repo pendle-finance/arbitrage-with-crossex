@@ -227,6 +227,7 @@
     "now": "now",
     "resolving": "Resolving an order's fate on the venue — nothing new is placed until it is confirmed",
     "convertTitle": "Cancel the resting remainder and complete both venues as market orders now",
+    "convertTitleNoRest": "Complete both venues as market orders now",
     "convertNow": "Market order now",
     "customAria": "Custom re-peg price",
     "resumeTitle": "Retry the hedge and settle the deal (fix margin/venue first)",

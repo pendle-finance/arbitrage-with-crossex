@@ -136,7 +136,7 @@ export function SliceGraph({ childId, oneLeg }: { childId: string; oneLeg: boole
       makerSide={pair.a.side}
       hedgeContract={oneLeg ? null : (pair.b?.contract ?? null)}
       limitPrice={open?.price ?? pair.limitPrice}
-      limitQty={open?.qty ?? proj.residualA}
+      limitQty={view.data?.repegRefused ? null : (open?.qty ?? proj.residualA)}
       hedgeQty={pair.b && owed > 0 ? String(owed) : null}
     />
   );
