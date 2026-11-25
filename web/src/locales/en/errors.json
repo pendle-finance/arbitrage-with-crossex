@@ -246,7 +246,6 @@
   "quotesUsedNext": "Resume after Gate's count clears, within 24 hours, or close {{size}} {{base}} of the {{venue}} {{sideWord}} in Positions.",
   "refusedNext": "Resume to try again, or close {{size}} {{base}} of the {{venue}} {{sideWord}} in Positions.",
   "underMinimumNext": "Abandon, then close {{size}} {{base}} of the {{venue}} {{sideWord}} in Positions.",
-  "rebalanceStoppedBeforeClose": "Rebalance stopped before the close.",
   "unknownStep": "unknown step {{step}}",
   "transferFailed": "Transfer failed.",
   "transferFailedReason": "Transfer failed: {{inner}}.",

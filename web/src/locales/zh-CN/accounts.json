@@ -160,7 +160,9 @@
       "transfer": "划转进行中",
       "deal": "交易任务进行中",
       "rebalance": "再平衡进行中",
-      "stoppedRebalance": "再平衡已停止"
+      "stoppedRebalance": "再平衡已停止",
+      "twapRunning": "TWAP 进行中",
+      "twapError": "TWAP 已停止"
     },
     "transferCta": "手动划转",
     "rateUnknown": "利率未知",
@@ -337,7 +339,14 @@
     "hedgeTitle": "挂单腿成交后市价对冲。",
     "slipTitleMaker": "超时后市价单的限价：中间价 ± 此值。",
     "pairNoteMaker": "一条腿只做 Maker 挂单并跟随盘口，另一条腿在其成交时市价平仓。超时后剩余部分市价平仓。",
-    "mechanicsMaker": "<b>只减仓</b>。每笔成交立即对冲，平仓期间仓位保持对冲。"
+    "mechanicsMaker": "<b>只减仓</b>。每笔成交立即对冲，平仓期间仓位保持对冲。",
+    "twap": {
+      "headlineSub": "每片成交时实现",
+      "start": "开始 TWAP 平仓",
+      "reduceOnly": "只减仓。每笔成交立即对冲。",
+      "marketSlippage": "市价滑点",
+      "marketSlippageHint": "市价步骤最多可让价格移动的幅度。"
+    }
   },
   "tracked": {
     "renewLogin": "为 {{address}} 续期登录",
@@ -392,8 +401,6 @@
     "howItRuns": "执行方式",
     "howItRan": "执行情况",
     "gapLineNoUsd": "{{venue}} {{side}} 少 {{size}} {{base}}",
-    "closeUnconfirmedTitle": "已发送平仓，尚未确认",
-    "closeUnconfirmedBody": "{{platform}} 尚未确认 {{size}} {{base}} {{side}} 的平仓。请先查看持仓，再点击恢复。",
     "capTitle": "超过 {{cap}} 的市价单上限。",
     "capBody": "请选择更小的自定义金额。",
     "abandonedGap": "{{size}} {{base}} {{side}}未重新开仓，{{usd}} 未对冲",
@@ -419,8 +426,6 @@
     "spotLoopLong": "现货循环，第 {{round}} 轮（共 {{rounds}} 轮）· 已超过通常的 {{minutes}} 分钟",
     "spotLoopWay": "{{amount}} {{coin}} 正经 Gate 现货转入途中",
     "spotLoopSpot": "{{amount}} {{coin}} 在 Gate 现货中",
-    "stoppedBeforeClose": "平仓前已停止",
-    "stoppedBeforeCloseBody": "{{venue}} {{side}} {{size}} {{base}}，与之前相同。未平仓，也未划转。",
     "gapBox": "{{venue}} {{side}} 比 {{leg}} 少 {{size}} {{base}}。",
     "notHedged": "{{usd}} 未对冲。",
     "receiptCash": "{{profit}} {{coin}} 的盈利已变现金：{{first}} 在 {{firstWallet}}，{{second}} 在 {{secondWallet}}。",
@@ -555,7 +560,7 @@
     "afterBoros": "Boros {{a}} → {{b}} YU",
     "borosGap": "Boros 在永续之后平仓。在此之前，没有永续对冲的 YU 会在结束时增至 {{amount}}（{{time}}）。",
     "notHedged": "每片期间未对冲：最多 {{qty}} {{coin}}（{{usd}}）",
-    "hold": "长按将 {{coin}} {{venueA}} / {{venueB}} 降规模 {{pct}}%（{{qty}} {{coin}}）",
+    "hold": "长按降规模 {{qty}} {{coin}}",
     "noPairs": "没有持仓组合",
     "noPairsMatch": "没有匹配的组合",
     "belowMin": "{{venue}} 最少接受 {{min}} {{coin}}",
@@ -567,10 +572,10 @@
   "sliceRun": {
     "slice": "第 {{i}} 片（共 {{n}} 片）",
     "left": "预计剩余 {{time}}",
-    "realizedOf": "已兑现 {{x}}（共 {{y}} USDC）",
+    "realizedOf": "{{x}} / {{y}} USDC",
     "notHedgedNow": "当前未对冲 {{qty}} {{coin}}（{{usd}}）",
     "feeSoFar": "已付手续费 {{fee}} · 预计共 {{est}}",
-    "holdPause": "长按在本片后暂停",
+    "holdPause": "本片后暂停",
     "pausing": "将在第 {{i}} 片（共 {{n}} 片）后暂停",
     "paused": "已在第 {{i}} 片（共 {{n}} 片）后暂停",
     "resume": "恢复",
@@ -588,13 +593,13 @@
     "holdRetryBoros": "长按重试在 Boros 平掉 {{amount}} YU",
     "holdAddBack": "长按在两条永续上各加回 {{qty}} {{coin}}",
     "holdAddBackOn": "长按加回 {{rest}}",
-    "perpsLine": "永续 · 第 {{i}} 片（共 {{n}} 片）{{old}} → {{now}} {{coin}}（每条）",
-    "borosLine": "Boros {{amount}} → {{end}} YU · 永续之后平仓",
+    "perpsLine": "{{old}} → {{now}} {{coin}}（每条腿）",
+    "borosLine": "{{amount}} → {{end}} YU · 永续之后平仓",
     "notHedgedMax": "当前未对冲，每片最多 {{qty}} {{coin}}（{{usd}}）",
-    "imNowEnd": "已用初始保证金 · {{account}} 当前 {{a}}% · 结束 {{b}}%",
+    "imNowEnd": "现在 {{a}}% · 结束时 {{b}}%",
     "feeEst": "已付手续费 {{fee}} · 预计手续费 {{est}}",
-    "imDone": "已用初始保证金 · {{account}} {{a}}% → {{b}}%",
-    "totalCost": "总成本 {{real}}（预计 {{est}}）",
+    "imDone": "{{a}}% → {{b}}%",
+    "totalCost": "{{real}}（预估 {{est}}）",
     "realized": "已兑现 {{amount}} USDC",
     "pairPnl": "组合盈亏",
     "pairPnlValue": "不变，成本除外",
@@ -609,6 +614,22 @@
     "deleverDoneHeader": "降规模 {{pct}}%",
     "perpsBorosNow": "永续 每边 {{perps}} {{coin}} · Boros {{boros}} YU",
     "perpsSplitBorosNow": "永续 {{venueA}} {{a}} {{coin}}，{{venueB}} {{b}} {{coin}} · Boros {{boros}} YU",
-    "borosFilled": "Boros 已成交 {{filled}} / {{target}} YU"
+    "borosFilled": "Boros 已成交 {{filled}} / {{target}} YU",
+    "perpsLabel": "永续 · 第 {{i}} / {{n}} 笔",
+    "borosLabel": "Boros",
+    "imLabel": "初始保证金占用 · {{account}}",
+    "totalCostLabel": "总成本",
+    "realizedLabel": "已兑现"
+  },
+  "delever": {
+    "holdTwap": "长按降规模 {{qty}} {{coin}} · TWAP {{duration}}",
+    "borosPerSlice": "每片 Boros 平仓",
+    "borosPerSliceValue": "{{amount}} YU",
+    "borosPerSliceHover": "不超过 10 美元的部分会等待，并在下一片一起平仓。"
+  },
+  "closeLeg": {
+    "twap": {
+      "reduceOnly": "只减仓。"
+    }
   }
 }

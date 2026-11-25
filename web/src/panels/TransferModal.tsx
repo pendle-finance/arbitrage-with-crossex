@@ -38,6 +38,8 @@ const LOCK_LINE: Readonly<Record<TransferLock, string>> = {
   get rebalance() { return t('accounts.transfer.lock.rebalance'); },
   get halted() { return t('accounts.transfer.lock.halted'); },
   get deal() { return t('accounts.transfer.lock.deal'); },
+  get twapRunning() { return t('trade.twap.lock.running'); },
+  get twapError() { return t('trade.twap.lock.error'); },
 };
 
 export interface TransferPick {

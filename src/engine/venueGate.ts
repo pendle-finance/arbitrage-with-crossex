@@ -28,6 +28,7 @@ const DEFINITE_REJECT = [
   /MAX_MARKET_SIZE|MAX_LIMIT_SIZE|SIZE_TOO_LARGE|TOO_LARGE/i,
   /SIGNIFICANT_FIGURES|PRICE/i,
   /REDUCE_ONLY/i,
+  /ORDER_LIMIT_ERROR/i,
   /LEVERAGE|RISK_LIMIT/i,
   /INVALID_PARAM|BAD_REQUEST|CONTRACT_NOT_FOUND|SYMBOL/i,
 ];
@@ -198,6 +199,20 @@ export function gateVenue(getClients: () => Clients): VenuePort {
       } catch {
         return { covered: false };
       }
+    },
+
+    async best(contract: string, side: Side, tick: string): Promise<string | null> {
+      return cachedPrice(`best:${contract}:${side}:${tick}`, async () => {
+        try {
+          const { exchange, base, quote } = parseSymbol(contract);
+          const book = await fetchVenueBook(exchange, base, quote);
+          const px = Number(side === 'BUY' ? book?.bids?.[0]?.[0] : book?.asks?.[0]?.[0]);
+          if (!Number.isFinite(px) || px <= 0) return null;
+          return formatRestPrice(px, side, contract, tick);
+        } catch {
+          return null;
+        }
+      });
     },
 
     async touch(contract: string, side: Side, tick: string): Promise<string | null> {

@@ -2,7 +2,13 @@ import { t } from '.';
 import type en from '../locales/en';
 
 type Messages = (typeof en)['errors'];
-type Key = Exclude<keyof Messages, 'word' | 'sentences' | 'sentencesSpaced'>;
+type Twap = (typeof en)['trade']['twap'];
+type TwapKey =
+  | `trade.twap.server.${keyof Twap['server'] & string}`
+  | `trade.twap.lock.${keyof Twap['lock'] & string}`
+  | `trade.twap.area.${'use' | 'useInterval' | 'turnOff'}`
+  | 'trade.twap.run.restNotOpened';
+type Key = Exclude<keyof Messages, 'word' | 'sentences' | 'sentencesSpaced'> | TwapKey;
 type Word = keyof Messages['word'];
 type Names = readonly string[];
 type Rule = readonly [RegExp, Key, Names?];
@@ -276,7 +282,6 @@ const RULES: readonly Rule[] = [
   [/^Resume after Gate's count clears, within 24 hours, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'quotesUsedNext', ['size', 'base', 'venue', 'sideWord']],
   [/^Resume to try again, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'refusedNext', ['size', 'base', 'venue', 'sideWord']],
   [/^Abandon, then close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'underMinimumNext', ['size', 'base', 'venue', 'sideWord']],
-  [/^Rebalance stopped before the close\.$/, 'rebalanceStoppedBeforeClose'],
   [/^unknown step (.+)$/, 'unknownStep', ['step']],
   [/^Transfer failed\.$/, 'transferFailed'],
   [/^Transfer failed: (.+)\.$/, 'transferFailedReason', ['inner']],
@@ -465,6 +470,35 @@ const RULES: readonly Rule[] = [
   [/^poc-reject$/, 'orderPocReject'],
   [/^never-reached-venue$/, 'orderNeverSent'],
   [/^rejected:(.*)$/s, 'orderRejected', ['detail']],
+  [/^Too small for 2 slices: (.+?) takes at least (\S+) (\S+) \((\S+)\) a slice\.$/, 'trade.twap.server.tooSmall', ['venue', 'min', 'coin', 'usd']],
+  [/^(.+?) takes at least (\S+) (\S+) \((\S+)\) a slice\.$/, 'trade.twap.server.sliceMin', ['venue', 'min', 'coin', 'usd']],
+  [/^Interval at least 1m\.$/, 'trade.twap.server.intervalMin'],
+  [/^Duration at least 5m\.$/, 'trade.twap.server.durationMin'],
+  [/^Duration at most 24h\.$/, 'trade.twap.server.durationMax'],
+  [/^([\d,]+) slices\. Max 100: slice size at least (\S+) (\S+)\.$/, 'trade.twap.server.tooMany', ['count', 'min', 'coin']],
+  [/^Book too thin for (\S+) (\S+) a slice\.$/, 'trade.twap.server.bookThin', ['qty', 'coin']],
+  [/^Taker after must be 30s to 24h\.$/, 'trade.twap.server.takerAfterRange'],
+  [/^(.+?) refused slice (\d+): not enough margin$/, 'trade.twap.server.refusedSlice', ['venue', 'n']],
+  [/^Add USDT to (.+?) CrossEx, then resume\.$/, 'trade.twap.server.refusedFix', ['venue']],
+  [/^Slice (\d+) is under (.+?)'s (\S+) minimum$/, 'trade.twap.server.underMin', ['n', 'venue', 'min']],
+  [/^(.+?) refused the hedge in slice (\d+)$/, 'trade.twap.server.hedgeRefused', ['venue', 'n']],
+  [/^(\S+) (\S+) not hedged \((\S+)\)$/, 'trade.twap.server.hedgeGap', ['qty', 'coin', 'usd']],
+  [/^Add USDT to (.+?) on CrossEx to hedge$/, 'trade.twap.server.hedgeFix', ['venue']],
+  [/^A TWAP is running\. Orders and transfers wait until it ends\.$/, 'trade.twap.lock.running'],
+  [/^A TWAP is paused\. Orders wait until it ends\.$/, 'trade.twap.lock.paused'],
+  [/^A TWAP stopped on an error\. Orders and transfers wait until you resume or stop it\.$/, 'trade.twap.lock.error'],
+  [/^(\d+) slices\. Min 2: slice size at most (\S+) (\S+)\.$/, 'trade.twap.server.countLowSize', ['n', 'qty', 'coin']],
+  [/^1 slice\. Min 2: slice size at most (\S+) (\S+)\.$/, 'trade.twap.server.countLowSizeOne', ['qty', 'coin']],
+  [/^Interval at most (\d+[hms](?: \d+[hms])*)\.$/, 'trade.twap.server.intervalMax', ['span']],
+  [/^(.+?) takes at most (\S+) (\S+) a slice\.$/, 'trade.twap.server.sliceMax', ['venue', 'qty', 'coin']],
+  [/^Taker after must be 80% of the interval or less \((\d+)s\)\.$/, 'trade.twap.server.takerOver', ['cap']],
+  [/^Slice (\d+) is over (.+?)'s (\S+) (\S+) maximum$/, 'trade.twap.server.sliceOverMax', ['n', 'venue', 'max', 'coin']],
+  [/^This Mac slept during the TWAP\. Nothing was sent while it slept\. Press Resume\.$/, 'trade.twap.server.slept'],
+  [/^(\S+) (\S+) not opened$/, 'trade.twap.run.restNotOpened', ['qty', 'coin']],
+  [/^Turn TWAP off$/, 'trade.twap.area.turnOff'],
+  [/^Use (\d+[hms](?: \d+[hms])*) interval$/, 'trade.twap.area.useInterval', ['value']],
+  [/^Use (\d+[hms](?: \d+[hms])*)$/, 'trade.twap.area.use', ['value']],
+  [/^Use ([\d,.]+ [A-Za-z0-9]+)$/, 'trade.twap.area.use', ['value']],
 ];
 
 function valueOf(name: string, raw: string): string {
@@ -479,7 +513,7 @@ const byKey = t as unknown as (key: string, values: Record<string, string>) => s
 function matchWhole(text: string): string | null {
   for (const [re, key, names = []] of RULES) {
     const m = re.exec(text);
-    if (m) return byKey(`errors.${key}`, Object.fromEntries(names.map((name, i) => [name, valueOf(name, m[i + 1] ?? '')])));
+    if (m) return byKey(key.startsWith('trade.') ? key : `errors.${key}`, Object.fromEntries(names.map((name, i) => [name, valueOf(name, m[i + 1] ?? '')])));
   }
   return null;
 }

@@ -25,24 +25,42 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { ApiError, postJson } from '../api/client';
-import { useAccount, usePositions } from '../api/queries';
-import type { ActionInput, DealResponse, PreviewResult } from '../api/types';
+import { useAccount, usePositions, useRebalance, useStartRebalance } from '../api/queries';
+import type { ActionInput, DealResponse, PreviewResult, RebalanceJob, TwapPlanView } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Spinner } from '../components/Spinner';
 import { SymbolCell } from '../components/VenueChip';
 import { fmtUsd, parseSymbol, sig } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import { useNow } from '../lib/useNow';
-import { dealFromActions } from './deal';
+import { dealFromActions, twapStartFrom, type DealOpts } from './deal';
 import { finalizeActions } from './finalize';
 import { clearPendingBasket, readPendingBasket, writePendingBasket } from './pendingBasket';
 import { ActionKindChip, estFeeOf, estimateMargin, feeText, SlippageBadge, ViolationList } from './previewBits';
 import { useTradeFlow } from './TradeFlow';
+import { liveTwapJob } from './twapJob';
 import { usePreviewDebounced } from './usePreview';
 import { withinTrackedDrift } from './trackedPriceDrift';
 import { useActiveWallet } from '../panels/trackedAddress';
+import { useRebalanceOpener } from '../panels/rebalanceOpener';
 
 const STALE_MS = 10_000;
+
+type TwapLock = 'running' | 'paused' | 'error';
+
+const LOCK_TEXT = {
+  running: 'trade.twap.lock.running',
+  paused: 'trade.twap.lock.paused',
+  error: 'trade.twap.lock.error',
+} as const;
+
+function twapLockOf(found: RebalanceJob | null | undefined): TwapLock | null {
+  const job = liveTwapJob(found);
+  if (!job) return null;
+  const childLive = job.child != null && job.child.mode !== 'DONE';
+  if (job.status === 'halted') return childLive ? 'error' : 'paused';
+  return job.paused && !childLive ? 'paused' : 'running';
+}
 
 interface Props {
   /** react-query preview scope — match the caller's own ticket preview to dedupe. */
@@ -84,6 +102,8 @@ interface Props {
    * ticket) — the hover review card is then redundant. Execution errors still
    * open the card: they must never be silent. */
   hoverCard?: boolean;
+  dealOpts?: DealOpts;
+  twap?: { plan: TwapPlanView; blocked: boolean } | null;
 }
 
 export function ExecuteControl({
@@ -103,6 +123,8 @@ export function ExecuteControl({
   buttonClassName,
   holdMs,
   hoverCard = true,
+  dealOpts,
+  twap = null,
 }: Props) {
   const { t } = useTranslation();
   const flow = useTradeFlow();
@@ -111,6 +133,9 @@ export function ExecuteControl({
   const account = useAccount();
   const positions = usePositions();
   const now = useNow(1_000);
+  const lock = twapLockOf(useRebalance().data?.job);
+  const openRebalance = useRebalanceOpener();
+  const startTwap = useStartRebalance();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hovering, setHovering] = useState(false);
   const basketIdRef = useRef<string | null>(null);
@@ -262,13 +287,14 @@ export function ExecuteControl({
    * genuinely needs the hedge loop that one deal buys.
    */
   const splitClose =
+    !twap &&
     !!actions &&
     !!previews &&
     !!probeActions &&
     !preview.estimating &&
     actions.length === 2 &&
     actions.every((a) => a.kind === 'close-position') &&
-    dealFromActions('probe-0', probeActions, previews) === null &&
+    dealFromActions('probe-0', probeActions, previews, dealOpts) === null &&
     dealFromActions('probe-a', [probeActions[0]], [previews[0]]) !== null &&
     dealFromActions('probe-b', [probeActions[1]], [previews[1]]) !== null;
   const mappable =
@@ -276,7 +302,7 @@ export function ExecuteControl({
     !previews ||
     preview.estimating ||
     !probeActions ||
-    dealFromActions('probe-0', probeActions, previews) !== null ||
+    dealFromActions('probe-0', probeActions, previews, dealOpts) !== null ||
     splitClose;
   const disabled =
     !actions ||
@@ -284,6 +310,8 @@ export function ExecuteControl({
     extraDisabled ||
     execute.isPending ||
     executeSplit.isPending ||
+    startTwap.isPending ||
+    (twap?.blocked ?? false) ||
     previewMissing ||
     hasViolations ||
     marginBlocked ||
@@ -300,7 +328,21 @@ export function ExecuteControl({
     // (pegToTouch), then map the confirmed intent onto the deal contract.
     const base = finalizeActions(previews);
     const decorated = decorate ? decorate(base) : base;
-    const deal = dealFromActions(basketIdRef.current, decorated, previews);
+    const deal = dealFromActions(basketIdRef.current, decorated, previews, dealOpts);
+    if (twap) {
+      if (!deal) return;
+      const clientId = basketIdRef.current;
+      setPlacedResting(null);
+      setReplayedDeal(null);
+      startTwap.mutate(twapStartFrom(deal, twap.plan, clientId), {
+        onSuccess: () => {
+          clearPendingBasket(inflightIntentRef.current);
+          onExecuted?.();
+          openRebalance();
+        },
+      });
+      return;
+    }
     if (!deal && splitClose) {
       // Two single-leg deals under ONE basket: ids derived from the basket id
       // so a retry after a lost response re-sends the same two ids and the
@@ -332,10 +374,10 @@ export function ExecuteControl({
     execute.mutate(deal);
   };
 
-  const anyError = execute.error ?? executeSplit.error;
+  const anyError = execute.error ?? executeSplit.error ?? startTwap.error;
   const errMsg =
     anyError instanceof ApiError ? anyError.message : (anyError as Error | null)?.message ?? null;
-  const cardOpen = (hoverCard && hovering) || execute.isError || executeSplit.isError;
+  const cardOpen = lock === null && ((hoverCard && hovering) || execute.isError || executeSplit.isError || startTwap.isError);
 
   return (
     <div
@@ -346,15 +388,24 @@ export function ExecuteControl({
       onFocusCapture={() => setHovering(true)}
       onBlurCapture={() => setHovering(false)}
     >
-      <HoldToConfirmButton tone={tone} disabled={disabled} holdMs={holdMs} onConfirm={onConfirm} className={buttonClassName}>
-        {execute.isPending || executeSplit.isPending ? (
-          <span className="inline-flex items-center gap-1.5">
-            <Spinner className="h-3.5 w-3.5" /> {t('trade.execute.executing')}
-          </span>
-        ) : (
-          label
-        )}
-      </HoldToConfirmButton>
+      {lock !== null ? (
+        <p role="status" className="flex flex-wrap items-baseline gap-x-2 text-xs text-ink-400">
+          {t(LOCK_TEXT[lock])}
+          <button type="button" className="btn-link" onClick={() => openRebalance()}>
+            {t('trade.recovery.view')}
+          </button>
+        </p>
+      ) : (
+        <HoldToConfirmButton tone={tone} disabled={disabled} holdMs={holdMs} onConfirm={onConfirm} className={buttonClassName}>
+          {execute.isPending || executeSplit.isPending || startTwap.isPending ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Spinner className="h-3.5 w-3.5" /> {t('trade.execute.executing')}
+            </span>
+          ) : (
+            label
+          )}
+        </HoldToConfirmButton>
+      )}
       {viewOnly && <p className="mt-1 text-[11px] text-ink-400">{t('trade.execute.viewOnly')}</p>}
       {placedResting && (
         <div
@@ -397,7 +448,7 @@ export function ExecuteControl({
           </button>
         </div>
       )}
-      {marginBlocked && (
+      {lock === null && marginBlocked && (
         <div role="alert" className="mt-1 text-[11px] text-rose-400">
           {t('trade.execute.marginBlocked', {
             required: fmtUsd(margin.gateRequired),
@@ -405,7 +456,7 @@ export function ExecuteControl({
           })}
         </div>
       )}
-      {!mappable && (
+      {lock === null && !mappable && (
         <div role="alert" className="mt-1 text-[11px] text-amber-400">
           {t('trade.execute.notMappable')}
         </div>

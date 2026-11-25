@@ -3,16 +3,15 @@
  * the shared row/affix primitives the single ticket reuses. Pure/prop-driven —
  * PairTicket owns all state and the preview query. */
 import { useMemo, useState, type ReactNode } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
-import { SegmentedToggle } from '../components/SegmentedToggle';
 import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
-import { FieldLabel } from './SymbolCombobox';
+import { EstimateHeadline } from './EstimateHeadline';
 import { BookOpen, ChevronDown, RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
@@ -24,12 +23,6 @@ export function storedExecMode(): ExecMode {
     (p as { entryMode?: unknown } | null)?.entryMode === 'both-market' ? 'market' : 'maker',
   );
 }
-export const TIMEOUT_CHOICES = [
-  { value: '60', label: '1m' },
-  { value: '300', label: '5m' },
-  { value: '900', label: '15m' },
-] as const;
-export type TimeoutChoice = (typeof TIMEOUT_CHOICES)[number]['value'];
 
 function dedupeByMessage<T extends { message: string }>(list: T[]): T[] {
   return [...new Map(list.map((v) => [v.message, v])).values()];
@@ -396,132 +389,39 @@ export function PairVenues({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Maker-hedge controls
-// ---------------------------------------------------------------------------
+function isMakerLeg(p: PreviewResult): boolean {
+  return 'pairRole' in p.input && p.input.pairRole === 'maker';
+}
 
-/** Maker-hedge controls: the auto-chosen maker leg (fee-minimizing, no
- * manual override), the touch-tracking price input, and the convert-to-taker
- * timeout. Flat in the form — they are fields of the ticket, not an aside. */
-export function MakerHedgeControls({
-  makerLegPick,
-  longSym,
-  shortSym,
-  makerSaving,
-  priceStr,
-  pricePinned,
-  touchIsFallback,
-  onPriceInput,
-  onTrackTouch,
-  timeoutSec,
-  onTimeout,
-}: {
-  makerLegPick: 'long' | 'short';
-  longSym: string | null;
-  shortSym: string | null;
-  /** Open-fee saving vs both legs taker (null while fees are unknown). */
-  makerSaving: number | null;
-  priceStr: string;
-  pricePinned: boolean;
-  touchIsFallback: boolean;
-  /** User typed a price — pin it. */
-  onPriceInput: (v: string) => void;
-  /** Un-pin and resume tracking the book (one gap behind the touch). */
-  onTrackTouch: () => void;
-  timeoutSec: TimeoutChoice;
-  onTimeout: (v: TimeoutChoice) => void;
-}) {
+const SIDE_MARK = '\u0001';
+
+function LegRoleRow({ p, side, base }: { p: PreviewResult | undefined; side: 'LONG' | 'SHORT'; base: string }) {
   const { t } = useTranslation();
-  const makerSym = makerLegPick === 'long' ? longSym : shortSym;
-  const makerVenue = makerSym ? parseSymbol(makerSym).exchange : t(makerLegPick === 'long' ? 'common.longUpper' : 'common.shortUpper');
-  const makerQuote = makerSym ? parseSymbol(makerSym).quote || 'USDT' : 'USDT';
+  if (!p) return null;
+  const [before, after] = t(isMakerLeg(p) ? 'pairTicket.estimate.legRole.rests' : 'pairTicket.estimate.legRole.hedges', {
+    side: SIDE_MARK,
+    venue: prettyVenue(parseSymbol(p.symbol).exchange),
+  }).split(SIDE_MARK);
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2" data-maker-panel>
-        <span className="flex items-center gap-2 text-[11.5px]">
-          <span className="text-ink-200">{t('pairTicket.bits.makerLeg')}</span>
-          <Chip sm tone="cyan">
-            {makerVenue}
+    <EstimateRow
+      label={
+        <>
+          {before}
+          <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
+            {t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
           </Chip>
-          <span className="text-ink-400" title={t('pairTicket.bits.autoHint')}>
-            {t('pairTicket.bits.auto')}
-          </span>
-        </span>
-        {makerSaving !== null && makerSaving > 0 && (
-          <span className="text-[11px] text-ink-400" title={t('pairTicket.bits.savingHint')}>
-            <Trans
-              i18nKey="pairTicket.bits.saving"
-              values={{ amount: sig(makerSaving) }}
-              components={{ g: <span className="num text-emerald-400" /> }}
-            />
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-2">
-          <FieldLabel htmlFor="pair-maker-price">{t('pairTicket.bits.makerPrice')}</FieldLabel>
-          <span
-            className="text-[11px] text-ink-400"
-            title={t('pairTicket.bits.makerPriceHint')}
-          >
-            {pricePinned ? (
-              <>
-                {t('pairTicket.bits.pinned')}{' '}
-                <button type="button" className="underline underline-offset-2 hover:text-ink-100" onClick={onTrackTouch}>
-                  {t('pairTicket.bits.trackBook')}
-                </button>
-              </>
-            ) : (
-              t('pairTicket.bits.tracking')
-            )}
-            {!pricePinned && touchIsFallback && (
-              <span
-                className="ml-1 text-amber-400/90"
-                title={t('pairTicket.bits.bookUnavailableHint')}
-              >
-                {t('pairTicket.bits.bookUnavailable')}
-              </span>
-            )}
-          </span>
-        </div>
-        <AffixedInput affix={<span>{makerQuote}</span>}>
-          <input
-            id="pair-maker-price"
-            className="input num pr-14"
-            inputMode="decimal"
-            placeholder={t('pairTicket.bits.fetchingTouch')}
-            value={priceStr}
-            onChange={(e) => onPriceInput(e.target.value)}
-          />
-        </AffixedInput>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <FieldLabel>
-          <span title={t('pairTicket.bits.convertHint')}>
-            {t('pairTicket.bits.convertAfter')}
-          </span>
-        </FieldLabel>
-        <SegmentedToggle
-          ariaLabel={t('pairTicket.bits.convertAfter')}
-          fill
-          value={timeoutSec}
-          onChange={onTimeout}
-          options={TIMEOUT_CHOICES.map((c) => ({ value: c.value, label: t('pairTicket.bits.minutes', { n: Number(c.value) / 60 }) }))}
-        />
-      </div>
-    </div>
+          {after}
+        </>
+      }
+      value={`${sig(p.qty)}${base ? ` ${base}` : ''}`}
+    />
   );
 }
 
-// ---------------------------------------------------------------------------
-// Estimate card
-// ---------------------------------------------------------------------------
-
-/** One leg of the estimate table: venue chip (+ maker), est price, slippage, est fee. */
 function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: PreviewResult | undefined }) {
   const { t } = useTranslation();
   if (!p) return null;
-  const isMaker = 'pairRole' in p.input && p.input.pairRole === 'maker';
+  const isMaker = isMakerLeg(p);
   return (
     <>
       <tr className="border-t border-ink-800/80">
@@ -618,6 +518,7 @@ export function PairEstimate({
   // at taker, or both taker. Closing is a separate trade with its own ticket.
   const tradeCost = legLong?.fees && legShort?.fees ? estFeeOf(legLong) + estFeeOf(legShort) : null;
   const refPx = legLong?.refPrice?.value ?? legShort?.refPrice?.value;
+  const showRoles = mode === 'maker' && [legLong, legShort].some((p) => p !== undefined && isMakerLeg(p));
   const spreadBps =
     legLong?.fillEstimate && legShort?.fillEstimate && refPx
       ? bpsOf((legLong.fillEstimate.avgPrice - legShort.fillEstimate.avgPrice) / refPx)
@@ -646,17 +547,18 @@ export function PairEstimate({
     >
       {previews ? (
         <>
-          <div className="flex items-end justify-between gap-3">
-            <div className="flex flex-col">
-              <span className="text-[12.5px] text-ink-50">{t('pairTicket.bits.tradeCost')}</span>
-              <span className="text-[11px] text-ink-400">
-                {mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
-              </span>
+          <EstimateHeadline
+            label={t('pairTicket.bits.tradeCost')}
+            sub={mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
+            value={tradeCost !== null ? `≈ ${sig(tradeCost)} USDT` : '—'}
+          />
+
+          {showRoles && (
+            <div className="flex flex-col gap-1.5">
+              <LegRoleRow p={legLong} side="LONG" base={base} />
+              <LegRoleRow p={legShort} side="SHORT" base={base} />
             </div>
-            <span className="num text-lg font-semibold text-ink-50">
-              {tradeCost !== null ? `≈ ${sig(tradeCost)} USDT` : '—'}
-            </span>
-          </div>
+          )}
 
           {showBook && <div className="pt-1">{book}</div>}
 

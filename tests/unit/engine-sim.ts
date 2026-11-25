@@ -52,6 +52,7 @@ export class FakeVenue implements VenuePort {
   readsFail = false;
   sweepCoverage = true;
   touchA: string | null = '2500';
+  bestA: string | null = '2500';
   refPrices = new Map<string, string>([[A_CONTRACT, '2500'], [B_CONTRACT, '2500']]);
   private nextId = 1;
 
@@ -176,6 +177,10 @@ export class FakeVenue implements VenuePort {
     return this.readsFail ? null : this.touchA;
   }
 
+  async best(_c?: string, _s?: Side, _t?: string): Promise<string | null> {
+    return this.readsFail ? null : this.bestA;
+  }
+
   async refPrice(contract: string): Promise<string | null> {
     return this.readsFail ? null : (this.refPrices.get(contract) ?? null);
   }
@@ -276,6 +281,10 @@ export function mkWorld(opts?: {
     hedgeRejectStreak: 0,
     maxClip: opts?.maxClip ?? null,
     clipBandBp: opts?.clipBandBp ?? null,
+    repegBehindBp: null,
+    repegAutoBp: null,
+    repegNotBefore: 0,
+    haltKind: null,
     haltReason: null,
     reportJson: null,
     createdAt: clock.now(),

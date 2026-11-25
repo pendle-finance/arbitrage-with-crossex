@@ -9,24 +9,19 @@ import { Trans, useTranslation } from 'react-i18next';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
 import { Chip } from '../components/Chip';
 import { ExecModeToggle } from '../components/ExecModeToggle';
-import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { fieldValue, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
+import type { DealOpts } from '../trade/deal';
+import { EstimateHeadline } from '../trade/EstimateHeadline';
 import { ExecuteControl } from '../trade/ExecuteControl';
-import {
-  AffixedInput,
-  EstimateCard,
-  type ExecMode,
-  LegCard,
-  SlippageLine,
-  storedExecMode,
-  TIMEOUT_CHOICES,
-  type TimeoutChoice,
-} from '../trade/PairTicketBits';
+import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
+import { AffixedInput, EstimateCard, type ExecMode, LegCard, storedExecMode } from '../trade/PairTicketBits';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from '../trade/previewBits';
 import { FieldLabel } from '../trade/SymbolCombobox';
+import { TwapArea, useTwapInput } from '../trade/TwapArea';
 import { usePreviewDebounced } from '../trade/usePreview';
+import { useTakerAfter, useTwapTakerAfter } from '../trade/useTwapTakerAfter';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
 
 /**
@@ -46,26 +41,7 @@ import { useTradeFlowOptional } from '../trade/TradeFlow';
  * slices this size, not as one order that walks the whole book. */
 const CLOSE_CLIP_USD = 100_000;
 
-/**
- * Which leg rests in a maker close: the cheaper maker + taker fee combo, as the
- * open ticket picks. CrossEx charges one schedule on every venue, so the fees
- * usually tie; then the leg whose market order would cost more (larger
- * estimated slippage) rests, since resting skips that cost. Index into `previews`.
- */
-export function pickCloseMakerLeg(previews: PreviewResult[]): 0 | 1 {
-  const [a, b] = previews;
-  const fa = a?.fees;
-  const fb = b?.fees;
-  if (fa && fb) {
-    const restA = fa.makerRate + fb.takerRate;
-    const restB = fb.makerRate + fa.takerRate;
-    if (restB < restA - 1e-12) return 1;
-    if (restA < restB - 1e-12) return 0;
-  }
-  const slipA = a?.fillEstimate?.slippagePct ?? 0;
-  const slipB = b?.fillEstimate?.slippagePct ?? 0;
-  return slipB > slipA + 1e-9 ? 1 : 0;
-}
+type RepegBp = DealOpts['repegBehindBp'];
 
 /**
  * The pair close as a FORM: what is being closed, at what price, for what fee.
@@ -79,6 +55,7 @@ export function ClosePairForm({
   base,
   legs,
   livePositions,
+  allowTwap = false,
 }: {
   base: string;
   /** `partial`: close exactly `qty` rather than the whole venue position —
@@ -86,6 +63,7 @@ export function ClosePairForm({
   legs: Array<{ symbol: string; qty: number; venue: string; partial?: boolean }>;
   /** symbol → live position, for the uPnL each close realises. */
   livePositions?: Map<string, CrossexPosition>;
+  allowTwap?: boolean;
 }) {
   const { t } = useTranslation();
   const flow = useTradeFlowOptional();
@@ -98,10 +76,12 @@ export function ClosePairForm({
    * expressed. Validated on the same (0,10] band the server enforces.
    */
   const [slipStr, setSlipStr] = useState('0.5');
-  const [slipOpen, setSlipOpen] = useState(false);
   /** Same default as the open ticket: the perp entry picked on Opportunities. */
   const [mode, setMode] = useState<ExecMode>(() => storedExecMode());
-  const [timeoutSec, setTimeoutSec] = useState<TimeoutChoice>('300');
+  const [makerLeg, setMakerLeg] = useState<'auto' | 'a' | 'b'>('auto');
+  const taker = useTakerAfter();
+  const [repeg, setRepeg] = useState<RepegBp>(REPEG_DEFAULT_BP);
+  const twap = useTwapInput();
   const slip = Number(slipStr);
   const slipInvalid = !Number.isFinite(slip) || slip <= 0 || slip > 10;
   /**
@@ -142,10 +122,16 @@ export function ClosePairForm({
             : {}),
         }))
       : null;
+  const maker = mode === 'maker';
+  const twapOn = allowTwap && maker && twap.on;
   // Not lazy: the dialog exists to show this, so it loads with the form.
   const preview = usePreviewDebounced(`close-pair-${base}`, actions, {
     refetchInterval: 5000,
+    twap: twapOn ? twap.input : undefined,
   });
+  const plan = preview.data?.twap?.plan ?? null;
+  const intervalSec = twapOn ? (plan?.intervalSec ?? twap.input.intervalSec ?? null) : null;
+  const takerBlocked = useTwapTakerAfter(taker, twapOn, plan?.takerAfterSec ?? null);
   if (!flow || legs.length !== 2) return null;
 
   /** The uPnL a leg's close realises: its slice of the position's uPnL,
@@ -172,14 +158,18 @@ export function ClosePairForm({
     // A close SELLs a long and BUYs a short.
     return p?.side === 'SELL' ? 'LONG' : 'SHORT';
   };
-  const estSlip = previews?.length
-    ? Math.max(...previews.map((p) => p.fillEstimate?.slippagePct ?? 0))
-    : null;
+
+  const autoPick = preview.data?.makerLeg ?? null;
+  const picked = makerLeg !== 'auto' ? makerLeg : (autoPick?.auto ?? null);
+  const makerIdx = picked === null ? null : picked === 'a' ? 0 : 1;
+  const takerSec = taker.sec;
+  const twapBlocked = twap.blockedBy(preview.data?.twap);
+  const dealOpts: DealOpts | undefined = maker
+    ? { makerLeg, repegBehindBp: repeg, timeoutSec: takerSec, clipBandPct: slip }
+    : undefined;
 
   // Maker + hedge: the previews price both legs as market closes; the resting
   // leg's fee is recomputed at the maker rate, and its slippage is not paid.
-  const maker = mode === 'maker';
-  const makerIdx = previews?.length === 2 ? pickCloseMakerLeg(previews) : 0;
   const notionalOf = (p: PreviewResult): number | null => {
     const mid = p.fillEstimate?.midPrice;
     const q = Number(p.qty);
@@ -191,14 +181,9 @@ export function ClosePairForm({
     const n = notionalOf(p);
     return n === null ? null : n * p.fees.makerRate;
   };
-  const makerSaving = (() => {
-    const p = previews?.[makerIdx];
-    const n = p ? notionalOf(p) : null;
-    return p?.fees && n !== null ? n * (p.fees.takerRate - p.fees.makerRate) : null;
-  })();
   /** Confirm-time only: the roles and maker settings never reach /preview. */
   const decorate = (acts: ActionInput[]): ActionInput[] => {
-    if (!maker || !previews || previews.length !== 2) return acts;
+    if (!maker || !previews || previews.length !== 2 || makerIdx === null) return acts;
     const mp = previews[makerIdx];
     const mid = mp.fillEstimate?.midPrice ?? Number(mp.price);
     if (!(mid > 0)) return acts;
@@ -208,7 +193,7 @@ export function ClosePairForm({
         ? {
             ...a,
             pairRole: i === makerIdx ? ('maker' as const) : ('hedge' as const),
-            ...(i === makerIdx ? { makerPrice: String(mid), makerTimeoutSec: Number(timeoutSec) } : {}),
+            ...(i === makerIdx ? { makerPrice: String(mid) } : {}),
             maxClip,
           }
         : a,
@@ -278,71 +263,65 @@ export function ClosePairForm({
         )}
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <FieldLabel>{t('accounts.closePair.execution')}</FieldLabel>
-        <ExecModeToggle
-          ariaLabel={t('accounts.closePair.executionAria')}
-          fill
-          value={mode}
-          onChange={setMode}
-          order={['maker', 'market']}
-          labels={{ maker: t('pairTicket.pair.limitHedge'), market: t('pairTicket.pair.twoMarket') }}
-        />
-      </div>
+      <ExecModeToggle
+        ariaLabel={t('accounts.closePair.executionAria')}
+        fill
+        value={mode}
+        onChange={setMode}
+        order={['maker', 'market']}
+        labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
+      />
 
-      {maker && (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="flex items-center gap-2 text-[11.5px]">
-              <span className="text-ink-200">{t('pairTicket.bits.makerLeg')}</span>
-              <Chip sm tone="cyan">
-                {prettyVenue(legs[makerIdx]?.venue ?? '')}
-              </Chip>
-              <span className="text-ink-400" title={t('accounts.closePair.makerLegHint')}>
-                {t('pairTicket.bits.auto')}
-              </span>
-            </span>
-            {makerSaving !== null && makerSaving > 0 && (
-              <span className="text-[11px] text-ink-400" title={t('accounts.closePair.savingHint')}>
-                <Trans
-                  i18nKey="pairTicket.bits.saving"
-                  values={{ amount: sig(makerSaving) }}
-                  components={{ g: <span className="num text-emerald-400" /> }}
-                />
-              </span>
-            )}
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <FieldLabel>
-              <span title={t('accounts.closePair.convertHint')}>{t('pairTicket.bits.convertAfter')}</span>
-            </FieldLabel>
-            <SegmentedToggle
-              ariaLabel={t('pairTicket.bits.convertAfter')}
-              fill
-              value={timeoutSec}
-              onChange={setTimeoutSec}
-              options={TIMEOUT_CHOICES.map((c) => ({
-                value: c.value,
-                label: t('pairTicket.bits.minutes', { n: Number(c.value) / 60 }),
-              }))}
+      {maker && allowTwap && (
+        <TwapArea
+          on={twap.on}
+          onToggle={twap.setOn}
+          input={twap.input}
+          onInput={twap.setInput}
+          preview={preview.data?.twap ?? null}
+          impact={preview.data?.priceImpact ?? null}
+          coin={base}
+        />
+      )}
+
+      {maker ? (
+        <MakerSettings
+          legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
+          makerLeg={makerLeg}
+          autoPick={autoPick}
+          onMakerLeg={setMakerLeg}
+          takerAfter={taker.takerAfter}
+          onTakerAfter={taker.pick}
+          intervalSec={intervalSec}
+          repegBehindBp={repeg}
+          repegLocked={false}
+          onRepeg={(v) => setRepeg(v as RepegBp)}
+          marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
+        />
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          <FieldLabel htmlFor={`close-pair-slip-${base}`}>{t('accounts.closePair.twap.marketSlippage')}</FieldLabel>
+          <AffixedInput affix={<span>%</span>}>
+            <input
+              id={`close-pair-slip-${base}`}
+              className={`input num pr-10 ${slipInvalid ? '!border-rose-500/60' : ''}`}
+              inputMode="decimal"
+              value={slipStr}
+              onChange={(e) => setSlipStr(e.target.value)}
             />
-          </div>
+          </AffixedInput>
+          {slipInvalid && <span className="text-[11px] text-rose-300">{t('accounts.closePair.slipInvalid')}</span>}
         </div>
       )}
 
       <EstimateCard dataUpdatedAt={preview.dataUpdatedAt} estimating={preview.estimating} isError={preview.isError}>
         {previews && previews.length > 0 ? (
           <>
-            {/* The aggregate only: each leg's own figure is in the table. */}
-            <div className="flex items-end justify-between gap-3">
-              <div className="flex flex-col">
-                <span className="text-[12.5px] text-ink-50">{t('accounts.closePair.pnlToRealise')}</span>
-                <span className="text-[11px] text-ink-400">{t('accounts.closePair.pnlSub')}</span>
-              </div>
-              <span className="num text-lg font-semibold">
-                {totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
-              </span>
-            </div>
+            <EstimateHeadline
+              label={t('accounts.closePair.pnlToRealise')}
+              sub={t(twapOn ? 'accounts.closePair.twap.headlineSub' : 'accounts.closePair.pnlSub')}
+              value={totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
+            />
             <table className="w-full">
               <thead>
                 <tr className="text-[12px] font-normal text-ink-300">
@@ -370,7 +349,9 @@ export function ClosePairForm({
                         Maker mode: one leg rests, the other is the market hedge. */}
                     <td className="num py-1.5 text-right text-[12.5px] text-ink-50">
                       {maker ? (
-                        i === makerIdx ? (
+                        makerIdx === null ? (
+                          '—'
+                        ) : i === makerIdx ? (
                           <span className="text-[11px] text-cyan-300" title={t('accounts.closePair.restsTitle')}>
                             {t('accounts.closePair.rests')}
                           </span>
@@ -425,25 +406,6 @@ export function ClosePairForm({
             <PreviewFallback isError={preview.isError} error={preview.error} />
           </div>
         )}
-        {/* Outside the preview branch on purpose: an out-of-range band
-            empties the preview, and the editor must stay on screen to be
-            corrected. */}
-        <div className="border-t border-ink-800/80 pt-2">
-          <SlippageLine
-            est={estSlip !== null ? `${estSlip >= 0 ? '+' : ''}${estSlip.toFixed(3)}%` : null}
-            max={`${slipStr}%`}
-            open={slipOpen}
-            onToggle={() => setSlipOpen((v) => !v)}
-            value={slipStr}
-            onChange={setSlipStr}
-            invalid={slipInvalid}
-            invalidText={t('accounts.closePair.slipInvalid')}
-            inputAriaLabel={t('accounts.closePair.slipAria')}
-            title={t(maker ? 'accounts.closePair.slipTitleMaker' : 'accounts.closePair.slipTitle')}
-            hint={t('accounts.closePair.slipHint')}
-            quick={['0.2', '0.5', '1', '2']}
-          />
-        </div>
       </EstimateCard>
 
       <div className="flex flex-col gap-1.5">
@@ -453,7 +415,7 @@ export function ClosePairForm({
           tone="red"
           label={
             <>
-              {t('accounts.closePair.closeBoth')}
+              {t(twapOn ? 'accounts.closePair.twap.start' : 'accounts.closePair.closeBoth')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -472,8 +434,19 @@ export function ClosePairForm({
           // the full close as done.
           // The mode and timeout too: a maker close and a market close of the
           // same size must not share a deal id.
-          intentKey={['closeBoth', mode, maker ? timeoutSec : '', String(slip), qtyStr, ...legs.map((l) => `${l.symbol}:${l.qty}`)].join('|')}
+          intentKey={[
+            'closeBoth',
+            mode,
+            maker ? `${makerLeg}:${taker.takerAfter.kind}:${takerSec ?? ''}:${repeg ?? ''}` : '',
+            twapOn ? JSON.stringify(twap.input) : '',
+            String(slip),
+            qtyStr,
+            ...legs.map((l) => `${l.symbol}:${l.qty}`),
+          ].join('|')}
           decorate={decorate}
+          dealOpts={dealOpts}
+          twap={twapOn && plan ? { plan, blocked: twapBlocked } : null}
+          extraDisabled={(maker && (makerIdx === null || takerBlocked)) || (twapOn && (twapBlocked || !plan))}
           buttonClassName="w-full"
           // The panel above already reviews this close; the hover card would
           // repeat it on top of the dialog. Errors still surface.
@@ -485,10 +458,14 @@ export function ClosePairForm({
           className="text-[11px] leading-relaxed text-ink-400"
           title={t(maker ? 'accounts.closePair.pairNoteMaker' : 'accounts.closePair.pairNote')}
         >
-          <Trans
-            i18nKey={maker ? 'accounts.closePair.mechanicsMaker' : 'accounts.closePair.mechanics'}
-            components={{ b: <span className="font-medium text-ink-200" /> }}
-          />
+          {twapOn ? (
+            t('accounts.closePair.twap.reduceOnly')
+          ) : (
+            <Trans
+              i18nKey={maker ? 'accounts.closePair.mechanicsMaker' : 'accounts.closePair.mechanics'}
+              components={{ b: <span className="font-medium text-ink-200" /> }}
+            />
+          )}
         </p>
       </div>
     </div>

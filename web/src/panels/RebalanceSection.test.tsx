@@ -10,16 +10,10 @@ import {
   makeCrossexPosition,
   accountBodies,
   accountHandler,
-  auditRebalanceViews,
   REBALANCE_NOW,
   rebalanceHandler,
   rebalanceViews,
   rebased,
-  OWNER_BEFORE_PERPS,
-  REALIZE_HALTED_LEG_OPEN_JOB,
-  REALIZE_ROUTE_JOB,
-  REALIZE_RETRYING_JOB,
-  REALIZE_RUNNING_JOB,
   transferHandler,
   transferViews,
   whaleRebalanceViews,
@@ -655,10 +649,6 @@ function servePositions(view: RebalanceView, positions: CrossexPosition[]) {
   server.use(http.get('/api/positions', () => HttpResponse.json(env({ positions, exposure: [] }))));
 }
 
-function serveMark(view: RebalanceView) {
-  servePositions(view, [makeCrossexPosition({ symbol: HL_ETH, markPrice: '1821' })]);
-}
-
 describe('RebalanceSection profit step', () => {
   beforeEach(() => {
     vi.setSystemTime(REBALANCE_NOW);
@@ -668,78 +658,8 @@ describe('RebalanceSection profit step', () => {
     vi.useRealTimers();
   });
 
-  it('card names step 1', async () => {
-    await show({ ...rebalanceViews.realizeRunning });
-    expect(within(region()).getByRole('button', { name: 'Running · step 1 of 2' })).toBeEnabled();
-    expect(REALIZE_RUNNING_JOB.steps[REALIZE_RUNNING_JOB.stepIndex]?.name).toBe('Close');
-    cleanup();
-    await show(rebalanceViews.realizeRoute);
-    expect(within(region()).getByRole('button', { name: 'Running · step 2 of 2' })).toBeEnabled();
-  });
-
-  it('card while a reopen retries', async () => {
-    serveMark(rebalanceViews.realizeRetrying);
-    renderWithClient(<RebalanceSection />);
-    await screen.findByRole('region', { name: 'Borrow' });
-    const gap = await waitFor(() => {
-      const hit = line('Hyperliquid short 53.8 ETH smaller · $97,970 not hedged · reopening.');
-      expect(hit).not.toBeNull();
-      return hit!;
-    });
-    expect(gap).toHaveClass('text-gold');
-    expect(sub()).toBeNull();
-    expect(REALIZE_RETRYING_JOB.steps[REALIZE_RETRYING_JOB.stepIndex]?.retry?.convertAmount).toBe(1500);
-  });
-
-  it('card stop with the leg open', async () => {
-    servePositions(rebalanceViews.realizeHaltedLegOpen, [
-      makeCrossexPosition({ symbol: HL_ETH, positionSide: 'SHORT', positionQty: '12.2', markPrice: '1821' }),
-      makeCrossexPosition({ symbol: GATE_ETH, positionSide: 'LONG', positionQty: '66', markPrice: '1821' }),
-    ]);
-    renderWithClient(<RebalanceSection />);
-    await screen.findByRole('region', { name: 'Borrow' });
-    const box = await waitFor(() => {
-      const hit = line('Hyperliquid short is 53.8 ETH smaller than the Gate long.');
-      expect(hit).not.toBeNull();
-      return hit!;
-    });
-    expect(box).toHaveClass('text-guava');
-    expect(sub()).toBe('$97,970 not hedged.');
-    expect(cardButtons()[0]).toHaveTextContent(/^Reduce borrow$/);
-    expect(cardButtons()[0]).toBeEnabled();
-    expect(REALIZE_HALTED_LEG_OPEN_JOB.status).toBe('halted');
-  });
-
-  it('abandoned run names the open gap', async () => {
-    const abandoned = auditRebalanceViews.realizeAbandonedLegOpen;
-    const gateLong = (qty: string) => makeCrossexPosition({ symbol: GATE_ETH, positionSide: 'LONG', positionQty: qty, markPrice: '1821' });
-    const hlShort = (qty: string) => makeCrossexPosition({ symbol: HL_ETH, positionSide: 'SHORT', positionQty: qty, markPrice: '1821' });
-    const text = '53.8 ETH short not reopened, $97,970 not hedged';
-    servePositions(abandoned, [hlShort('-12.2'), gateLong('66')]);
-    renderWithClient(<RebalanceSection />);
-    const gap = await within(await screen.findByRole('region', { name: 'Borrow' })).findByText(text);
-    expect(gap).toHaveClass('text-guava');
-    expect(gap.compareDocumentPosition(cardButtons()[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    cleanup();
-    servePositions(abandoned, [hlShort('-66'), gateLong('66')]);
-    renderWithClient(<RebalanceSection />);
-    await screen.findByRole('region', { name: 'Borrow' });
-    await waitFor(() => expect(within(region()).queryByText(/not reopened/)).toBeNull());
-    expect(cardButtons()[0]).toHaveTextContent('Reduce borrow');
-    cleanup();
-    const before = { ...abandoned, job: { ...abandoned.job!, before: { buckets: abandoned.buckets, perps: OWNER_BEFORE_PERPS } } };
-    servePositions(before, [hlShort('-12.2'), gateLong('12.2')]);
-    renderWithClient(<RebalanceSection />);
-    await screen.findByRole('region', { name: 'Borrow' });
-    await waitFor(() => expect(within(region()).queryByText(/not reopened/)).toBeNull());
-    cleanup();
-    servePositions(before, [hlShort('-12.2'), gateLong('66')]);
-    renderWithClient(<RebalanceSection />);
-    expect(await within(await screen.findByRole('region', { name: 'Borrow' })).findByText(text)).toBeInTheDocument();
-  });
-
   it('a new job keeps the abandoned gap line until positions are whole', async () => {
-    const done = rebalanceViews.realizeDone;
+    const done = rebalanceViews.ownerRealizeDone;
     const gateLong = (qty: string) => makeCrossexPosition({ symbol: GATE_ETH, positionSide: 'LONG', positionQty: qty, markPrice: '1821' });
     const hlShort = (qty: string) => makeCrossexPosition({ symbol: HL_ETH, positionSide: 'SHORT', positionQty: qty, markPrice: '1821' });
     const carried: RebalanceView = {
@@ -764,46 +684,6 @@ describe('RebalanceSection profit step', () => {
     renderWithClient(<RebalanceSection />);
     await screen.findByRole('region', { name: 'Borrow' });
     await waitFor(() => expect(within(region()).queryByText(/not reopened/)).toBeNull());
-  });
-
-  it('card gap with no positions read says the size', async () => {
-    await show(rebalanceViews.realizeRetrying);
-    expect(line('Hyperliquid short 53.8 ETH smaller · reopening.')).toHaveClass('text-gold');
-  });
-
-  it('part fill shows the gap', async () => {
-    serveMark(rebalanceViews.realizePartFill);
-    renderWithClient(<RebalanceSection />);
-    await screen.findByRole('region', { name: 'Borrow' });
-    await waitFor(() => expect(line('Hyperliquid short 30.0 ETH smaller · $54,630 not hedged · reopening.')).not.toBeNull());
-  });
-
-  it('route convert reads step 2', async () => {
-    const steps = REALIZE_ROUTE_JOB.steps.map((step, index) => (index === REALIZE_ROUTE_JOB.stepIndex ? { ...step, name: 'Convert' } : step));
-    await show({ ...rebalanceViews.realizeRoute, job: { ...REALIZE_ROUTE_JOB, route: 'convert', steps } });
-    expect(within(region()).getByRole('button', { name: 'Running · step 2 of 2' })).toBeEnabled();
-  });
-
-  it('one-step run reads Running', async () => {
-    await show(auditRebalanceViews.realizeOnlyRunning);
-    expect(cardButtons()[0]).toHaveTextContent(/^Running$/);
-  });
-
-  it('stop before the close', async () => {
-    await show(rebalanceViews.realizeHaltedBeforeClose);
-    expect(line('Stopped before the close')).not.toBeNull();
-    expect(within(region()).getByRole('button', { name: 'Stopped · open' })).toBeEnabled();
-  });
-
-  it('stop after a close that was sent reads like the modal', async () => {
-    await show(auditRebalanceViews.realizeHaltedCloseSent);
-    expect(line('Stopped after sending the close')).not.toBeNull();
-    expect(line('Stopped before the close')).toBeNull();
-  });
-
-  it('card sizes use one decimal', async () => {
-    await show(whaleRebalanceViews.realizeWhaleRetrying);
-    expect(line('Hyperliquid short 11,000.0 ETH smaller · reopening.')).not.toBeNull();
   });
 });
 

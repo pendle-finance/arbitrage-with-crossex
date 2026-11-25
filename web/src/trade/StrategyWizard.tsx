@@ -468,7 +468,7 @@ function WizardBody({
                   {t('trade.wizard.rateChanged')}
                 </p>
               )}
-            <PairTicket onExecuted={() => setStep('done')} />
+            <PairTicket allowTwap={false} onExecuted={() => setStep('done')} />
             {step === 2 && !resuming && (
               <button
                 type="button"

@@ -2,7 +2,7 @@ import type { BorosOrderBook } from '../boros/client';
 import { walkBorosBook } from '../boros/opportunities';
 import { CoreError } from '../errors';
 import { type NormalizedBook, touchOf } from '../estimate/books';
-import { pickCloseMakerLeg } from '../estimate/closeMaker';
+import { type MakerLegInput, pickMakerLeg } from '../estimate/makerLeg';
 import { feeRowsForTier } from '../estimate/crossexFeeTiers';
 import { resolveFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { walkBook } from '../estimate/fill';
@@ -145,9 +145,14 @@ function impactUsdOf(leg: Leg, qtys: number[]): number {
   return qtys.reduce((total, qty) => total + (impactOf(leg.book, closeSideOf(leg), leg.mid, qty)?.usd ?? 0), 0);
 }
 
-function slippagePctOf(leg: Leg, qty: number): number | null {
+function makerInputOf(leg: Leg, qty: number): MakerLegInput {
   const walk = walkBook(closeLevelsOf(leg), qty);
-  return walk ? (Math.abs(walk.avgPrice - leg.mid) / leg.mid) * 100 : null;
+  return {
+    makerRate: leg.makerRate,
+    takerRate: leg.takerRate,
+    slippagePct: walk ? (Math.abs(walk.avgPrice - leg.mid) / leg.mid) * 100 : null,
+    pastBookDepth: walk?.exhausted ? walk.filledQty : null,
+  };
 }
 
 function borosMidOf(book: BorosOrderBook): number | null {
@@ -219,10 +224,7 @@ export function planDelever(input: DeleverInput): DeleverPlan {
   if (legs[0].base !== legs[1].base) throw new CoreError('Both perps of a Delever must be on the same coin.');
   const lot = coarsestLot(legs.map((leg) => leg.lot)) ?? DEFAULT_STEP;
   const closeQty = sameSizeOf(legs, lot);
-  const makerLeg = pickCloseMakerLeg(
-    { makerRate: legs[0].makerRate, takerRate: legs[0].takerRate, slippagePct: slippagePctOf(legs[0], closeQty) },
-    { makerRate: legs[1].makerRate, takerRate: legs[1].takerRate, slippagePct: slippagePctOf(legs[1], closeQty) },
-  );
+  const makerLeg = pickMakerLeg(makerInputOf(legs[0], closeQty), makerInputOf(legs[1], closeQty)).leg === 'a' ? 0 : 1;
   const lead = legs[makerLeg];
   const follow = legs[makerLeg === 0 ? 1 : 0];
   const minQty = Math.max(...legs.map((leg) => minQtyOf(leg.rule, lot, leg.mark)));

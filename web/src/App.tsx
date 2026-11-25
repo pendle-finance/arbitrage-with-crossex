@@ -33,7 +33,7 @@ import { Drawer } from './components/Drawer';
 import { RecoveryBanner } from './trade/RecoveryBanner';
 import { StrategyWizard } from './trade/StrategyWizard';
 import { TradeFlowProvider, useTradeFlow } from './trade/TradeFlow';
-import { TradeRail } from './trade/TradeRail';
+import { TradeRail, TradeRailTabs, type Venue } from './trade/TradeRail';
 
 // The markdown renderer is ~160kB and only the guide needs it — split it out so
 // opening the terminal doesn't pay for a document most sessions never read.
@@ -352,16 +352,18 @@ function OrderTicketButton() {
 function OrderTicketDrawer() {
   const flow = useTradeFlow();
   const [busy, setBusy] = useState(false);
+  const [venue, setVenue] = useState<Venue>('perp');
   const { t } = useTranslation();
   return (
     <Drawer
       open={flow.railOpen}
       title={t('app.orderTicket')}
+      header={<TradeRailTabs venue={venue} onChange={setVenue} />}
       locked={busy}
       onClose={flow.closeRail}
       widthClass="w-[560px]"
     >
-      <TradeRail onBusyChange={setBusy} />
+      <TradeRail venue={venue} onVenueChange={setVenue} onBusyChange={setBusy} />
     </Drawer>
   );
 }

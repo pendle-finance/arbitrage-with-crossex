@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse } from '../api/types';
+import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse, TwapStartBody } from '../api/types';
 import { sig } from '../lib/fmt';
 import { baseHandlers, ethPosition, makeCrossexPosition, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -469,5 +469,99 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
 
     expect(screen.queryByText(/Above the position/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled());
+  });
+});
+
+describe('ClosePopover — TWAP', () => {
+  const bigLeg = makeCrossexPosition({ positionQty: '150', markPrice: '1730', upnl: '4740.43' });
+
+  function twapPreviewHandler() {
+    return http.post('/api/preview', async ({ request }) => {
+      const { actions } = (await request.json()) as { actions: ActionInput[] };
+      return HttpResponse.json(
+        env<PreviewResponse>({
+          previews: [
+            previewFor(actions[0], {
+              side: 'SELL',
+              type: 'LIMIT',
+              tif: 'IOC',
+              reduceOnly: true,
+              qty: '150',
+              price: '1721.35',
+              estNotional: 259_500,
+              closing: { positionQty: '150', upnl: '4740.43', mark: 1730 },
+              fees: { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { taker: 129.75 } },
+            }),
+          ],
+          priceImpact: { whole: 8, sliced: 1 },
+          twap: {
+            plan: { slices: 5, sliceQty: '30', lastQty: '30', intervalSec: 180, durationSec: 900, takerAfterSec: 144 },
+            refusal: null,
+          },
+        }),
+      );
+    });
+  }
+
+  async function turnOnTwap() {
+    fireEvent.click(await screen.findByRole('switch', { name: 'TWAP' }));
+    fireEvent.change(await screen.findByLabelText('Duration'), { target: { value: '15m' } });
+    fireEvent.change(await screen.findByLabelText('Interval'), { target: { value: '3m' } });
+  }
+
+  it('twap off keeps reduce-only ioc', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+
+    expect(await screen.findByText('Reduce-only IOC')).toBeInTheDocument();
+    expect(screen.getByText('Order')).toBeInTheDocument();
+    expect(screen.getAllByText(/0\.5%/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Close now' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start TWAP close' })).toBeNull();
+  });
+
+  it('twap on slices as reduce-only makers', async () => {
+    const starts: TwapStartBody[] = [];
+    server.use(
+      ...baseHandlers(),
+      twapPreviewHandler(),
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as TwapStartBody);
+        return HttpResponse.json(env({ id: 'job-1' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+    await turnOnTwap();
+
+    const btn = await screen.findByRole('button', { name: 'Start TWAP close' });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 3_000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(starts).toHaveLength(1), { timeout: 3_000 });
+    expect(starts[0]).toMatchObject({
+      kind: 'twap',
+      durationSec: 900,
+      slices: 5,
+      deal: {
+        a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'SELL', reduceOnly: true },
+        execution: 'maker',
+        pricePolicy: 'touch',
+        timeoutSec: 144,
+      },
+    });
+    expect(screen.queryByText('Reduce-only IOC')).toBeNull();
+  });
+
+  it('leg card and warning stay', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(
+      <ClosePopover position={bigLeg} hedgedSibling={{ venue: 'GATE', side: 'SHORT' }} onDismiss={() => {}} />,
+    );
+    await turnOnTwap();
+
+    expect(await screen.findByRole('button', { name: 'Start TWAP close' })).toBeInTheDocument();
+    expect(screen.getByText(/This leg hedges the Gate Short/)).toBeInTheDocument();
+    expect(screen.getByText(/mark 1730/)).toBeInTheDocument();
+    expect(screen.getByText('Reduce-only.')).toBeInTheDocument();
+    expect(screen.getByText('Realized as each slice fills')).toBeInTheDocument();
   });
 });

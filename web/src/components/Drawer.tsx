@@ -12,6 +12,7 @@ interface Props {
   locked?: boolean;
   onClose: () => void;
   children: ReactNode;
+  header?: ReactNode;
   /** Defaults to 420px (Settings). The order ticket takes more: its market
    * cards carry full names like "Binance BTCUSDT 25 Sep 2026", which
    * truncated at the narrower width. */
@@ -25,6 +26,7 @@ export function Drawer({
   locked = false,
   onClose,
   children,
+  header,
   widthClass = 'w-[420px]',
 }: Props) {
   const { t } = useTranslation();
@@ -61,8 +63,10 @@ export function Drawer({
         ref={panel}
         className={`absolute inset-y-0 right-0 flex ${widthClass} max-w-[92vw] flex-col border-l border-ink-700 bg-ink-900`}
       >
-        <div className="flex items-center justify-between border-b border-ink-800 px-5 py-4">
-          <h2 className="text-sm font-semibold text-ink-100">{title}</h2>
+        <div
+          className={`flex justify-between border-b border-ink-800 px-5 ${header ? 'items-stretch' : 'items-center py-4'}`}
+        >
+          {header ?? <h2 className="text-sm font-semibold text-ink-100">{title}</h2>}
           {!locked && (
             <button
               type="button"

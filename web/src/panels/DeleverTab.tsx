@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useDeleverPlan, useStartRebalance } from '../api/queries';
 import type { DeleverPlan, DeleverRequest, RealizeExec, SliceOption } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
+import { HoverCard } from '../components/HoverCard';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { PairPicker, type PairPickerRow } from '../components/PairPicker';
 import { SegmentedToggle } from '../components/SegmentedToggle';
@@ -14,10 +15,12 @@ import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sigGrouped,
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
+import { TwapArea, useTwapInput } from '../trade/TwapArea';
 import { AffixedInput } from '../trade/PairTicketBits';
 import { daysLeftText, useOpenPairs, type OpenPair } from './assets/pairs';
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
+import { spanText } from '../lib/span';
 import { execModeLabel, poolKey } from './rebalanceCopy';
 import { SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
@@ -59,12 +62,13 @@ function closeOf(pair: OpenPair, share: Share, customText: string): { close: num
   return { close, error: null };
 }
 
-function requestOf(pair: OpenPair, close: number, exec: RealizeExec, sliceUsd: number | null): DeleverRequest {
+function requestOf(pair: OpenPair, close: number, exec: RealizeExec, sliceUsd: number | null, twap: DeleverRequest['twap']): DeleverRequest {
   return {
     perps: pair.perps.map((p) => ({ symbol: p.symbol, qty: close })),
     boros: pair.boros.map((b) => ({ marketId: b.marketId, size: (b.size * close) / pair.size })),
     exec,
     ...(sliceUsd !== null ? { sliceUsd } : {}),
+    ...(twap ? { twap } : {}),
   };
 }
 
@@ -129,8 +133,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const pairs = open.filter((p) => p.unit === 'base');
   const pair = pairs.find((p) => p.key === picked) ?? largestIm(pairs);
   const { close, error: amountText } = pair ? closeOf(pair, share, customText) : { close: null, error: null };
+  const twap = useTwapInput();
   const sliceUsd = sliceUsdOf(slicePick, sliceText);
-  const request = pair !== null && close !== null ? requestOf(pair, close, exec, sliceUsd) : null;
+  const twapSent = twap.on && !twap.startBlocked ? twap.input : undefined;
+  const request = pair !== null && close !== null ? requestOf(pair, close, exec, twap.on ? null : sliceUsd, twapSent) : null;
   const query = useDeleverPlan(request);
 
   if (loading) return <Skeleton className="h-40 w-full" />;
@@ -153,13 +159,25 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const option = plan ? optionOf(plan, slicePick) : null;
   const estimate = plan?.estimates[exec] ?? null;
   const borosGapYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
+  const leadClose = plan?.legs[plan.makerLeg]?.closeQty ?? 0;
   const needsBoros = pair.boros.length > 0;
   const walletBlocked = needsBoros && wallet.state !== null && !wallet.canTrade;
   const walletReady = !needsBoros || wallet.canTrade;
   const stale = plan !== null && query.isError;
-  const slicePastBook = option?.pastBook === true;
+  const twapPlan = twap.on ? (plan?.twap?.plan ?? null) : null;
+  const twapBody = twapPlan ? { durationSec: twapPlan.durationSec, slices: twapPlan.slices } : undefined;
+  const slicePastBook = !twap.on && option?.pastBook === true;
+  const twapBlocked = twap.blockedBy(plan?.twap);
   const ready =
-    plan !== null && !query.isPlaceholderData && !stale && plan.refused === null && !slicePastBook && lock === null && !start.isPending && walletReady;
+    plan !== null &&
+    !query.isPlaceholderData &&
+    !stale &&
+    plan.refused === null &&
+    !slicePastBook &&
+    !twapBlocked &&
+    lock === null &&
+    !start.isPending &&
+    walletReady;
 
   const modeLabel = (mode: RealizeExec): string =>
     execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(option ? option.seconds[mode] / Math.max(1, option.count) : 0));
@@ -173,18 +191,16 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
       ]
     : [];
 
-  const holdLabel = t('accounts.deleverTab.hold', {
-    coin: pair.base,
-    venueA: prettyVenue(pair.longVenue),
-    venueB: prettyVenue(pair.shortVenue),
-    pct: pctText(pct),
-    qty: qtyText(close ?? 0),
-  });
+  const holdLabel =
+    twapPlan
+      ? t('accounts.delever.holdTwap', { coin: pair.base, qty: qtyText(close ?? 0), duration: spanText(twapPlan.durationSec) })
+      : t('accounts.deleverTab.hold', { coin: pair.base, qty: qtyText(close ?? 0) });
 
   const confirm = () => {
-    if (request === null || estimate === null) return;
+    if (request === null || estimate === null || close === null) return;
+    const delever = twapBody ? requestOf(pair, close, exec, null, twapBody) : request;
     start.mutate(
-      { kind: 'delever', exec, sliceUsd: option?.sizeUsd ?? sliceUsd ?? undefined, delever: request, costUsd: estimate.totalUsd },
+      { kind: 'delever', exec, sliceUsd: twapBody ? undefined : (option?.sizeUsd ?? sliceUsd ?? undefined), delever, costUsd: estimate.totalUsd },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
     );
   };
@@ -213,25 +229,46 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
           />
         </Field>
-        {option && (
-          <SliceSizeRow
-            sizeUsd={option.sizeUsd}
-            count={option.count}
-            open={slicesOpen}
-            onToggle={() => setSlicesOpen((v) => !v)}
-            table={{
-              options: plan.sliceOptions,
-              value: slicePick?.kind === 'custom' ? (plan.sliceOptions.find((o) => o.custom)?.sizeUsd ?? -1) : option.sizeUsd,
-              exec,
-              onPick: (usd) => setSlicePick(plan.sliceOptions.some((o) => !o.custom && o.sizeUsd === usd) ? { kind: 'preset', usd } : { kind: 'custom' }),
-              customText: sliceText,
-              onCustom: (text) => {
-                setSliceText(text);
-                setSlicePick({ kind: 'custom' });
-              },
-              coin: pair.base,
-            }}
-          />
+        <TwapArea
+          on={twap.on}
+          onToggle={twap.setOn}
+          input={twap.input}
+          onInput={twap.setInput}
+          preview={plan.twap ?? null}
+          impact={plan.priceImpact ?? null}
+          coin={pair.base}
+          offLabel={
+            option && (
+              <SliceSizeRow
+                sizeUsd={option.sizeUsd}
+                count={option.count}
+                open={slicesOpen}
+                onToggle={() => setSlicesOpen((v) => !v)}
+                table={{
+                  options: plan.sliceOptions,
+                  value: slicePick?.kind === 'custom' ? (plan.sliceOptions.find((o) => o.custom)?.sizeUsd ?? -1) : option.sizeUsd,
+                  exec,
+                  onPick: (usd) => setSlicePick(plan.sliceOptions.some((o) => !o.custom && o.sizeUsd === usd) ? { kind: 'preset', usd } : { kind: 'custom' }),
+                  customText: sliceText,
+                  onCustom: (text) => {
+                    setSliceText(text);
+                    setSlicePick({ kind: 'custom' });
+                  },
+                  coin: pair.base,
+                }}
+              />
+            )
+          }
+        />
+        {twapPlan && borosGapYu > 0 && leadClose > 0 && (
+          <div className="flex items-center justify-between gap-3 px-1 text-xs text-ink-300">
+            <HoverCard label={t('accounts.delever.borosPerSlice')} widthPx={260}>
+              {t('accounts.delever.borosPerSliceHover')}
+            </HoverCard>
+            <span className="num text-ink-100">
+              {t('accounts.delever.borosPerSliceValue', { amount: qtyText((borosGapYu * Number(twapPlan.sliceQty)) / leadClose) })}
+            </span>
+          </div>
         )}
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {plan.notHedgedMaxQty > 0 && (

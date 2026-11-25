@@ -19,7 +19,7 @@ export function initialTab(view: RebalanceView): RebalanceTab {
   return view.fullPlan?.needsRealize ? 'realize' : 'move';
 }
 
-const jobTab = (job: RebalanceJob): RebalanceTab => job.kind ?? 'move';
+const jobTab = (job: RebalanceJob): RebalanceTab => (job.kind === 'twap' ? 'move' : (job.kind ?? 'move'));
 
 const isLive = (job: RebalanceJob | null): boolean =>
   job?.status === 'running' ||
@@ -64,7 +64,7 @@ export function RebalanceModal({
   const onError = (error: Error) => toast.push('error', apiErrorText(error));
 
   let body: ReactNode;
-  if (shown && jobTab(job) === tab) {
+  if (shown && (job.kind === 'twap' || jobTab(job) === tab)) {
     body = (
       <RebalanceJobView
         job={job} view={view} now={now} holdMs={holdMs} transfer={transfer} onClose={onClose} onTransfer={onTransfer} onTab={setTab}

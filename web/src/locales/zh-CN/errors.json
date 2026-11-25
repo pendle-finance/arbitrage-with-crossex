@@ -246,7 +246,6 @@
   "quotesUsedNext": "请等 Gate 的计数清零（24 小时内）后点击恢复，或在持仓中平掉 {{venue}} {{sideWord}}的 {{size}} {{base}}。",
   "refusedNext": "点击恢复重试，或在持仓中平掉 {{venue}} {{sideWord}}的 {{size}} {{base}}。",
   "underMinimumNext": "请放弃，然后在持仓中平掉 {{venue}} {{sideWord}}的 {{size}} {{base}}。",
-  "rebalanceStoppedBeforeClose": "再平衡在平仓前已停止。",
   "unknownStep": "未知步骤 {{step}}",
   "transferFailed": "划转失败。",
   "transferFailedReason": "划转失败：{{inner}}。",

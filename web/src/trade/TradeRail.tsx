@@ -1,30 +1,3 @@
-/**
- * The manual order ticket — now the CONTENT of an on-demand drawer rather
- * than a permanent right rail. The guided path is the StrategyWizard; this
- * surface is for free-form trades, and mounts only while its drawer is open,
- * so it can never sit armed beside content it has nothing to do with.
- *
- * The top-level choice is the VENUE, not the execution style:
- *
- *   CrossEx perps ──┬─ Pair   ─┬─ 2 market orders
- *                   │          └─ Limit + hedge
- *                   └─ Single
- *   Boros rates ────── Market order, 2 legs
- *
- * WHY venue-first. The Boros two-leg market ticket and the perp pair's "2
- * market orders" mode are near-identical surfaces — same verb, same two-leg
- * shape, same size and slippage controls — that put on DIFFERENT exposure on
- * DIFFERENT venues. Someone who takes the wrong one ends up unhedged while
- * believing they are hedged. As three sibling tabs those two sit adjacent and
- * a label is the only thing between them; nesting execution style UNDER the
- * venue means they can never be one mis-click apart, and the thing the user
- * has to hold in their head is reduced to "which venue" — which the rail then
- * states outright rather than leaving to be inferred.
- *
- * Everything downstream repeats the venue rather than assuming it: the ticket
- * header names it, and the Boros confirm names the venue and both markets
- * before anything is sent.
- */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SegmentedToggle } from '../components/SegmentedToggle';
@@ -35,22 +8,39 @@ import { SingleTicket } from './SingleTicket';
 import { useTradeFlowOptional } from './TradeFlow';
 
 /** Which venue's legs the ticket will touch. */
-type Venue = 'perp' | 'boros';
-/** Perp-only sub-choice; Boros has a single ticket, so it needs none. */
-type PerpMode = 'single' | 'pair';
+export type Venue = 'perp' | 'boros';
+type TicketMode = 'single' | 'pair';
+
+export function TradeRailTabs({ venue, onChange }: { venue: Venue; onChange: (next: Venue) => void }) {
+  const { t } = useTranslation();
+  return (
+    <UnderlineTabs<Venue>
+      ariaLabel={t('common.venue')}
+      value={venue}
+      onChange={onChange}
+      look="underline"
+      className="border-b-0"
+      options={[
+        { value: 'perp', label: t('trade.rail.crossexPerps') },
+        { value: 'boros', label: t('trade.rail.borosRates') },
+      ]}
+    />
+  );
+}
 
 export function TradeRail({
+  venue,
+  onVenueChange,
   onBusyChange,
 }: {
-  /** True while a Boros execution is in flight — the drawer hosting this rail
-   * locks its close controls off it (see BorosPairTicket.onBusyChange). */
+  venue: Venue;
+  onVenueChange: (next: Venue) => void;
   onBusyChange?: (busy: boolean) => void;
-} = {}) {
+}) {
   const { t } = useTranslation();
-  const [venue, setVenue] = useState<Venue>('perp');
   // Pair is the default within perps: the terminal exists for delta-neutral
   // pair entries.
-  const [perpMode, setPerpMode] = useState<PerpMode>('pair');
+  const [mode, setMode] = useState<TicketMode>('pair');
   // Once visited, the Boros ticket stays MOUNTED (hidden) across venue flips.
   // Its §5 fill report, unhedged-residual warning and armed completion are
   // component state — unmounting on a venue flip would bury a live
@@ -71,9 +61,9 @@ export function TradeRail({
   const prefillNonce = flow?.pairPrefill?.nonce ?? 0;
   useEffect(() => {
     if (!prefillNonce) return;
-    setVenue('perp');
-    setPerpMode('pair');
-  }, [prefillNonce]);
+    onVenueChange('perp');
+    setMode('pair');
+  }, [prefillNonce, onVenueChange]);
 
   // A missing-perp ROW asks for one leg, so the rail shows the single ticket
   // rather than the pair — same contract as the pair prefill above, opposite
@@ -81,8 +71,8 @@ export function TradeRail({
   const singlePerpNonce = flow?.singlePerpPrefill?.nonce ?? 0;
   useEffect(() => {
     if (!singlePerpNonce) return;
-    setVenue('perp');
-    setPerpMode('single');
+    onVenueChange('perp');
+    setMode('single');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [singlePerpNonce]);
 
@@ -91,50 +81,26 @@ export function TradeRail({
   const borosOpenNonce = flow?.borosOpenPrefill?.nonce ?? 0;
   useEffect(() => {
     if (!borosOpenNonce) return;
-    setVenue('boros');
-  }, [borosOpenNonce]);
+    onVenueChange('boros');
+  }, [borosOpenNonce, onVenueChange]);
 
   return (
-    // The drawer supplies width, heading and scroll; this is just the tickets.
-    <div className="flex flex-col gap-4" aria-label={t('trade.rail.orderTicket')}>
+    <div className="flex flex-col gap-3">
+      <SegmentedToggle<TicketMode>
+        ariaLabel={t('trade.rail.ticketKindAria')}
+        value={mode}
+        onChange={setMode}
+        fill
+        options={[
+          { value: 'pair', label: t('common.pair') },
+          { value: 'single', label: t('trade.rail.single') },
+        ]}
+      />
       <div>
-        {/* The VENUE switch is navigation — which ticket am I on — so it
-            reads as tabs. The perp mode below is a setting on the ticket,
-            the same choice the Boros ticket makes with a boxed toggle, so
-            it is styled to match rather than looking like a third surface. */}
-        <UnderlineTabs<Venue>
-          ariaLabel={t('common.venue')}
-          value={venue}
-          onChange={setVenue}
-          options={[
-            { value: 'perp', label: t('trade.rail.crossexPerps') },
-            { value: 'boros', label: t('trade.rail.borosRates') },
-          ]}
-        />
-        {/* Stated, never inferred: the rail says which venue's legs this
-            ticket touches before the user reads a single field. */}
-        <p className="mt-2 mb-3 text-[11px] text-ink-400">{venue === 'perp' ? t('trade.rail.perpBlurb') : t('trade.rail.borosBlurb')}</p>
-
-        {venue === 'perp' && (
-          <>
-            <div className="mb-3">
-              <SegmentedToggle<PerpMode>
-                ariaLabel={t('trade.rail.perpMode')}
-                value={perpMode}
-                onChange={setPerpMode}
-                fill
-                options={[
-                  { value: 'pair', label: t('common.pair') },
-                  { value: 'single', label: t('trade.rail.single') },
-                ]}
-              />
-            </div>
-            {perpMode === 'single' ? <SingleTicket /> : <PairTicket />}
-          </>
-        )}
+        {venue === 'perp' && (mode === 'single' ? <SingleTicket /> : <PairTicket />)}
         {(venue === 'boros' || borosSeen) && (
           <div hidden={venue !== 'boros'}>
-            <BorosPairTicket active={venue === 'boros'} onBusyChange={onBusyChange} />
+            <BorosPairTicket active={venue === 'boros'} onBusyChange={onBusyChange} mode={mode} onModeChange={setMode} />
           </div>
         )}
       </div>

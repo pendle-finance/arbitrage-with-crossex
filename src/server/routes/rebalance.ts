@@ -3,7 +3,7 @@ import { classifyPlain, CoreError, describeError } from '../../core/errors';
 import { fetchBorosOrderBook, resolveBorosFetch, resolveCollateralPricesUsd } from '../../core/boros/client';
 import { halfCapSeedPct } from '../../core/boros/rollProbe';
 import { borosTimeToMaturitySec } from '../../core/boros/opportunities';
-import { fetchDeepBook, type NormalizedBook } from '../../core/estimate/books';
+import type { NormalizedBook } from '../../core/estimate/books';
 import { DEFAULT_STEP, parseSymbol } from '../../core/numbers';
 import { type DeleverInput, type DeleverPlan, type DeleverRequest, planDelever } from '../../core/rebalance/delever';
 import { computeExposure } from '../../core/positions';
@@ -40,10 +40,17 @@ import {
   type Pool,
   type RouteName,
 } from '../../core/rebalance/plan';
+import { touchOf } from '../../core/estimate/books';
+import { depthOf, makerLegOf, priceImpactOf, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
+import { planSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult } from '../../core/twap';
+import { type DealRequest, REPEG_CHOICES_BP, REPEG_DEFAULT_BP, takerAfterCapText, TIMEOUT_MIN_S } from '../../engine/create';
+import { deepBookOf } from '../deepBook';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
-import { catchRateLimit, sendError } from '../errorReply';
+import { catchRateLimit, refuse, sendError } from '../errorReply';
+import { loadTwapChildren, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
+import { createDeal, type DealBody } from './deals';
 import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
 import {
   ADD_BACK_FIRST,
@@ -54,9 +61,11 @@ import {
   FOLLOW_MISSES_RED,
   gapsLeftBy,
   inTransitOf,
+  isChildOf,
   LOCK_TEXT,
   moneyLockFor,
   newJob,
+  newTwapJob,
   requestPause,
   SLICE_STEP,
   type FixAction,
@@ -80,9 +89,9 @@ const CUSTOM_NEEDS = 'A custom move needs from, to and amount.';
 const RELOAD_TEXT = 'This page is out of date. Reload it and check the plan before you rebalance.';
 const PLAN_CHANGED_TEXT = 'The plan changed. Check the new route before you rebalance.';
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
-const JOB_KINDS: readonly string[] = ['move', 'realize', 'delever'];
+const JOB_KINDS: readonly string[] = ['move', 'realize', 'delever', 'twap'];
 const EXECS: readonly string[] = ['maker', 'market'];
-const FIX_ACTIONS: readonly string[] = ['market', 'limit', 'boros-retry', 'add-back'];
+const FIX_ACTIONS: readonly string[] = ['market', 'limit', 'boros-retry', 'add-back', 'unwind'];
 const NOTHING_TO_REALIZE = 'No perp in profit to realize.';
 const NOTHING_TO_CLOSE = 'Nothing to close.';
 const NOTHING_TO_FIX = 'Nothing is left to fix.';
@@ -101,14 +110,68 @@ export const conflict = (reply: FastifyReply, message: string, label?: string): 
 
 export const sleep = (ms: number): Promise<void> => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const workingDeal = (deps: AppDeps): string | null => deps.engine!.store.listPairs({ activeOnly: true })[0]?.id ?? null;
+const workingDeal = (deps: AppDeps, skipJob: string | null = null): string | null =>
+  deps.engine!.store.listPairs({ activeOnly: true }).find((pair) => skipJob === null || !isChildOf(skipJob, pair.id))?.id ?? null;
 
-export const moneyLockNow = (deps: AppDeps): MoneyLock | null =>
-  moneyLockFor({
-    rebalance: deps.rebalance?.jobs.read() ?? null,
+const childLiveOf = (deps: AppDeps, job: Job | null): boolean =>
+  job !== null && deps.engine!.store.listPairs({ activeOnly: true }).some((pair) => isChildOf(job.id, pair.id));
+
+export const moneyLockNow = (deps: AppDeps): MoneyLock | null => {
+  const rebalance = deps.rebalance?.jobs.read() ?? null;
+  return moneyLockFor({
+    rebalance,
     transfer: deps.transfer?.jobs.read() ?? null,
     dealId: workingDeal(deps),
+    childLive: childLiveOf(deps, rebalance),
   });
+};
+
+interface OrderLeg {
+  symbol: string;
+  side: 'BUY' | 'SELL';
+}
+
+const legBookOf = (leg: OrderLeg, book: NormalizedBook | null): TwapLegBook => ({ ...leg, book, mid: touchOf(book)?.mid ?? null });
+
+export async function autoMakerLeg(deps: AppDeps, a: OrderLeg, b: OrderLeg, qty: string): Promise<'a' | 'b'> {
+  const feeRows = await deps.cache
+    .get('fees', TTL.static, async () => (await deps.getClients().crossEx.getCrossexFee()).body)
+    .then(
+      ({ value }) => value,
+      () => [],
+    );
+  const sizedOf = async (leg: OrderLeg) => ({ ...legBookOf(leg, await deepBookOf(deps, leg.symbol)), qty: Number(qty) });
+  const [legA, legB] = await Promise.all([sizedOf(a), sizedOf(b)]);
+  return makerLegOf(feeRows, legA, legB).auto;
+}
+
+const qtyText = (qty: number): string => qty.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 12 });
+
+function planOr400(totalQty: string, input: TwapInput, rules: TwapLegRule[], price: number, bookMaxQty: string | null): TwapPlanResult {
+  try {
+    return planSlices(totalQty, input, rules, price, bookMaxQty);
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('twap:')) throw new CoreError(err.message, 'validation');
+    throw err;
+  }
+}
+
+function twapInputOf(value: unknown): TwapInput | null {
+  if (value === undefined || value === null) return null;
+  const raw = value as Partial<Record<keyof TwapInput, unknown>>;
+  const num = (field: unknown): number | undefined => (typeof field === 'number' ? field : undefined);
+  const input: TwapInput = {
+    ...(raw.durationSec === undefined ? {} : { durationSec: num(raw.durationSec) }),
+    ...(raw.intervalSec === undefined ? {} : { intervalSec: num(raw.intervalSec) }),
+    ...(raw.slices === undefined ? {} : { slices: num(raw.slices) }),
+    ...(typeof raw.sliceQty === 'string' ? { sliceQty: raw.sliceQty } : {}),
+  };
+  if (Object.values(input).some((field) => field === undefined)) throw new CoreError('twap needs numbers for durationSec, intervalSec and slices');
+  return input;
+}
+
+const REPEG_OR_OFF: readonly unknown[] = [...REPEG_CHOICES_BP, null];
+const TWAP_NEEDS = 'A TWAP needs a client id, a deal, a duration and a slice count.';
 
 const orEmpty = <T>(read: Promise<{ value: T[]; stale: boolean }>): Promise<{ value: T[]; stale: boolean }> =>
   read.catch(() => ({ value: [], stale: true }));
@@ -242,9 +305,6 @@ export function isShownRealize(fresh: RealizeLeg[], shown: ShownLeg[], rules: Re
   });
 }
 
-const leadsToReopen = (job: Job): boolean =>
-  job.steps.slice(job.stepIndex).find((step) => !step.name.startsWith('Convert'))?.name === 'Reopen';
-
 export function rebalanceRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
     app.setErrorHandler((err, req, reply) => sendError(err, req, reply, classifyPlain));
@@ -290,6 +350,13 @@ export function rebalanceRoutes(deps: AppDeps) {
       return halfCapSeedPct([market?.maxRateDeviationApr ?? 0]);
     };
 
+    const borosCollateralUsd = async (marketId: number): Promise<number | null> => {
+      const markets = await pricer.loadMarkets(false);
+      const market = markets.find((m) => m.marketId === marketId);
+      const price = market ? resolveCollateralPricesUsd(markets).get(market.tokenId) : undefined;
+      return isPositive(price) ? price : null;
+    };
+
     const runnerDeps = (store: JobFile, pollOnly = false): RunnerDeps => {
       const address = configuredRoot();
       return {
@@ -302,7 +369,8 @@ export function rebalanceRoutes(deps: AppDeps) {
         onDone: deps.rebalance?.onDone,
         pollOnly,
         takeFix,
-        ...(address ? { boros: { deps: borosCloseDeps, address, slippagePct: borosSlippagePct } } : {}),
+        ...(address ? { boros: { deps: borosCloseDeps, address, slippagePct: borosSlippagePct, collateralUsd: borosCollateralUsd } } : {}),
+        ...(deps.engine ? { twap: twapDeps(store) } : {}),
       };
     };
 
@@ -330,12 +398,65 @@ export function rebalanceRoutes(deps: AppDeps) {
       }, queued.fail);
     };
 
+    const twapPlanFor = async (legs: OrderLeg[], totalQty: string, input: TwapInput, fresh: boolean, markUsd: number | null) => {
+      const [rules, books] = await Promise.all([readRules(fresh), perpBooks(legs.map((leg) => leg.symbol))]);
+      const twapRules = legs.map((leg) => {
+        const row = rules.value.find((rule) => rule.symbol === leg.symbol);
+        if (!row) throw new CoreError(`No venue rule for ${leg.symbol}, so the TWAP is not planned.`);
+        return twapRuleOf(row as TwapRuleRow, leg.symbol);
+      });
+      const lead = legs[0];
+      const refPrice = touchOf(books[lead.symbol])?.mid ?? markUsd ?? Number(await deps.engine!.venue.refPrice(lead.symbol).catch(() => null));
+      if (!(refPrice > 0)) throw new CoreError(`No price for ${lead.symbol}, so the TWAP is not planned. Try again.`);
+      const legBooks = legs.map((leg) => legBookOf(leg, books[leg.symbol]));
+      const depths = legBooks.map(depthOf).filter((depth): depth is number => depth !== null);
+      const result = planOr400(totalQty, input, twapRules, refPrice, depths.length ? qtyText(Math.min(...depths)) : null);
+      return { result, price: refPrice, rules: twapRules, priceImpact: result.plan ? priceImpactOf(legBooks, Number(totalQty), result.plan) : null };
+    };
+
+    const makerSymbolOf = (req: DealRequest): OrderLeg => (req.makerLeg === 'b' && req.b ? req.b : req.a);
+
+    const createChild = async (req: DealRequest): Promise<void> => {
+      let price = req.price;
+      if (price === undefined) {
+        const maker = makerSymbolOf(req);
+        const rules = await readRules();
+        const tick = (rules.value.find((rule) => rule.symbol === maker.symbol) as { tickSize?: string } | undefined)?.tickSize;
+        if (!tick) throw new CoreError(`No venue rule for ${maker.symbol}, so the slice was not sent.`);
+        price = (await deps.engine!.venue.best(maker.symbol, maker.side, tick)) ?? undefined;
+        if (price === undefined) throw new CoreError(`No best price for ${maker.symbol}, so the slice was not sent.`);
+      }
+      const outcome = await createDeal(deps, { ...req, price });
+      if ('refusal' in outcome) throw new CoreError(outcome.refusal.message, outcome.refusal.category);
+    };
+
+    const twapDeps = (store: JobFile): TwapRunDeps => ({
+      store: deps.engine!.store,
+      engineWake: () => deps.engine!.wake?.(),
+      createChild,
+      now,
+      jobs: store,
+      readFees: () => Promise.resolve({}),
+    });
+
+    const twapViewFor = async (store: JobFile, job: Job) => {
+      const children = await loadTwapChildren(twapDeps(store), job);
+      const withBest = await Promise.all(
+        children.map(async (child) =>
+          child.pair.mode === 'OPENING'
+            ? { ...child, bestPrice: await deps.engine!.venue.best(child.pair.a.contract, child.pair.a.side, child.pair.a.tick).catch(() => null) }
+            : child,
+        ),
+      );
+      return twapViewOf(job, withBest);
+    };
+
     const bootJob = jobs?.read() ?? null;
     const bootStep = bootJob?.status === 'running' ? bootJob.steps[bootJob.stepIndex] : undefined;
     const resumesAtBoot =
       bootJob !== null &&
       bootStep !== undefined &&
-      (bootStep.venueId !== null || bootStep.text !== null || leadsToReopen(bootJob));
+      (bootStep.venueId !== null || bootStep.text !== null);
     if (jobs && bootJob && bootStep?.name === SLICE_STEP) {
       inflight = cancelRestingLead(runnerDeps(jobs), bootJob)
         .then(() => {
@@ -351,7 +472,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       bootStep.startedAt = now();
       jobs.write(bootJob);
       start(jobs, true);
-    } else if (bootJob && jobs?.haltIfRunning()) {
+    } else if (bootJob && bootJob.kind !== 'twap' && jobs?.haltIfRunning()) {
       onHalt(bootJob);
     }
 
@@ -373,16 +494,8 @@ export function rebalanceRoutes(deps: AppDeps) {
           return { value: {}, stale: true };
         });
 
-    const perpBooks = async (symbols: string[]): Promise<Record<string, NormalizedBook | null>> => {
-      const read = (symbol: string): Promise<NormalizedBook | null> => {
-        const { exchange, base, quote } = parseSymbol(symbol);
-        return deps.cache.get(`book:deep:${symbol}`, TTL.live, () => fetchDeepBook(exchange, base, quote)).then(
-          ({ value }) => value,
-          () => null,
-        );
-      };
-      return Object.fromEntries(await Promise.all(symbols.map(async (symbol) => [symbol, await read(symbol)] as const)));
-    };
+    const perpBooks = async (symbols: string[]): Promise<Record<string, NormalizedBook | null>> =>
+      Object.fromEntries(await Promise.all(symbols.map(async (symbol) => [symbol, await deepBookOf(deps, symbol)] as const)));
 
     const crossEx = () => deps.getClients().crossEx;
     const readAccount = (fresh: boolean) =>
@@ -390,7 +503,8 @@ export function rebalanceRoutes(deps: AppDeps) {
     const readPositions = (fresh: boolean) =>
       deps.cache.get('positions', TTL.live, async () => (await crossEx().listCrossexPositions()).body, { fresh });
     const readRates = () => orEmpty(deps.cache.get('interest:rate', TTL.static, async () => (await crossEx().getCrossexInterestRate()).body));
-    const readRules = () => deps.cache.get('rules:all', TTL.static, async () => (await crossEx().listCrossexRuleSymbols()).body);
+    const readRules = (fresh = false) =>
+      deps.cache.get('rules:all', TTL.static, async () => (await crossEx().listCrossexRuleSymbols()).body, { fresh });
     const readFees = () => deps.cache.get('fees', TTL.static, async () => (await crossEx().getCrossexFee()).body);
     const perpRulesOf = (rows: Awaited<ReturnType<typeof readRules>>['value']): Record<string, PerpRule> =>
       Object.fromEntries(
@@ -534,8 +648,8 @@ export function rebalanceRoutes(deps: AppDeps) {
 
     const findLock = (): string | null => lockText(moneyLockNow(deps));
 
-    const resumeLock = (): string | null =>
-      lockText(moneyLockFor({ rebalance: null, transfer: deps.transfer?.jobs.read() ?? null, dealId: workingDeal(deps) }));
+    const resumeLock = (job: Job): string | null =>
+      lockText(moneyLockFor({ rebalance: null, transfer: deps.transfer?.jobs.read() ?? null, dealId: workingDeal(deps, job.id) }));
 
     const currentUserId = async (): Promise<string | null> => {
       const { value } = await deps.cache.get(
@@ -563,16 +677,33 @@ export function rebalanceRoutes(deps: AppDeps) {
       const sliceUsd = positiveQueryOf(query.sliceUsd, 'sliceUsd');
       const { buckets, plans, realize, fullPlan, imUsed, stale } = await loadView(false, custom, realizeUsd, sliceUsd);
       const job = jobs?.read() ?? null;
+      const twapView = job && jobs && (job.kind === 'twap' || (job.kind === 'delever' && job.deleverTwap)) ? await twapViewFor(jobs, job) : {};
       return reply.ok(
-        { buckets, plans, realize, fullPlan, imUsed, job: job ? { ...job, inTransit: await loadInTransit(job) } : null },
+        { buckets, plans, realize, fullPlan, imUsed, job: job ? { ...job, inTransit: await loadInTransit(job), ...twapView } : null },
         { stale },
       );
     });
 
+    const deleverTwapOf = async (plan: DeleverPlan, perps: RealizePerp[], input: TwapInput | null, fresh: boolean) => {
+      const lead = plan.legs[plan.makerLeg];
+      if (input === null || plan.refused || !lead || lead.closeQty <= 0) return { twap: null, priceImpact: null };
+      const ordered = [lead, ...plan.legs.filter((leg) => leg !== lead)];
+      const legs = ordered.map((leg): OrderLeg => ({ symbol: leg.symbol, side: leg.side === 'LONG' ? 'SELL' : 'BUY' }));
+      const markUsd = livePerpsOf(perps).find((perp) => perp.symbol === lead.symbol)?.markPrice ?? null;
+      const planned = await twapPlanFor(legs, qtyText(lead.closeQty), input, fresh, markUsd);
+      const { result } = planned;
+      return {
+        twap: { plan: result.plan, refusal: result.ok ? null : result.refusal, price: planned.price },
+        priceImpact: planned.priceImpact,
+      };
+    };
+
     app.post('/rebalance/delever/plan', async (req, reply) => {
       const request = deleverRequestOf(req.body);
       if (!request) throw new CoreError(DELEVER_NEEDS);
-      return reply.ok((await loadDelever(request, false)).plan);
+      const twapInput = twapInputOf((req.body as { twap?: unknown } | undefined)?.twap);
+      const { plan, perps } = await loadDelever(request, false);
+      return reply.ok({ ...plan, ...(await deleverTwapOf(plan, perps, twapInput, false)) });
     });
 
     interface StartBody {
@@ -589,7 +720,82 @@ export function rebalanceRoutes(deps: AppDeps) {
       realizeUsd?: unknown;
       realizeTarget?: unknown;
       delever?: unknown;
+      clientId?: unknown;
+      deal?: unknown;
+      durationSec?: unknown;
+      slices?: unknown;
     }
+
+    const refuse400 = (reply: FastifyReply, message: string): FastifyReply =>
+      refuse(reply, { code: 400, category: 'validation', message, retryable: false });
+
+    const takerAfterOf = (deal: Partial<DealBody>, plan: TwapPlan): number | null => {
+      if (deal.timeoutSec === null) return null;
+      if (deal.timeoutSec === undefined) return plan.takerAfterSec;
+      const sec = Number(deal.timeoutSec);
+      const cap = takerAfterCapSec(plan.intervalSec);
+      if (!Number.isFinite(sec) || sec < TIMEOUT_MIN_S || sec > cap) throw new CoreError(takerAfterCapText(cap));
+      return sec;
+    };
+
+    const repegOf = (deal: Partial<DealBody>): 2 | 5 | 10 | null => {
+      if (deal.repegBehindBp === undefined) return REPEG_DEFAULT_BP;
+      if (!REPEG_OR_OFF.includes(deal.repegBehindBp)) throw new CoreError('repegBehindBp must be 2, 5, 10 or null');
+      return deal.repegBehindBp;
+    };
+
+    const sameTwap = (store: JobFile, clientId: string): Job | null => {
+      const job = store.read();
+      return job?.kind === 'twap' && job.twap?.clientId === clientId ? job : null;
+    };
+
+    const startTwap = async (body: StartBody, reply: FastifyReply): Promise<FastifyReply> => {
+      const { clientId, durationSec, slices } = body;
+      const deal = (body.deal ?? null) as Partial<DealBody> | null;
+      if (typeof clientId !== 'string' || clientId === '' || typeof durationSec !== 'number' || typeof slices !== 'number') {
+        throw new CoreError(TWAP_NEEDS);
+      }
+      if (!deal?.a?.symbol || typeof deal.qty !== 'string' || (deal.execution !== 'maker' && deal.execution !== 'taker')) {
+        throw new CoreError(TWAP_NEEDS);
+      }
+      if (deal.makerLeg !== undefined && !['auto', 'a', 'b'].includes(deal.makerLeg)) throw new CoreError(`unknown maker leg ${String(deal.makerLeg)}`);
+      const store = requireJobs();
+      const seen = sameTwap(store, clientId);
+      if (seen) return reply.code(202).ok({ id: seen.id });
+      const locked = findLock();
+      if (locked) return conflict(reply, locked);
+      const a = { symbol: deal.a.symbol, side: deal.a.side };
+      const b = deal.b ? { symbol: deal.b.symbol, side: deal.b.side } : null;
+      const planned = await catchRateLimit(twapPlanFor(b ? [a, b] : [a], deal.qty, { durationSec, slices }, true, null));
+      if (!planned) return conflict(reply, STALE_TEXT);
+      if (!planned.result.ok) return refuse400(reply, planned.result.refusal.text);
+      const plan = planned.result.plan;
+      const takerAfterSec = takerAfterOf(deal, plan);
+      const repegBehindBp = repegOf(deal);
+      const makerLeg = !b ? 'a' : deal.makerLeg === 'a' || deal.makerLeg === 'b' ? deal.makerLeg : await autoMakerLeg(deps, a, b, deal.qty);
+      const userId = await currentUserId();
+      const again = sameTwap(store, clientId);
+      if (again) return reply.code(202).ok({ id: again.id });
+      const lockedNow = findLock();
+      if (lockedNow) return conflict(reply, lockedNow);
+      const { id: _id, qty, price: _price, pricePolicy: _policy, timeoutSec: _timeout, deadlineCapSec: _cap, repegBehindBp: _repeg, makerLeg: _leg, ...template } =
+        deal as DealBody;
+      const job = newTwapJob(
+        {
+          userId,
+          deal: { ...template, totalQty: qty, coin: parseSymbol(a.symbol).base, rules: planned.rules },
+          plan,
+          makerLeg,
+          repegBehindBp,
+          takerAfterSec,
+          clientId,
+        },
+        now(),
+      );
+      store.write(job);
+      start(store);
+      return reply.code(202).ok({ id: job.id });
+    };
 
     const startRealize = async (body: StartBody, exec: RealizeExec, reply: FastifyReply): Promise<FastifyReply> => {
       const target = body.realizeTarget;
@@ -655,6 +861,9 @@ export function rebalanceRoutes(deps: AppDeps) {
       const { plan, userId, account } = loaded;
       if (plan.refused) return conflict(reply, belowMinText(plan.refused));
       if (plan.legs.every((leg) => leg.closeQty <= 0)) return conflict(reply, NOTHING_TO_CLOSE);
+      const twapInput = twapInputOf((body.delever as { twap?: unknown } | undefined)?.twap);
+      const { twap } = await deleverTwapOf(plan, loaded.perps, twapInput, true);
+      if (twap?.refusal) return refuse400(reply, twap.refusal.text);
       const cost = plan.estimates[exec];
       if (costRoseTooMuch(cost.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const [rates, paid] = await Promise.all([readRates(), interestPaid(userId)]);
@@ -682,6 +891,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           estimate: { feeUsd: cost.feePerpsUsd + cost.feeBorosUsd, impactUsd: cost.impactUsd, totalUsd: cost.totalUsd },
           delever: plan,
           imUsedStart: plan.imUsed.map((row) => ({ account: row.account, pct: row.before })),
+          twap: twap?.plan ? { durationSec: twap.plan.durationSec, intervalSec: twap.plan.intervalSec, slices: twap.plan.slices } : null,
         },
         now(),
       );
@@ -698,6 +908,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const kind: JobKind = body.kind === undefined ? 'move' : isJobKind(body.kind) ? body.kind : (() => {
         throw new CoreError(`unknown kind ${String(body.kind)}`);
       })();
+      if (kind === 'twap') return startTwap(body, reply);
       if (kind !== 'move') {
         const exec: RealizeExec = body.exec === undefined ? 'maker' : isExec(body.exec) ? body.exec : (() => {
           throw new CoreError(`unknown order mode ${String(body.exec)}`);
@@ -765,6 +976,11 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const job = jobOr404(store, (req.params as { id: string }).id);
       if (job.status !== 'running') return conflict(reply, `rebalance ${job.id} is ${job.status}`);
+      if (job.kind === 'twap') {
+        if (!job.pauseRequested) store.write(requestPause(job));
+        await stopLiveChild(twapDeps(store), job);
+        return reply.ok(job);
+      }
       if (job.slice === null) return conflict(reply, NOT_SLICED);
       if (!job.pauseRequested) store.write(requestPause(job));
       return reply.ok(job);
@@ -781,14 +997,17 @@ export function rebalanceRoutes(deps: AppDeps) {
       const fixable =
         job.status === 'halted' || (follow && missed) || (action === 'boros-retry' && job.status === 'abandoned' && job.delever !== null);
       if (!fixable) return conflict(reply, `rebalance ${job.id} is ${job.status}`);
-      const open = follow
-        ? (job.follow?.qty ?? 0) > 0
+      const hedgeRefused = job.status === 'halted' && job.haltKind === 'hedge-margin';
+      const open = action === 'unwind'
+        ? hedgeRefused
+        : follow
+        ? hedgeRefused || (job.follow?.qty ?? 0) > 0
         : action === 'boros-retry'
           ? job.delever !== null && Math.max(job.borosLeftYu, job.borosGapYu) > 0
           : job.borosLeftYu > 0;
       if (!open) return conflict(reply, NOTHING_TO_FIX);
       if (action === 'boros-retry' && job.status === 'halted' && job.steps[job.stepIndex]?.addBack) return conflict(reply, ADD_BACK_FIRST);
-      const working = resumeLock();
+      const working = resumeLock(job);
       if (working) return conflict(reply, working);
       if (job.userId !== null && (await currentUserId()) !== job.userId) {
         return conflict(reply, 'This rebalance was started on another Gate account. Abandon it.');
@@ -818,7 +1037,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (job.steps[job.stepIndex]?.addBack) return conflict(reply, ADD_BACK_FIRST);
       // The same rule as the start: the remaining steps move cash a working
       // deal may be counting on.
-      const working = resumeLock();
+      const working = resumeLock(job);
       if (working) return conflict(reply, working);
       // The steps hold venue ids and amounts of the account they ran on. On
       // another account they would poll ids it does not know, or send from it.
@@ -829,10 +1048,18 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (current?.id !== job.id || current.status !== 'halted') {
         return conflict(reply, 'This rebalance is no longer halted');
       }
-      const lockedNow = resumeLock();
+      const lockedNow = resumeLock(current);
       if (lockedNow) return conflict(reply, lockedNow);
       current.status = 'running';
       current.haltReason = null;
+      if (current.kind === 'twap') {
+        current.paused = false;
+        current.pauseRequested = false;
+        current.haltKind = null;
+        store.write(current);
+        start(store);
+        return reply.ok(current);
+      }
       current.steps[current.stepIndex].startedAt = now();
       store.write(current);
       start(store);
@@ -841,7 +1068,18 @@ export function rebalanceRoutes(deps: AppDeps) {
 
     app.post('/rebalance/:id/abandon', async (req, reply) => {
       const store = requireJobs();
-      const job = haltedOr409(store, (req.params as { id: string }).id, reply);
+      const id = (req.params as { id: string }).id;
+      const live = jobOr404(store, id);
+      if (live.kind === 'twap' && (live.status === 'running' || live.status === 'halted')) {
+        if (fixing) return conflict(reply, FIX_RUNNING);
+        await stopLiveChild(twapDeps(store), live);
+        const ended = jobOr404(store, id);
+        ended.status = 'abandoned';
+        if (ended.twap) ended.twap.nextAt = null;
+        store.write(ended);
+        return reply.ok(ended);
+      }
+      const job = haltedOr409(store, id, reply);
       if (!job) return reply;
       if (fixing) return conflict(reply, FIX_RUNNING);
       const settle = settleAddBack(runnerDeps(store), job).then((unread) => {

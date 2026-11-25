@@ -1,13 +1,12 @@
 import { ArrowRight } from 'lucide-react';
-import type { EvenPlan, PerpSize, RebalanceBucket, RebalanceJob, RebalanceView, RoutePlan, WalletAfter } from '../api/types';
+import type { EvenPlan, RebalanceBucket, RebalanceView, RoutePlan, WalletAfter } from '../api/types';
 import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { borrowingBuckets } from '../lib/borrow';
-import { fmtPct, fmtUsd, parseSymbol, prettyVenue, sigGrouped } from '../lib/fmt';
+import { fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { borrowLeftOf, interestAfterOf, isRateUnknown, keyOf, MONTH_DAYS, Term, WalletTerm } from './RebalanceHovers';
-import { HOVER, hoverCash, modalFrees, sideText, sizeText, WALLET_LABEL } from './rebalanceCopy';
-import { lots, walletsNow } from './rebalanceJobSteps';
+import { HOVER, hoverCash, modalFrees, sizeText, WALLET_LABEL } from './rebalanceCopy';
 
 export interface ChangeRow {
   label: string;
@@ -79,45 +78,6 @@ function changesOf(buckets: RebalanceBucket[], after: WalletAfter[], freedUsd: n
 
 export function walletChanges(view: RebalanceView, _plan: EvenPlan, route: RoutePlan): WalletChange[] {
   return changesOf(view.buckets, route.after, route.marginFreedUsd);
-}
-
-export function receiptChanges(job: RebalanceJob, buckets: RebalanceBucket[], live: PerpSize[] | null): WalletChange[] {
-  const before = job.before?.buckets ?? buckets;
-  const wallets = job.target ? changesOf(before, walletsNow(job, before), null) : [];
-  const legs = job.realize?.legs ?? [];
-  if (legs.length === 0) return wallets;
-  const perps: WalletChange = { key: 'perps', label: t('accounts.rebalanceRealize.perps'), rows: perpRows(job, live ?? []) };
-  return [...wallets, perps];
-}
-
-const perpLabel = (perp: Pick<PerpSize, 'exchange' | 'side'>): string => `${prettyVenue(perp.exchange)} ${sideText(perp.side)}`;
-
-function perpRows(job: RebalanceJob, live: PerpSize[]): ChangeRow[] {
-  const legs = job.realize?.legs ?? [];
-  const before = job.before?.perps ?? [];
-  const of = (list: PerpSize[], symbol: string) => list.find((perp) => perp.symbol === symbol);
-  const paying = legs.map((leg): ChangeRow => {
-    const reopened = job.steps.find((step) => step.name === 'Reopen' && step.perp?.symbol === leg.symbol)?.qty ?? 0;
-    return {
-      label: perpLabel(leg),
-      before: of(before, leg.symbol)?.qty ?? leg.positionQty,
-      after: of(live, leg.symbol)?.qty ?? lots(leg.positionQty - leg.filledQty + reopened),
-      unit: 'coin',
-      coin: leg.base,
-    };
-  });
-  const bases = legs.map((leg) => leg.base);
-  const hedges = [...before, ...live]
-    .filter((perp, index, all) => all.findIndex((p) => p.symbol === perp.symbol) === index)
-    .filter((perp) => bases.includes(parseSymbol(perp.symbol).base) && !legs.some((leg) => leg.symbol === perp.symbol))
-    .map((perp): ChangeRow => ({
-      label: perpLabel(perp),
-      before: of(before, perp.symbol)?.qty ?? null,
-      after: of(live, perp.symbol)?.qty ?? perp.qty,
-      unit: 'coin',
-      coin: parseSymbol(perp.symbol).base,
-    }));
-  return [...paying, ...hedges];
 }
 
 const COLUMN = 'w-28 shrink-0 text-right';

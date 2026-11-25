@@ -1,13 +1,19 @@
 import { fireEvent, screen } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { makeDealView } from '../test/fixtures';
+import type { RebalanceJob } from '../api/types';
+import { makeDealView, makeRebalanceView } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RecoveryBanner } from './RecoveryBanner';
 import { TradeFlowProvider } from './TradeFlow';
 
 const openDealMock = vi.fn();
+const openRebalanceMock = vi.fn();
+vi.mock('../panels/rebalanceOpener', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../panels/rebalanceOpener')>()),
+  useRebalanceOpener: () => openRebalanceMock,
+}));
 vi.mock('./TradeFlow', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./TradeFlow')>()),
   useTradeFlow: () => ({ modalOpen: false, openDeal: openDealMock }),
@@ -33,7 +39,65 @@ function renderBanner(
   );
 }
 
+function twapJob(overrides: Partial<RebalanceJob> = {}): RebalanceJob {
+  return {
+    id: 'job1',
+    kind: 'twap',
+    status: 'running',
+    twap: { slice: 3, of: 12, makerLeg: 'a' },
+    legs: [
+      { name: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', side: 'LONG' },
+      { name: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', side: 'SHORT' },
+    ],
+    ...overrides,
+  } as unknown as RebalanceJob;
+}
+
+function renderTwap(job: RebalanceJob, deals: ReturnType<typeof makeDealView>[] = []) {
+  server.use(
+    http.get('/api/rebalance', () => HttpResponse.json(env({ ...makeRebalanceView(), job }))),
+  );
+  return renderBanner(deals);
+}
+
 describe('RecoveryBanner', () => {
+  it('twap band', async () => {
+    renderTwap(twapJob());
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP · ETH pair open · slice 3/12');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    expect(openRebalanceMock).toHaveBeenCalled();
+  });
+
+  it('no deal band for a twap child', async () => {
+    renderTwap(twapJob(), [makeDealView({ pair: { id: 'job1-s3-1', mode: 'OPENING' } })]);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('TWAP · ETH pair open');
+    expect(alert).not.toHaveTextContent(/deal is still working/i);
+  });
+
+  it('paused band', async () => {
+    renderTwap(twapJob({ paused: true }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused · ETH pair open · slice 3/12');
+  });
+
+  it('restart band', async () => {
+    renderTwap(twapJob({ status: 'halted', haltKind: 'restart' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'TWAP paused: app restarted · ETH pair open · slice 3/12',
+    );
+  });
+
+  it('refused band', async () => {
+    renderTwap(twapJob({ status: 'halted', haltKind: 'refused', twap: { slice: 4, of: 12, makerLeg: 'a' } as never }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: Gate refused slice 4 · ETH pair open');
+  });
+
+  it('never deal keeps its band', async () => {
+    renderBanner([makeDealView({ pair: { id: 'plain1', mode: 'OPENING', deadlineAt: null } })]);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/deal is still working/i);
+    expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+  });
+
   it('renders nothing with no active deals and no alerts', async () => {
     renderBanner([]);
     await new Promise((r) => setTimeout(r, 50));

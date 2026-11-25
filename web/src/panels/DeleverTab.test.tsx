@@ -35,13 +35,26 @@ const ETH: OpenPair = {
 };
 const BTC_LIGHTER: OpenPair = { ...BTC, key: 'BTC:GATE:LIGHTER:1797379200:spread', longVenue: 'GATE', shortVenue: 'LIGHTER', size: 250, imUsd: 1_700_000 };
 
-function servePlan(plan: DeleverPlan | { error: string }) {
+function twapReply(close: number, input: NonNullable<DeleverRequest['twap']>): NonNullable<DeleverPlan['twap']> {
+  const durationSec = input.durationSec ?? 0;
+  const intervalSec = input.intervalSec ?? 0;
+  const slices = Math.floor(durationSec / intervalSec);
+  const sliceQty = String(close / slices);
+  const plan = { slices, sliceQty, lastQty: sliceQty, intervalSec, durationSec, takerAfterSec: Math.floor(intervalSec * 0.8) };
+  return { plan, refusal: null, price: 100_000 };
+}
+
+function servePlan(plan: DeleverPlan | { error: string }, twapOverride?: DeleverPlan['twap']) {
   const sent: DeleverRequest[] = [];
   server.use(
     http.post('/api/rebalance/delever/plan', async ({ request }) => {
-      sent.push((await request.json()) as DeleverRequest);
+      const body = (await request.json()) as DeleverRequest;
+      sent.push(body);
       if ('error' in plan) return HttpResponse.json({ ok: false, error: { category: 'unknown', message: plan.error } }, { status: 400 });
-      return HttpResponse.json(env(plan));
+      if (!body.twap) return HttpResponse.json(env({ ...plan, twap: null, priceImpact: null }));
+      const lead = plan.legs[plan.makerLeg]!;
+      const twap = twapOverride ?? twapReply(lead.closeQty, body.twap);
+      return HttpResponse.json(env({ ...plan, twap, priceImpact: { whole: null, sliced: 1200 } }));
     }),
   );
   return sent;
@@ -212,9 +225,9 @@ describe('DeleverTab guards', () => {
       }),
     );
     show(openPairs.btc900);
-    await waitFor(() => expect(screen.getByRole('button', { name: /by 20% \(180 BTC\)/ })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to delever 180 BTC' })).toBeEnabled());
     await user.click(screen.getByRole('radio', { name: '30%' }));
-    const hold = screen.getByRole('button', { name: /by 30% \(270 BTC\)/ });
+    const hold = screen.getByRole('button', { name: 'Hold to delever 270 BTC' });
     expect(hold).toBeDisabled();
     release();
     await waitFor(() => expect(hold).toBeEnabled());
@@ -351,23 +364,24 @@ describe('DeleverTab plan', () => {
     expect(screen.getByRole('button', { name: 'Change' })).toBeInTheDocument();
   });
 
-  it('delever hold label', async () => {
+  it('short hold label', async () => {
     const started = vi.fn();
-    const starts: unknown[] = [];
+    const starts: { delever: DeleverRequest }[] = [];
     server.use(
       http.post('/api/rebalance', async ({ request }) => {
-        starts.push(await request.json());
+        starts.push((await request.json()) as { delever: DeleverRequest });
         return HttpResponse.json(env({ id: 'delv0001' }));
       }),
     );
     const plan = deleverPlans.twentyPct;
     servePlan(plan);
     show(openPairs.btc900, null, started);
-    const hold = await screen.findByRole('button', { name: 'Hold to delever BTC Hyperliquid / Gate by 20% (180 BTC)' });
+    const hold = await screen.findByRole('button', { name: 'Hold to delever 180 BTC' });
     await waitFor(() => expect(hold).toBeEnabled());
     fireEvent.pointerDown(hold);
     await waitFor(() => expect(started).toHaveBeenCalled());
     expect(starts[0]).toMatchObject({ kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { exec: 'maker' } });
+    expect(starts[0]!.delever.twap).toBeUndefined();
   });
 
   it('a plan that fails shows the error, never a cost', async () => {
@@ -376,5 +390,95 @@ describe('DeleverTab plan', () => {
     expect(await screen.findByText('No order book for GATE_FUTURE_BTC_USDT.')).toBeInTheDocument();
     expect(screen.queryByText('Total cost')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+  });
+});
+
+async function turnTwapOn(duration: string, interval: string) {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole('switch', { name: 'TWAP' }));
+  const durationBox = screen.getByRole('textbox', { name: 'Duration' });
+  await user.clear(durationBox);
+  await user.type(durationBox, duration);
+  const intervalBox = screen.getByRole('textbox', { name: 'Interval' });
+  await user.clear(intervalBox);
+  await user.type(intervalBox, interval);
+}
+
+describe('DeleverTab TWAP', () => {
+  it('twap off keeps slice size row', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    expect(await screen.findByText(/^Slice size \$[\d.]+k · \d+ slices?$/)).toBeInTheDocument();
+    expect(screen.queryByText('Boros close per slice')).not.toBeInTheDocument();
+  });
+
+  it('twap area with boros per slice', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    expect(await screen.findByText(/^Slices 48/)).toBeInTheDocument();
+    expect(screen.getByText('Boros close per slice')).toBeInTheDocument();
+    expect(screen.getByText('3.75 YU')).toBeInTheDocument();
+    expect(screen.queryByText(/^Slice size \$/)).not.toBeInTheDocument();
+  });
+
+  it('twap hold label', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    expect(await screen.findByRole('button', { name: 'Hold to delever 180 BTC · TWAP 4h' })).toBeInTheDocument();
+  });
+
+  it('cost box kept with twap', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    await screen.findByText(/^Slices 48/);
+    expect(screen.getByText('Trading fee · perps')).toBeInTheDocument();
+    expect(screen.getByText('Total cost')).toBeInTheDocument();
+  });
+
+  it('twap start body carries twap only with the switch on', async () => {
+    const starts: { delever: DeleverRequest }[] = [];
+    server.use(
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as { delever: DeleverRequest });
+        return HttpResponse.json(env({ id: 'delv0002' }));
+      }),
+    );
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    const hold = await screen.findByRole('button', { name: 'Hold to delever 180 BTC · TWAP 4h' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(starts).toHaveLength(1));
+    expect(starts[0]!.delever.twap).toEqual({ durationSec: 14_400, slices: 48 });
+    expect(starts[0]!.delever.sliceUsd).toBeUndefined();
+  });
+
+  it('a twap slice past the book refuses with the text and fix from the plan', async () => {
+    const refusal = {
+      field: 'sliceSize' as const,
+      text: 'Book too thin for 15 BTC a slice.',
+      fix: { label: 'Use 9 BTC', patch: { durationSec: 3_600, sliceQty: '9' } },
+    };
+    servePlan(deleverPlans.twentyPct, { plan: null, refusal, price: 100_000 });
+    show(openPairs.btc900);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('switch', { name: 'TWAP' }));
+    expect(await screen.findByText(/^Book too thin for 15 BTC a slice\./)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use 9 BTC' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
+  });
+
+  it('the plan request carries the twap input and no slice size', async () => {
+    const sent = servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    await screen.findByText(/^Slices 48/);
+    const last = sent[sent.length - 1]!;
+    expect(last.twap).toMatchObject({ durationSec: 14_400, intervalSec: 300 });
+    expect(last.sliceUsd).toBeUndefined();
   });
 });

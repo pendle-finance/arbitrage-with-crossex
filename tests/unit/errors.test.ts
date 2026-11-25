@@ -51,6 +51,18 @@ describe('classifyGateError label anchoring', () => {
     expect(c.retryable).toBe(false);
   });
 
+  it('hyperliquid order allowance kind', () => {
+    const c = classifyGateError(gate(400, 'TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR'));
+    expect(c.category).toBe('order-allowance');
+    expect(c.label).toBe('TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR');
+    expect(c.retryable).toBe(false);
+  });
+
+  it('lighter order allowance kind, and a rate limit stays rate-limited', () => {
+    expect(classifyGateError(gate(400, 'TRADE_LIGHTER_ORDER_LIMIT_ERROR')).category).toBe('order-allowance');
+    expect(classifyGateError(gate(400, 'TOO_MANY_REQUESTS')).category).toBe('rate-limited');
+  });
+
   it('transfer amount below minimum is still unknown', () => {
     expect(classifyGateError(gate(422, 'TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR')).category).toBe('unknown');
   });

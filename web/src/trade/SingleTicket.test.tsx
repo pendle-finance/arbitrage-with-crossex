@@ -1,14 +1,17 @@
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type { ActionInput, PreviewResponse } from '../api/types';
+import type { ActionInput, DealRequest, PreviewResponse, TwapPlanView } from '../api/types';
 import {
   baseHandlers,
   BTC_BINANCE,
   BTC_HYPERLIQUID,
   echoPreviewHandler,
+  makeRebalanceView,
   previewFor,
+  REALIZE_RUNNING_JOB,
+  rebalanceHandler,
   symbolHandlers,
 } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -17,28 +20,69 @@ import { SingleTicket } from './SingleTicket';
 
 const btcSymbolHandlers = () => symbolHandlers([BTC_BINANCE, BTC_HYPERLIQUID]);
 
-/** Quick-pick BTC and pick the BINANCE venue chip. */
-async function pickBinanceBtc() {
-  await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
-  await userEvent.click(await screen.findByRole('button', { name: 'BINANCE' }));
+const bookHandler = (bestBid = 64_999.9, bestAsk = 65_000) =>
+  http.get('/api/books/:symbol', ({ params }) =>
+    HttpResponse.json(env({ symbol: String(params.symbol), bestBid, bestAsk, mid: (bestBid + bestAsk) / 2 })),
+  );
+
+const PLAN: TwapPlanView = {
+  slices: 12,
+  sliceQty: '0.002',
+  lastQty: '0.004',
+  intervalSec: 150,
+  durationSec: 1800,
+  takerAfterSec: 120,
+};
+
+function twapPreviewHandler(bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = []) {
+  return http.post('/api/preview', async ({ request }) => {
+    const body = (await request.json()) as { actions: ActionInput[]; twap?: unknown };
+    bodies.push(body);
+    return HttpResponse.json(
+      env<PreviewResponse>({
+        previews: body.actions.map((a, i) => previewFor(a, { index: i, qty: '0.0015' })),
+        priceImpact: { whole: 83, sliced: 14 },
+        twap: { plan: PLAN, refusal: null },
+      }),
+    );
+  });
 }
 
-/** Quick-pick BTC and pick the HYPERLIQUID venue chip, then wait for the
- * symbol detail (tick size + leverage cap) so the blur snap has a tick — the
- * "max" link only appears once the venue's leverage cap is known. */
+function dealHandler(calls: DealRequest[]) {
+  return http.post('/api/deals', async ({ request }) => {
+    const body = (await request.json()) as DealRequest;
+    calls.push(body);
+    return HttpResponse.json(env({ id: body.id }), { status: 202 });
+  });
+}
+
+async function pickBinanceBtc() {
+  await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
+  await userEvent.selectOptions(await screen.findByLabelText('Long venue'), 'BINANCE_FUTURE_BTC_USDT');
+  await screen.findByRole('button', { name: /^Max / }).catch(() => undefined);
+}
+
 async function pickHyperliquidBtc() {
   await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
-  // The chip's accessible name includes the non-USDT quote note ("USDC").
-  await userEvent.click(await screen.findByRole('button', { name: /HYPERLIQUID/ }));
+  await userEvent.selectOptions(await screen.findByLabelText('Long venue'), 'HYPERLIQUID_FUTURE_BTC_USDC');
   await userEvent.click(screen.getByRole('radio', { name: 'USDT' }));
   await screen.findByRole('button', { name: /^Max / });
 }
 
+const marketMode = () => userEvent.click(screen.getByRole('radio', { name: 'Market' }));
+
+async function holdExecute(name: RegExp | string) {
+  const button = await screen.findByRole('button', { name });
+  await waitFor(() => expect(button).toBeEnabled());
+  fireEvent.pointerDown(button);
+}
+
 describe('SingleTicket', () => {
-  it('renders preview violations and disables both actions', async () => {
+  it('renders preview violations and disables the action', async () => {
     server.use(
       ...baseHandlers(),
       ...btcSymbolHandlers(),
+      bookHandler(),
       http.post('/api/preview', async ({ request }) => {
         const { actions } = (await request.json()) as { actions: ActionInput[] };
         return HttpResponse.json(
@@ -47,9 +91,7 @@ describe('SingleTicket', () => {
               previewFor(actions[0], {
                 qty: '',
                 estNotional: 0,
-                violations: [
-                  { code: 'below-min-notional', message: 'notional 5.00 below venue min 10' },
-                ],
+                violations: [{ code: 'below-min-notional', message: 'notional 5.00 below venue min 10' }],
               }),
             ],
           }),
@@ -65,36 +107,33 @@ describe('SingleTicket', () => {
     expect(screen.getByRole('button', { name: 'Execute now' })).toBeDisabled();
   });
 
-  it('blocks execute until the venue leverage cap loads (never silently omits leverage)', async () => {
+  it('blocks execute until the venue leverage cap loads', async () => {
     server.use(
       ...baseHandlers(),
       http.get('/api/symbols', () => HttpResponse.json(env([BTC_BINANCE]))),
-      // The symbol DETAIL (leverage cap) never resolves → levMax stays 0.
       http.get('/api/symbols/:symbol', async () => {
         await new Promise(() => {});
         return HttpResponse.json(env({}));
       }),
-      http.post('/api/preview', async ({ request }) => {
-        const { actions } = (await request.json()) as { actions: ActionInput[] };
-        return HttpResponse.json(env<PreviewResponse>({ previews: [previewFor(actions[0], { qty: '0.0015' })] }));
-      }),
+      bookHandler(),
+      echoPreviewHandler({ overrides: { qty: '0.0015' } }),
     );
     renderWithClient(<SingleTicket />);
 
     await pickBinanceBtc();
+    await marketMode();
     await userEvent.type(screen.getByLabelText('Size'), '100');
 
-    // The preview can settle, but with the venue max unknown the promise "venue
-    // max" can't be honored — execute stays disabled and the row says loading.
     await screen.findByText('Loading…');
     await new Promise((r) => setTimeout(r, 250));
     expect(screen.getByRole('button', { name: 'Execute now' })).toBeDisabled();
   });
 
-  it('MARKET preview shows the tentative avg fill and the partial-depth warning', async () => {
+  it('Market preview shows the tentative avg fill and the partial-depth warning', async () => {
     server.use(
       ...baseHandlers(),
       ...btcSymbolHandlers(),
+      bookHandler(),
       http.post('/api/preview', async ({ request }) => {
         const { actions } = (await request.json()) as { actions: ActionInput[] };
         return HttpResponse.json(
@@ -131,12 +170,12 @@ describe('SingleTicket', () => {
     renderWithClient(<SingleTicket />);
 
     await pickBinanceBtc();
+    await marketMode();
     await userEvent.type(screen.getByLabelText('Size'), '100');
 
     expect(await screen.findByText(/Est\. avg fill/)).toBeInTheDocument();
     expect(screen.getByText('65010.5')).toBeInTheDocument();
     expect(screen.getByText(/Thin book/)).toBeInTheDocument();
-    // Taker fee with bps, and actions enabled (no violations).
     expect(screen.getByText('0.0488 USDT')).toBeInTheDocument();
     expect(screen.getByText('Taker · 5.0 bps')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Execute now' })).toBeEnabled();
@@ -146,6 +185,7 @@ describe('SingleTicket', () => {
     server.use(
       ...baseHandlers(),
       ...btcSymbolHandlers(),
+      bookHandler(),
       echoPreviewHandler({ overrides: { qty: '0.0015' } }),
     );
     renderWithClient(<SingleTicket />);
@@ -155,19 +195,16 @@ describe('SingleTicket', () => {
     const exec = screen.getByRole('button', { name: 'Execute now' });
     await waitFor(() => expect(exec).toBeEnabled());
 
-    // Edit the size — the debounced preview still describes the OLD "100" input,
-    // so the action must NOT stay enabled off that stale estimate.
-    await userEvent.type(screen.getByLabelText('Size'), '00'); // → "10000"
+    await userEvent.type(screen.getByLabelText('Size'), '00');
     expect(exec).toBeDisabled();
-
-    // Once the new preview settles (no violations), it re-enables.
     await waitFor(() => expect(exec).toBeEnabled());
   });
 
-  it('LIMIT is always post-only (POC): the fee estimate is maker-only from the start', async () => {
+  it('Limit is always post-only: the fee estimate is maker-only from the start', async () => {
     server.use(
       ...baseHandlers(),
       ...btcSymbolHandlers(),
+      bookHandler(),
       http.post('/api/preview', async ({ request }) => {
         const { actions } = (await request.json()) as { actions: ActionInput[] };
         const a = actions[0];
@@ -196,129 +233,226 @@ describe('SingleTicket', () => {
     renderWithClient(<SingleTicket />);
 
     await pickBinanceBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
     await userEvent.type(screen.getByLabelText('Size'), '100');
-    await userEvent.type(screen.getByLabelText('Limit price'), '65000');
 
-    // The engine rests every limit post-only — the ticket declares tif POC
-    // up front, so the estimate is maker-only and no range is ever shown.
     expect(await screen.findByText(/^Post-only · (?!fills)/)).toBeInTheDocument();
     expect(screen.queryByText(/maker–taker/i)).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /post-only/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Limit orders are post-only/)).toBeInTheDocument();
   });
 
-  it('blur-snaps a resting BUY price DOWN, never up onto the ask (Hyperliquid)', async () => {
-    // Pre-fix failure: the on-blur snap used the NEAREST-mode formatLimitPrice,
-    // whose Hyperliquid 5-sig-fig cap turned 61717.6 into 61718. With HL BTC at
-    // bid 61717 / ask 61718 (tick 0.1) that is EXACTLY the ask, so the ticket's
-    // always-POC limit was insta-rejected by the venue as would-cross — and the
-    // server's directional formatRestPrice (commit 54964fe) was a no-op on the
-    // already-valid tick multiple, so no "price adjusted" warning ever fired.
-    server.use(...baseHandlers(), ...btcSymbolHandlers(), echoPreviewHandler());
+  it('snaps a typed resting BUY price DOWN and a SELL price UP (Hyperliquid)', async () => {
+    const calls: ActionInput[][] = [];
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(61_717, 61_718), echoPreviewHandler({ calls }));
     renderWithClient(<SingleTicket />);
 
     await pickHyperliquidBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
-    const price = screen.getByLabelText('Limit price');
-    await userEvent.type(price, '61717.6');
-    await userEvent.tab();
+    await userEvent.type(screen.getByLabelText('Size'), '100');
+    await userEvent.clear(screen.getByLabelText('Limit price'));
+    await userEvent.type(screen.getByLabelText('Limit price'), '61717.6');
+    await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ kind: 'open-limit', price: '61717' }));
 
-    expect(price).toHaveValue('61717');
-    expect(screen.getByText("Rounded to the venue's price step")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: 'Short' }));
+    await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ kind: 'open-limit', side: 'SELL', price: '61718' }));
   });
 
-  it('blur-snaps a resting SELL price UP, never down onto the bid (Hyperliquid)', async () => {
-    server.use(...baseHandlers(), ...btcSymbolHandlers(), echoPreviewHandler());
+  it('a Limit price that follows the book rests at the best bid for Long and the best ask for Short', async () => {
+    const calls: ActionInput[][] = [];
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), echoPreviewHandler({ calls }));
     renderWithClient(<SingleTicket />);
 
-    await pickHyperliquidBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'Sell' }));
-    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
-    const price = screen.getByLabelText('Limit price');
-    await userEvent.type(price, '61717.4');
-    await userEvent.tab();
+    await pickBinanceBtc();
+    await userEvent.type(screen.getByLabelText('Size'), '100');
+    await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ kind: 'open-limit', side: 'BUY', price: '64999.9' }));
 
-    // Mirror of the BUY case: a resting SELL must stay at/above what was typed.
-    expect(price).toHaveValue('61718');
-  });
-
-  it('re-snaps from the typed price when the side flips after a snap', async () => {
-    // The directional snap is lossy: after the BUY blur the field holds 61717,
-    // and re-snapping THAT for SELL would be a no-op (it is a valid tick
-    // multiple) — leaving a resting SELL on the bid. The ticket must remember
-    // the raw typed 61717.6 and re-snap it for the new side.
-    server.use(...baseHandlers(), ...btcSymbolHandlers(), echoPreviewHandler());
-    renderWithClient(<SingleTicket />);
-
-    await pickHyperliquidBtc();
-    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
-    const price = screen.getByLabelText('Limit price');
-    await userEvent.type(price, '61717.6');
-    await userEvent.tab();
-    expect(price).toHaveValue('61717'); // floored for the resting BUY
-
-    await userEvent.click(screen.getByRole('radio', { name: 'Sell' }));
-    expect(price).toHaveValue('61718'); // re-ceiled from the raw 61717.6
+    await userEvent.click(screen.getByRole('radio', { name: 'Short' }));
+    await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ kind: 'open-limit', side: 'SELL', price: '65000' }));
   });
 });
 
 describe('no Review card on a single order', () => {
-  // The ticket already shows ref price, fill estimate, fees and violations
-  // directly above the button, so hovering Execute popped a floating copy of
-  // what was already on screen.
   it('hovering Execute does not open a Review card', async () => {
-    server.use(...baseHandlers(), ...btcSymbolHandlers(), echoPreviewHandler());
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), echoPreviewHandler());
     renderWithClient(<SingleTicket />);
     await pickBinanceBtc();
-    // BTC is coin-margined on Boros, so the box defaults to the coin — the
-    // same rule the pair ticket follows, so one strategy is sized in one unit.
     await userEvent.type(screen.getByPlaceholderText(/Size \(BTC\)/), '0.01');
 
     const execute = await screen.findByRole('button', { name: /Execute now/ });
     await userEvent.hover(execute);
 
-    // The card is a portalled tooltip titled "Review".
     await waitFor(() => expect(screen.queryByText('Review')).toBeNull());
     expect(screen.queryByRole('tooltip')).toBeNull();
-    // The inline preview is still there — nothing was lost by removing it.
     expect(await screen.findByText('Est. fee')).toBeInTheDocument();
   });
 });
 
-describe('SingleTicket — the size unit follows the coin', () => {
+describe('SingleTicket: the size unit follows the coin', () => {
   it('defaults BTC to the coin, and the toggle still wins', async () => {
-    /**
-     * Same rule as the pair ticket (`sizeUnitForBase`): BTC/ETH are
-     * coin-margined on Boros, so sizing the perp in the coin makes the hedge
-     * exact instead of an eyeballed FX step. The Single ticket used to
-     * hardcode USDT regardless of coin.
-     */
-    server.use(...baseHandlers(), ...btcSymbolHandlers(), echoPreviewHandler());
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), echoPreviewHandler());
     renderWithClient(<SingleTicket />);
     await pickBinanceBtc();
 
     expect(await screen.findByPlaceholderText(/Size \(BTC\)/)).toBeInTheDocument();
-    // An explicit choice still overrides the default.
     await userEvent.click(screen.getByRole('radio', { name: 'USDT' }));
     expect(screen.getByPlaceholderText(/Notional/)).toBeInTheDocument();
   });
 });
 
-describe('SingleTicket — the max size', () => {
+describe('SingleTicket: the max size', () => {
   it('stops at the largest position CrossEx takes, even when margin allows more', async () => {
-    // $4,200 available at 50x carries $190,909; CrossEx takes $100,000.
     server.use(
       http.get('/api/symbols/:symbol', () =>
         HttpResponse.json(env({ ...BTC_HYPERLIQUID, leverageMax: 50, positionMaxUsd: 100_000 })),
       ),
       ...baseHandlers(),
       ...btcSymbolHandlers(),
+      bookHandler(),
       echoPreviewHandler(),
     );
     renderWithClient(<SingleTicket />);
     await pickHyperliquidBtc();
 
     expect(screen.getByRole('button', { name: /^Max / })).toHaveTextContent('Max $100,000');
+  });
+});
+
+describe('SingleTicket with TWAP', () => {
+  function setup(bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [], deals: DealRequest[] = []) {
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), twapPreviewHandler(bodies), dealHandler(deals));
+    renderWithClient(<SingleTicket />);
+  }
+
+  it('built from pair ticket parts', async () => {
+    setup();
+    await pickBinanceBtc();
+
+    expect(screen.getByRole('radio', { name: 'Long' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Short' })).toBeInTheDocument();
+    expect(screen.getByText('LONG')).toBeInTheDocument();
+    expect(screen.getByLabelText('Long venue')).toBeInTheDocument();
+    expect(screen.getByLabelText('Size')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Limit' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Market' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Limit price')).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('Size'), '100');
+    expect(await screen.findByText('Est. fee')).toBeInTheDocument();
+  });
+
+  it('long short with no buy sell', async () => {
+    setup();
+    await pickBinanceBtc();
+
+    expect(screen.queryByRole('radio', { name: 'Buy' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Sell' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Mark/ })).toBeNull();
+    await userEvent.click(screen.getByRole('radio', { name: 'Short' }));
+    expect(screen.getByText('SHORT')).toBeInTheDocument();
+  });
+
+  it('twap switch only on limit', async () => {
+    setup();
+    await pickBinanceBtc();
+    expect(screen.getByRole('switch', { name: 'TWAP' })).toBeInTheDocument();
+
+    await marketMode();
+    expect(screen.queryByRole('switch', { name: 'TWAP' })).toBeNull();
+
+    await userEvent.click(screen.getByRole('radio', { name: 'Limit' }));
+    expect(screen.getByRole('switch', { name: 'TWAP' })).toBeInTheDocument();
+  });
+
+  it('twap off keeps post-only limit', async () => {
+    const deals: DealRequest[] = [];
+    setup([], deals);
+    await pickBinanceBtc();
+    await userEvent.type(screen.getByLabelText('Size'), '100');
+
+    await holdExecute('Execute now');
+    await waitFor(() => expect(deals).toHaveLength(1), { timeout: 4_000 });
+
+    expect(deals[0]).toMatchObject({ execution: 'maker', price: '64999.9', pricePolicy: 'fixed' });
+    expect(deals[0]).not.toHaveProperty('timeoutSec');
+  });
+
+  it('no maker settings with twap off', async () => {
+    setup();
+    await pickBinanceBtc();
+
+    expect(screen.queryByText('Maker settings')).toBeNull();
+  });
+
+  it('twap on hides type and price', async () => {
+    setup();
+    await pickBinanceBtc();
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+
+    expect(screen.queryByRole('radio', { name: 'Limit' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Market' })).toBeNull();
+    expect(screen.queryByLabelText('Limit price')).toBeNull();
+  });
+
+  it('single fold row', async () => {
+    const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
+    setup(bodies);
+    await pickBinanceBtc();
+    await userEvent.type(screen.getByLabelText('Size'), '100');
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+    await userEvent.clear(screen.getByLabelText('Duration'));
+    await userEvent.type(screen.getByLabelText('Duration'), '30m');
+    await userEvent.clear(screen.getByLabelText('Interval'));
+    await userEvent.type(screen.getByLabelText('Interval'), '2m 30s');
+
+    expect(await screen.findByText('Taker 2m · re-peg 0.05%')).toBeInTheDocument();
+    expect(screen.getByText('Maker settings')).toBeInTheDocument();
+    await waitFor(() => expect(bodies.some((b) => b.twap !== undefined)).toBe(true));
+  });
+
+  it('unhedged note stays with twap', async () => {
+    setup();
+    await pickBinanceBtc();
+    await userEvent.type(screen.getByLabelText('Size'), '100');
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+
+    expect(await screen.findByRole('button', { name: /Start TWAP/ })).toBeInTheDocument();
+    expect(screen.getByText('This leg is not hedged.')).toBeInTheDocument();
+  });
+
+  it('locked while a twap runs', async () => {
+    server.use(
+      rebalanceHandler(
+        makeRebalanceView({
+          job: {
+            ...REALIZE_RUNNING_JOB,
+            kind: 'twap',
+            status: 'running',
+            paused: false,
+            child: null,
+            twap: {
+              slice: 3,
+              of: 12,
+              nextAt: null,
+              durationSec: 3600,
+              intervalSec: 300,
+              startedAt: 0,
+              carryQty: '0',
+              behindQty: '0',
+              makerLeg: 'a',
+              repegBehindBp: 5,
+              takerAfterSec: 240,
+            },
+          },
+        }),
+      ),
+      ...baseHandlers(),
+      ...btcSymbolHandlers(),
+      bookHandler(),
+      echoPreviewHandler(),
+    );
+    renderWithClient(<SingleTicket />);
+    await pickBinanceBtc();
+    await userEvent.type(screen.getByLabelText('Size'), '100');
+
+    expect(await screen.findByText('A TWAP is running. Orders and transfers wait until it ends.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Execute now' })).toBeNull();
   });
 });

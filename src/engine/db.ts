@@ -44,7 +44,11 @@ CREATE TABLE IF NOT EXISTS pair (
   clip_band_bp INTEGER,
   halt_reason TEXT,
   report_json TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  repeg_behind_bp INTEGER,
+  repeg_not_before INTEGER NOT NULL DEFAULT 0,
+  halt_kind TEXT,
+  repeg_auto_bp INTEGER
 );
 CREATE TABLE IF NOT EXISTS orders (
   pair_id TEXT NOT NULL REFERENCES pair(id),
@@ -100,6 +104,10 @@ interface PairDbRow {
   halt_reason: string | null;
   report_json: string | null;
   created_at: number;
+  repeg_behind_bp: number | null;
+  repeg_not_before: number;
+  halt_kind: string | null;
+  repeg_auto_bp: number | null;
 }
 
 interface OrderDbRow {
@@ -150,6 +158,10 @@ function toPair(r: PairDbRow): PairRow {
     haltReason: r.halt_reason,
     reportJson: r.report_json,
     createdAt: r.created_at,
+    repegBehindBp: r.repeg_behind_bp,
+    repegAutoBp: r.repeg_auto_bp,
+    repegNotBefore: r.repeg_not_before,
+    haltKind: r.halt_kind as PairRow['haltKind'],
   };
 }
 
@@ -207,6 +219,9 @@ export interface PairPatch {
   hedgeRejectStreak?: number;
   haltReason?: string | null;
   reportJson?: string | null;
+  repegBehindBp?: number | null;
+  repegNotBefore?: number;
+  haltKind?: PairRow['haltKind'];
 }
 
 export interface OrderPatch {
@@ -233,6 +248,9 @@ const PAIR_COLS: Record<keyof PairPatch, string> = {
   hedgeRejectStreak: 'hedge_reject_streak',
   haltReason: 'halt_reason',
   reportJson: 'report_json',
+  repegBehindBp: 'repeg_behind_bp',
+  repegNotBefore: 'repeg_not_before',
+  haltKind: 'halt_kind',
 };
 
 const ORDER_COLS: Record<keyof OrderPatch, string> = {
@@ -279,6 +297,20 @@ export class Store {
     if (!cols.some((c) => c.name === 'read_fail_streak')) {
       this.db.exec(`ALTER TABLE orders ADD COLUMN read_fail_streak INTEGER NOT NULL DEFAULT 0`);
     }
+    const pairCols = this.db.prepare(`PRAGMA table_info(pair)`).all() as unknown as { name: string }[];
+    if (!pairCols.some((c) => c.name === 'repeg_behind_bp')) {
+      this.db.exec(`ALTER TABLE pair ADD COLUMN repeg_behind_bp INTEGER`);
+    }
+    if (!pairCols.some((c) => c.name === 'repeg_not_before')) {
+      this.db.exec(`ALTER TABLE pair ADD COLUMN repeg_not_before INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!pairCols.some((c) => c.name === 'halt_kind')) {
+      this.db.exec(`ALTER TABLE pair ADD COLUMN halt_kind TEXT`);
+    }
+    if (!pairCols.some((c) => c.name === 'repeg_auto_bp')) {
+      this.db.exec(`ALTER TABLE pair ADD COLUMN repeg_auto_bp INTEGER`);
+      this.db.exec(`UPDATE pair SET repeg_auto_bp = repeg_behind_bp`);
+    }
   }
 
   close(): void {
@@ -293,8 +325,9 @@ export class Store {
            b_contract, b_side, b_lot, b_min_size, b_min_notional, b_tick, b_reduce_only,
            target_qty, limit_price, price_policy, deadline_at,
            maker_not_before, hedge_not_before, poc_rejects, hedge_reject_streak,
-           max_clip, clip_band_bp, halt_reason, report_json, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+           max_clip, clip_band_bp, halt_reason, report_json, created_at,
+           repeg_behind_bp, repeg_not_before, halt_kind, repeg_auto_bp)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         p.id, p.mode,
@@ -304,6 +337,7 @@ export class Store {
         p.targetQty, p.limitPrice, p.pricePolicy, p.deadlineAt,
         p.makerNotBefore, p.hedgeNotBefore, p.pocRejects, p.hedgeRejectStreak,
         p.maxClip, p.clipBandBp, p.haltReason, p.reportJson, p.createdAt,
+        p.repegBehindBp, p.repegNotBefore, p.haltKind, p.repegAutoBp,
       );
   }
 

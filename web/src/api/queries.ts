@@ -60,6 +60,7 @@ import type {
   TelegramLinkStatus,
   TradesResponse,
   TransferView,
+  TwapStartBody,
   VenueFees,
   UpdateStatus,
   RunUpdateResponse,
@@ -655,7 +656,7 @@ export interface StartRebalanceBody extends Partial<CustomMove> {
 export function useStartRebalance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: StartRebalanceBody) => postJson<{ id: string }>('/rebalance', body),
+    mutationFn: (body: StartRebalanceBody | TwapStartBody) => postJson<{ id: string }>('/rebalance', body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.rebalance });
       void qc.invalidateQueries({ queryKey: qk.transfer });
@@ -680,7 +681,7 @@ export function useRebalanceCommand(cmd: 'resume' | 'abandon' | 'pause') {
 export function useRebalanceFix() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, action }: { id: string; action: RebalanceFixAction }) =>
+    mutationFn: ({ id, action }: { id: string; action: RebalanceFixAction | 'unwind' }) =>
       postJson<RebalanceJob>(`/rebalance/${encodeURIComponent(id)}/fix`, { action }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.rebalance });

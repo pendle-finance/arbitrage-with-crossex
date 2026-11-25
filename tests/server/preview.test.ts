@@ -9,9 +9,11 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import nock from 'nock';
 import type { PreviewResult } from '../../src/core/actions';
+import type { TwapPreview } from '../../src/core/preview';
 import { gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
 
 const RULES = 'rule-symbols.json';
+type TwapResponse = TwapPreview & { previews: PreviewResult[] };
 let app: FastifyInstance;
 
 afterEach(async () => {
@@ -123,5 +125,99 @@ describe('POST /api/preview', () => {
     expect(previews[1].qty).toBe(previews[0].qty); // shared sizing binds both legs
     expect(previews[0].fillEstimate?.source).toBe('reference+spread');
     expect(previews[1].fillEstimate?.source).toBe('reference+spread');
+  });
+});
+
+type BookLevel = [string, string];
+
+function mockGateBook(bids: BookLevel[], asks: BookLevel[]): void {
+  const toGate = (levels: BookLevel[]) => levels.map(([p, qty]) => ({ p, s: Math.round(Number(qty) / 0.01) }));
+  gate()
+    .get(/\/api\/v4\/futures\/usdt\/contracts\//)
+    .query(true)
+    .reply(200, { quanto_multiplier: '0.01', order_price_round: '0.05' })
+    .persist();
+  gate()
+    .get('/api/v4/futures/usdt/order_book')
+    .query(true)
+    .reply(200, { bids: toGate(bids), asks: toGate(asks) })
+    .persist();
+}
+
+function mockBinanceBook(bids: BookLevel[], asks: BookLevel[]): void {
+  nock('https://fapi.binance.com').get('/fapi/v1/depth').query(true).reply(200, { bids, asks }).persist();
+}
+
+function mockPairStack(): void {
+  app = makeTestApp();
+  mockGateGet('/rule/symbols', { fixture: RULES });
+  mockGateGet('/fee', { fixture: 'fee.json' });
+  mockSpotTicker('ETH_USDT', '2000');
+  mockGateBook([['1999.5', '500']], [['2000.5', '1'], ['2001.5', '1']]);
+  mockBinanceBook([['1999.5', '1'], ['1998.5', '1'], ['1997.5', '100']], [['2000.5', '100']]);
+}
+
+async function previewTwap(actions: unknown[], twap?: unknown): Promise<{ status: number; data: TwapResponse }> {
+  const res = await app.inject({ method: 'POST', url: '/api/preview', headers: HOST, payload: { actions, twap } });
+  return { status: res.statusCode, data: res.json().data as TwapResponse };
+}
+
+const pair = (qty: string) => [
+  { kind: 'open-market', symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY', qty },
+  { kind: 'open-market', symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'SELL', qty },
+];
+
+describe('POST /api/preview with twap', () => {
+  it('a pair gets the maker leg, the price impact and the default 1h 12 slice plan', async () => {
+    mockPairStack();
+
+    const { status, data } = await previewTwap(pair('1'));
+
+    expect(status).toBe(200);
+    expect(data.makerLeg).toEqual({ auto: 'a', why: 'book' });
+    expect(data.twap).toEqual({
+      plan: { slices: 12, sliceQty: '0.08', lastQty: '0.12', intervalSec: 300, durationSec: 3600, takerAfterSec: 240 },
+      refusal: null,
+    });
+    expect(data.priceImpact?.whole).toBeCloseTo(1, 6);
+    expect(data.priceImpact?.sliced).toBeCloseTo(1, 6);
+  });
+
+  it('twap whole-size impact past the book', async () => {
+    mockPairStack();
+
+    const { status, data } = await previewTwap(pair('3'), { durationSec: 3600, slices: 12 });
+
+    expect(status).toBe(200);
+    expect(data.makerLeg).toEqual({ auto: 'a', why: 'book' });
+    expect(data.priceImpact?.whole).toBeNull();
+    expect(data.priceImpact?.sliced).toBeCloseTo(3, 6);
+    expect(data.twap?.plan).toMatchObject({ slices: 12, sliceQty: '0.24', lastQty: '0.36' });
+    expect(data.twap?.refusal).toBeNull();
+  });
+
+  it('a single leg gets the plan alone, and a slice past the book is refused with the largest that fits', async () => {
+    mockPairStack();
+
+    const { status, data } = await previewTwap(
+      [{ kind: 'open-market', symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY', qty: '3' }],
+      { intervalSec: 300, sliceQty: '2.5' },
+    );
+
+    expect(status).toBe(200);
+    expect(data.makerLeg).toBeNull();
+    expect(data.priceImpact).toBeNull();
+    expect(data.twap?.refusal).toEqual({
+      field: 'sliceSize',
+      text: 'Book too thin for 2.5 ETH a slice.',
+      fix: { label: 'Use 2 ETH', patch: { intervalSec: 300, sliceQty: '2' } },
+    });
+  });
+
+  it('a twap with one field or a wrong type is a 400', async () => {
+    mockPairStack();
+
+    expect((await previewTwap(pair('1'), { durationSec: 3600 })).status).toBe(400);
+    expect((await previewTwap(pair('1'), { durationSec: 3600, slices: '12' })).status).toBe(400);
   });
 });

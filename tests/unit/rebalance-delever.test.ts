@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BorosOrderBook } from '../../src/core/boros/client';
 import { walkBorosBook } from '../../src/core/boros/opportunities';
 import { type NormalizedBook, touchOf } from '../../src/core/estimate/books';
-import { pickCloseMakerLeg } from '../../src/core/estimate/closeMaker';
+import { pickMakerLeg } from '../../src/core/estimate/makerLeg';
 import { floorToStep } from '../../src/core/numbers';
 import { type AccountLike, imUsedOf } from '../../src/core/rebalance/plan';
 import { type DeleverInput, type DeleverRequest, planDelever } from '../../src/core/rebalance/delever';
@@ -214,12 +214,40 @@ describe('planDelever', () => {
     expect(plan.estimates.market.impactUsd).toBeGreaterThan(plan.estimates.maker.impactUsd);
   });
 
-  it('maker leg from pickCloseMakerLeg', () => {
+  it('maker leg from pickMakerLeg', () => {
     const hlRates = { makerRate: 0.00018, takerRate: 0.00042, slippagePct: null };
     const gateRates = { makerRate: 0.0002, takerRate: 0.0005, slippagePct: null };
-    expect(planDelever(inputOf()).makerLeg).toBe(pickCloseMakerLeg(hlRates, gateRates));
-    expect(planDelever(inputOf({ order: 'gate-first' })).makerLeg).toBe(pickCloseMakerLeg(gateRates, hlRates));
+    expect(planDelever(inputOf()).makerLeg).toBe(pickMakerLeg(hlRates, gateRates).leg === 'a' ? 0 : 1);
+    expect(planDelever(inputOf({ order: 'gate-first' })).makerLeg).toBe(pickMakerLeg(gateRates, hlRates).leg === 'a' ? 0 : 1);
     expect(planDelever(inputOf({ order: 'gate-first' })).makerLeg).toBe(0);
+  });
+
+  it('a fee tie rests on the leg whose book runs out at the close size, at 0.0166 and 2,000 BTC', () => {
+    const tie: DeleverInput['feeRows'] = [
+      { exchangeType: 'HYPERLIQUID', futureMakerFee: '0.0002', futureTakerFee: '0.0005' },
+      { exchangeType: 'GATE', futureMakerFee: '0.0002', futureTakerFee: '0.0005' },
+    ];
+    for (const size of [0.0166, 2_000]) {
+      const books = {
+        [HL]: { bids: [[64_000, size * 10]], asks: [[64_000.5, size / 2]], ts: 0 } as NormalizedBook,
+        [GATE]: {
+          bids: [
+            [63_999.5, size / 4],
+            [63_900, size / 4],
+            [63_000, size * 10],
+          ],
+          asks: [[64_000.5, size * 10]],
+          ts: 0,
+        } as NormalizedBook,
+      };
+      const perpsOf = (symbols: string[]) => symbols.map((symbol) => ({ symbol, qty: size }));
+      const setup = { held: size, perps: perpsOf([HL, GATE]), boros: [], books };
+      expect(planDelever({ ...inputOf(setup), feeRows: tie }).makerLeg).toBe(0);
+      expect(planDelever({ ...inputOf({ ...setup, perps: perpsOf([GATE, HL]) }), feeRows: tie }).makerLeg).toBe(1);
+      expect(planDelever(inputOf(setup)).makerLeg).toBe(1);
+      const bothShort = { ...books, [GATE]: { ...books[GATE], bids: [[63_999.5, size / 4]] } as NormalizedBook };
+      expect(planDelever({ ...inputOf({ ...setup, books: bothShort }), feeRows: tie }).makerLeg).toBe(1);
+    }
   });
 
   it('im used per margin account before and after', () => {

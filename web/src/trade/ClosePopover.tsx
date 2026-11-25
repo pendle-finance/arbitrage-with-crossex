@@ -22,11 +22,16 @@ import { SignedNumber } from '../components/SignedNumber';
 import { SideChip } from '../components/VenueChip';
 import { fieldValue, fmtUsd, fmtUsdCompact, parseSymbol, prettyVenue, sig, sigGrouped } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
+import type { DealOpts } from './deal';
+import { EstimateHeadline } from './EstimateHeadline';
 import { ExecuteControl } from './ExecuteControl';
+import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { feeAmount, feeKind, PreviewFallback, ViolationList } from './previewBits';
 import { FieldLabel } from './SymbolCombobox';
+import { TwapArea, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
+import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 
 interface Props {
   position: CrossexPosition;
@@ -213,12 +218,36 @@ export function ClosePopover({
     };
   }, [slipInvalid, qtyInvalid, position.symbol, slip, closesEverything, qtyNum]);
 
+  const twapState = useTwapInput();
+  const twapOn = twapState.on;
+  const taker = useTakerAfter();
+  const [repegBehindBp, setRepegBehindBp] = useState<DealOpts['repegBehindBp']>(REPEG_DEFAULT_BP);
+
   const preview = usePreviewDebounced(`close-${position.symbol}`, action ? [action] : null, {
     debounceMs: 300,
     refetchInterval: 3_000,
+    twap: twapOn ? twapState.input : undefined,
   });
   const p = preview.previews?.[0];
   const estimating = preview.estimating;
+  const twapPreview = preview.data?.twap ?? null;
+  const twapPlan = twapOn ? (twapPreview?.plan ?? null) : null;
+  const intervalSec = twapOn ? (twapState.input.intervalSec ?? twapPlan?.intervalSec ?? null) : null;
+
+  const takerAfterBad = useTwapTakerAfter(taker, twapOn, twapPlan?.takerAfterSec ?? null);
+  const dealOpts = twapOn
+    ? { makerLeg: 'auto' as const, repegBehindBp, timeoutSec: taker.sec }
+    : undefined;
+  const twapStart =
+    twapOn && twapPlan
+      ? { plan: twapPlan, blocked: twapState.blockedBy(twapPreview) || takerAfterBad || estimating }
+      : null;
+  const restPrice = p?.fillEstimate?.midPrice ?? (p?.closing ? Number(p.closing.mark) : NaN);
+  const decorate = (acts: ActionInput[]): ActionInput[] =>
+    restPrice > 0
+      ? acts.map((a) => (a.kind === 'close-position' ? { ...a, makerPrice: String(restPrice) } : a))
+      : acts;
+  const makerFee = p?.fees && restPrice > 0 ? Number(p.qty) * restPrice * p.fees.makerRate : null;
 
   // Partial closes realize a proportional share of the position's uPnL.
   const upnlToRealize = p?.closing
@@ -388,19 +417,56 @@ export function ClosePopover({
           )}
         </div>
 
+        <TwapArea
+          on={twapOn}
+          onToggle={twapState.setOn}
+          input={twapState.input}
+          onInput={twapState.setInput}
+          preview={twapOn ? twapPreview : null}
+          impact={preview.data?.priceImpact ?? null}
+          coin={base}
+        />
+        {twapOn && (
+          <MakerSettings
+            legs={null}
+            makerLeg="auto"
+            autoPick={null}
+            onMakerLeg={() => {}}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            intervalSec={intervalSec}
+            repegBehindBp={repegBehindBp}
+            repegLocked={false}
+            onRepeg={(bp) => setRepegBehindBp(bp as DealOpts['repegBehindBp'])}
+            marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
+          />
+        )}
+
         {action && (
           <EstimateCard dataUpdatedAt={preview.dataUpdatedAt} estimating={estimating} isError={preview.isError}>
             {p ? (
               <>
-                <div className="flex items-end justify-between gap-3">
-                  <div className="flex flex-col">
-                    <span className="text-[12.5px] text-ink-50">{t('trade.close.upnlToRealise')}</span>
-                    <span className="text-[11px] text-ink-400">{t('trade.close.becomesReal')}</span>
+                <EstimateHeadline
+                  label={t('trade.close.upnlToRealise')}
+                  sub={twapOn ? t('accounts.closePair.twap.headlineSub') : t('trade.close.becomesReal')}
+                  value={upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
+                />
+                {twapOn ? (
+                  <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
+                    <EstimateRow
+                      label={t('pairTicket.estimate.legRole.rests', {
+                        side: t(heldSide === 'LONG' ? 'common.longUpper' : 'common.shortUpper'),
+                        venue: prettyVenue(exchange),
+                      })}
+                      value={p.qty ? `${sigGrouped(p.qty)} ${base}` : '—'}
+                    />
+                    <EstimateRow
+                      label={t('pairTicket.bits.tradeCost')}
+                      value={makerFee !== null ? `≈ ${sig(makerFee)} USDT` : '—'}
+                    />
                   </div>
-                  <span className="num text-lg font-semibold">
-                    {upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
-                  </span>
-                </div>
+                ) : (
+                <>
                 <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
                   <EstimateRow
                     label={t('common.order')}
@@ -440,6 +506,8 @@ export function ClosePopover({
                     quick={['0.2', '0.5', '1', '2']}
                   />
                 </div>
+                </>
+                )}
                 <ViolationList violations={p.violations} warnings={p.warnings} />
               </>
             ) : (
@@ -471,11 +539,15 @@ export function ClosePopover({
         <div className="flex flex-col gap-1.5">
           <ExecuteControl
             scope={`close-${position.symbol}`}
-            actions={action ? [action] : null}
+            actions={action && (!twapOn || twapPlan) ? [action] : null}
             tone="red"
+            decorate={twapOn ? decorate : undefined}
+            dealOpts={dealOpts}
+            twap={twapStart}
+            intentKey={twapOn ? JSON.stringify([action, twapState.input, taker.takerAfter, repegBehindBp]) : undefined}
             label={
             <>
-              {t('trade.close.closeNow')}
+              {twapOn ? t('accounts.closePair.twap.start') : t('trade.close.closeNow')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -492,7 +564,11 @@ export function ClosePopover({
             }}
           />
           <p className="text-[11px] leading-relaxed text-ink-400">
-            <Trans i18nKey="trade.close.reduceOnlyNote" components={{ b: <span className="font-medium text-ink-200" /> }} />
+            {twapOn ? (
+              <span className="font-medium text-ink-200">{t('accounts.closeLeg.twap.reduceOnly')}</span>
+            ) : (
+              <Trans i18nKey="trade.close.reduceOnlyNote" components={{ b: <span className="font-medium text-ink-200" /> }} />
+            )}
           </p>
         </div>
       </div>

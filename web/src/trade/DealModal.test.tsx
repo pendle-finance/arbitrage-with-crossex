@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
 import type { ActionInput, DealOrder } from '../api/types';
@@ -45,18 +45,51 @@ function renderModal(view = makeDealView()) {
 }
 
 describe('DealModal', () => {
-  it('OPENING: shows the mode strip and the maker controls', async () => {
+  it('first line with the market countdown', async () => {
+    renderModal(makeDealView({ pair: { mode: 'OPENING', deadlineAt: Date.now() + 232_000 } }));
+    expect(await screen.findByText('Limit resting')).toBeInTheDocument();
+    expect(screen.getByText(/^Market order in 3m 5\ds$|^Market order in 3m 4\ds$/)).toBeInTheDocument();
+    expect(screen.getByText('Running')).toBeInTheDocument();
+  });
+
+  it('first line under never', async () => {
+    renderModal(makeDealView({ pair: { mode: 'OPENING', deadlineAt: null } }));
+    expect(await screen.findByText('Limit resting · no market order')).toBeInTheDocument();
+    expect(screen.queryByText(/Market order in/)).not.toBeInTheDocument();
+  });
+
+  it('deal window in the run layout', async () => {
     renderModal(
       makeDealView({
         pair: { mode: 'OPENING', deadlineAt: Date.now() + 120_000 },
+        orders: [dealOrder('A', 'maker'), dealOrder('B', 'taker'), dealOrder('B', 'taker')],
         projection: { aFilled: '0.02', bFilled: '0.02' },
       }),
     );
-    expect(await screen.findByText(/Maker resting/)).toBeInTheDocument();
-    expect(screen.getByText(/until convert/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Convert now' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Re-peg to touch' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled();
+    expect(await screen.findByText('Filled · each leg')).toBeInTheDocument();
+    expect(screen.getByText('Not hedged now')).toBeInTheDocument();
+    expect(screen.getByText('Fee so far')).toBeInTheDocument();
+    expect(screen.getByText('Orders 3')).toBeInTheDocument();
+    expect(await screen.findByText(/Limit · Gate/)).toBeInTheDocument();
+    await waitFor(() => expect(document.querySelector('[data-price-graph]')).not.toBeNull());
+    expect(screen.queryByTestId('deal-report')).not.toBeInTheDocument();
+  });
+
+  it('market order now beside hold to stop', async () => {
+    renderModal();
+    const market = await screen.findByRole('button', { name: 'Market order now' });
+    const stop = screen.getByRole('button', { name: 'Hold to stop' });
+    expect(market).toBeEnabled();
+    expect(market.parentElement).toBe(stop.parentElement);
+    expect(market.parentElement?.className).toContain('grid-cols-2');
+  });
+
+  it('old buttons gone', async () => {
+    renderModal();
+    await screen.findByRole('button', { name: 'Market order now' });
+    for (const name of ['Convert now', 'Re-peg to touch', 'Re-peg to price']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
   });
 
   it('OPENING: draws the live book graph — OUR limit, the hedge market fill, and the leg captions', async () => {
@@ -119,7 +152,7 @@ describe('DealModal', () => {
         },
       }),
     );
-    await screen.findByText(/Maker resting/);
+    await screen.findByText('Running');
     // The maker (GATE, BUY → long column) carries the resting limit at the
     // LIVE order's price; the hedge column shows only its book.
     await waitFor(() => expect(document.querySelector('[data-price-graph]')).not.toBeNull());
@@ -154,9 +187,6 @@ describe('DealModal', () => {
       side: 'SELL',
       qty: '0.05',
     });
-    // Each column names its leg's role under the venue caption.
-    expect(screen.getByText('Leg A — limit order')).toBeInTheDocument();
-    expect(screen.getByText('Leg B — market hedge after every fill')).toBeInTheDocument();
   });
 
   it('OPENING: the hedge qty is target − reserved, float dust trimmed off the wire', async () => {
@@ -247,36 +277,22 @@ describe('DealModal', () => {
     expect(document.querySelector('[data-mark="fill"]')).toBeNull();
   });
 
-  it('re-pegs a BUY maker to a custom price, snapped DOWN to the venue tick', async () => {
+  it('re-pegs a BUY maker to a typed price, snapped DOWN to the venue tick', async () => {
     const bodies: Array<Record<string, unknown>> = [];
-    renderModal(); // default OPENING deal, leg A BUY, tick 0.01
+    renderModal();
     server.use(
       http.post('/api/deals/:id/:cmd', async ({ params, request }) => {
         bodies.push({ cmd: String(params.cmd), ...((await request.json()) as object) });
         return HttpResponse.json(env({ id: String(params.id) }));
       }),
     );
-
-    const input = await screen.findByLabelText('Custom re-peg price');
-    const btn = screen.getByRole('button', { name: 'Re-peg to price' });
-    // No parseable positive price yet → disabled.
-    expect(btn).toBeDisabled();
-    fireEvent.change(input, { target: { value: '-5' } });
-    expect(btn).toBeDisabled();
-    // Below one tick a BUY snaps to 0 → still disabled, never sent.
-    fireEvent.change(input, { target: { value: '0.004' } });
-    expect(btn).toBeDisabled();
-
-    // 0.6 tick above 2497.13: nearest would be 2497.14, a resting BUY goes DOWN.
+    const input = await screen.findByLabelText(/Limit · Gate/);
     fireEvent.change(input, { target: { value: '2497.136' } });
-    expect(btn).toBeEnabled();
-    fireEvent.click(btn);
+    fireEvent.submit(input.closest('form')!);
     await waitFor(() => expect(bodies).toEqual([{ cmd: 'repeg', price: '2497.13' }]));
-    // The input clears once the command lands.
-    await waitFor(() => expect(input).toHaveValue(''));
   });
 
-  it('re-pegs a SELL maker to a custom price, snapped UP to the venue tick', async () => {
+  it('re-pegs a SELL maker to a typed price, snapped UP to the venue tick', async () => {
     const bodies: Array<Record<string, unknown>> = [];
     renderModal(
       makeDealView({
@@ -292,17 +308,26 @@ describe('DealModal', () => {
         return HttpResponse.json(env({ id: String(params.id) }));
       }),
     );
-
-    const input = await screen.findByLabelText('Custom re-peg price');
-    const btn = screen.getByRole('button', { name: 'Re-peg to price' });
-    // 0.4 tick above 2497.13: nearest would be 2497.13, a resting SELL goes UP.
+    const input = await screen.findByLabelText(/Limit · Gate/);
     fireEvent.change(input, { target: { value: '2497.134' } });
-    expect(btn).toBeEnabled();
-    fireEvent.click(btn);
+    fireEvent.submit(input.closest('form')!);
     await waitFor(() => expect(bodies).toEqual([{ cmd: 'repeg', price: '2497.14' }]));
   });
 
-  it('Convert now POSTs the command', async () => {
+  it('To best posts a re-peg with no price', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    renderModal();
+    server.use(
+      http.post('/api/deals/:id/:cmd', async ({ params, request }) => {
+        bodies.push({ cmd: String(params.cmd), ...((await request.json()) as object) });
+        return HttpResponse.json(env({ id: String(params.id) }));
+      }),
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'To best' }));
+    await waitFor(() => expect(bodies).toEqual([{ cmd: 'repeg' }]));
+  });
+
+  it('market order now converts', async () => {
     const cmds: string[] = [];
     renderModal();
     server.use(
@@ -311,8 +336,27 @@ describe('DealModal', () => {
         return HttpResponse.json(env({ id: String(params.id) }));
       }),
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Convert now' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Market order now' }));
     await waitFor(() => expect(cmds).toEqual(['convert']));
+  });
+
+  it('stop is a hold', async () => {
+    const cmds: string[] = [];
+    renderModal();
+    server.use(
+      http.post('/api/deals/:id/:cmd', ({ params }) => {
+        cmds.push(String(params.cmd));
+        return HttpResponse.json(env({ id: String(params.id) }));
+      }),
+    );
+    const stop = await screen.findByRole('button', { name: 'Hold to stop' });
+    fireEvent.pointerDown(stop);
+    await act(() => new Promise((r) => setTimeout(r, 400)));
+    fireEvent.pointerUp(stop);
+    await act(() => new Promise((r) => setTimeout(r, 700)));
+    expect(cmds).toEqual([]);
+    fireEvent.pointerDown(stop);
+    await waitFor(() => expect(cmds).toEqual(['stop']), { timeout: 2500 });
   });
 
   it('HALTED: shows the halt reason and the resume control; unhedged is surfaced', async () => {
@@ -322,13 +366,47 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0.02', unhedged: '0.03' },
       }),
     );
-    expect(await screen.findByText(/Halted — needs you — hedge failed 3x/)).toBeInTheDocument();
-    expect(screen.getByText(/Unhedged/)).toBeInTheDocument();
+    expect(await screen.findByText('Halted — needs you')).toBeInTheDocument();
+    expect(screen.getByText(/hedge failed 3x/)).toBeInTheDocument();
+    expect(screen.getByText('Not hedged now')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Resume/ })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Convert now' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Market order now' })).not.toBeInTheDocument();
   });
 
-  it('DONE: renders the honest terminal report, no controls', async () => {
+  it('done rows', async () => {
+    const created = 1_751_500_000_000;
+    renderModal(
+      makeDealView({
+        pair: {
+          mode: 'DONE',
+          createdAt: created,
+          reportJson: JSON.stringify({
+            aFilled: '0.05', bFilled: '0.05', unhedged: '0', reason: 'filled',
+            aAvgFill: '2500', bAvgFill: '2500.33',
+          }),
+        },
+        orders: [
+          { ...dealOrder('A', 'maker'), resolvedAt: created + 220_000 },
+          dealOrder('B', 'taker'),
+        ],
+        projection: { aFilled: '0.05', bFilled: '0.05', unhedged: '0' },
+        fees: { readUsd: 0, estUsd: 0.09, est: true },
+        endedAt: created + 220_000,
+      }),
+    );
+    expect(await screen.findByText('Opened · each leg')).toBeInTheDocument();
+    expect(screen.getByText('Avg price · Gate')).toBeInTheDocument();
+    expect(screen.getByText('Avg price · Binance')).toBeInTheDocument();
+    expect(screen.getByText(/^\+0\.33 \(\+0\.013%\) Favorable$/)).toBeInTheDocument();
+    expect(screen.getByText('Fees')).toBeInTheDocument();
+    expect(screen.getByText('$0.09')).toBeInTheDocument();
+    expect(screen.getByText('Took')).toBeInTheDocument();
+    expect(screen.getByText('3m 40s')).toBeInTheDocument();
+    expect(screen.getByText('Orders 2')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /stop/i })).not.toBeInTheDocument();
+  });
+
+  it('no report box', async () => {
     renderModal(
       makeDealView({
         pair: {
@@ -338,11 +416,10 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0.04', unhedged: '0.01' },
       }),
     );
-    expect(await screen.findByText('Report')).toBeInTheDocument();
-    expect(screen.getByText(/Unhedged dust/)).toBeInTheDocument();
-    expect(screen.getByText('Stopped')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
-    // An ordinary stop must NOT wear the crossing-limit explanation.
+    expect(await screen.findByText('Stopped')).toBeInTheDocument();
+    expect(screen.getByText('Not hedged now')).toBeInTheDocument();
+    expect(screen.queryByText('Report')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('deal-report')).not.toBeInTheDocument();
     expect(screen.queryByText(/through the market/)).not.toBeInTheDocument();
   });
 
@@ -355,81 +432,17 @@ describe('DealModal', () => {
             aFilled: '0',
             bFilled: '0',
             unhedged: '0',
-            reason:
-              'the limit price kept crossing the market — the venue rejected the post-only maker 5 times in a row',
+            reason: 'the limit price kept crossing the market — the venue rejected the post-only maker 5 times in a row',
           }),
         },
         projection: { aFilled: '0', bFilled: '0', unhedged: '0' },
       }),
     );
-    expect(
-      await screen.findByText(/the limit price was already through the market/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/the limit price was already through the market/)).toBeInTheDocument();
     expect(screen.getByText(/Try again from the order form with a fresh limit price/)).toBeInTheDocument();
   });
 
-  it('DONE: labels each leg long/short with its venue + price, and the slippage', async () => {
-    renderModal(
-      makeDealView({
-        pair: {
-          mode: 'DONE',
-          // Leg A = maker BUY on Gate @ 2500 (long/limit); leg B = taker SELL on
-          // Binance @ 2503.75 (short/hedge). Basis = sell − buy = +3.75 →
-          // favorable; % of the 2501.875 mid.
-          reportJson: JSON.stringify({
-            aFilled: '0.05', bFilled: '0.05', unhedged: '0', reason: 'filled',
-            aAvgFill: '2500', bAvgFill: '2503.75',
-          }),
-        },
-        // The roles are read off the ORDERS, so a maker/hedge deal has to say so.
-        orders: [dealOrder('A', 'maker'), dealOrder('B', 'taker')],
-        projection: { aFilled: '0.05', bFilled: '0.05', unhedged: '0' },
-      }),
-    );
-    // Scoped to the report: the orders table below it prints kinds too.
-    const rep = within(await screen.findByTestId('deal-report'));
-    // Each leg reads: role · direction · venue · @ price.
-    expect(rep.getByText('Maker')).toBeInTheDocument();
-    expect(rep.getByText('Taker')).toBeInTheDocument();
-    expect(rep.getByText('Limit — the filled resting leg')).toBeInTheDocument();
-    expect(rep.getByText('Long')).toBeInTheDocument(); // the BUY (maker) leg
-    expect(rep.getByText('Short')).toBeInTheDocument(); // the SELL (taker) leg
-    expect(rep.getByText('Gate')).toBeInTheDocument(); // maker venue
-    expect(rep.getByText('Binance')).toBeInTheDocument(); // taker venue
-    expect(rep.getByText('2500')).toBeInTheDocument(); // long/maker avg fill
-    expect(rep.getByText('2503.75')).toBeInTheDocument(); // short/taker avg fill
-    expect(rep.getByText(/^\+3\.75$/)).toBeInTheDocument(); // signed price basis
-    expect(rep.getByText(/^\(\+0\.150%\)$/)).toBeInTheDocument(); // +0.150%
-    expect(rep.getByText('Favorable')).toBeInTheDocument();
-  });
-
-  /** "2 market orders" sends both legs as takers and nothing rests. The report
-   * used to hardcode leg A as "maker · limit — the filled resting leg", right
-   * under a table whose own kind column said taker on both rows. */
-  it('DONE: a two-market-order pair never claims a resting maker leg', async () => {
-    renderModal(
-      makeDealView({
-        pair: {
-          mode: 'DONE',
-          reportJson: JSON.stringify({
-            aFilled: '0.05', bFilled: '0.05', unhedged: '0', reason: 'filled',
-            aAvgFill: '2500', bAvgFill: '2503.75',
-          }),
-        },
-        orders: [dealOrder('A', 'taker'), dealOrder('B', 'taker')],
-        projection: { aFilled: '0.05', bFilled: '0.05', unhedged: '0' },
-      }),
-    );
-    const rep = within(await screen.findByTestId('deal-report'));
-    expect(rep.queryByText('Maker')).not.toBeInTheDocument();
-    expect(rep.queryByText(/the filled resting leg/)).not.toBeInTheDocument();
-    expect(rep.getAllByText('Taker')).toHaveLength(2);
-    expect(rep.getByText('Market order')).toBeInTheDocument();
-    // The basis is a difference of averages — right in either mode.
-    expect(rep.getByText(/^\+3\.75$/)).toBeInTheDocument();
-  });
-
-  it('DONE: omits the slippage block when a leg has no average fill', async () => {
+  it('DONE: omits slippage when a leg has no average fill', async () => {
     renderModal(
       makeDealView({
         pair: {
@@ -439,8 +452,7 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0', unhedged: '0.05' },
       }),
     );
-    expect(await screen.findByText('Report')).toBeInTheDocument();
-    expect(screen.queryByText('Maker')).not.toBeInTheDocument();
+    expect(await screen.findByText('Opened · each leg')).toBeInTheDocument();
     expect(screen.queryByText('Slippage')).not.toBeInTheDocument();
   });
 });

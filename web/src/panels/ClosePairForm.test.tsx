@@ -10,11 +10,11 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type { ActionInput, DealRequest, PreviewResponse, PreviewResult } from '../api/types';
+import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
 import { account, baseHandlers, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { ClosePairForm, pickCloseMakerLeg } from './PerpOnlyBox';
+import { ClosePairForm } from './PerpOnlyBox';
 
 const LEGS = [
   { symbol: 'BYBIT_FUTURE_HYPE_USDT', qty: 1.89, venue: 'BYBIT' },
@@ -28,6 +28,7 @@ function previewSpy(seen: ActionInput[][]) {
     seen.push(actions);
     return HttpResponse.json(
       env<PreviewResponse>({
+        makerLeg: { auto: 'a', why: 'fees' },
         previews: actions.map((a) =>
           previewFor(a, {
             side: 'SELL',
@@ -57,8 +58,8 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
       as.map((a) => (a.kind === 'close-position' ? a.slippagePct : undefined));
     expect(slipOf(seen.at(-1)!)).toEqual([0.5, 0.5]);
 
-    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Max slippage %');
+    await pickMarket();
+    const slip = screen.getByLabelText('Market slippage');
     await userEvent.clear(slip);
     await userEvent.type(slip, '2');
 
@@ -104,8 +105,8 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
 
-    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Max slippage %');
+    await pickMarket();
+    const slip = screen.getByLabelText('Market slippage');
     await userEvent.clear(slip);
     await userEvent.type(slip, '50');
 
@@ -184,7 +185,7 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
 
 /** The close defaults to Limit + hedge; market-mode cases pick it first. */
 async function pickMarket(): Promise<void> {
-  await userEvent.click(await screen.findByRole('radio', { name: /2 market orders/ }));
+  await userEvent.click(await screen.findByRole('radio', { name: /^Market$/ }));
 }
 
 const qtysOf = (as: ActionInput[] | undefined) => as?.map((a) => (a.kind === 'close-position' ? a.qty : undefined));
@@ -217,10 +218,8 @@ describe('ClosePairForm — slippage is part of the close intent', () => {
     fireEvent.pointerDown(btn);
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
 
-    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Max slippage %');
-    await userEvent.clear(slip);
-    await userEvent.type(slip, '2');
+    await userEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    await userEvent.click(screen.getByRole('radio', { name: '2%' }));
 
     const btn2 = screen.getByRole('button', { name: /Close both/ });
     await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
@@ -259,6 +258,8 @@ describe('ClosePairForm — Limit + hedge close', () => {
       pricePolicy: 'touch',
       price: '80',
       timeoutSec: 300,
+      repegBehindBp: 5,
+      makerLeg: 'auto',
       clipBandPct: 0.5,
     });
     // $100k slices at $80 = 1,250 HYPE per order.
@@ -317,18 +318,43 @@ describe('ClosePairForm — Limit + hedge close', () => {
   }, 15_000);
 });
 
-describe('pickCloseMakerLeg', () => {
-  const p = (slip: number, maker = 0.0002, taker = 0.0005): PreviewResult =>
-    previewFor({ kind: 'close-position', symbol: 'X' }, {
-      fees: { makerRate: maker, takerRate: taker, specialOverride: false, quote: 'USDT', est: {} },
-      fillEstimate: { qty: '1', avgPrice: 1, worstPrice: 1, slippagePct: slip, source: 'venue-orderbook', confidence: 'high', venue: 'X' },
-    });
-  it('rests the cheaper fee combo first', () => {
-    expect(pickCloseMakerLeg([p(0.01, 0.0002), p(0.0, 0)])).toBe(1);
+describe('ClosePairForm — the maker leg comes from the preview', () => {
+  it('a manual pick of the second leg rests that leg', async () => {
+    const posted: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', async ({ request }) => {
+        posted.push((await request.json()) as DealRequest);
+        return HttpResponse.json(env({ id: 'd-b' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    await userEvent.click(await screen.findByRole('button', { name: /Maker settings/ }));
+    await userEvent.click(screen.getByRole('radio', { name: /Hyperliquid/ }));
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(posted).toHaveLength(1), { timeout: 4000 });
+    expect(posted[0]).toMatchObject({ makerLeg: 'b', execution: 'maker' });
   });
-  it('with equal fees, rests the leg whose market order costs more', () => {
-    expect(pickCloseMakerLeg([p(0.01), p(0.03)])).toBe(1);
-    expect(pickCloseMakerLeg([p(0.03), p(0.01)])).toBe(0);
-    expect(pickCloseMakerLeg([p(0.02), p(0.02)])).toBe(0);
+
+  it('no maker leg in the preview keeps the maker close disabled', async () => {
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const { actions } = (await request.json()) as { actions: ActionInput[] };
+        return HttpResponse.json(
+          env<PreviewResponse>({
+            makerLeg: null,
+            previews: actions.map((a) => previewFor(a, { side: 'SELL', reduceOnly: true, qty: '1.89', price: '80' })),
+          }),
+        );
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(btn).toBeDisabled();
   });
 });

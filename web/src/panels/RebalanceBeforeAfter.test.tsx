@@ -1,8 +1,8 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { RebalanceBucket, RebalanceView, RoutePlan, WalletAfter } from '../api/types';
-import { auditRebalanceViews, OWNER_BEFORE_PERPS, REALIZE_DONE_JOB, rebalanceViews } from '../test/fixtures';
-import { RebalanceBeforeAfter, receiptChanges, walletChanges, type WalletChange } from './RebalanceBeforeAfter';
+import { rebalanceViews } from '../test/fixtures';
+import { RebalanceBeforeAfter, walletChanges, type WalletChange } from './RebalanceBeforeAfter';
 
 const owner = rebalanceViews.ownerBook;
 const ownerRoute = (over: Partial<RoutePlan> = {}): RoutePlan => ({ ...owner.plans.even.routes.loop!, ...over });
@@ -132,26 +132,6 @@ describe('RebalanceBeforeAfter', () => {
     expect(rows.length).toBeGreaterThan(0);
   });
 
-  it('receipt reads Before and Now and ends with the perps at the same size', () => {
-    render(<RebalanceBeforeAfter rows={receiptChanges(REALIZE_DONE_JOB, owner.buckets, null)} mode="now" />);
-    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Before', 'Now']);
-    expect(groupNames()).toEqual(['USDT · CrossEx', 'USDC · Hyperliquid', 'Perps']);
-    expect(labelsOf(group('USDT · CrossEx'))).toEqual(['Equity', 'Borrow', 'Interest a month']);
-    expect(valuesOf(group('USDT · CrossEx'), 'Borrow')).toEqual(['29,812', '0']);
-    expect(valuesOf(group('Perps'), 'Hyperliquid short')).toEqual(['66.0 ETH', '66.0 ETH']);
-  });
-
-  it.each([[66, '66.0'], [53.8, '53.8'], [0.954, '0.954']])('perp size %d reads %s', (qty, text) => {
-    const job = { ...REALIZE_DONE_JOB, target: null, realize: { ...REALIZE_DONE_JOB.realize!, legs: [{ ...REALIZE_DONE_JOB.realize!.legs[0]!, positionQty: qty }] } };
-    render(<RebalanceBeforeAfter rows={receiptChanges(job, owner.buckets, null)} mode="now" />);
-    expect(valuesOf(group('Perps'), 'Hyperliquid short')).toEqual([`${text} ETH`, `${text} ETH`]);
-  });
-
-  it('receipt without a target still reports the perps', () => {
-    const rows: WalletChange[] = receiptChanges({ ...REALIZE_DONE_JOB, target: null }, owner.buckets, null);
-    expect(rows.map((g) => g.key)).toEqual(['perps']);
-  });
-
   it.each([50, 6_000_000])('reads the full amount at $%d', (size) => {
     const scale = size / 29812;
     const buckets = owner.buckets.map((b) => ({
@@ -167,35 +147,6 @@ describe('RebalanceBeforeAfter', () => {
     expect(valuesOf(group('USDT · CrossEx'), 'Borrow')[0]).toBe(size === 50 ? '50' : '6,000,000');
   });
 
-  it.each([50 / 29812, 1, 200])('done now is before plus what landed on a trimmed route, at %s times the owner book', (by) => {
-    const trimmed = auditRebalanceViews.realizeDonePartFill.job!;
-    const buckets = owner.buckets.map((b) => ({ ...b, cash: b.cash * by, upnl: b.upnl * by, equity: b.equity * by, borrow: b.borrow * by, imHeldUsd: b.imHeldUsd * by }));
-    const job = {
-      ...trimmed,
-      before: { buckets, perps: OWNER_BEFORE_PERPS },
-      realize: { legs: trimmed.realize!.legs.map((leg) => ({ ...leg, realizedUsd: leg.realizedUsd * by })) },
-      steps: trimmed.steps.map((step) => ({ ...step, planned: step.planned === null || step.perp ? step.planned : step.planned * by, qty: step.qty === null || step.perp ? step.qty : step.qty * by })),
-    };
-    const landedUsdt = (5742.2 + 4537 + 4537 + 2941) * by;
-    const sentUsdc = (5742.2 + 4538 + 4538 + 2941.6) * by;
-    const rows = receiptChanges(job, owner.buckets, null);
-    const after = (key: string, label: string) => rows.find((g) => g.key === key)!.rows.find((r) => r.label === label)!.after;
-    expect(after('USDT/CROSSEX', 'Equity')).toBeCloseTo(-29812 * by + landedUsdt, 1);
-    expect(after('USDC/HYPERLIQUID', 'Equity')).toBeCloseTo(45314 * by - sentUsdc, 1);
-    expect(after('USDT/CROSSEX', 'Borrow')).toBeCloseTo(29812 * by - landedUsdt, 1);
-  });
-
-  it('done now column shows a short reopen', () => {
-    const job = { ...auditRebalanceViews.realizeDoneShortReopen.job!, before: { buckets: owner.buckets, perps: OWNER_BEFORE_PERPS } };
-    render(<RebalanceBeforeAfter rows={receiptChanges(job, owner.buckets, null)} mode="now" />);
-    expect(valuesOf(group('Perps'), 'Hyperliquid short')).toEqual(['66.0 ETH', '65.99 ETH']);
-    expect(valuesOf(group('Perps'), 'Gate long')).toEqual(['66.0 ETH', '66.0 ETH']);
-    cleanup();
-    const live = [{ symbol: job.realize!.legs[0]!.symbol, exchange: 'HYPERLIQUID', side: 'SHORT' as const, qty: 60 }];
-    render(<RebalanceBeforeAfter rows={receiptChanges(job, owner.buckets, live)} mode="now" />);
-    expect(valuesOf(group('Perps'), 'Hyperliquid short')).toEqual(['66.0 ETH', '60.0 ETH']);
-  });
-
   it('after mode leads with an After heading at 14px semibold; now mode has none', () => {
     planCard(owner, ownerRoute());
     const heading = screen.getByRole('caption');
@@ -203,7 +154,7 @@ describe('RebalanceBeforeAfter', () => {
     expect(heading.className).toContain('text-[14px]');
     expect(heading.className).toContain('font-semibold');
     cleanup();
-    render(<RebalanceBeforeAfter rows={receiptChanges(REALIZE_DONE_JOB, owner.buckets, null)} mode="now" />);
+    render(<RebalanceBeforeAfter rows={walletChanges(owner, owner.plans.even, ownerRoute())} mode="now" />);
     expect(screen.queryByRole('caption')).toBeNull();
   });
 

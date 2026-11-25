@@ -14,6 +14,7 @@ export type PairMode = 'OPENING' | 'CONVERTING' | 'STOPPING' | 'HALTED' | 'DONE'
 export type OrderState = 'PENDING' | 'OPEN' | 'CLOSED' | 'DEAD';
 export type Leg = 'A' | 'B';
 export type Side = 'BUY' | 'SELL';
+export type PairHaltKind = 'hedge-margin';
 
 /** Venue trading rules for one leg, snapshotted at deal creation (decimal strings). */
 export interface LegSpec {
@@ -58,6 +59,10 @@ export interface PairRow {
    * Closes carry the user's slippage here — the clip becomes LIMIT IOC at
    * ref·(1 ± band), the close-protection semantics. */
   clipBandBp: number | null;
+  repegBehindBp: number | null;
+  repegAutoBp: number | null;
+  repegNotBefore: number;
+  haltKind: PairHaltKind | null;
   haltReason: string | null;
   reportJson: string | null;
   createdAt: number;
@@ -166,6 +171,7 @@ export interface VenuePort {
    * (tick-snapped + Hyperliquid 5-sig-fig cap — `tick` is the leg's tick size);
    * null when the book is unavailable. */
   touch(contract: string, side: Side, tick: string): Promise<string | null>;
+  best(contract: string, side: Side, tick: string): Promise<string | null>;
   /** Reference price for min-notional checks; null when unavailable. */
   refPrice(contract: string): Promise<string | null>;
 }
@@ -189,6 +195,7 @@ export interface Projection {
   residualA: string;
   /** Newest leg-A maker order, if any. */
   makerOrder: OrderRow | null;
+  lastHedge: OrderRow | null;
   anyPending: boolean;
   anyQuarantined: boolean;
   /** The first order stuck on a status the decoder cannot classify (any leg).
@@ -217,6 +224,7 @@ export type Action =
       mode: PairMode;
       reason: string;
       haltReason?: string;
+      haltKind?: PairHaltKind;
       /** Start the new mode with a fresh leg-A failure budget. A close that
        * enters CONVERTING because the maker kept failing would otherwise stop
        * on its first tick there, with the budget already spent. */
@@ -244,10 +252,8 @@ export interface Tuning {
   HEDGE_REJECT_HALT: number;
   /** Convert clips: caps peak unhedged exposure during completion. */
   MAX_CLIP: string;
-  /** A resting reduce-only maker follows the book: it is re-placed at the
-   * fresh touch once it has rested this long and the touch moved toward the
-   * market. Opens keep a fixed resting price. */
-  CLOSE_REPEG_MS: number;
+  REPEG_MIN_GAP_MS: number;
+  REPEG_REFUSED_WAIT_MS: number;
   /** Zero-fill hedges in a row after which a STOPPING close gives up on its
    * reduce-only hedge leg. That leg's position is most likely already gone
    * (closed by hand, liquidated, ADL), and every retry is refused; without a
@@ -268,7 +274,8 @@ export const TUNING: Tuning = {
   MAX_POC_REJECTS: 5,
   HEDGE_REJECT_HALT: 3,
   MAX_CLIP: '1000000000', // effectively uncapped by default; pairs may be created with less
-  CLOSE_REPEG_MS: 5_000,
+  REPEG_MIN_GAP_MS: 5_000,
+  REPEG_REFUSED_WAIT_MS: 60_000,
   STOP_HEDGE_GIVE_UP: 10,
   READ_FAIL_ALERT: 5,
 };

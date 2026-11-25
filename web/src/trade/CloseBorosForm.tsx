@@ -31,6 +31,7 @@ import { spreadName } from '../lib/spread';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { FieldLabel } from './SymbolCombobox';
+import { EstimateHeadline } from './EstimateHeadline';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -621,15 +622,11 @@ export function CloseBorosForm({
       >
         {/* The PnL this close realises — (locked − execution rate) × size ×
             time to maturity, before the fee — summed over the legs. */}
-        <div className="flex items-end justify-between gap-3">
-          <div className="flex flex-col">
-            <span className="text-[12.5px] text-ink-50">{t('pairTicket.closeBoros.estPnl')}</span>
-            <span className="text-[11px] text-ink-400">{t('pairTicket.closeBoros.beforeFee')}</span>
-          </div>
-          <span className="num text-lg font-semibold">
-            {totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
-          </span>
-        </div>
+        <EstimateHeadline
+          label={t('pairTicket.closeBoros.estPnl')}
+          sub={t('pairTicket.closeBoros.beforeFee')}
+          value={totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
+        />
         {/* Per-leg simulation. One leg: plain rows. Two legs: a table, one
             row per market, with any per-leg notice under it. */}
         {(() => {

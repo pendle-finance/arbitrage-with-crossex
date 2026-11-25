@@ -367,7 +367,7 @@ describe('scale ladder: planRealize', () => {
     expect(converts).toHaveLength(leg.convert?.count ?? 0);
     expect(converts.every((step) => (step.planned ?? 0) <= CONVERT_MAX)).toBe(true);
     expect(converts.reduce((total, step) => total + Math.round((step.planned ?? 0) * 100), 0)).toBe(Math.round(amount * 100));
-    expect(job.steps.map((step) => step.name)).toEqual(['Close', ...converts.map(() => 'Convert'), 'Reopen']);
+    expect(job.steps.map((step) => step.name)).toEqual(['Slices', ...converts.map(() => 'Convert')]);
     expect(floorToStep(job.steps[0].planned ?? 0, '0.0001')).toBe(leg.qty.toFixed(4));
     expect(job.realize?.legs[0].qty).toBe(leg.qty);
   });

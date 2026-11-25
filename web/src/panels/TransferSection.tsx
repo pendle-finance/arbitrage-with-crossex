@@ -14,6 +14,8 @@ const LOCK_SHORT: Readonly<Record<TransferLock, string>> = {
   get rebalance() { return waitsForRebalance(); },
   get halted() { return waitsForStoppedRebalance(); },
   get deal() { return waitsForDeal(); },
+  get twapRunning() { return t('accounts.rebalance.waits.twapRunning'); },
+  get twapError() { return t('accounts.rebalance.waits.twapError'); },
 };
 
 function doneText(transfer: TransferJob): string {

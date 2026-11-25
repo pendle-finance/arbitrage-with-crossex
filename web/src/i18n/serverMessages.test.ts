@@ -243,7 +243,6 @@ const ENGLISH = [
     "The Hyperliquid short is 40 ETH on Gate, not the 53.8 ETH this rebalance left. Abandon it and check Positions.",
     "The Gate long is 12.2 ETH on Gate, not the 66 ETH it was when this rebalance started. The Hyperliquid short was not reopened. Abandon it and check Positions.",
     "Rebalance stopped. Hyperliquid short is 23.8 ETH smaller than the Gate long.",
-    "Rebalance stopped before the close.",
   ],
   "11.00 USDC is in Gate spot.",
   "11.00 USDC is on the way to USDC · Hyperliquid.",
@@ -508,7 +507,6 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
     "Gate 上的 Gate 多头为 12.2 ETH，而不是本次再平衡开始时的 66 ETH。Hyperliquid 空头未重新开仓。请放弃并检查持仓。",
   ],
   ["Rebalance stopped. Hyperliquid short is 23.8 ETH smaller than the Gate long.", "再平衡已停止。Hyperliquid 空头比 Gate 多头少 23.8 ETH。"],
-  ["Rebalance stopped before the close.", "再平衡在平仓前已停止。"],
   ["Gate paused USDC transfers.", "Gate 已暂停 USDC 划转。"],
   ["body must be { key, secret } (non-empty strings)", "请求体必须是 { key, secret }（非空字符串）"],
   ["A deal is still running. Wait for it to finish, then update.", "有交易任务仍在进行中，请等它完成后再更新。"],
@@ -554,6 +552,14 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
   ["the limit price kept crossing the market — the venue rejected the post-only maker 5 times in a row", "限价持续穿过市价 — 交易所连续 5 次拒绝只做挂单"],
   ["cancelled", "已撤销"],
   ["rejected:ORDER_SIZE_TOO_SMALL", "被拒：ORDER_SIZE_TOO_SMALL"],
+  ["3 slices. Min 2: slice size at most 0.5 ETH.", "3 片。至少 2 片：单片最多 0.5 ETH。"],
+  ["1 slice. Min 2: slice size at most 0.5 ETH.", "1 片。至少 2 片：单片最多 0.5 ETH。"],
+  ["Interval at most 1h 30m.", "间隔最多 1h 30m。"],
+  ["Binance takes at most 1,000 ETH a slice.", "Binance 每片最多 1,000 ETH。"],
+  ["Taker after must be 80% of the interval or less (240s).", "转市价时限不得超过间隔的 80%（240 秒）。"],
+  ["Slice 4 is over Gate's 2,000 ETH maximum", "第 4 片超过 Gate 的最大额 2,000 ETH"],
+  ["This Mac slept during the TWAP. Nothing was sent while it slept. Press Resume.", "这台 Mac 在 TWAP 期间休眠。休眠时没有发送任何订单。请点击恢复。"],
+  ["0.5 ETH not opened", "0.5 ETH 未开仓"],
 ];
 
 const UNKNOWN = [

@@ -161,7 +161,9 @@
       "transfer": "Transfer running",
       "deal": "Deal running",
       "rebalance": "Rebalance running",
-      "stoppedRebalance": "Rebalance stopped"
+      "stoppedRebalance": "Rebalance stopped",
+      "twapRunning": "TWAP running",
+      "twapError": "TWAP stopped"
     },
     "transferCta": "Manual transfer",
     "rateUnknown": "Rate unknown",
@@ -341,7 +343,14 @@
     "hedgeTitle": "Market, as the resting leg fills.",
     "slipTitleMaker": "Limit for the market orders after the timeout: mid ± this much.",
     "pairNoteMaker": "One leg rests post-only and follows the book. The other closes at market as it fills. After the timeout, the rest closes at market.",
-    "mechanicsMaker": "<b>Reduce-only</b>. Each fill is hedged at once, so the pair stays hedged while it closes."
+    "mechanicsMaker": "<b>Reduce-only</b>. Each fill is hedged at once, so the pair stays hedged while it closes.",
+    "twap": {
+      "headlineSub": "Realized as each slice fills",
+      "start": "Start TWAP close",
+      "reduceOnly": "Reduce-only. Each fill is hedged at once.",
+      "marketSlippage": "Market slippage",
+      "marketSlippageHint": "The most the market step may move the price."
+    }
   },
   "tracked": {
     "renewLogin": "Renew login for {{address}}",
@@ -398,8 +407,6 @@
     "howItRuns": "How it runs",
     "howItRan": "How it ran",
     "gapLineNoUsd": "{{venue}} {{side}} {{size}} {{base}} smaller",
-    "closeUnconfirmedTitle": "Stopped after sending the close",
-    "closeUnconfirmedBody": "{{platform}} has not confirmed the close of {{size}} {{base}} {{side}}. Check Positions, then Resume.",
     "capTitle": "Above the {{cap}} market-order cap.",
     "capBody": "Pick a smaller Custom amount.",
     "abandonedGap": "{{size}} {{base}} {{side}} not reopened, {{usd}} not hedged",
@@ -425,8 +432,6 @@
     "spotLoopLong": "Spot loop, round {{round}} of {{rounds}} · longer than the usual {{minutes}} min",
     "spotLoopWay": "{{amount}} {{coin}} on the way through Gate spot",
     "spotLoopSpot": "{{amount}} {{coin}} in Gate spot",
-    "stoppedBeforeClose": "Stopped before the close",
-    "stoppedBeforeCloseBody": "{{venue}} {{side}} {{size}} {{base}}, same as before. Nothing was closed or moved.",
     "gapBox": "{{venue}} {{side}} is {{size}} {{base}} smaller than the {{leg}}.",
     "notHedged": "{{usd}} not hedged.",
     "receiptCash": "{{profit}} {{coin}} of profit is now cash: {{first}} in {{firstWallet}}, {{second}} in {{secondWallet}}.",
@@ -562,7 +567,7 @@
     "afterBoros": "Boros {{a}} → {{b}} YU",
     "borosGap": "Boros closes after the perps. Until then, the YU with no perp behind it grows to {{amount}} by the end ({{time}}).",
     "notHedged": "Not hedged during each slice: max {{qty}} {{coin}} ({{usd}})",
-    "hold": "Hold to delever {{coin}} {{venueA}} / {{venueB}} by {{pct}}% ({{qty}} {{coin}})",
+    "hold": "Hold to delever {{qty}} {{coin}}",
     "noPairs": "No open pairs",
     "noPairsMatch": "No pairs match",
     "belowMin": "{{venue}} takes at least {{min}} {{coin}}",
@@ -574,10 +579,10 @@
   "sliceRun": {
     "slice": "Slice {{i}} of {{n}}",
     "left": "Est. {{time}} left",
-    "realizedOf": "Realized {{x}} of {{y}} USDC",
+    "realizedOf": "{{x}} of {{y}} USDC",
     "notHedgedNow": "Not hedged now {{qty}} {{coin}} ({{usd}})",
     "feeSoFar": "Fee so far {{fee}} · est. total {{est}}",
-    "holdPause": "Hold to pause after this slice",
+    "holdPause": "Pause after this slice",
     "pausing": "Pausing after slice {{i}} of {{n}}",
     "paused": "Paused after slice {{i}} of {{n}}",
     "resume": "Resume",
@@ -595,13 +600,13 @@
     "holdRetryBoros": "Hold to retry closing {{amount}} YU on Boros",
     "holdAddBack": "Hold to add {{qty}} {{coin}} back on both perps",
     "holdAddBackOn": "Hold to add back {{rest}}",
-    "perpsLine": "Perps · slice {{i}} of {{n}} {{old}} → {{now}} {{coin}} each",
-    "borosLine": "Boros {{amount}} → {{end}} YU · closes after perps",
+    "perpsLine": "{{old}} → {{now}} {{coin}} each",
+    "borosLine": "{{amount}} → {{end}} YU · closes after perps",
     "notHedgedMax": "Not hedged now max {{qty}} {{coin}} ({{usd}}) per slice",
-    "imNowEnd": "IM used · {{account}} {{a}}% now · {{b}}% at end",
+    "imNowEnd": "{{a}}% now · {{b}}% at end",
     "feeEst": "Fee so far {{fee}} · Est. fee {{est}}",
-    "imDone": "IM used · {{account}} {{a}}% → {{b}}%",
-    "totalCost": "Total cost {{real}} (est. {{est}})",
+    "imDone": "{{a}}% → {{b}}%",
+    "totalCost": "{{real}} (est. {{est}})",
     "realized": "Realized {{amount}} USDC",
     "pairPnl": "Pair PnL",
     "pairPnlValue": "Unchanged, except cost",
@@ -616,6 +621,22 @@
     "deleverDoneHeader": "Delever {{pct}}%",
     "perpsBorosNow": "Perps {{perps}} {{coin}} each · Boros {{boros}} YU",
     "perpsSplitBorosNow": "Perps {{venueA}} {{a}} {{coin}}, {{venueB}} {{b}} {{coin}} · Boros {{boros}} YU",
-    "borosFilled": "Boros filled {{filled}} of {{target}} YU"
+    "borosFilled": "Boros filled {{filled}} of {{target}} YU",
+    "perpsLabel": "Perps · slice {{i}} of {{n}}",
+    "borosLabel": "Boros",
+    "imLabel": "IM used · {{account}}",
+    "totalCostLabel": "Total cost",
+    "realizedLabel": "Realized"
+  },
+  "delever": {
+    "holdTwap": "Hold to delever {{qty}} {{coin}} · TWAP {{duration}}",
+    "borosPerSlice": "Boros close per slice",
+    "borosPerSliceValue": "{{amount}} YU",
+    "borosPerSliceHover": "A share of $10 or less waits and closes with the next slice."
+  },
+  "closeLeg": {
+    "twap": {
+      "reduceOnly": "Reduce-only."
+    }
   }
 }

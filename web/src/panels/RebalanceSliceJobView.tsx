@@ -7,6 +7,7 @@ import { Spinner } from '../components/Spinner';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
 import { fmtAbout, fmtUsd, num, prettyVenue, WALLET_SHORT } from '../lib/fmt';
+import { RunView } from '../trade/RunView';
 import { markPriceOf, ProgressBar } from './RebalanceBits';
 import { poolKey, sideText, sizeText } from './rebalanceCopy';
 import { Actions, CloseButton, haltLine, StopBox, type JobViewProps } from './RebalanceJobBits';
@@ -14,6 +15,7 @@ import type { RebalanceTab } from './rebalanceOpener';
 import { NotHedgedLine } from './RebalancePlanBits';
 import { MAX_SLIPPAGE_RATIO } from './SliceTable';
 
+type RunProps = Parameters<typeof RunView>[0];
 const SLICE_SECONDS = { maker: 300, market: 2 } as const;
 const FOLLOW_MISSES_RED = 3;
 
@@ -97,12 +99,14 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       : sk('perpsBorosNow', { perps: sizeText(perpA?.qty ?? perpNow), coin, boros: sizeText(borosNow) });
   const longLeg = delever?.legs.find((l) => l.side === 'LONG');
   const shortLeg = delever?.legs.find((l) => l.side === 'SHORT');
-  const header = (text: string) => <p className="num text-sm font-semibold text-ink-100">{text}</p>;
-  const deleverHeader = delever
-    ? header(sk('deleverHeader', { coin, long: prettyVenue(longLeg?.exchange ?? ''), short: prettyVenue(shortLeg?.exchange ?? '') }))
-    : null;
-  const totalCostLine = (tone?: string) =>
-    realCost === null ? null : <Line tone={tone}>{sk('totalCost', { real: fmtUsd(realCost), est: fmtUsd(estCost) })}</Line>;
+  const title = delever
+    ? sk('deleverHeader', { coin, long: prettyVenue(longLeg?.exchange ?? ''), short: prettyVenue(shortLeg?.exchange ?? '') })
+    : t('accounts.rebalanceTabs.realize');
+  const show = (props: Partial<RunProps>) => (
+    <RunView title={title} chip={null} firstLine={null} rows={[]} graph={null} priceBox={null} orders={[]} lines={[]} acts={null} footer={false} {...props} />
+  );
+  const totalCostRows: RunProps['rows'] =
+    realCost === null ? [] : [{ label: sk('totalCostLabel'), value: sk('totalCost', { real: fmtUsd(realCost), est: fmtUsd(estCost) }) }];
 
   const fixHolds = () => {
     const fallback = delever ? (followLeg?.side === 'LONG' ? 'SELL' : 'BUY') : leg?.side === 'SHORT' ? 'SELL' : 'BUY';
@@ -142,97 +146,89 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       const account = job.imUsedStart?.[0]?.account;
       const start = imOf(job.imUsedStart, account);
       const end = imOf(job.imUsedEnd, account);
-      return (
-        <>
-          {header(sk('deleverDoneHeader', { pct: pctText(delever.pct) }))}
-          <div className="card flex flex-col gap-1.5 p-3">
-            <Line>
-              {dk('afterPerps', {
-                longVenue: prettyVenue(longLeg?.exchange ?? ''), shortVenue: prettyVenue(shortLeg?.exchange ?? ''), a: sizeText(perpBefore), b: sizeText(perpNow), coin,
-              })}
-            </Line>
-            {borosBefore > 0 && <Line>{dk('afterBoros', { a: sizeText(borosBefore), b: sizeText(borosNow) })}</Line>}
-            {start !== null && end !== null && <Line>{sk('imDone', { account: accountText(account), a: pctText(start), b: pctText(end) })}</Line>}
-            {totalCostLine('font-semibold text-ink-100')}
-          </div>
-          {nextOrClose(borrowLeft)}
-        </>
-      );
+      return show({
+        title: sk('deleverDoneHeader', { pct: pctText(delever.pct) }),
+        lines: [
+          <Line key="perps">
+            {dk('afterPerps', {
+              longVenue: prettyVenue(longLeg?.exchange ?? ''), shortVenue: prettyVenue(shortLeg?.exchange ?? ''), a: sizeText(perpBefore), b: sizeText(perpNow), coin,
+            })}
+          </Line>,
+          borosBefore > 0 && <Line key="boros">{dk('afterBoros', { a: sizeText(borosBefore), b: sizeText(borosNow) })}</Line>,
+        ].filter(Boolean),
+        rows: [
+          ...(start !== null && end !== null
+            ? [{ label: sk('imLabel', { account: accountText(account) }), value: sk('imDone', { a: pctText(start), b: pctText(end) }) }]
+            : []),
+          ...totalCostRows,
+        ],
+        acts: nextOrClose(borrowLeft),
+      });
     }
-    return (
-      <>
-        <div className="card flex flex-col gap-1.5 p-3">
-          <Line tone="font-semibold text-ink-100">{sk('realized', { amount: num(realized, 0) })}</Line>
-          {totalCostLine()}
-          <div className="flex justify-between gap-4 text-xs">
-            <span className="text-ink-400">{sk('pairPnl')}</span>
-            <span className="text-ink-200">{sk('pairPnlValue')}</span>
-          </div>
-        </div>
-        {nextOrClose(true)}
-      </>
-    );
+    return show({
+      lines: [<Line key="realized" tone="font-semibold text-ink-100">{sk('realized', { amount: num(realized, 0) })}</Line>],
+      rows: [...totalCostRows, { label: sk('pairPnl'), value: sk('pairPnlValue') }],
+      acts: nextOrClose(true),
+    });
   }
 
-  const facts = delever ? (
-    <>
-      <Line>{sk('perpsLine', { i: num(index, 0), n: num(count, 0), old: sizeText(perpBefore), now: sizeText(perpNow), coin })}</Line>
-      {borosNow > 0 && <Line>{sk('borosLine', { amount: sizeText(borosNow), end: sizeText(borosEnd) })}</Line>}
-      {(() => {
-        const leadClose = leg?.qty ?? 0;
-        const size = job.slice?.sizeUsd ?? 0;
-        const qty = job.slice?.qty ?? (mark !== null && size > 0 ? Math.min(size / mark, leadClose) : leadClose / count);
-        const usd = mark !== null ? fmtUsd(qty * mark, 0) : fmtUsd(size, 0);
-        return <NotHedgedLine text={sk('notHedgedMax', { qty: sizeText(qty), coin, usd })} />;
-      })()}
-      {(() => {
-        const account = (job.imUsedNow ?? job.imUsedStart)?.[0]?.account;
-        const now = imOf(job.imUsedNow ?? job.imUsedStart, account);
-        const end = imOf(job.imUsedEnd, account);
-        return now !== null && end !== null ? <Line>{sk('imNowEnd', { account: accountText(account), a: pctText(now), b: pctText(end) })}</Line> : null;
-      })()}
-      <Line>{sk('feeEst', { fee: fmtUsd(job.feeSoFarUsd ?? 0), est: fmtUsd(job.estimate?.feeUsd ?? 0) })}</Line>
-    </>
-  ) : (
-    <>
-      <div className="flex justify-between gap-4">
-        <Line tone="font-semibold text-ink-100">{sk('slice', { i: num(index, 0), n: num(count, 0) })}</Line>
-        <Line tone="text-ink-300">{sk('left', { time: fmtAbout((count - index + 1) * SLICE_SECONDS[job.exec ?? 'maker']) })}</Line>
-      </div>
-      <Line>{sk('realizedOf', { x: num(realized, 0), y: num(job.amount, 0) })}</Line>
-      <Line>{sk('notHedgedNow', { qty: sizeText(open), coin, usd: usdOf(open) })}</Line>
-      <Line>{sk('feeSoFar', { fee: fmtUsd(job.feeSoFarUsd ?? 0), est: fmtUsd(estCost) })}</Line>
-    </>
-  );
+  const feeRow = {
+    label: t('trade.twap.run.feeSoFar'),
+    value: t('trade.twap.run.feeValue', { fee: fmtUsd(job.feeSoFarUsd ?? 0), est: fmtUsd(delever ? (job.estimate?.feeUsd ?? 0) : estCost) }),
+  };
+  const imAccount = (job.imUsedNow ?? job.imUsedStart)?.[0]?.account;
+  const imNow = imOf(job.imUsedNow ?? job.imUsedStart, imAccount);
+  const imEnd = imOf(job.imUsedEnd, imAccount);
+  const factRows: RunProps['rows'] = delever
+    ? [
+        { label: sk('perpsLabel', { i: num(index, 0), n: num(count, 0) }), value: sk('perpsLine', { old: sizeText(perpBefore), now: sizeText(perpNow), coin }) },
+        ...(borosNow > 0 ? [{ label: sk('borosLabel'), value: sk('borosLine', { amount: sizeText(borosNow), end: sizeText(borosEnd) }) }] : []),
+        ...(imNow !== null && imEnd !== null
+          ? [{ label: sk('imLabel', { account: accountText(imAccount) }), value: sk('imNowEnd', { a: pctText(imNow), b: pctText(imEnd) }) }]
+          : []),
+        feeRow,
+      ]
+    : [
+        { label: t('trade.twap.run.slice', { i: num(index, 0), n: num(count, 0) }), value: sk('left', { time: fmtAbout((count - index + 1) * SLICE_SECONDS[job.exec ?? 'maker']) }) },
+        { label: sk('realizedLabel'), value: sk('realizedOf', { x: num(realized, 0), y: num(job.amount, 0) }) },
+        { label: t('trade.twap.run.notHedged'), value: `${sizeText(open)} ${coin} (${usdOf(open)})` },
+        feeRow,
+      ];
+  const factLines = delever ? (
+    (() => {
+      const leadClose = leg?.qty ?? 0;
+      const size = job.slice?.sizeUsd ?? 0;
+      const qty = job.slice?.qty ?? (mark !== null && size > 0 ? Math.min(size / mark, leadClose) : leadClose / count);
+      const usd = mark !== null ? fmtUsd(qty * mark, 0) : fmtUsd(size, 0);
+      return <NotHedgedLine text={sk('notHedgedMax', { qty: sizeText(qty), coin, usd })} />;
+    })()
+  ) : null;
   const progress = <ProgressBar ratio={(index - (running ? 1 : 0)) / count} tone={halted || missed ? 'stopped' : 'running'} />;
   const abandonNote = leg ? sk('abandonNote', { side: sideText(leg.side), qty: sizeText(open), coin }) : '';
 
   if (running) {
-    return (
-      <>
-        {deleverHeader}
-        {progress}
-        {missed && (
-          <>
-            <StopBox title={sk(followKey.missed, { qty: sizeText(followQty), coin })} lines={haltLine(job.haltReason)} />
-            {fixHolds()}
-          </>
-        )}
-        <div className="card flex flex-col gap-1.5 p-3">{facts}</div>
-        {job.pauseRequested ? (
-          <p className="num flex items-center gap-2 text-xs text-ink-300">
-            <Spinner className="h-3 w-3" />
-            {sk('pausing', { i: num(index, 0), n: num(count, 0) })}
-          </p>
-        ) : (
-          !missed && (
-            <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={() => pause.mutate(job.id)}>
-              {sk('holdPause')}
-            </HoldToConfirmButton>
-          )
-        )}
-      </>
-    );
+    return show({
+      firstLine: (
+        <>
+          {progress}
+          {missed && <StopBox title={sk(followKey.missed, { qty: sizeText(followQty), coin })} lines={haltLine(job.haltReason)} />}
+        </>
+      ),
+      rows: factRows,
+      lines: factLines ? [factLines] : [],
+      acts: missed ? (
+        fixHolds()
+      ) : job.pauseRequested ? (
+        <p className="num flex items-center gap-2 text-xs text-ink-300">
+          <Spinner className="h-3 w-3" />
+          {sk('pausing', { i: num(index, 0), n: num(count, 0) })}
+        </p>
+      ) : (
+        <button type="button" className="btn px-4 py-2 text-sm" disabled={pending} onClick={() => pause.mutate(job.id)}>
+          {sk('holdPause')}
+        </button>
+      ),
+    });
   }
 
   const closeBorosHold = (
@@ -266,13 +262,15 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     const addBackLabel = unevenRest
       ? sk('holdAddBackOn', { rest: legRests.filter((l) => l.rest > 0).map((l) => `${l.venue} ${sizeText(l.rest)} ${coin}`).join(', ') })
       : sk('holdAddBack', { qty: sizeText(addBack), coin });
-    return (
-      <>
-        {deleverHeader}
+    return show({
+      firstLine: (
         <StopBox
           title={sk('borosNotHedged', { amount: sizeText(left) })}
           lines={[perpsBoros, sk('borosFilled', { filled: sizeText(Math.max(0, borosTarget - left)), target: sizeText(borosTarget) }), ...haltLine(job.haltReason)]}
         />
+      ),
+      acts: (
+        <>
         <div className="flex flex-col gap-2">
           {added === null && (
             <HoldToConfirmButton tone="cyan" holdMs={holdMs} disabled={pending} onConfirm={() => press('boros-retry')}>
@@ -285,63 +283,76 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
           {fixError}
         </div>
         {abandonBlock}
-      </>
-    );
+        </>
+      ),
+    });
   }
 
   if (open > 0 && halted && !paused && !margin) {
-    return (
-      <>
-        {deleverHeader}
-        <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />
-        {fixHolds()}
-        {borosGap && (
-          <>
-            <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={[perpsBoros]} />
-            {closeBorosHold}
-          </>
-        )}
-        {abandonBlock}
-      </>
-    );
+    return show({
+      firstLine: <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />,
+      acts: (
+        <>
+          {fixHolds()}
+          {borosGap && (
+            <>
+              <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={[perpsBoros]} />
+              {closeBorosHold}
+            </>
+          )}
+          {abandonBlock}
+        </>
+      ),
+    });
   }
 
   const pausedLine = paused ? sliceStateLabel(job) : null;
-  return (
+  const status = borosGap ? (
     <>
-      {deleverHeader}
-      {progress}
-      {borosGap ? (
-        <>
-          {margin && open > 0 && <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />}
-          <StopBox
-            title={dk('borosNoPerp', { amount: sizeText(gapYu) })}
-            lines={[...(pausedLine ? [pausedLine] : margin && open > 0 ? [] : haltLine(job.haltReason)), perpsBoros]}
-          />
-          {closeBorosHold}
-          {fixError}
-        </>
-      ) : margin ? (
-        <StopBox title={open > 0 ? sk('notHedged', { qty: sizeText(open), coin }) : localizeServerText(job.haltReason ?? '')} lines={open > 0 ? haltLine(job.haltReason) : []} />
-      ) : pausedLine ? (
-        <Line tone="font-semibold text-ink-100">{pausedLine}</Line>
-      ) : (
-        <StopBox title={job.haltReason ? localizeServerText(job.haltReason) : t('common.stopped')} lines={[]} />
-      )}
-      <div className="card flex flex-col gap-1.5 p-3">{facts}</div>
-      {abandoned ? (
-        <CloseButton onClose={onClose} />
-      ) : (
-        <Actions
-          {...props}
-          note={open > 0 ? abandonNote : ''}
-          resumeLabel={paused ? sk('resume') : undefined}
-          abandonLabel={paused ? sk('abandon') : undefined}
-          quietResume={borosGap}
-        />
-      )}
+      {margin && open > 0 && <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />}
+      <StopBox
+        title={dk('borosNoPerp', { amount: sizeText(gapYu) })}
+        lines={[...(pausedLine ? [pausedLine] : margin && open > 0 ? [] : haltLine(job.haltReason)), perpsBoros]}
+      />
     </>
+  ) : margin ? (
+    <StopBox title={open > 0 ? sk('notHedged', { qty: sizeText(open), coin }) : localizeServerText(job.haltReason ?? '')} lines={open > 0 ? haltLine(job.haltReason) : []} />
+  ) : pausedLine ? (
+    <Line tone="font-semibold text-ink-100">{pausedLine}</Line>
+  ) : (
+    <StopBox title={job.haltReason ? localizeServerText(job.haltReason) : t('common.stopped')} lines={[]} />
   );
+  return show({
+    firstLine: (
+      <>
+        {progress}
+        {status}
+      </>
+    ),
+    rows: factRows,
+    lines: factLines ? [factLines] : [],
+    acts: (
+      <>
+        {borosGap && (
+          <>
+            {closeBorosHold}
+            {fixError}
+          </>
+        )}
+        {abandoned ? (
+          <CloseButton onClose={onClose} />
+        ) : (
+          <Actions
+            {...props}
+            note={open > 0 ? abandonNote : ''}
+            resumeLabel={paused ? sk('resume') : undefined}
+            abandonLabel={paused ? sk('abandon') : undefined}
+            quietResume={borosGap}
+          />
+        )}
+      </>
+    ),
+  });
 }
 
 export const isSliceJob = (job: RebalanceJob): boolean =>

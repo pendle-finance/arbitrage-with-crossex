@@ -1,0 +1,666 @@
+import { prettyVenue } from '../../web/src/lib/fmt';
+import { classifyGateError, CoreError } from '../core/errors';
+import { parseSymbol } from '../core/numbers';
+import { planSlices, takerAfterCapSec, type TwapLegRule, usdText } from '../core/twap';
+import type { DealRequest } from '../engine/create';
+import type { Store } from '../engine/db';
+import { hasMarginRefusalLabel, project } from '../engine/decide';
+import { type Fx, FX_DECIMALS, FX_ZERO, fx, fxMax, fxMin, fxStr } from '../engine/fx';
+import { commands, SLEEP_GAP_MS } from '../engine/loop';
+import { type OrderRow, type PairMode, type PairRow, type Side, TUNING } from '../engine/types';
+import {
+  childIdFor,
+  HALT_TEXT,
+  haltReasonFor,
+  type HaltKind,
+  isChildOf,
+  type Job,
+  type JobFile,
+  type JobTwap,
+  SLICE_STEP,
+} from './rebalanceJob';
+
+export interface TwapRunDeps {
+  store: Store;
+  engineWake: () => void;
+  createChild: (req: DealRequest) => Promise<void>;
+  now: () => number;
+  jobs: JobFile;
+  readFees: (dealIds: string[]) => Promise<Record<string, number>>;
+}
+
+export interface ChildDealView {
+  pair: PairRow;
+  orders: OrderRow[];
+  feeUsd: number | null;
+  bestPrice?: string | null;
+}
+
+export interface TwapView {
+  slice: number;
+  of: number;
+  nextAt: number | null;
+  durationSec: number;
+  intervalSec: number;
+  startedAt: number;
+  carryQty: string;
+  behindQty: string;
+  makerLeg: 'a' | 'b';
+  repegBehindBp: number | null;
+  takerAfterSec: number | null;
+}
+
+export interface TwapChildView {
+  id: string;
+  mode: PairMode;
+  slice: number;
+  makerLeg: 'a' | 'b';
+  side: Side;
+  restPrice: string | null;
+  bestPrice: string | null;
+  behindPct: number | null;
+  repegRefused: { kind: string; at: number } | null;
+}
+
+export interface RunLegView {
+  name: string;
+  exchange: string;
+  symbol: string;
+  reduceOnly: boolean;
+  side: 'LONG' | 'SHORT';
+  filledQty: string;
+  plannedQty: string;
+  avgPrice: string | null;
+  beforeQty?: string;
+  nowQty?: string;
+}
+
+export interface RunOrderView {
+  venue: string;
+  leg: 'A' | 'B';
+  kind: 'maker' | 'taker';
+  slice: number | null;
+  price: string | null;
+  qty: string;
+  filledQty: string;
+  state: OrderRow['state'];
+  createdAt: number;
+}
+
+export interface TwapBorosView {
+  refused: boolean;
+  slice: number;
+  leftYu: number;
+  beforeYu: number;
+  nowYu: number;
+}
+
+export interface TwapJobView {
+  twap: TwapView | null;
+  child: TwapChildView | null;
+  legs: RunLegView[];
+  fees: { readUsd: number; estUsd: number; est: boolean };
+  slippage: { pct: number; usd: number } | null;
+  orders: RunOrderView[];
+  boros: TwapBorosView | null;
+}
+
+const MAKER_FEE_BP = 2;
+const TAKER_FEE_BP = 5;
+
+const SLEEP_TEXT = 'This Mac slept during the TWAP. Nothing was sent while it slept. Press Resume.';
+const SLICE_NUMBER = /-[sf](\d+)(?:-\d+)?$/;
+const ENDED: readonly PairMode[] = ['DONE', 'HALTED'];
+
+const lastPass = new Map<string, number>();
+
+const childOf = (store: Store, job: Job, slice: number): PairRow | null =>
+  slice > 0 ? store.getPair(childIdFor(job.id, slice, 1)) : null;
+
+const childrenOf = (store: Store, job: Job, opts?: { activeOnly?: boolean }): PairRow[] =>
+  store.listPairs(opts).filter((pair) => isChildOf(job.id, pair.id));
+
+const filledOf = (store: Store, pair: PairRow): Fx => fx(project(pair, store.listOrders(pair.id)).aFilled);
+
+const isUnwindChild = (job: Job, pair: PairRow): boolean => pair.id.startsWith(`${job.id}-f`);
+
+const filledAll = (store: Store, job: Job): Fx =>
+  childrenOf(store, job).reduce((sum, pair) => (isUnwindChild(job, pair) ? sum - filledOf(store, pair) : sum + filledOf(store, pair)), FX_ZERO);
+
+const exchangeOf = (symbol: string): string => parseSymbol(symbol).exchange;
+
+const makerSymbolOf = (twap: JobTwap): string => (twap.makerLeg === 'b' && twap.deal.b ? twap.deal.b.symbol : twap.deal.a.symbol);
+
+function markOf(store: Store, job: Job): number | null {
+  const twap = job.twap;
+  if (!twap) return null;
+  for (let slice = twap.sliceIndex; slice > 0; slice -= 1) {
+    const pair = childOf(store, job, slice);
+    if (!pair) continue;
+    const price = Number(store.avgFillPrice(pair.id, 'A') ?? pair.limitPrice ?? NaN);
+    if (Number.isFinite(price) && price > 0) return price;
+  }
+  return null;
+}
+
+function isMarginRefusal(err: unknown): boolean {
+  if (err instanceof CoreError) return err.category === 'insufficient-margin';
+  return classifyGateError(err).category === 'insufficient-margin';
+}
+
+function isRefusedForMargin(orders: OrderRow[]): boolean {
+  const legA = orders.filter((order) => order.leg === 'A');
+  if (legA.some((order) => fx(order.cumQty) > FX_ZERO)) return false;
+  return legA.some(hasMarginRefusalLabel);
+}
+
+const underSizeLine = (slice: number, venue: string, minSize: string, coin: string): string =>
+  `Slice ${slice} is under ${venue}'s ${minSize} ${coin} minimum`;
+
+const underValueLine = (slice: number, venue: string, minUsd: number): string => `Slice ${slice} is under ${venue}'s ${usdText(minUsd)} minimum`;
+
+const MIN_REFUSAL = /is below (\S+?)'s minimum (?:size of ([\d.]+)|order value \(([\d.]+) at)/;
+
+function minRefusalLine(err: unknown, slice: number, coin: string): string | null {
+  const match = err instanceof Error ? MIN_REFUSAL.exec(err.message) : null;
+  if (!match) return null;
+  const venue = prettyVenue(exchangeOf(match[1]));
+  return match[2] !== undefined ? underSizeLine(slice, venue, match[2], coin) : underValueLine(slice, venue, Number(match[3]));
+}
+
+function limitBreachOf(qty: Fx, rules: TwapLegRule[], mark: number | null, slice: number): string | null {
+  const amount = Number(fxStr(qty));
+  for (const rule of rules) {
+    const venue = prettyVenue(rule.venue);
+    if (amount < Number(rule.minSize)) return underSizeLine(slice, venue, rule.minSize, rule.coin);
+    const minNotional = Number(rule.minNotional);
+    if (mark !== null && minNotional > 0 && amount * mark < minNotional) {
+      return underValueLine(slice, venue, minNotional);
+    }
+    const caps = [rule.maxMarketSize, rule.maxLimitSize].map(Number).filter((cap) => Number.isFinite(cap) && cap > 0);
+    if (caps.length > 0 && amount > Math.min(...caps)) {
+      return `Slice ${slice} is over ${venue}'s ${Math.min(...caps).toLocaleString('en-US')} ${rule.coin} maximum`;
+    }
+  }
+  return null;
+}
+
+function haltTwap(deps: TwapRunDeps, job: Job, kind: HaltKind | null, reason: string | null): void {
+  job.status = 'halted';
+  job.haltKind = kind;
+  job.haltReason = reason;
+  if (job.twap) {
+    job.twap.nextAt = null;
+    job.twap.replan = true;
+  }
+  deps.jobs.write(job);
+  lastPass.delete(job.id);
+}
+
+function finishTwap(deps: TwapRunDeps, job: Job): void {
+  job.status = 'done';
+  job.haltKind = null;
+  job.haltReason = null;
+  if (job.twap) {
+    job.twap.nextAt = null;
+    job.twap.carryQty = '0';
+    job.twap.behindQty = '0';
+  }
+  deps.jobs.write(job);
+  lastPass.delete(job.id);
+}
+
+function pauseTwap(deps: TwapRunDeps, job: Job): void {
+  job.paused = true;
+  job.pauseRequested = false;
+  haltTwap(deps, job, null, null);
+}
+
+export async function stopLiveChild(deps: TwapRunDeps, job: Job): Promise<void> {
+  const live = childrenOf(deps.store, job, { activeOnly: true });
+  for (const pair of live) commands.stop(deps.store, pair.id);
+  if (live.length > 0) deps.engineWake();
+}
+
+function isLiveJob(job: Job | null): job is Job & { twap: JobTwap } {
+  return job !== null && job.kind === 'twap' && job.twap !== null && job.twap !== undefined && job.status === 'running';
+}
+
+export async function bootHaltTwap(deps: TwapRunDeps, job: Job): Promise<Job> {
+  if (!isLiveJob(job)) return job;
+  void stopLiveChild(deps, job);
+  job.pauseRequested = false;
+  haltTwap(deps, job, 'restart', HALT_TEXT.restart);
+  return job;
+}
+
+const isLiveDeleverTwap = (job: Job): boolean => job.kind === 'delever' && Boolean(job.deleverTwap) && job.status === 'running';
+
+export function sleepHaltTwap(deps: TwapRunDeps, job: Job, gap: { fromMs: number; toMs: number }): Job {
+  if (!isLiveJob(job) && !isLiveDeleverTwap(job)) return job;
+  void stopLiveChild(deps, job);
+  job.sleptFrom = gap.fromMs;
+  job.sleptTo = gap.toMs;
+  job.pauseRequested = false;
+  haltTwap(deps, job, 'sleep', SLEEP_TEXT);
+  return job;
+}
+
+function replanOf(deps: TwapRunDeps, job: Job & { twap: JobTwap }, rest: Fx, slice: number): void {
+  const { twap } = job;
+  const left = twap.slices - slice + 1;
+  const mark = markOf(deps.store, job);
+  twap.carryQty = '0';
+  twap.replan = false;
+  if (left <= 1 || mark === null) {
+    if (left <= 1) twap.sliceQty = fxStr(rest);
+    return;
+  }
+  const result = planSlices(fxStr(rest), { intervalSec: twap.intervalSec, slices: left }, twap.deal.rules, mark);
+  twap.sliceQty = result.plan ? result.plan.sliceQty : fxStr(rest);
+}
+
+function childRequest(job: Job & { twap: JobTwap }, slice: number, qty: Fx): DealRequest {
+  const { deal, makerLeg, repegBehindBp, takerAfterSec, intervalSec } = job.twap;
+  return {
+    a: deal.a,
+    b: deal.b,
+    execution: deal.execution,
+    maxClip: deal.maxClip,
+    clipBandPct: deal.clipBandPct,
+    leverage: deal.leverage,
+    id: childIdFor(job.id, slice, 1),
+    qty: fxStr(qty),
+    pricePolicy: 'touch',
+    timeoutSec: takerAfterSec,
+    deadlineCapSec: takerAfterCapSec(intervalSec),
+    repegBehindBp,
+    makerLeg,
+  };
+}
+
+async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: number): Promise<void> {
+  const { twap } = job;
+  const slice = twap.sliceIndex + 1;
+  const rest = fxMax(FX_ZERO, fx(twap.deal.totalQty) - filledAll(deps.store, job));
+  if (twap.replan) replanOf(deps, job, rest, slice);
+  const qty = slice >= twap.slices ? rest : fxMin(fx(twap.sliceQty) + fx(twap.carryQty), rest);
+  if (qty <= FX_ZERO) return finishTwap(deps, job);
+  const breach = limitBreachOf(qty, twap.deal.rules, markOf(deps.store, job), slice);
+  if (breach !== null) return haltTwap(deps, job, 'refused', breach);
+  twap.behindQty = twap.carryQty;
+  twap.carryQty = '0';
+  twap.sliceIndex = slice;
+  twap.nextAt = slice >= twap.slices ? null : now + twap.intervalSec * 1000;
+  deps.jobs.write(job);
+  try {
+    await deps.createChild(childRequest(job, slice, qty));
+  } catch (err) {
+    const fresh = deps.jobs.read();
+    const target = fresh?.id === job.id ? fresh : job;
+    void stopLiveChild(deps, target);
+    if (target.status !== 'running') return;
+    if (isMarginRefusal(err)) {
+      return haltTwap(deps, target, 'refused', `${prettyVenue(exchangeOf(makerSymbolOf(twap)))} refused slice ${slice}: not enough margin`);
+    }
+    const under = minRefusalLine(err, slice, twap.deal.coin);
+    if (under !== null) return haltTwap(deps, target, 'refused', under);
+    const reason = haltReasonFor(err);
+    deps.store.alert('error', childIdFor(job.id, slice, 1), reason, deps.now());
+    return haltTwap(deps, target, 'error', reason);
+  }
+  const after = deps.jobs.read();
+  if (after?.id !== job.id || after.status !== 'running' || after.pauseRequested) await stopLiveChild(deps, after ?? job);
+  deps.engineWake();
+}
+
+function haltOnHalted(deps: TwapRunDeps, job: Job & { twap: JobTwap }, child: PairRow): void {
+  const slice = job.twap.sliceIndex;
+  if (child.haltKind === 'hedge-margin') {
+    const hedge = child.b ? prettyVenue(exchangeOf(child.b.contract)) : prettyVenue(exchangeOf(child.a.contract));
+    return haltTwap(deps, job, 'hedge-margin', `${hedge} refused the hedge in slice ${slice}`);
+  }
+  const reason = `Slice ${slice} stopped on an error. Check the orders, then resume or stop.`;
+  deps.store.alert('error', child.id, reason, deps.now());
+  haltTwap(deps, job, 'error', reason);
+}
+
+function settleEnded(deps: TwapRunDeps, job: Job & { twap: JobTwap }, child: PairRow): 'next' | 'stop' {
+  const { twap } = job;
+  if (twap.replan) return 'next';
+  const orders = deps.store.listOrders(child.id);
+  if (isRefusedForMargin(orders)) {
+    haltTwap(deps, job, 'refused', `${prettyVenue(exchangeOf(child.a.contract))} refused slice ${twap.sliceIndex}: not enough margin`);
+    return 'stop';
+  }
+  const unfilled = fxMax(FX_ZERO, fx(child.targetQty) - fx(project(child, orders).aFilled));
+  if (twap.sliceIndex >= twap.slices) {
+    const left = fxMax(FX_ZERO, fx(twap.deal.totalQty) - filledAll(deps.store, job));
+    if (left <= FX_ZERO) {
+      finishTwap(deps, job);
+      return 'stop';
+    }
+    twap.carryQty = fxStr(left);
+    twap.behindQty = fxStr(left);
+    const word = child.a.reduceOnly ? 'closed' : 'opened';
+    haltTwap(deps, job, 'capped-rest', `${fxStr(left)} ${twap.deal.coin} not ${word}`);
+    return 'stop';
+  }
+  const carry = fxStr(unfilled);
+  if (twap.carryQty !== carry || twap.behindQty !== carry) {
+    twap.carryQty = carry;
+    twap.behindQty = carry;
+    deps.jobs.write(job);
+  }
+  return 'next';
+}
+
+async function passTwap(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: number): Promise<void> {
+  const { twap } = job;
+  const child = childOf(deps.store, job, twap.sliceIndex);
+  const live = child !== null && !ENDED.includes(child.mode);
+  if (job.pauseRequested) {
+    if (child?.mode === 'OPENING' || child?.mode === 'CONVERTING') await stopLiveChild(deps, job);
+    if (live) return;
+    if (child?.mode === 'DONE' && settleEnded(deps, job, child) === 'stop') return;
+    return pauseTwap(deps, job);
+  }
+  if (child?.mode === 'HALTED') {
+    if (!twap.replan) return haltOnHalted(deps, job, child);
+    commands.resumeAfterHalt(deps.store, child.id);
+    deps.engineWake();
+    return;
+  }
+  if (live) {
+    if (twap.nextAt === null || now < twap.nextAt) return;
+    const resting = twap.takerAfterSec === null && twap.sliceIndex < twap.slices;
+    twap.nextAt = null;
+    deps.jobs.write(job);
+    if (resting) await stopLiveChild(deps, job);
+    return;
+  }
+  if (child?.mode === 'DONE' && settleEnded(deps, job, child) === 'stop') return;
+  if (twap.nextAt !== null && now < twap.nextAt) return;
+  await startSlice(deps, job, now);
+}
+
+export async function runTwap(deps: TwapRunDeps, job: Job): Promise<void> {
+  const current = deps.jobs.read();
+  if (current?.id !== job.id || !isLiveJob(current)) {
+    lastPass.delete(job.id);
+    return;
+  }
+  const now = deps.now();
+  const last = lastPass.get(current.id);
+  if (last !== undefined && now - last > SLEEP_GAP_MS) {
+    sleepHaltTwap(deps, current, { fromMs: last, toMs: now });
+    return;
+  }
+  lastPass.set(current.id, now);
+  await passTwap(deps, current, now);
+  if (current.status === 'running') lastPass.set(current.id, deps.now());
+}
+
+export function borosShareOf(input: { closeSize: number; legFilled: [number, number]; legPlanned: [number, number] }): number {
+  const { closeSize, legFilled, legPlanned } = input;
+  if (!(closeSize > 0)) return 0;
+  const legs = [0, 1].filter((leg) => legPlanned[leg] > 0 && Number.isFinite(legFilled[leg]));
+  if (legs.length === 0) return 0;
+  const smaller = legs.reduce((a, b) =>
+    legPlanned[b] < legPlanned[a] || (legPlanned[b] === legPlanned[a] && legFilled[b] < legFilled[a]) ? b : a,
+  );
+  const ratio = Math.min(1, Math.max(0, legFilled[smaller] / legPlanned[smaller]));
+  return closeSize * ratio;
+}
+
+export async function loadTwapChildren(deps: Pick<TwapRunDeps, 'store' | 'readFees'>, job: Job): Promise<ChildDealView[]> {
+  const pairs = childrenOf(deps.store, job);
+  const fees: Record<string, number> = pairs.length > 0 ? await deps.readFees(pairs.map((pair) => pair.id)).catch(() => ({}) as Record<string, number>) : {};
+  return pairs.map((pair) => ({
+    pair,
+    orders: deps.store.listOrders(pair.id),
+    feeUsd: Object.hasOwn(fees, pair.id) && Number.isFinite(fees[pair.id]) ? fees[pair.id] : null,
+  }));
+}
+
+const sliceOfId = (id: string): number | null => {
+  const match = SLICE_NUMBER.exec(id);
+  return match ? Number(match[1]) : null;
+};
+
+function legOrders(view: ChildDealView, symbol: string): OrderRow[] {
+  if (view.pair.a.contract === symbol) return view.orders.filter((order) => order.leg === 'A');
+  if (view.pair.b?.contract === symbol) return view.orders.filter((order) => order.leg === 'B');
+  return [];
+}
+
+function fillsOf(orders: OrderRow[]): { qty: Fx; usd: number } {
+  return orders.reduce(
+    (sum, order) => ({
+      qty: sum.qty + fx(order.cumQty),
+      usd: sum.usd + Number(order.cumQty) * Number(order.avgFillPrice),
+    }),
+    { qty: FX_ZERO, usd: 0 },
+  );
+}
+
+const avgOf = (fills: { qty: Fx; usd: number }): number | null => {
+  const qty = Number(fxStr(fills.qty));
+  return qty > 0 && fills.usd > 0 ? fills.usd / qty : null;
+};
+
+function perpSideOf(side: Side, reduceOnly: boolean | undefined): 'LONG' | 'SHORT' {
+  return (side === 'BUY') !== (reduceOnly === true) ? 'LONG' : 'SHORT';
+}
+
+interface LegPlan {
+  symbol: string;
+  side: Side;
+  reduceOnly: boolean;
+  plannedQty: string;
+  beforeQty?: number;
+}
+
+function legsOf(plans: LegPlan[], children: ChildDealView[]): RunLegView[] {
+  return plans.map((plan) => {
+    const orders = children.flatMap((view) => legOrders(view, plan.symbol));
+    const fills = fillsOf(orders.filter((order) => order.side === plan.side));
+    const back = fillsOf(orders.filter((order) => order.side !== plan.side));
+    const avg = avgOf(fills);
+    const exchange = exchangeOf(plan.symbol);
+    const filledQty = fxMax(FX_ZERO, fills.qty - back.qty);
+    return {
+      name: prettyVenue(exchange),
+      exchange,
+      symbol: plan.symbol,
+      reduceOnly: plan.reduceOnly,
+      side: perpSideOf(plan.side, plan.reduceOnly),
+      filledQty: fxStr(filledQty),
+      plannedQty: plan.plannedQty,
+      avgPrice: avg === null ? null : String(avg),
+      ...(plan.beforeQty === undefined
+        ? {}
+        : { beforeQty: qtyOf(plan.beforeQty), nowQty: qtyOf(plan.beforeQty - Number(fxStr(filledQty))) }),
+    };
+  });
+}
+
+const twapLegPlans = (twap: JobTwap): LegPlan[] =>
+  [twap.deal.a, ...(twap.deal.b ? [twap.deal.b] : [])].map((leg) => ({
+    symbol: leg.symbol,
+    side: leg.side,
+    reduceOnly: leg.reduceOnly === true,
+    plannedQty: twap.deal.totalQty,
+  }));
+
+const qtyOf = (n: number): string => fxStr(fx(Math.max(0, n).toFixed(FX_DECIMALS)));
+
+function deleverLegPlans(job: Job): LegPlan[] {
+  const lead = job.realize?.legs[0];
+  const legs = job.delever?.legs ?? [];
+  const ordered = lead ? [...legs].sort((x, y) => Number(y.symbol === lead.symbol) - Number(x.symbol === lead.symbol)) : legs;
+  return ordered.map((leg) => ({
+    symbol: leg.symbol,
+    side: leg.side === 'LONG' ? 'SELL' : 'BUY',
+    reduceOnly: true,
+    beforeQty: leg.before,
+    plannedQty: qtyOf(lead && leg.symbol === lead.symbol ? lead.qty : leg.closeAll === true ? leg.before : leg.before - leg.after),
+  }));
+}
+
+export function feesOf(children: Pick<ChildDealView, 'orders' | 'feeUsd'>[]): TwapJobView['fees'] {
+  let readUsd = 0;
+  let estUsd = 0;
+  for (const view of children) {
+    if (view.feeUsd !== null) {
+      readUsd += view.feeUsd;
+      continue;
+    }
+    for (const order of view.orders) {
+      const bp = order.kind === 'maker' ? MAKER_FEE_BP : TAKER_FEE_BP;
+      estUsd += (Number(order.cumQty) * Number(order.avgFillPrice) * bp) / 10_000;
+    }
+  }
+  return { readUsd, estUsd, est: estUsd > 0 };
+}
+
+function slippageOf(children: ChildDealView[]): TwapJobView['slippage'] {
+  let usd = 0;
+  let notional = 0;
+  for (const { pair, orders } of children) {
+    if (!pair.b) continue;
+    const sides = [
+      { side: pair.a.side, fills: fillsOf(orders.filter((order) => order.leg === 'A')) },
+      { side: pair.b.side, fills: fillsOf(orders.filter((order) => order.leg === 'B')) },
+    ];
+    const buy = sides.find((row) => row.side === 'BUY');
+    const sell = sides.find((row) => row.side === 'SELL');
+    const buyAvg = buy ? avgOf(buy.fills) : null;
+    const sellAvg = sell ? avgOf(sell.fills) : null;
+    if (!buy || !sell || buyAvg === null || sellAvg === null) continue;
+    const qty = Number(fxStr(fxMin(buy.fills.qty, sell.fills.qty)));
+    usd += (sellAvg - buyAvg) * qty;
+    notional += ((buyAvg + sellAvg) / 2) * qty;
+  }
+  return notional > 0 ? { usd, pct: usd / notional } : null;
+}
+
+function ordersOf(legA: string, children: ChildDealView[]): RunOrderView[] {
+  return children
+    .flatMap(({ pair, orders }) =>
+      orders.map((order): RunOrderView => {
+        const contract = order.leg === 'A' ? pair.a.contract : (pair.b?.contract ?? pair.a.contract);
+        return {
+          venue: prettyVenue(exchangeOf(contract)),
+          leg: contract === legA ? 'A' : 'B',
+          kind: order.kind,
+          slice: sliceOfId(pair.id),
+          price: order.kind === 'maker' ? order.price : order.cumQty === '0' ? order.price : order.avgFillPrice,
+          qty: order.qty,
+          filledQty: order.cumQty,
+          state: order.state,
+          createdAt: order.createdAt,
+        };
+      }),
+    )
+    .sort((a, b) => b.createdAt - a.createdAt);
+}
+
+function childViewOf(id: string | null, slice: number, makerLeg: 'a' | 'b', children: ChildDealView[]): TwapChildView | null {
+  const view = id === null ? undefined : children.find((row) => row.pair.id === id);
+  if (!view || view.pair.mode === 'DONE') return null;
+  const { pair } = view;
+  const maker = project(pair, view.orders).makerOrder;
+  const restPrice = maker?.state === 'OPEN' ? maker.price : pair.limitPrice;
+  const bestPrice = view.bestPrice ?? null;
+  const best = Number(bestPrice);
+  const rest = Number(restPrice);
+  const gap = pair.a.side === 'BUY' ? best - rest : rest - best;
+  const behindPct = bestPrice !== null && restPrice !== null && best > 0 && rest > 0 ? Math.max(0, gap / best) : null;
+  return {
+    id: pair.id,
+    mode: pair.mode,
+    slice,
+    makerLeg,
+    side: pair.a.side,
+    restPrice,
+    bestPrice,
+    behindPct,
+    repegRefused: pair.repegNotBefore > 0 ? { kind: 'order-allowance', at: pair.repegNotBefore - TUNING.REPEG_REFUSED_WAIT_MS } : null,
+  };
+}
+
+function borosViewOf(job: Job, slice: number): TwapBorosView | null {
+  const rows = job.delever?.boros ?? [];
+  if (rows.length === 0) return null;
+  const beforeYu = rows.reduce((sum, row) => sum + Math.abs(row.before), 0);
+  const closedYu = rows.reduce((sum, row) => sum + row.closed, 0);
+  return {
+    refused: job.status === 'halted' && job.haltKind === 'boros',
+    slice,
+    leftYu: job.borosLeftYu,
+    beforeYu,
+    nowYu: Math.max(0, beforeYu - closedYu),
+  };
+}
+
+const EMPTY_VIEW: TwapJobView = { twap: null, child: null, legs: [], fees: { readUsd: 0, estUsd: 0, est: false }, slippage: null, orders: [], boros: null };
+
+function deleverViewOf(job: Job, own: ChildDealView[]): TwapJobView {
+  const plan = job.deleverTwap;
+  if (!plan) return EMPTY_VIEW;
+  const step = job.steps.find((candidate) => candidate.name === SLICE_STEP);
+  const slice = step && step.startedAt !== null ? (job.slice?.index ?? 0) : 0;
+  const sliceLive = job.status === 'running' && step?.status !== 'done' && Boolean(step?.cut);
+  const plans = deleverLegPlans(job);
+  const latest = own.at(-1)?.pair ?? null;
+  return {
+    twap: {
+      slice,
+      of: Math.max(plan.slices, job.slice?.count ?? 0, slice),
+      nextAt: sliceLive && step?.cut ? step.cut.at + plan.intervalSec * 1000 : null,
+      durationSec: plan.durationSec,
+      intervalSec: plan.intervalSec,
+      startedAt: step?.startedAt ?? job.createdAt,
+      carryQty: '0',
+      behindQty: '0',
+      makerLeg: 'a',
+      repegBehindBp: latest?.repegBehindBp ?? null,
+      takerAfterSec: job.exec === 'market' ? 0 : takerAfterCapSec(plan.intervalSec),
+    },
+    child: childViewOf(step?.status === 'done' ? null : (step?.lead?.text ?? null), slice, 'a', own),
+    legs: legsOf(plans, own),
+    fees: feesOf(own),
+    slippage: slippageOf(own),
+    orders: ordersOf(plans[0]?.symbol ?? '', own),
+    boros: borosViewOf(job, slice),
+  };
+}
+
+export function twapViewOf(job: Job, children: ChildDealView[]): TwapJobView {
+  const own = children.filter((view) => isChildOf(job.id, view.pair.id));
+  if (job.kind === 'delever') return deleverViewOf(job, own);
+  const twap = job.twap;
+  if (job.kind !== 'twap' || !twap) return EMPTY_VIEW;
+  return {
+    twap: {
+      slice: twap.sliceIndex,
+      of: Math.max(twap.slices, twap.sliceIndex),
+      nextAt: twap.nextAt,
+      durationSec: twap.durationSec,
+      intervalSec: twap.intervalSec,
+      startedAt: twap.startedAt,
+      carryQty: twap.carryQty,
+      behindQty: twap.behindQty,
+      makerLeg: twap.makerLeg,
+      repegBehindBp: twap.repegBehindBp,
+      takerAfterSec: twap.takerAfterSec,
+    },
+    child: childViewOf(childIdFor(job.id, twap.sliceIndex, 1), twap.sliceIndex, twap.makerLeg, own),
+    legs: legsOf(twapLegPlans(twap), own),
+    fees: feesOf(own),
+    slippage: slippageOf(own),
+    orders: ordersOf(twap.deal.a.symbol, own),
+    boros: null,
+  };
+}

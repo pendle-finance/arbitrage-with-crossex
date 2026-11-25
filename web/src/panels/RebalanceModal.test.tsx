@@ -7,11 +7,9 @@ import { useAccount, usePositions, useRebalance, useTransfer } from '../api/quer
 import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
 import type { RebalanceJob, RouteName } from '../api/types';
 import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased, whaleRebalanceViews } from '../test/fixtures';
-import { REALIZE_DONE_BEFORE_JOB, REALIZE_ROUTE_JOB } from '../test/fixtures';
 import { extraRebalanceViews, transferHandler, transferViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { RebalanceJobView } from './RebalanceJobView';
 import { fmtAbout, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
 import { rebalanceHandler } from '../test/fixtures';
 import { RebalanceModal, RebalanceModalHost } from './RebalanceModal';
@@ -1501,19 +1499,6 @@ describe('RebalanceModal presets and custom amount', () => {
   });
 });
 
-const mark = (symbol: string, qty: number, price: number) => ({
-  symbol, positionSide: 'NONE', positionQty: String(qty), positionValue: String(Math.abs(qty) * price), entryPrice: String(price),
-  markPrice: String(price), leverage: '10', maxLeverage: '25', upnl: '0', upnlRate: '0', fundingFee: '0', fee: '0',
-  initialMargin: '0', maintenanceMargin: '0',
-});
-
-const GAP_POSITIONS: PositionsResponse = {
-  positions: [mark('HYPERLIQUID_FUTURE_ETH_USDC', -12.2, 1821), mark('GATE_FUTURE_ETH_USDT', 66, 1821)],
-  exposure: [],
-};
-
-const stepItems = () => [...dialog().querySelectorAll('ol.gap-5')][0]!.querySelectorAll(':scope > li');
-
 const totalCard = () => screen.getByText('Total cost').closest('.card') as HTMLElement;
 
 function customPlans(plans: Record<number, RebalanceView['plans']['custom']>) {
@@ -1562,114 +1547,6 @@ describe('RebalanceModal close and reopen, before the hold', () => {
     expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeDisabled();
   });
 
-});
-
-describe('RebalanceModal close and reopen, the run', () => {
-  it('running step 1 reads Realizing', () => {
-    show(rebalanceViews.realizeRunning);
-    expect(screen.getByText('Realizing 34,386 USDC of profit')).toBeInTheDocument();
-  });
-
-  it('gap line while the leg is closed', async () => {
-    show(rebalanceViews.realizeLegClosed, { positions: GAP_POSITIONS });
-    const line = await screen.findByText('Hyperliquid short 53.8 ETH smaller · $97,970 not hedged');
-    expect(line.className).toContain('text-gold');
-  });
-
-  it('step 1 realized shows ticked', () => {
-    show(rebalanceViews.realizeRoute);
-    const step = stepItems()[0] as HTMLElement;
-    expect(within(step).getByText('Realized 34,386 USDC of profit')).toBeInTheDocument();
-    expect(step.querySelector('[data-step-dot]')?.getAttribute('data-step-dot')).toBe('done');
-  });
-
-  it('running step 2 reads Moving the other', () => {
-    show(rebalanceViews.realizeRoute);
-    expect(screen.getByText('Moving the other 27,228 USDC')).toBeInTheDocument();
-  });
-
-  it('a route inside its usual time counts the minutes left and names cash already in Gate spot', () => {
-    serve({});
-    const view = rebalanceViews.realizeRoute;
-    const job = { ...view.job, inTransit: { coin: 'USDC' as const, qty: 4538, at: 'SPOT' as const } };
-    renderWithClient(<RebalanceJobView job={job} view={view} now={REBALANCE_NOW} onResume={vi.fn()} onAbandon={vi.fn()} />);
-    expect(screen.getByText('Spot loop, round 1 of 6 · about 40 min left')).toBeInTheDocument();
-    expect(screen.getByText('4,538 USDC in Gate spot')).toBeInTheDocument();
-  });
-
-  it('a route past its usual time says so, never 0 min left, and a transfer still moving is on the way', () => {
-    serve({});
-    const view = rebalanceViews.realizeRoute;
-    const job = { ...view.job, inTransit: { coin: 'USDC' as const, qty: 4538, at: 'MOVING' as const } };
-    renderWithClient(<RebalanceJobView job={job} view={view} now={REBALANCE_NOW + 3_600_000} onResume={vi.fn()} onAbandon={vi.fn()} />);
-    expect(screen.getByText('Spot loop, round 1 of 6 · longer than the usual 40 min')).toBeInTheDocument();
-    expect(screen.getByText('4,538 USDC on the way through Gate spot')).toBeInTheDocument();
-    expect(screen.queryByText(/min left|in Gate spot$/)).toBeNull();
-  });
-
-  it('reopen retrying counts the seconds from nextTryAt', () => {
-    serve({ positions: GAP_POSITIONS });
-    const view = rebalanceViews.realizeRetrying;
-    renderWithClient(<RebalanceJobView job={view.job} view={view} now={REBALANCE_NOW} onResume={vi.fn()} onAbandon={vi.fn()} />);
-    expect(screen.getByText('Gate CrossEx refused it: not enough margin. Converting 1,500 USDC more. Try 3 in 4 s.')).toBeInTheDocument();
-  });
-
-  it('part-filled close shows what filled', () => {
-    show(rebalanceViews.realizePartFill);
-    expect(screen.getByText('Realizing 19,173 USDC of profit')).toBeInTheDocument();
-    expect(screen.getByText('Close + reopen 30.0 of 66.0 ETH short')).toBeInTheDocument();
-  });
-
-  it('stopped before the close says the short is whole', () => {
-    show(rebalanceViews.realizeHaltedBeforeClose);
-    expect(screen.getByText('Stopped before the close')).toBeInTheDocument();
-    expect(screen.getByText('Hyperliquid short 66.0 ETH, same as before. Nothing was closed or moved.')).toBeInTheDocument();
-  });
-
-  it('stopped title before the reopen names the size', () => {
-    show(rebalanceViews.realizeHaltedLegOpen, { positions: GAP_POSITIONS });
-    expect(screen.getByText('Stopped before reopening 53.8 ETH')).toBeInTheDocument();
-  });
-
-  it('stopped with the leg not reopened shows the red box above the plan', async () => {
-    show(rebalanceViews.realizeHaltedLegOpen, { positions: GAP_POSITIONS });
-    const box = await screen.findByText('Hyperliquid short is 53.8 ETH smaller than the Gate long.');
-    const alert = box.closest('[role="alert"]') as HTMLElement;
-    const lines = () => [...alert.querySelectorAll('p')].map((line) => line.textContent);
-    await waitFor(() => expect(lines()).toContain('$97,970 not hedged.'));
-    expect(lines()).toContain('Gate CrossEx takes no new orders on this contract.');
-    expect(alert.compareDocumentPosition(screen.getByText('How it runs')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
-
-  it('abandon is a hold in any halted job', () => {
-    show(rebalanceViews.realizeHaltedBeforeClose);
-    expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Abandon' })).toBeNull();
-  });
-
-  it('abandon note names the gap', () => {
-    show(rebalanceViews.realizeHaltedLegOpen, { positions: GAP_POSITIONS });
-    expect(screen.getByText('Abandon leaves the short 53.8 ETH smaller.')).toBeInTheDocument();
-  });
-
-});
-
-describe('done receipt from the job', () => {
-  it('reopened done modal reads the job', async () => {
-    const live = rebalanceViews.realizeDone;
-    const { next } = showPolled([{ ...live, job: REALIZE_ROUTE_JOB }, { ...live, job: REALIZE_DONE_BEFORE_JOB }]);
-    await next();
-    const usdt = await screen.findByRole('rowgroup', { name: 'USDT · CrossEx' });
-    const cells = (row: HTMLElement) => [...row.querySelectorAll('[role="cell"]')].map((cell) => cell.textContent);
-    expect(cells(within(usdt).getByText('Borrow').closest('[role="row"]') as HTMLElement)).toEqual(['29,812', '0']);
-    const perps = screen.getByRole('rowgroup', { name: 'Perps' });
-    expect(cells(within(perps).getByText('Gate long').closest('[role="row"]') as HTMLElement)).toEqual(['66.0 ETH', '66.0 ETH']);
-    expect(screen.getByText('How it ran')).toBeInTheDocument();
-    expect(screen.getByText('Moved the other 27,228 USDC')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '3 actions' })).toBeInTheDocument();
-    expect(screen.getByText('$127.27')).toBeInTheDocument();
-    expect(screen.getByText('$108.39')).toBeInTheDocument();
-  });
 });
 
 function showOn(view: RebalanceView, tab?: RebalanceTab) {

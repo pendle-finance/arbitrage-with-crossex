@@ -6620,7 +6620,7 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
-            <ClosePairForm base={group.base} legs={perpOnlyCloseLegs(closePerpOnly)} livePositions={livePositions} />
+            <ClosePairForm base={group.base} legs={perpOnlyCloseLegs(closePerpOnly)} livePositions={livePositions} allowTwap />
           </div>
         </Modal>
       )}

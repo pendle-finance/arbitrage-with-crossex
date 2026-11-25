@@ -319,14 +319,13 @@ const closedAt = (job: Job, filled: number, stepIndex: number): Job => {
   return Object.assign(job, { status: 'halted', stepIndex });
 };
 
-describe('close and reopen job', () => {
-  it('writes close, convert, reopen before the route', () => {
+describe('realize job', () => {
+  it('writes the slices step and its convert before the route', () => {
     const job = realizeJob([realizeLeg()]);
 
     expect(shape(job)).toEqual([
-      ['Close', 'HYPERLIQUID', 'HYPERLIQUID', 53.8],
+      ['Slices', 'HYPERLIQUID', 'HYPERLIQUID', 53.8],
       ['Convert', 'HYPERLIQUID', 'CROSSEX', 10298],
-      ['Reopen', 'HYPERLIQUID', 'HYPERLIQUID', 53.8],
       ['From Hyperliquid', 'HYPERLIQUID', 'CROSSEX', 27228],
       ['To Gate', 'HYPERLIQUID', 'CROSSEX', 27200],
       ['Sell USDC', 'HYPERLIQUID', 'CROSSEX', 27200],
@@ -335,11 +334,7 @@ describe('close and reopen job', () => {
       round: null,
       status: 'pending',
       perp: { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'BUY', reduceOnly: true },
-      nextTryAt: null,
-      retry: null,
-    });
-    expect(job.steps[2]).toMatchObject({
-      perp: { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SELL', reduceOnly: false },
+      follow: { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SELL', reduceOnly: false },
       nextTryAt: null,
       retry: null,
     });
@@ -351,13 +346,10 @@ describe('close and reopen job', () => {
   });
 
   it('a realize with no route steps is the leg alone, and no Convert when the leg needs none', () => {
-    expect(shape(realizeJob([realizeLeg()], [])).map(([name]) => name)).toEqual(['Close', 'Convert', 'Reopen']);
+    expect(shape(realizeJob([realizeLeg()], [])).map(([name]) => name)).toEqual(['Slices', 'Convert']);
     const small = realizeJob([realizeLeg({ positionQty: 0.05, qty: 0.02, realizedUsd: 12.4, convert: null })], []);
 
-    expect(shape(small)).toEqual([
-      ['Close', 'HYPERLIQUID', 'HYPERLIQUID', 0.02],
-      ['Reopen', 'HYPERLIQUID', 'HYPERLIQUID', 0.02],
-    ]);
+    expect(shape(small)).toEqual([['Slices', 'HYPERLIQUID', 'HYPERLIQUID', 0.02]]);
     expect(small.fundsAt).toBe('HYPERLIQUID');
   });
 
@@ -365,12 +357,11 @@ describe('close and reopen job', () => {
     const job = realizeJob([gateLong()], []);
 
     expect(shape(job)).toEqual([
-      ['Close', 'CROSSEX', 'CROSSEX', 47.1],
+      ['Slices', 'CROSSEX', 'CROSSEX', 47.1],
       ['Convert', 'CROSSEX', 'HYPERLIQUID', 8000],
-      ['Reopen', 'CROSSEX', 'CROSSEX', 47.1],
     ]);
     expect(job.steps[0].perp).toEqual({ symbol: GATE_ETH, exchange: 'GATE', side: 'SELL', reduceOnly: true });
-    expect(job.steps[2].perp).toEqual({ symbol: GATE_ETH, exchange: 'GATE', side: 'BUY', reduceOnly: false });
+    expect(job.steps[0].follow).toEqual({ symbol: GATE_ETH, exchange: 'GATE', side: 'BUY', reduceOnly: false });
     expect(job.fundsAt).toBe('CROSSEX');
   });
 
@@ -382,24 +373,24 @@ describe('close and reopen job', () => {
     const converts = job.steps.filter((step) => step.name === 'Convert');
 
     expect(job.steps.map((step) => step.name)).toEqual([
-      'Close', 'Convert', 'Convert', 'Convert', 'Convert', 'Reopen', 'Close', 'Reopen', 'From Hyperliquid', 'To Gate', 'Sell USDC',
+      'Slices', 'Convert', 'Convert', 'Convert', 'Convert', 'Slices', 'From Hyperliquid', 'To Gate', 'Sell USDC',
     ]);
     expect(converts.every((step) => step.planned! <= 500_000)).toBe(true);
     expect(Math.round(converts.reduce((sum, step) => sum + step.planned!, 0) * 100)).toBe(191_700_000);
-    expect(job.steps[6].perp?.symbol).toBe('HYPERLIQUID_FUTURE_BTC_USDC');
+    expect(job.steps[5].perp?.symbol).toBe('HYPERLIQUID_FUTURE_BTC_USDC');
     expect(job.realize!.legs.map((leg) => [leg.symbol, leg.qty])).toEqual([[HL_ETH, 3000], ['HYPERLIQUID_FUTURE_BTC_USDC', 0.4]]);
   });
 
-  it('survives write and read, with a filled close and a reopen retry on disk', () => {
+  it('survives write and read, with a filled slices step and a retry on disk', () => {
     const d = dir();
     const job = closedAt(realizeJob([realizeLeg()]), 53.8, 2);
-    Object.assign(job.steps[2], { attempt: 2, nextTryAt: 4_008_000, retry: { reason: 'margin', convertAmount: 1500 } });
+    Object.assign(job.steps[0], { attempt: 2, nextTryAt: 4_008_000, retry: { reason: 'margin', convertAmount: 1500 } });
     new JobFile(d).write(job);
 
     const read = new JobFile(d).read()!;
 
     expect(read).toMatchObject(JSON.parse(JSON.stringify(job)));
-    expect(read.steps.slice(3).every((step) => step.perp === null && step.nextTryAt === null && step.retry === null)).toBe(true);
+    expect(read.steps.slice(1).every((step) => step.perp === null && step.nextTryAt === null && step.retry === null)).toBe(true);
   });
 
   it('an old job file without realize still parses, with no perp, wait or retry on its steps', () => {
@@ -415,7 +406,7 @@ describe('close and reopen job', () => {
     expect(read.steps.every((step) => step.perp === null && step.nextTryAt === null && step.retry === null)).toBe(true);
   });
 
-  it('reads null for a same-wallet step that is not a close or reopen, a close with no perp, or a close with no realize', () => {
+  it('reads null for a same-wallet step that is not a slices step, a slices step with no perp, or a realize job with no realize', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const bad: ((job: Job) => void)[] = [
@@ -765,35 +756,21 @@ describe('bannerFor', () => {
     expect(bannerFor({ ...exampleEJob(), steps: [] })).toBe('Rebalance stopped.');
   });
 
-  it('says it stopped before the close when no close was sent', () => {
-    const job = Object.assign(realizeJob([realizeLeg()]), { status: 'halted' });
+  it('names the leg gap while the slices step has the close filled and the hedge behind', () => {
+    const gapAt = (leg: RealizeLeg, filled: number, hedged: number): Job => {
+      const job = closedAt(realizeJob([leg]), filled, 0);
+      Object.assign(job.steps[0], { status: 'running', qty: hedged });
+      return job;
+    };
 
-    expect(bannerFor(job)).toBe('Rebalance stopped before the close.');
+    expect(bannerFor(gapAt(realizeLeg(), 53.8, 0))).toBe('Rebalance stopped. Hyperliquid short is 53.8 ETH smaller than the Gate long.');
+    expect(bannerFor(gapAt(realizeLeg(), 30, 0))).toBe('Rebalance stopped. Hyperliquid short is 30 ETH smaller than the Gate long.');
+    expect(bannerFor(gapAt(gateLong(), 47.1, 20))).toBe('Rebalance stopped. Gate long is 27.1 ETH smaller than the Hyperliquid short.');
   });
 
-  it('says a sent close stopped at Close, since Gate may have filled it', () => {
-    const job = Object.assign(realizeJob([realizeLeg()]), { status: 'halted' });
-    Object.assign(job.steps[0], { status: 'running', text: 't-rb1' });
-
-    expect(bannerFor(job)).toBe('Rebalance stopped at Close.');
-  });
-
-  it('names the leg gap at the reopen and at the Convert before it', () => {
-    expect(bannerFor(closedAt(realizeJob([realizeLeg()]), 53.8, 2))).toBe(
-      'Rebalance stopped. Hyperliquid short is 53.8 ETH smaller than the Gate long.',
-    );
-    expect(bannerFor(closedAt(realizeJob([realizeLeg()]), 30, 1))).toBe(
-      'Rebalance stopped. Hyperliquid short is 30 ETH smaller than the Gate long.',
-    );
-    const part = closedAt(realizeJob([gateLong()]), 47.1, 2);
-    Object.assign(part.steps[2], { status: 'running', qty: 20 });
-
-    expect(bannerFor(part)).toBe('Rebalance stopped. Gate long is 27.1 ETH smaller than the Hyperliquid short.');
-  });
-
-  it('reads as a route stop once the reopen is done', () => {
-    const job = closedAt(realizeJob([realizeLeg()]), 53.8, 3);
-    for (const step of job.steps.slice(1, 3)) Object.assign(step, { status: 'done', qty: step.planned });
+  it('reads as a route stop once the slices are done', () => {
+    const job = closedAt(realizeJob([realizeLeg()]), 53.8, 2);
+    Object.assign(job.steps[1], { status: 'done', qty: job.steps[1].planned });
 
     expect(bannerFor(job)).toBe('Rebalance stopped in round 1.');
   });

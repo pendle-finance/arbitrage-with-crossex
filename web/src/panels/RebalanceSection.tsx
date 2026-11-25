@@ -12,11 +12,10 @@ import { useNow } from '../lib/useNow';
 import { useSettledError } from '../lib/useSettledError';
 import { VerdictAlert } from './RebalanceBits';
 import { jobSeconds } from './rebalanceStepRows';
-import { abandonedGapText, gapVerdict, hasLeftGap, openGapOf } from './rebalanceCardGap';
+import { abandonedGapText, hasLeftGap } from './rebalanceCardGap';
 import { CARD_LABEL, realizeBlockedReason, sizeText, verdictRateUnknown, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
 import { borrowFacts, DUST, Facts, hasUnknownRate, HYPERLIQUID_INTEREST_FREE_USDC, isFreeBorrow, WORTH_IT_DAYS, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
-import { isCloseSent, lastRealizeIndex } from './rebalanceJobSteps';
 import { crossexImFull } from './rebalanceImStop';
 import { useRebalanceOpener } from './rebalanceOpener';
 
@@ -36,10 +35,6 @@ function jobVerdict(job: RebalanceJob, now: number): string {
     return t(job.paused ? 'accounts.rebalanceSection.paused' : 'accounts.rebalanceSection.stopped', { what });
   }
   if (job.status === 'halted') {
-    if (job.realize?.legs.length && job.steps[job.stepIndex]?.name === 'Close') {
-      const sent = job.realize.legs.some((leg) => isCloseSent(job, leg));
-      return t(sent ? 'accounts.rebalanceRealize.closeUnconfirmedTitle' : 'accounts.rebalanceRealize.stoppedBeforeClose');
-    }
     return round === null
       ? t('accounts.rebalanceSection.haltedAtConvert', { what })
       : t('accounts.rebalanceSection.haltedInRound', { what, round: num(round, 0) });
@@ -53,12 +48,7 @@ function jobVerdict(job: RebalanceJob, now: number): string {
 function jobButton(job: RebalanceJob): string {
   if (isSliced(job) && job.status === 'halted' && job.paused) return t('accounts.rebalanceSection.pausedOpen');
   if (isSliced(job) && job.status === 'running') return t('common.running');
-  if (job.status === 'halted') return job.realize && openGapOf(job) ? t('accounts.borrowCard.reduce') : t('accounts.rebalanceSection.stoppedOpen');
-  if (job.realize?.legs.length) {
-    const last = lastRealizeIndex(job);
-    if (last === job.steps.length - 1) return t('common.running');
-    return t('accounts.rebalanceRealize.cardStep', { step: job.stepIndex <= last ? 1 : 2, steps: 2 });
-  }
+  if (job.status === 'halted') return t('accounts.rebalanceSection.stoppedOpen');
   const round = roundOf(job);
   return round === null
     ? t('accounts.rebalanceSection.runningConvert')
@@ -125,8 +115,7 @@ export function RebalanceSection({
   const [openedWith] = useState(query.dataUpdatedAt);
   const loadError = useSettledError(query.status, query.error);
   const view = query.data;
-  const openJob = view?.job && view.job.status !== 'done' ? view.job : null;
-  const positions = usePositions((openJob !== null && openGapOf(openJob) !== null) || (view?.job ? hasLeftGap(view.job) : false)).data?.positions;
+  const positions = usePositions(view?.job ? hasLeftGap(view.job) : false).data?.positions;
   const title = (
     <h2 className="text-[14px] font-semibold text-ink-50">
       <RebalanceInfo />
@@ -169,11 +158,9 @@ export function RebalanceSection({
     if (job?.status === 'running') chip = <Chip tone="info">{t('common.running')}</Chip>;
     if (job?.status === 'halted') chip = job.paused ? <Chip tone="info">{t('common.paused')}</Chip> : <Chip tone="red">{t('common.stopped')}</Chip>;
 
-    const gap = job ? gapVerdict(job, positions) : null;
     let verdict: CardVerdict | null = null;
     let muted: string | null = null;
-    if (gap) verdict = { tone: gap.tone, text: gap.text, sub: gap.sub, primary: false };
-    else if (job) verdict = { tone: 'info', text: jobVerdict(job, now), sub: null, primary: false };
+    if (job) verdict = { tone: 'info', text: jobVerdict(job, now), sub: null, primary: false };
     else if (!hasBorrow) muted = t('accounts.borrowCard.none');
     else if (isFreeBorrow(buckets)) muted = t('accounts.borrowCard.free', { amount: num(HYPERLIQUID_INTEREST_FREE_USDC, 0) });
     else {

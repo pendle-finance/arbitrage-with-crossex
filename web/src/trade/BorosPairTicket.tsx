@@ -23,7 +23,7 @@
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
 import { ChevronRight } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sigFigsDirectional } from '../lib/ticks';
 import { useTradeFlowOptional, type BorosOpenPrefill } from './TradeFlow';
@@ -162,8 +162,12 @@ export function BorosPairTicket({
   twoColumn = false,
   guided = false,
   hedge,
+  mode: modeProp,
+  onModeChange,
 }: {
   active?: boolean;
+  mode?: 'pair' | 'single';
+  onModeChange?: (mode: 'pair' | 'single') => void;
   /**
    * Lay the form and its readouts side by side (wide surfaces only — the
    * drawer stays one column).
@@ -339,7 +343,9 @@ export function BorosPairTicket({
    */
   const [onlyLeg, setOnlyLeg] = useState<number | null>(null);
   /** Pair (both legs) or Single (leg A alone) — the user's own choice. */
-  const [mode, setMode] = useState<'pair' | 'single'>('pair');
+  const [ownMode, setOwnMode] = useState<'pair' | 'single'>('pair');
+  const mode = modeProp ?? ownMode;
+  const setMode = onModeChange ?? setOwnMode;
   /**
    * The two single markets a spread stands in for. Set when the ticket swaps
    * a picked Pair for the spread market that covers it, so "Use 2 single
@@ -352,6 +358,18 @@ export function BorosPairTicket({
     [markets, spreadMarkets],
   );
   const isSpread = marketA !== null && Boolean(byId.get(marketA)?.spreadVenues);
+  const lastMode = useRef(modeProp);
+  useEffect(() => {
+    if (lastMode.current === modeProp) return;
+    lastMode.current = modeProp;
+    if (modeProp !== 'single') return;
+    if (isSpread) {
+      setMarketA(behind ? behind.a : null);
+      setMarketB(behind ? behind.b : null);
+      if (behind) setDirA(behind.dirA);
+    }
+    setBehind(null);
+  }, [modeProp, isSpread, behind]);
   const legName = (id: number): string | null => {
     const row = byId.get(id);
     return row ? marketName(row) : null;
@@ -961,7 +979,7 @@ export function BorosPairTicket({
       {/* Pair or one leg. A spread is the usual trade here, so Pair leads;
           Single is for locking one venue's rate on its own — the same control
           the perp rail carries, so the two tickets read alike. */}
-      {!guided && (
+      {!guided && modeProp === undefined && (
         <SegmentedToggle<'pair' | 'single'>
           ariaLabel={t('pairTicket.boros.modeAria')}
           value={mode}
