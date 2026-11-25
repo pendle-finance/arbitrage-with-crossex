@@ -20,7 +20,7 @@ import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip } from '../components/VenueChip';
-import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig, sigGrouped } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
 import type { DealOpts } from './deal';
 import { EstimateHeadline } from './EstimateHeadline';
@@ -292,7 +292,7 @@ export function ClosePopover({
               <>
                 {t('trade.close.notionalMark', {
                   notional: notionalUsd !== null ? fmtUsd(notionalUsd) : '—',
-                  mark: sig(mark),
+                  mark: sigGrouped(mark),
                 })}
               </>
             ) : undefined
@@ -405,7 +405,7 @@ export function ClosePopover({
                 <>
                   <Trans
                     i18nKey="trade.close.atMark"
-                    values={{ qty: qtyGrouped(qtyNum), base, mark: sig(mark) }}
+                    values={{ qty: qtyGrouped(qtyNum), base, mark: sigGrouped(mark) }}
                     components={{ n: <span className="num" /> }}
                   />
                 </>
@@ -492,7 +492,7 @@ export function ClosePopover({
                     label={t('trade.close.limitPx')}
                     sub={p.side === 'BUY' ? t('trade.close.markPlus', { pct: slipStr }) : t('trade.close.markMinus', { pct: slipStr })}
                     title={t('trade.close.limitPxTitle')}
-                    value={p.price ? sig(p.price) : '—'}
+                    value={p.price ? sigGrouped(p.price) : '—'}
                   />
                   <EstimateRow label={t('trade.single.estFee')} sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
                 </div>

@@ -30,7 +30,7 @@ import type { ActionInput, DealResponse, PreviewResult, RebalanceJob, TwapPlanVi
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Spinner } from '../components/Spinner';
 import { SymbolCell } from '../components/VenueChip';
-import { fmtUsd, parseSymbol, sig } from '../lib/fmt';
+import { fmtUsd, parseSymbol, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import { useNow } from '../lib/useNow';
 import { dealFromActions, twapStartFrom, type DealOpts } from './deal';
@@ -607,7 +607,7 @@ function HoverCard({
                   <ActionKindChip input={p.input} />
                   <SymbolCell symbol={p.symbol} />
                 </span>
-                <span className="num text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
+                <span className="num text-ink-100">{p.qty ? qtyGrouped(p.qty) : '—'}</span>
               </div>
               <div className="flex items-center justify-between gap-2 text-[11px] text-ink-400">
                 <span className="num">
@@ -622,7 +622,7 @@ function HoverCard({
                   {p.fillEstimate && (
                     <>
                       {' · '}
-                      {sig(p.fillEstimate.avgPrice)} <SlippageBadge est={p.fillEstimate} />
+                      {sigGrouped(p.fillEstimate.avgPrice)} <SlippageBadge est={p.fillEstimate} />
                     </>
                   )}
                 </span>

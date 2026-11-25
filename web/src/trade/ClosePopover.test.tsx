@@ -89,7 +89,7 @@ describe('ClosePopover', () => {
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
     expect(await screen.findByText(/limit price/i)).toBeInTheDocument();
-    expect(screen.getByText('2497.45')).toBeInTheDocument();
+    expect(screen.getByText('2,497.45')).toBeInTheDocument();
     expect(screen.getByText('Reduce-only.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled();
   });
@@ -571,7 +571,7 @@ describe('ClosePopover: TWAP', () => {
 
     expect(await screen.findByRole('button', { name: 'Start TWAP close' })).toBeInTheDocument();
     expect(screen.getByText(/This leg hedges the Gate Short/)).toBeInTheDocument();
-    expect(screen.getByText(/mark 1730/)).toBeInTheDocument();
+    expect(screen.getByText(/mark 1,730/)).toBeInTheDocument();
     expect(screen.getByText('Reduce-only.')).toBeInTheDocument();
     expect(screen.getByText('Realized as each slice fills')).toBeInTheDocument();
   });
