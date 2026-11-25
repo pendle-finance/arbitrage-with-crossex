@@ -318,6 +318,22 @@ describe('RunView, TWAP running', () => {
     expect(within(rowOf('Rest')).getByText('21.40 ETH resting until filled')).toBeTruthy();
   });
 
+  it('a refused re-peg on the last slice says no limit rests', () => {
+    const legs = [leg('Gate', 'LONG', '672.24', '1729.9'), leg('Hyperliquid', 'SHORT', '672.24', '1730.2')];
+    const child = restingChild({ slice: 12, repegRefused: { kind: 'order-allowance', at: NOW - 5_000 } });
+    renderRun(job({ legs, child }, { slice: 12, nextAt: null, takerAfterSec: null }));
+    expect(screen.getByText('Re-peg refused by Gate · no order resting · retry in 1 min')).toBeTruthy();
+    expect(within(rowOf('Slice 12 of 12')).getByText('No market order')).toBeTruthy();
+    expect(within(rowOf('Rest')).getByText('21.40 ETH')).toBeTruthy();
+    expect(screen.queryByText(/Limit resting|resting until filled/)).toBeNull();
+  });
+
+  it('a refused re-peg on the last slice with a taker step shows no resting label', () => {
+    const child = restingChild({ slice: 12, repegRefused: { kind: 'order-allowance', at: NOW - 5_000 } });
+    renderRun(job({ child }, { slice: 12, nextAt: null }));
+    expect(screen.queryByText(/Limit resting/)).toBeNull();
+  });
+
   it('refused re-peg line', () => {
     const child = restingChild({ makerLeg: 'b', side: 'SELL', repegRefused: { kind: 'order-allowance', at: NOW - 5_000 } });
     renderRun(job({ child }, { makerLeg: 'b', takerAfterSec: null }));

@@ -24,7 +24,7 @@ import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { refuse } from '../errorReply';
 import { perpLimitBreach } from '../perpLimit';
 import { dealLockFor, isChildOf, type Job } from '../rebalanceJob';
-import { accountFeeRowsOf, cachedTradesOf } from '../dealFees';
+import { cachedTradesOf, feeReadWithin, feeRowsWithin } from '../dealFees';
 import { feesOf, repegRefusalOf } from '../twapRun';
 import { positionLimitFor } from './leverage';
 import { autoMakerLeg, readChildFees } from './rebalance';
@@ -217,35 +217,14 @@ export async function createDeal(deps: AppDeps, raw: DealBody): Promise<DealOutc
 
 type DealFees = { rows: VenueFeeRow[]; read: Record<string, number> };
 
-const FEE_READ_DEADLINE_MS = 1_500;
-const FEE_READ_RETRY_MS = 10_000;
-const feeReadFailedAt = new WeakMap<AppDeps, Map<string, number>>();
-
-async function withinDeadline<T>(deps: AppDeps, kind: string, work: () => Promise<T>, fallback: T): Promise<T> {
-  const failures = feeReadFailedAt.get(deps) ?? new Map<string, number>();
-  feeReadFailedAt.set(deps, failures);
-  const failedAt = failures.get(kind);
-  if (failedAt !== undefined && Date.now() - failedAt < FEE_READ_RETRY_MS) return fallback;
-  let timer: NodeJS.Timeout | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error('fee read timed out')), FEE_READ_DEADLINE_MS);
-  });
-  try {
-    const read = work();
-    read.catch(() => undefined);
-    return await Promise.race([read, deadline]);
-  } catch {
-    failures.set(kind, Date.now());
-    return fallback;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 async function dealFeesFor(deps: AppDeps, pairs: PairRow[]): Promise<DealFees> {
   const [rows, read] = await Promise.all([
-    withinDeadline(deps, 'rows', () => accountFeeRowsOf(deps), []),
-    withinDeadline(deps, 'read', () => readChildFees(deps.engine!.store, cachedTradesOf(deps), pairs.map((pair) => pair.id)), {} as Record<string, number>),
+    feeRowsWithin(deps),
+    feeReadWithin(deps, {
+      kind: 'read',
+      work: () => readChildFees(deps.engine!.store, cachedTradesOf(deps), pairs.map((pair) => pair.id)),
+      fallback: {} as Record<string, number>,
+    }),
   ]);
   return { rows, read };
 }

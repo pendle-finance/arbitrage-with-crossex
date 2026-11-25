@@ -369,6 +369,7 @@
       "orderMarket": "市价 · {{n}}",
       "limitResting": "限价挂单中",
       "noMarket": "限价挂单中 · 不转市价单",
+      "noMarketOrder": "不转市价单",
       "priceBoxSlice": "第 {{i}} 片限价 · {{venue}}",
       "priceBoxDeal": "限价 · {{venue}}",
       "bestBid": "最优买价 {{price}} · 落后 {{n}}%",

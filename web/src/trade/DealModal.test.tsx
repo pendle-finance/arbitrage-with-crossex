@@ -87,6 +87,7 @@ describe('DealModal', () => {
     renderModal({ ...makeDealView({ pair: { mode: 'OPENING', deadlineAt: null }, orders: [dealOrder('A', 'maker'), refusedMaker] }), repegRefused: 'GATE' });
     expect(await screen.findByText(refusedLine)).toBeInTheDocument();
     expect(screen.queryByText('Limit resting · no market order')).not.toBeInTheDocument();
+    expect(screen.getByText('No market order')).toBeInTheDocument();
   });
 
   it('a refused re-peg keeps the market countdown and says no limit rests', async () => {

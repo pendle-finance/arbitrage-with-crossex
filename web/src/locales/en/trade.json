@@ -370,6 +370,7 @@
       "orderMarket": "Market · {{n}}",
       "limitResting": "Limit resting",
       "noMarket": "Limit resting · no market order",
+      "noMarketOrder": "No market order",
       "priceBoxSlice": "Slice {{i}} limit · {{venue}}",
       "priceBoxDeal": "Limit · {{venue}}",
       "bestBid": "Best bid {{price}} · {{n}}% behind",

@@ -236,10 +236,11 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   const graph = resting && child ? <SliceGraph key={`${child.id}-graph`} childId={child.id} oneLeg={!pair} /> : null;
   const priceBox = resting && child ? <SlicePriceBox key={`${child.id}-price`} child={child} /> : null;
   const lines: ReactNode[] = [];
-  if (resting && child?.repegRefused && child.restPrice !== null) {
+  const refusedNow = resting && child !== null && child.repegRefused !== null && child.restPrice !== null;
+  if (refusedNow) {
     lines.push(
       <span className="num text-amber-300">
-        {t('trade.twap.run.repegRefused', { venue: maker?.name ?? '', price: padTwo(sigGrouped(child.restPrice)) })}
+        {t('trade.twap.run.repegRefused', { venue: maker?.name ?? '' })}
       </span>,
     );
   }
@@ -351,7 +352,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
 
   const firstRow: RunRow =
     lastSlice && child !== null
-      ? { label: sliceLabel, value: t(never ? 'trade.twap.run.noMarket' : 'trade.twap.run.limitResting') }
+      ? { label: sliceLabel, value: refusedNow ? (never ? t('trade.twap.run.noMarketOrder') : '') : t(never ? 'trade.twap.run.noMarket' : 'trade.twap.run.limitResting') }
       : {
           label: sliceLabel,
           value:
@@ -367,7 +368,8 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   const behind = Number(twap?.behindQty ?? 0);
   if (never && !lastSlice && behind > 0) rows.push({ label: t('trade.twap.run.behind'), value: t('trade.twap.run.qtyValue', { qty: qtyText(behind), coin }) });
   if (never && lastSlice && child !== null) {
-    rows.push({ label: t('trade.twap.run.rest'), value: t('trade.twap.run.restResting', { qty: qtyText(Math.max(0, total - makerFilled)), coin }) });
+    const restQty = qtyText(Math.max(0, total - makerFilled));
+    rows.push({ label: t('trade.twap.run.rest'), value: t(refusedNow ? 'trade.twap.run.qtyValue' : 'trade.twap.run.restResting', { qty: restQty, coin }) });
   }
   rows.push(...avgRows(), ...slippageRow(t('trade.twap.run.slippageSoFar')), ...borosRow(), ...notHedgedRow(), feeRow);
   return { ...base, firstLine: null, rows, acts: <TwapActs jobId={job.id} state="running" holds={null} borosHold={null} /> };

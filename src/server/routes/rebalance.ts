@@ -51,7 +51,7 @@ import { type DealRequest, REPEG_CHOICES_BP, REPEG_DEFAULT_BP, takerAfterCapText
 import { deepBookOf } from '../deepBook';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
-import { accountFeeRowsOf, cachedTradesOf } from '../dealFees';
+import { accountFeeRowsOf, cachedTradesOf, feeReadWithin, feeRowsWithin } from '../dealFees';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { catchRateLimit, refuse, sendError } from '../errorReply';
 import { loadTwapChildren, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
@@ -511,7 +511,14 @@ export function rebalanceRoutes(deps: AppDeps) {
     });
 
     const twapViewFor = async (store: JobFile, job: Job) => {
-      const children = await loadTwapChildren(twapDeps(store), job);
+      const children = await loadTwapChildren(
+        {
+          store: deps.engine!.store,
+          readFees: (dealIds) =>
+            feeReadWithin(deps, { kind: 'read', work: () => readChildFees(deps.engine!.store, cachedTrades, dealIds), fallback: {} as Record<string, number> }),
+        },
+        job,
+      );
       const withBest = await Promise.all(
         children.map(async (child) =>
           child.pair.mode === 'OPENING'
@@ -519,7 +526,7 @@ export function rebalanceRoutes(deps: AppDeps) {
             : child,
         ),
       );
-      return twapViewOf(job, withBest, await accountFeeRowsOf(deps));
+      return twapViewOf(job, withBest, await feeRowsWithin(deps));
     };
 
     const bootJob = jobs?.read() ?? null;

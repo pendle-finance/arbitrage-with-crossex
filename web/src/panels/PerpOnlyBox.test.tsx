@@ -154,6 +154,25 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     expect(starts[0].deal).toMatchObject({ qty: '4.03', a: { reduceOnly: true }, b: { reduceOnly: true } });
   });
 
+  it('a shared Gate leg of 4.03 out of 8.0 against 4.03 BTC sends 4.03, never the whole Gate position', async () => {
+    const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
+    server.use(heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '8', HYPERLIQUID_FUTURE_BTC_USDT: '4.03' }, bodies));
+    renderWithClient(
+      <ClosePairForm
+        base="BTC"
+        legs={[
+          { symbol: 'GATE_FUTURE_BTC_USDT', qty: 4.03, venue: 'GATE', partial: true },
+          { symbol: 'HYPERLIQUID_FUTURE_BTC_USDT', qty: 4.03, venue: 'HYPERLIQUID' },
+        ]}
+        allowTwap
+      />,
+    );
+    await twapOn();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Start TWAP close/ })).toBeEnabled(), { timeout: 4000 });
+    expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ symbol: 'GATE_FUTURE_BTC_USDT', qty: '4.03' });
+    expect(screen.queryByText(/stays open/)).not.toBeInTheDocument();
+  });
+
   it('a $6M book of 1,000.37 against 1,000 ETH closes 1000 on both and leaves 0.37 ETH', async () => {
     const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
     server.use(heldPreviewHandler({ GATE_FUTURE_ETH_USDT: '1000.37', HYPERLIQUID_FUTURE_ETH_USDT: '1000' }, bodies));
