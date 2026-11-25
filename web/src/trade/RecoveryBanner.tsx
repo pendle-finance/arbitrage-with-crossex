@@ -70,6 +70,10 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
   const tone = STRIP_TONES[stripToneOf(key)];
   const { what, makerVenue, hedgeVenue } = runLabelOf(job, t);
   const venue = key === 'hedge' ? hedgeVenue : makerVenue;
+  const size = key === 'refused' ? (job.sizeRefusal ?? null) : null;
+  const text = size
+    ? t(`trade.twap.strip.${size.bound === 'min' ? 'underMin' : 'overMax'}`, { what, i: size.slice, venue: size.venue, limit: size.limit })
+    : t(`trade.twap.strip.${key}`, { what, i: twap.slice, n: twap.of, venue });
   const icon =
     key === 'running' || key === 'pausing' ? (
       <Spinner className="h-3 w-3" />
@@ -83,7 +87,7 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
       <div className={`mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-5 py-2 text-xs ${tone.text}`}>
         <span className="inline-flex items-center gap-2">
           {icon}
-          <span className="num">{t(`trade.twap.strip.${key}`, { what, i: twap.slice, n: twap.of, venue })}</span>
+          <span className="num">{text}</span>
         </span>
         <button type="button" className={`btn-ghost-xs ${tone.button}`} onClick={() => open()}>
           {t('trade.recovery.view')}

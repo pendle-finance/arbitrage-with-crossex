@@ -92,6 +92,12 @@ describe('RecoveryBanner', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: Gate refused slice 4 · ETH pair open');
   });
 
+  it('a size refusal names the slice and the venue of the breach, not a venue refusal', async () => {
+    const sizeRefusal = { slice: 7, venue: 'Binance', limit: '$20', bound: 'min' as const, wholeRest: false };
+    renderTwap(twapJob({ status: 'halted', haltKind: 'refused', sizeRefusal, twap: { slice: 6, of: 12, makerLeg: 'a' } as never }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("TWAP paused: slice 7 under Binance's $20 minimum · ETH pair open");
+  });
+
   it('a close names the coin from the symbol and says close', async () => {
     const legs = twapJob().legs!.map((leg) => ({ ...leg, reduceOnly: true }));
     renderTwap(twapJob({ legs }));

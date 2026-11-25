@@ -298,7 +298,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             onMakerLeg={() => undefined}
             takerAfter={taker.takerAfter}
             onTakerAfter={taker.pick}
-            intervalSec={twap.input.intervalSec ?? twapPlan?.intervalSec ?? null}
+            takerCapSec={twapPlan?.takerAfterSec ?? null}
             repegBehindBp={repegBp}
             repegLocked={false}
             onRepeg={setRepegBp}

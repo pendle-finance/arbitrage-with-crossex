@@ -193,6 +193,7 @@
   "unknownRoute": "unknown route {{route}}",
   "pageOutOfDate": "This page is out of date. Reload it and check the plan before you rebalance.",
   "planChanged": "The plan changed. Check the new route before you rebalance.",
+  "twapPlanChanged": "The TWAP plan changed. Check the new slices before you start.",
   "readRateLimited": "Gate is limiting requests from this account. Try again in a few seconds.",
   "alreadyEven": "Already even.",
   "noPositions": "No open positions. Nothing to rebalance.",

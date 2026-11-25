@@ -17,7 +17,6 @@ type LegPick = 'a' | 'b';
 const PRESET_SEC = { '5m': 300, '10m': 600 } as const;
 const CUSTOM_MIN_SEC = 30;
 const CUSTOM_MAX_SEC = 86_400;
-export const TAKER_CAP_OF_INTERVAL = 0.8;
 const MAKER_FEE_BP = 2;
 const TAKER_FEE_BP = 5;
 export const REPEG_DEFAULT_BP = 5;
@@ -95,7 +94,7 @@ export function MakerSettings({
   onMakerLeg,
   takerAfter,
   onTakerAfter,
-  intervalSec,
+  takerCapSec: capSec,
   repegBehindBp,
   repegLocked,
   onRepeg,
@@ -109,7 +108,7 @@ export function MakerSettings({
   onMakerLeg: (v: 'auto' | LegPick) => void;
   takerAfter: TakerAfter;
   onTakerAfter: (v: TakerAfter) => void;
-  intervalSec: number | null;
+  takerCapSec: number | null;
   repegBehindBp: number | null;
   repegLocked: boolean;
   onRepeg: (v: number | null) => void;
@@ -120,7 +119,6 @@ export function MakerSettings({
   const picked: LegPick | null = makerLeg !== 'auto' ? makerLeg : autoPick?.auto ?? null;
   const pickedLeg = legs && picked ? legs[picked === 'a' ? 0 : 1] ?? null : null;
   const autoWhy = autoPick ? t(autoPick.why === 'fees' ? 'pairTicket.makerSettings.autoFees' : 'pairTicket.makerSettings.autoBook') : undefined;
-  const capSec = intervalSec !== null ? Math.floor(intervalSec * TAKER_CAP_OF_INTERVAL) : null;
   const takerSec = takerAfterSec(takerAfter);
   const takerText =
     takerAfter.kind === 'never' ? t('pairTicket.makerSettings.takerNever') : takerSec !== null ? spanText(takerSec) : '—';

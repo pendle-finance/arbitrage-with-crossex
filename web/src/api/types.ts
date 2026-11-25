@@ -550,6 +550,7 @@ export interface RebalanceJob {
   imUsedStart?: ImUsedRow[] | null;
   totalCostUsd?: number | null;
   haltKind?: JobHaltKind | null;
+  sizeRefusal?: { slice: number; venue: string; limit: string; bound: 'min' | 'max'; wholeRest: boolean } | null;
   sleptFrom?: number | null;
   sleptTo?: number | null;
   twap?: TwapView | null;

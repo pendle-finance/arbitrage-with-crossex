@@ -129,6 +129,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   const pausing = running && job.pauseRequested === true;
   const kind = halted ? (job.haltKind ?? null) : null;
   const redHalt = kind === 'refused' || kind === 'hedge-margin' || kind === 'error';
+  const stuck = kind === 'refused' && job.sizeRefusal?.wholeRest === true;
   const never = twap?.takerAfterSec === null;
   const lastSlice = slice >= of;
   const fees = job.fees ?? { readUsd: 0, estUsd: 0, totalUsd: 0, est: false };
@@ -291,9 +292,11 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
       const text = (
         <>
           <span className="block">{localizeServerText(job.haltReason ?? '')}</span>
-          <span className="block text-ink-300">
-            {margin ? t('trade.twap.server.refusedFix', { venue: venueOf(maker), coin: marginCoinOf(maker) }) : t('trade.twap.run.refusedSize')}
-          </span>
+          {!stuck && (
+            <span className="block text-ink-300">
+              {margin ? t('trade.twap.server.refusedFix', { venue: venueOf(maker), coin: marginCoinOf(maker) }) : t('trade.twap.run.refusedSize')}
+            </span>
+          )}
         </>
       );
       firstLine = <VerdictAlert tone="act" text={text} />;
@@ -331,7 +334,8 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
           ? { open: holdOn('holdCloseFilled', hedge), close: holdOn('holdOpenHedge', maker) }
           : { open: holdOn('holdOpenHedge', hedge), close: holdOn('holdCloseFilled', maker) }
         : null;
-    return { ...base, firstLine, rows, acts: <TwapActs jobId={job.id} state="halted" holds={holds} borosHold={borosHold} /> };
+    const acts = <TwapActs jobId={job.id} state="halted" holds={holds} borosHold={borosHold} noResume={stuck} />;
+    return { ...base, firstLine, rows, acts };
   }
 
   const firstRow: RunRow =

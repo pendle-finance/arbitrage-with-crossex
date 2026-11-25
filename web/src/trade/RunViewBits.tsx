@@ -196,11 +196,13 @@ export function TwapActs({
   state,
   holds,
   borosHold,
+  noResume = false,
 }: {
   jobId: string;
   state: 'running' | 'halted';
   holds: { open: string; close: string } | null;
   borosHold: string | null;
+  noResume?: boolean;
 }) {
   const { t: tr } = useTranslation();
   const pause = useRebalanceCommand('pause');
@@ -231,7 +233,7 @@ export function TwapActs({
           <button type="button" className="btn" disabled={pending} onClick={() => pause.mutate(jobId)}>
             {tr('trade.twap.run.pause')}
           </button>
-        ) : holds === null && borosHold === null ? (
+        ) : holds === null && borosHold === null && !noResume ? (
           <button type="button" className="btn-primary" disabled={pending} onClick={() => resume.mutate(jobId)}>
             {tr('trade.twap.run.resume')}
           </button>

@@ -207,6 +207,14 @@ export interface JobTwap {
   startedAt: number;
 }
 
+export interface SizeRefusal {
+  slice: number;
+  venue: string;
+  limit: string;
+  bound: 'min' | 'max';
+  wholeRest: boolean;
+}
+
 export const childIdFor = (jobId: string, slice: number, k: number): string => `${jobId}-s${slice}-${k}`;
 
 const CHILD_SUFFIX = /^(s[1-9]\d*-[1-9]\d*|f[1-9]\d*)$/;
@@ -258,6 +266,7 @@ export interface Job {
   retryConverts: number;
   haltKind?: HaltKind | null;
   twap?: JobTwap | null;
+  sizeRefusal?: SizeRefusal | null;
   deleverTwap?: DeleverTwap | null;
   sleptFrom?: number | null;
   sleptTo?: number | null;
@@ -975,6 +984,7 @@ function applyDefaults(job: Partial<Job>): void {
   job.retryConverts = finiteOr(job.retryConverts, 0);
   if (!(HALT_KINDS as readonly unknown[]).includes(job.haltKind)) job.haltKind = null;
   if (typeof job.twap !== 'object' || job.kind !== 'twap') job.twap = null;
+  if (typeof job.sizeRefusal !== 'object' || job.kind !== 'twap') job.sizeRefusal = null;
   if (job.kind !== 'delever' || !isDeleverTwap(job.deleverTwap)) job.deleverTwap = null;
   job.sleptFrom = typeof job.sleptFrom === 'number' && Number.isFinite(job.sleptFrom) ? job.sleptFrom : null;
   job.sleptTo = typeof job.sleptTo === 'number' && Number.isFinite(job.sleptTo) ? job.sleptTo : null;

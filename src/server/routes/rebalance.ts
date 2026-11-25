@@ -44,7 +44,6 @@ import {
 } from '../../core/rebalance/plan';
 import { touchOf } from '../../core/estimate/books';
 import { depthOf, makerLegOf, priceImpactOf, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
-import type { VenueFeeRow } from '../../core/estimate/fees';
 import { planSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult } from '../../core/twap';
 import type { Store } from '../../engine/db';
 import { fx, FX_ZERO, type Fx } from '../../engine/fx';
@@ -52,6 +51,7 @@ import { type DealRequest, REPEG_CHOICES_BP, REPEG_DEFAULT_BP, takerAfterCapText
 import { deepBookOf } from '../deepBook';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
+import { accountFeeRowsOf, cachedTradesOf } from '../dealFees';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { catchRateLimit, refuse, sendError } from '../errorReply';
 import { loadTwapChildren, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
@@ -95,6 +95,7 @@ const CUSTOM_NEEDS = 'A custom move needs from, to and amount.';
 const RELOAD_TEXT = 'This page is out of date. Reload it and check the plan before you rebalance.';
 const PLAN_CHANGED_TEXT = 'The plan changed. Check the new route before you rebalance.';
 const PLAN_CHANGED_LABEL = 'PLAN_CHANGED';
+const TWAP_PLAN_CHANGED_TEXT = 'The TWAP plan changed. Check the new slices before you start.';
 const JOB_KINDS: readonly string[] = ['move', 'realize', 'delever', 'twap'];
 const EXECS: readonly string[] = ['maker', 'market'];
 const FIX_ACTIONS: readonly string[] = ['market', 'limit', 'boros-retry', 'add-back', 'unwind'];
@@ -187,16 +188,8 @@ interface OrderLeg {
 
 const legBookOf = (leg: OrderLeg, book: NormalizedBook | null): TwapLegBook => ({ ...leg, book, mid: touchOf(book)?.mid ?? null });
 
-const accountFeeRows = (deps: AppDeps): Promise<VenueFeeRow[]> =>
-  deps.cache
-    .get('fees', TTL.static, async () => (await deps.getClients().crossEx.getCrossexFee()).body)
-    .then(
-      ({ value }) => value,
-      () => [],
-    );
-
 export async function autoMakerLeg(deps: AppDeps, a: OrderLeg, b: OrderLeg, qty: string): Promise<'a' | 'b'> {
-  const feeRows = await accountFeeRows(deps);
+  const feeRows = await accountFeeRowsOf(deps);
   const sizedOf = async (leg: OrderLeg) => ({ ...legBookOf(leg, await deepBookOf(deps, leg.symbol)), qty: Number(qty) });
   const [legA, legB] = await Promise.all([sizedOf(a), sizedOf(b)]);
   return makerLegOf(feeRows, legA, legB).auto;
@@ -506,12 +499,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if ('refusal' in outcome) throw new CoreError(outcome.refusal.message, outcome.refusal.category);
     };
 
-    const cachedTrades: TradePage = async (query) =>
-      (
-        await deps.cache.get(`twap:trades:${query.from}:${query.page}:${query.limit}`, TTL.trades, async () =>
-          (await deps.getClients().crossEx.listCrossexHistoryTrades(query)).body,
-        )
-      ).value;
+    const cachedTrades = cachedTradesOf(deps);
 
     const twapDeps = (store: JobFile): TwapRunDeps => ({
       store: deps.engine!.store,
@@ -531,7 +519,7 @@ export function rebalanceRoutes(deps: AppDeps) {
             : child,
         ),
       );
-      return twapViewOf(job, withBest, await accountFeeRows(deps));
+      return twapViewOf(job, withBest, await accountFeeRowsOf(deps));
     };
 
     const bootJob = jobs?.read() ?? null;
@@ -884,7 +872,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const total = fx(deal.qty);
       const offLot = planned.rules.findIndex((rule) => fxOrZero(rule.lot) > FX_ZERO && total % fxOrZero(rule.lot) !== FX_ZERO);
       if (offLot >= 0) throw new CoreError(`Size ${deal.qty} is not a multiple of ${legs[offLot].symbol}'s lot ${planned.rules[offLot].lot}`);
-      if (shown && !isShownPlan(planned.result.plan, shown, slices)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      if (shown && !isShownPlan(planned.result.plan, shown, slices)) return conflict(reply, TWAP_PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (!planned.result.ok) return refuse400(reply, planned.result.refusal.text);
       const plan = planned.result.plan;
       const takerAfterSec = takerAfterOf(deal, plan);
@@ -1155,6 +1143,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const job = haltedOr409(store, (req.params as { id: string }).id, reply);
       if (!job) return reply;
+      if (job.sizeRefusal?.wholeRest && job.haltReason) return conflict(reply, job.haltReason);
       if (fixing) return conflict(reply, FIX_RUNNING);
       if (job.steps[job.stepIndex]?.addBack) return conflict(reply, ADD_BACK_FIRST);
       // The same rule as the start: the remaining steps move cash a working
@@ -1178,6 +1167,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         current.paused = false;
         current.pauseRequested = false;
         current.haltKind = null;
+        current.sizeRefusal = null;
         store.write(current);
         start(store);
         return reply.ok(current);

@@ -215,7 +215,7 @@ describe('TWAP start checks the size and runs the plan the ticket showed', () =>
     const w = await boot();
     const res = await post(w, twapStart({ durationSec: 3600, slices: 12, intervalSec: 300, sliceQty: '0.3' }));
     expect(res.statusCode, res.body).toBe(409);
-    expect(res.json().error.label).toBe('PLAN_CHANGED');
+    expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: 'The TWAP plan changed. Check the new slices before you start.' });
     expect(w.jobs.read()).toBeNull();
   });
 });

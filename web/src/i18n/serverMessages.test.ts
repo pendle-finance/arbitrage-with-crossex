@@ -559,7 +559,10 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
   ["Taker after must be 80% of the interval or less (240s).", "转市价时限不得超过间隔的 80%（240 秒）。"],
   ["Slice 4 is over Gate's 2,000 ETH maximum", "第 4 片超过 Gate 的最大额 2,000 ETH"],
   ["This Mac slept during the TWAP. Nothing was sent while it slept. Press Resume.", "这台 Mac 在 TWAP 期间休眠。休眠时没有发送任何订单。请点击恢复。"],
-  ["0.5 ETH not opened", "0.5 ETH 未开仓"],
+  ["Slice 7 is under Binance's 0.001 BTC minimum", "第 7 片低于 Binance 的最小额 0.001 BTC"],
+  ["Slice 7 is under Gate's $5 minimum", "第 7 片低于 Gate 的最小额 $5"],
+  ["The TWAP plan changed. Check the new slices before you start.", "TWAP 方案已变化。请检查新的分片后再开始。"],
+  ["0.5 ETH not opened","0.5 ETH 未开仓"],
 ];
 
 const UNKNOWN = [

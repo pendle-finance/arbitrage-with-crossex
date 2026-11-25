@@ -1,4 +1,4 @@
-import { ArrowRight, X } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PriceImpactPreview, TwapPlanPreview, TwapPlanView, TwapRefusalView } from '../api/types';
@@ -8,6 +8,7 @@ import { localizeServerText } from '../i18n/serverMessages';
 import { fmtUsd, qtyGrouped } from '../lib/fmt';
 import { parseSpan, spanText } from '../lib/span';
 import { AffixedInput } from './PairTicketBits';
+import { ViolationList } from './previewBits';
 
 export interface TwapInput {
   durationSec?: number;
@@ -143,14 +144,14 @@ function RefusalLine({
 }) {
   const fix = refusal.fix;
   return (
-    <p className="text-[11px] text-rose-400">
-      <X size={12} aria-hidden className="inline" /> {atLot(localizeServerText(refusal.text), coin, lot)}{' '}
+    <div>
+      <ViolationList violations={[{ message: atLot(localizeServerText(refusal.text), coin, lot) }]} />
       {fix && (
         <button type="button" className="btn-link text-[11px]" onClick={() => onFix(fix.patch)}>
           {atLot(localizeServerText(fix.label), coin, lot)}
         </button>
       )}
-    </p>
+    </div>
   );
 }
 

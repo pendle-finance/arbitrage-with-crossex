@@ -370,6 +370,16 @@ describe('RunView, TWAP paused and ended', () => {
     expect(screen.getByText('Add USDT to Gate CrossEx, then resume.')).toBeTruthy();
   });
 
+  it('a rest wholly under a venue minimum says Resume cannot send it and offers only Stop', () => {
+    const reason = "Rest 0.006 ETH is under Binance's $20 minimum. Resume cannot send it. Stop ends the run.";
+    const sizeRefusal = { slice: 3, venue: 'Binance', limit: '$20', bound: 'min' as const, wholeRest: true };
+    renderRun(paused({ paused: false, haltKind: 'refused', haltReason: reason, sizeRefusal }));
+    expect(screen.getByText(reason).closest('.alert-red')).not.toBeNull();
+    expect(screen.queryByText('Resume re-plans the rest.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Hold to stop' })).toBeTruthy();
+  });
+
   it('a margin refusal on Hyperliquid asks for USDC', () => {
     const legs = [leg('Hyperliquid', 'LONG', '146.12', '1730'), leg('Gate', 'SHORT', '146.12', '1730.2')];
     renderRun(paused({ paused: false, haltKind: 'refused', haltReason: 'Hyperliquid refused slice 4: not enough margin', legs }));

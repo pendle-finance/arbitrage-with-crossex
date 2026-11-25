@@ -6,6 +6,7 @@
  * edits (levels, not events).
  */
 import type { FastifyInstance } from 'fastify';
+import type { VenueFeeRow } from '../../core/estimate/fees';
 import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
 import { CoreError, type ErrorCategory } from '../../core/errors';
 import { formatRestPrice, parseSymbol } from '../../core/numbers';
@@ -23,9 +24,10 @@ import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { refuse } from '../errorReply';
 import { perpLimitBreach } from '../perpLimit';
 import { dealLockFor, isChildOf, type Job } from '../rebalanceJob';
+import { accountFeeRowsOf, cachedTradesOf } from '../dealFees';
 import { feesOf } from '../twapRun';
 import { positionLimitFor } from './leverage';
-import { autoMakerLeg } from './rebalance';
+import { autoMakerLeg, readChildFees } from './rebalance';
 
 const TRANSFER_SETTLE_MS = 5_000;
 const TRANSFER_SETTLING_TEXT = 'Deals wait until Gate takes the transfer. Try again in a few seconds.';
@@ -213,14 +215,27 @@ export async function createDeal(deps: AppDeps, raw: DealBody): Promise<DealOutc
   return { id: row.id };
 }
 
-function dealView(store: Store, pair: PairRow) {
+type DealFees = { rows: VenueFeeRow[]; read: Record<string, number> };
+
+async function dealFeesFor(deps: AppDeps, pairs: PairRow[]): Promise<DealFees> {
+  const [rows, read] = await Promise.all([
+    accountFeeRowsOf(deps),
+    readChildFees(deps.engine!.store, cachedTradesOf(deps), pairs.map((pair) => pair.id)).catch(() => ({}) as Record<string, number>),
+  ]);
+  return { rows, read };
+}
+
+function dealView(store: Store, pair: PairRow, fees: DealFees) {
   const orders = store.listOrders(pair.id);
   const resolved = orders.flatMap((order) => (order.resolvedAt === null ? [] : [order.resolvedAt]));
   return {
     pair,
     orders,
     projection: project(pair, orders),
-    fees: feesOf([{ orders, feeUsd: null }]),
+    fees: feesOf(
+      [{ pair, orders, feeUsd: Object.hasOwn(fees.read, pair.id) && Number.isFinite(fees.read[pair.id]) ? fees.read[pair.id] : null }],
+      fees.rows,
+    ),
     avgPrice: { a: store.avgFillPrice(pair.id, 'A'), b: store.avgFillPrice(pair.id, 'B') },
     endedAt: pair.mode === 'DONE' && resolved.length > 0 ? Math.max(...resolved) : null,
   };
@@ -243,14 +258,15 @@ export function dealsRoutes(deps: AppDeps) {
         .listPairs(q.active === '1' ? { activeOnly: true } : undefined)
         .slice(-limit)
         .reverse();
-      return reply.ok(rows.map((p) => dealView(deps.engine!.store, p)));
+      const fees = await dealFeesFor(deps, rows);
+      return reply.ok(rows.map((p) => dealView(deps.engine!.store, p, fees)));
     });
 
     app.get('/deals/:id', async (req, reply) => {
       const { id } = req.params as { id: string };
       const pair = deps.engine!.store.getPair(id);
       if (!pair) throw new CoreError(`unknown deal ${id}`);
-      return reply.ok(dealView(deps.engine!.store, pair));
+      return reply.ok(dealView(deps.engine!.store, pair, await dealFeesFor(deps, [pair])));
     });
 
     const requireDeal = (id: string): PairRow => {

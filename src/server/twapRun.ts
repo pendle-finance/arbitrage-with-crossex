@@ -20,6 +20,7 @@ import {
   type JobFile,
   type JobTwap,
   SLICE_STEP,
+  type SizeRefusal,
 } from './rebalanceJob';
 
 export interface TwapRunDeps {
@@ -156,41 +157,50 @@ function isRefusedForMargin(orders: OrderRow[]): boolean {
   return legA.some(hasMarginRefusalLabel);
 }
 
-const underSizeLine = (slice: number, venue: string, minSize: string, coin: string): string =>
-  `Slice ${slice} is under ${venue}'s ${minSize} ${coin} minimum`;
+interface Breach {
+  line: string;
+  venue: string;
+  limit: string;
+  bound: SizeRefusal['bound'];
+}
 
-const underValueLine = (slice: number, venue: string, minUsd: number): string => `Slice ${slice} is under ${venue}'s ${usdText(minUsd)} minimum`;
+const underOf = (slice: number, venue: string, limit: string): Breach => ({
+  line: `Slice ${slice} is under ${venue}'s ${limit} minimum`,
+  venue,
+  limit,
+  bound: 'min',
+});
 
 const MIN_REFUSAL = /is below (\S+?)'s minimum (?:size of ([\d.]+)|order value \(([\d.]+) at)/;
 
-function minRefusalLine(err: unknown, slice: number, coin: string): string | null {
+function minRefusalOf(err: unknown, slice: number, coin: string): Breach | null {
   const match = err instanceof Error ? MIN_REFUSAL.exec(err.message) : null;
   if (!match) return null;
   const venue = prettyVenue(exchangeOf(match[1]));
-  return match[2] !== undefined ? underSizeLine(slice, venue, match[2], coin) : underValueLine(slice, venue, Number(match[3]));
+  return underOf(slice, venue, match[2] !== undefined ? `${match[2]} ${coin}` : usdText(Number(match[3])));
 }
 
-function limitBreachOf(qty: Fx, rules: TwapLegRule[], mark: number | null, slice: number): string | null {
+function limitBreachOf(qty: Fx, rules: TwapLegRule[], mark: number | null, slice: number): Breach | null {
   const amount = Number(fxStr(qty));
   for (const rule of rules) {
     const venue = prettyVenue(rule.venue);
-    if (amount < Number(rule.minSize)) return underSizeLine(slice, venue, rule.minSize, rule.coin);
+    if (amount < Number(rule.minSize)) return underOf(slice, venue, `${rule.minSize} ${rule.coin}`);
     const minNotional = Number(rule.minNotional);
-    if (mark !== null && minNotional > 0 && amount * mark < minNotional) {
-      return underValueLine(slice, venue, minNotional);
-    }
+    if (mark !== null && minNotional > 0 && amount * mark < minNotional) return underOf(slice, venue, usdText(minNotional));
     const caps = [rule.maxMarketSize, rule.maxLimitSize].map(Number).filter((cap) => Number.isFinite(cap) && cap > 0);
     if (caps.length > 0 && amount > Math.min(...caps)) {
-      return `Slice ${slice} is over ${venue}'s ${Math.min(...caps).toLocaleString('en-US')} ${rule.coin} maximum`;
+      const limit = `${Math.min(...caps).toLocaleString('en-US')} ${rule.coin}`;
+      return { line: `Slice ${slice} is over ${venue}'s ${limit} maximum`, venue, limit, bound: 'max' };
     }
   }
   return null;
 }
 
-function haltTwap(deps: TwapRunDeps, job: Job, kind: HaltKind | null, reason: string | null): void {
+function haltTwap(deps: TwapRunDeps, job: Job, kind: HaltKind | null, reason: string | null, sizeRefusal: SizeRefusal | null = null): void {
   job.status = 'halted';
   job.haltKind = kind;
   job.haltReason = reason;
+  job.sizeRefusal = sizeRefusal;
   if (job.kind === 'twap' && job.twap) {
     job.twap.nextAt = null;
     job.twap.replan = true;
@@ -200,10 +210,19 @@ function haltTwap(deps: TwapRunDeps, job: Job, kind: HaltKind | null, reason: st
   lastPass.delete(job.id);
 }
 
+function haltSize(deps: TwapRunDeps, job: Job, breach: Breach, at: { slice: number; qty: Fx; rest: Fx; coin: string }): void {
+  const wholeRest = breach.bound === 'min' && at.qty >= at.rest;
+  const reason = wholeRest
+    ? `Rest ${fxStr(at.qty)} ${at.coin} is under ${breach.venue}'s ${breach.limit} minimum. Resume cannot send it. Stop ends the run.`
+    : breach.line;
+  haltTwap(deps, job, 'refused', reason, { slice: at.slice, venue: breach.venue, limit: breach.limit, bound: breach.bound, wholeRest });
+}
+
 function finishTwap(deps: TwapRunDeps, job: Job): void {
   job.status = 'done';
   job.haltKind = null;
   job.haltReason = null;
+  job.sizeRefusal = null;
   if (job.twap) {
     job.twap.nextAt = null;
     job.twap.carryQty = '0';
@@ -294,7 +313,8 @@ async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: 
   const qty = slice >= twap.slices ? rest : fxMin(fx(twap.sliceQty) + fx(twap.carryQty), rest);
   if (qty <= FX_ZERO) return finishTwap(deps, job);
   const breach = limitBreachOf(qty, twap.deal.rules, markOf(deps.store, job), slice);
-  if (breach !== null) return haltTwap(deps, job, 'refused', breach);
+  const at = { slice, qty, rest, coin: twap.deal.coin };
+  if (breach !== null) return haltSize(deps, job, breach, at);
   twap.behindQty = twap.carryQty;
   twap.carryQty = '0';
   twap.sliceIndex = slice;
@@ -310,8 +330,8 @@ async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: 
     if (isMarginRefusal(err)) {
       return haltTwap(deps, target, 'refused', `${prettyVenue(exchangeOf(makerSymbolOf(twap)))} refused slice ${slice}: not enough margin`);
     }
-    const under = minRefusalLine(err, slice, twap.deal.coin);
-    if (under !== null) return haltTwap(deps, target, 'refused', under);
+    const under = minRefusalOf(err, slice, twap.deal.coin);
+    if (under !== null) return haltSize(deps, target, under, at);
     const reason = haltReasonFor(err);
     deps.store.alert('error', childIdFor(job.id, slice, 1), reason, deps.now());
     return haltTwap(deps, target, 'error', reason);

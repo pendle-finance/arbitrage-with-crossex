@@ -233,7 +233,6 @@ export function ClosePopover({
   const estimating = preview.estimating;
   const twapPreview = preview.data?.twap ?? null;
   const twapPlan = twapOn ? (twapPreview?.plan ?? null) : null;
-  const intervalSec = twapOn ? (twapState.input.intervalSec ?? twapPlan?.intervalSec ?? null) : null;
 
   const takerAfterBad = useTwapTakerAfter(taker, twapOn, twapPlan?.takerAfterSec ?? null);
   const dealOpts = twapOn
@@ -431,7 +430,7 @@ export function ClosePopover({
             onMakerLeg={() => {}}
             takerAfter={taker.takerAfter}
             onTakerAfter={taker.pick}
-            intervalSec={intervalSec}
+            takerCapSec={twapPlan?.takerAfterSec ?? null}
             repegBehindBp={repegBehindBp}
             repegLocked={false}
             onRepeg={(bp) => setRepegBehindBp(bp as DealOpts['repegBehindBp'])}

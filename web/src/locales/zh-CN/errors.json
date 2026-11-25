@@ -193,6 +193,7 @@
   "unknownRoute": "未知的路线 {{route}}",
   "pageOutOfDate": "此页面已过期。请刷新并检查方案后再进行再平衡。",
   "planChanged": "方案已变化。请检查新路线后再进行再平衡。",
+  "twapPlanChanged": "TWAP 方案已变化。请检查新的分片后再开始。",
   "readRateLimited": "Gate 正在限制此账户的请求，请几秒后重试。",
   "alreadyEven": "已经均衡。",
   "noPositions": "没有持仓，无需再平衡。",

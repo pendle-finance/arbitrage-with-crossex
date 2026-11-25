@@ -509,7 +509,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             onMakerLeg={setMakerLeg}
             takerAfter={taker.takerAfter}
             onTakerAfter={taker.pick}
-            intervalSec={twapOn ? (twapPreview?.plan?.intervalSec ?? twap.input.intervalSec ?? null) : null}
+            takerCapSec={twapOn ? (twapPreview?.plan?.takerAfterSec ?? null) : null}
             repegBehindBp={repegBp}
             repegLocked={pinned}
             onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}

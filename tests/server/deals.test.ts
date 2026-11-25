@@ -1039,6 +1039,45 @@ describe('POST /api/deals', () => {
   });
 });
 
+describe('deal window fee', () => {
+  const feeWire = [
+    { exchange_type: 'HYPERLIQUID', future_maker_fee: '0.00015', future_taker_fee: '0.00028', special_fee_list: [] },
+    { exchange_type: 'OKX', future_maker_fee: '0.0002', future_taker_fee: '0.0005', special_fee_list: [] },
+  ];
+
+  async function filledDeal(trades: unknown[]) {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/fee', { body: feeWire }).persist();
+    mockGateGet('/history_trades', { body: trades }).persist();
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    await tickPair(w.loop, 'deal-000001');
+    w.store.updateOrder('deal-000001', 'A', 1, { venueOrderId: 'v1', cumQty: '0.1', avgFillPrice: '2500' });
+    return w;
+  }
+
+  it('counts an unread fill at the account rate, not the flat default', async () => {
+    await filledDeal([]);
+    const res = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    const fees = res.json().data.fees;
+    expect(fees.readUsd).toBe(0);
+    expect(fees.estUsd).toBeCloseTo(0.1 * 2500 * 0.00015, 10);
+    expect(fees.est).toBe(true);
+  });
+
+  it('replaces the estimate with the fee Gate charged', async () => {
+    await filledDeal([{ order_id: 'v1', qty: '0.1', fee: '-0.07', fee_coin: 'USDT' }]);
+    const res = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    const fees = res.json().data.fees;
+    expect(fees.readUsd).toBeCloseTo(0.07, 10);
+    expect(fees.estUsd).toBe(0);
+    expect(fees.est).toBe(false);
+  });
+});
+
 describe('deal commands + alerts', () => {
   async function mkWorking(): Promise<ReturnType<typeof mkApp> & { id: string }> {
     const w = mkApp();

@@ -8,6 +8,7 @@ import type { VenueFeeRow } from '../../src/core/estimate/fees';
 import { planSlices, type TwapInput, type TwapLegRule } from '../../src/core/twap';
 import type { DealRequest } from '../../src/engine/create';
 import { Store } from '../../src/engine/db';
+import { fx, fxStr } from '../../src/engine/fx';
 import { tickPair, type LoopDeps } from '../../src/engine/loop';
 import type { PairRow } from '../../src/engine/types';
 import { TtlCache } from '../../src/server/cache';
@@ -241,6 +242,70 @@ describe('twap resume re-plans the rest', () => {
     const halted = await advance(job, T0 + MIN);
     expect(halted.status).toBe('halted');
     expect(onResume(halted)).toBe(11);
+  });
+});
+
+const ETH_BINANCE_RULES: TwapLegRule[] = [
+  { venue: 'GATE', coin: 'ETH', lot: '0.001', minSize: '0.001', minNotional: '0', maxMarketSize: '100000', maxLimitSize: '100000' },
+  { venue: 'BINANCE', coin: 'ETH', lot: '0.001', minSize: '0.001', minNotional: '20', maxMarketSize: '2000', maxLimitSize: '10000' },
+];
+
+const ethBinanceDeal = (totalQty: string): TwapDealTemplate => ({
+  a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY' },
+  b: { symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'SELL' },
+  execution: 'maker',
+  totalQty,
+  coin: 'ETH',
+  rules: ETH_BINANCE_RULES,
+});
+
+describe('twap rest wholly under a venue minimum', () => {
+  const STUCK = "Rest 0.006 ETH is under Binance's $20 minimum. Resume cannot send it. Stop ends the run.";
+
+  beforeEach(() => {
+    w = makeWorld();
+  });
+
+  for (const [size, total] of [
+    ['$50', '0.017'],
+    ['$6M', '2000'],
+  ] as const) {
+    it(`a ${size} run halts once, says Resume cannot send the rest, and the route refuses Resume`, async () => {
+      const job = startJob(ethBinanceDeal(total), { durationSec: 3600, slices: 2 }, 3000);
+      await advance(job, T0);
+      const first = w.requests[0];
+      fill(first.id, first.qty, '3000');
+      await advance(job, T0 + 30 * MIN);
+      const last = w.requests[1];
+      fill(last.id, fxStr(fx(last.qty) - fx('0.006')), '3000');
+      const capped = await advance(job, T0 + 31 * MIN);
+      expect(capped).toMatchObject({ status: 'halted', haltKind: 'capped-rest', haltReason: '0.006 ETH not opened' });
+      await resume();
+      const halted = await advance(job, T0 + 32 * MIN);
+      expect(halted).toMatchObject({
+        status: 'halted',
+        haltKind: 'refused',
+        haltReason: STUCK,
+        sizeRefusal: { slice: 3, venue: 'Binance', limit: '$20', bound: 'min', wholeRest: true },
+      });
+      expect(w.requests).toHaveLength(2);
+      const a = bootApp([]);
+      a.jobs.write(halted);
+      const res = await a.app.inject({ method: 'POST', url: `/api/rebalance/${halted.id}/resume`, headers: HOST });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).toBe(STUCK);
+      expect(appJob(a)).toMatchObject({ status: 'halted', haltReason: STUCK });
+    });
+  }
+
+  it('a slice under the minimum with more rest behind it keeps Resume', async () => {
+    const job = startJob(btcDeal('0.012'), { durationSec: 3600, slices: 12 }, 90_000);
+    for (let slice = 1; slice <= 6; slice += 1) {
+      await advance(job, T0 + (slice - 1) * 5 * MIN);
+      fill(childIdFor(job.id, slice, 1), '0.001', slice === 6 ? '40000' : '90000');
+    }
+    const halted = await advance(job, T0 + 30 * MIN);
+    expect(halted.sizeRefusal).toEqual({ slice: 7, venue: 'Binance', limit: '$50', bound: 'min', wholeRest: false });
   });
 });
 

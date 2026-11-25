@@ -24,7 +24,7 @@ function Harness({ bookPrice = '1730' }: { bookPrice?: string | null }) {
         onMakerLeg={() => {}}
         takerAfter={taker}
         onTakerAfter={setTaker}
-        intervalSec={null}
+        takerCapSec={null}
         repegBehindBp={repeg}
         repegLocked={price !== null}
         onRepeg={setRepeg}
@@ -81,7 +81,7 @@ describe('LimitPriceBox', () => {
 });
 
 describe('MakerSettings', () => {
-  function Settings(props: { intervalSec: number | null; start: TakerAfter; makerLeg?: 'auto' | 'a' | 'b'; onMakerLeg?: (v: 'auto' | 'a' | 'b') => void }) {
+  function Settings(props: { takerCapSec: number | null; start: TakerAfter; makerLeg?: 'auto' | 'a' | 'b'; onMakerLeg?: (v: 'auto' | 'a' | 'b') => void }) {
     const [taker, setTaker] = useState<TakerAfter>(props.start);
     return (
       <MakerSettings
@@ -94,7 +94,7 @@ describe('MakerSettings', () => {
         onMakerLeg={props.onMakerLeg ?? (() => {})}
         takerAfter={taker}
         onTakerAfter={setTaker}
-        intervalSec={props.intervalSec}
+        takerCapSec={props.takerCapSec}
         repegBehindBp={5}
         repegLocked={false}
         onRepeg={() => {}}
@@ -104,7 +104,7 @@ describe('MakerSettings', () => {
   }
 
   it('greys taker choices over 80% of the interval', async () => {
-    render(<Settings intervalSec={300} start={{ kind: 'custom', sec: 240 }} />);
+    render(<Settings takerCapSec={240} start={{ kind: 'custom', sec: 240 }} />);
     expect(foldRow()).toHaveTextContent('Gate maker · taker 4m · re-peg 0.05%');
     await userEvent.click(foldRow());
     const group = screen.getByRole('radiogroup', { name: 'Taker after' });
@@ -116,7 +116,7 @@ describe('MakerSettings', () => {
   });
 
   it('12m interval enables 5m only', async () => {
-    render(<Settings intervalSec={720} start={{ kind: '5m', sec: 300 }} />);
+    render(<Settings takerCapSec={576} start={{ kind: '5m', sec: 300 }} />);
     await userEvent.click(foldRow());
     const group = screen.getByRole('radiogroup', { name: 'Taker after' });
     expect(within(group).getByRole('radio', { name: '5m' })).toBeEnabled();
@@ -124,7 +124,7 @@ describe('MakerSettings', () => {
   });
 
   it('custom box shows only after Custom and flags a time over the cap', async () => {
-    render(<Settings intervalSec={300} start={{ kind: 'never', sec: null }} />);
+    render(<Settings takerCapSec={240} start={{ kind: 'never', sec: null }} />);
     await userEvent.click(foldRow());
     expect(screen.queryByLabelText('Taker after, custom time')).toBeNull();
     await userEvent.click(screen.getByRole('radio', { name: 'Custom' }));
@@ -136,9 +136,18 @@ describe('MakerSettings', () => {
     expect(screen.getByText('30s to 24h')).toBeInTheDocument();
   });
 
+  it('reads the cap it is given, not 80% of an interval', async () => {
+    render(<Settings takerCapSec={120} start={{ kind: 'never', sec: null }} />);
+    await userEvent.click(foldRow());
+    await userEvent.click(screen.getByRole('radio', { name: 'Custom' }));
+    await userEvent.type(screen.getByLabelText('Taker after, custom time'), '3m');
+    expect(screen.getByText('Must be 80% of the interval or less (2m)')).toBeInTheDocument();
+    expect(within(screen.getByRole('radiogroup', { name: 'Taker after' })).getByRole('radio', { name: '5m' })).toBeDisabled();
+  });
+
   it('a manual maker leg shows Reset, which goes back to Auto', async () => {
     const onMakerLeg = vi.fn();
-    render(<Settings intervalSec={null} start={{ kind: '5m', sec: 300 }} makerLeg="b" onMakerLeg={onMakerLeg} />);
+    render(<Settings takerCapSec={null} start={{ kind: '5m', sec: 300 }} makerLeg="b" onMakerLeg={onMakerLeg} />);
     expect(foldRow()).toHaveTextContent('Hyperliquid maker');
     await userEvent.click(foldRow());
     expect(screen.getByRole('radio', { name: 'Hyperliquid Short' })).toHaveAttribute('aria-checked', 'true');
@@ -147,7 +156,7 @@ describe('MakerSettings', () => {
   });
 
   it('market slippage renders inside the fold', async () => {
-    render(<Settings intervalSec={null} start={{ kind: '5m', sec: 300 }} />);
+    render(<Settings takerCapSec={null} start={{ kind: '5m', sec: 300 }} />);
     await userEvent.click(foldRow());
     const group = screen.getByRole('radiogroup', { name: 'Market slippage' });
     expect(within(group).getByRole('radio', { name: '0.5%' })).toHaveAttribute('aria-checked', 'true');

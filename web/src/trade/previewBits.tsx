@@ -71,7 +71,7 @@ export function estFeeOf(p: PreviewResult): number {
 }
 
 /** Violations (red, blocking) + warnings (dim) as a compact list. */
-export function ViolationList({ violations, warnings }: { violations: Violation[]; warnings?: string[] }) {
+export function ViolationList({ violations, warnings }: { violations: Pick<Violation, 'message'>[]; warnings?: string[] }) {
   if (!violations.length && !(warnings ?? []).length) return null;
   return (
     <ul className="flex flex-col gap-0.5 text-[11px]">

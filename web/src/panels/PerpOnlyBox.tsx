@@ -130,7 +130,6 @@ export function ClosePairForm({
     twap: twapOn ? twap.input : undefined,
   });
   const plan = preview.data?.twap?.plan ?? null;
-  const intervalSec = twapOn ? (plan?.intervalSec ?? twap.input.intervalSec ?? null) : null;
   const takerBlocked = useTwapTakerAfter(taker, twapOn, plan?.takerAfterSec ?? null);
   if (!flow || legs.length !== 2) return null;
 
@@ -299,7 +298,7 @@ export function ClosePairForm({
           onMakerLeg={setMakerLeg}
           takerAfter={taker.takerAfter}
           onTakerAfter={taker.pick}
-          intervalSec={intervalSec}
+          takerCapSec={twapOn ? (plan?.takerAfterSec ?? null) : null}
           repegBehindBp={repeg}
           repegLocked={false}
           onRepeg={(v) => setRepeg(v as RepegBp)}

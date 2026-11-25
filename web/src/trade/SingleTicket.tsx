@@ -154,7 +154,6 @@ export function SingleTicket() {
   const impact = preview.data?.priceImpact ?? null;
   const twapBlocked = twapOn && twap.blockedBy(twapPreview);
   const plan = twapPreview?.plan ?? null;
-  const intervalSec = twapOn ? (twap.input.intervalSec ?? plan?.intervalSec ?? null) : null;
 
   const zeroSize = (p?.violations ?? []).some((v) => /rounds down to zero/.test(v.message));
   const sliceMin =
@@ -377,7 +376,7 @@ export function SingleTicket() {
           onMakerLeg={() => undefined}
           takerAfter={taker.takerAfter}
           onTakerAfter={taker.pick}
-          intervalSec={intervalSec}
+          takerCapSec={plan?.takerAfterSec ?? null}
           repegBehindBp={repeg}
           repegLocked={false}
           onRepeg={(v) => setRepeg(v === 2 || v === 5 || v === 10 ? v : null)}
