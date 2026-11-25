@@ -30,7 +30,7 @@ import type { ActionInput, DealResponse, PreviewResult, RebalanceJob, TwapPlanVi
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Spinner } from '../components/Spinner';
 import { SymbolCell } from '../components/VenueChip';
-import { fmtUsd, parseSymbol, qtyGrouped, sigGrouped } from '../lib/fmt';
+import { fmtUsd, groupedExact, parseSymbol, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import { useNow } from '../lib/useNow';
 import { dealFromActions, twapStartFrom, type DealOpts } from './deal';
@@ -614,9 +614,9 @@ function HoverCard({
                   {p.type === 'MARKET'
                     ? t('trade.execute.mkt')
                     : p.input.kind === 'close-position'
-                      ? t('trade.execute.iocAt', { price: p.price ?? '—' })
+                      ? t('trade.execute.iocAt', { price: p.price ? groupedExact(p.price) : '—' })
                       : t('trade.execute.lmtAt', {
-                          price: p.price ?? '—',
+                          price: p.price ? groupedExact(p.price) : '—',
                           tif: p.tif && p.tif !== 'GTC' ? ` ${p.tif}` : '',
                         })}
                   {p.fillEstimate && (

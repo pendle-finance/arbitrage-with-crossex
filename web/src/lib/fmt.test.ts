@@ -14,6 +14,7 @@ import {
   fmtTokenQty,
   fmtUsd,
   fmtUsdCompact,
+  groupedExact,
   num,
   parseDateLocal,
   parseSymbol,
@@ -42,6 +43,22 @@ describe('sig (port of core numbers.sig)', () => {
     [0.000012345, '0.00001234'],
   ])('sig(%f) -> %s', (value, expected) => {
     expect(sig(value)).toBe(expected);
+  });
+});
+
+describe('groupedExact', () => {
+  it.each([
+    ['2675.5', '2,675.5'],
+    ['65010.55', '65,010.55'],
+    ['1234567.123456', '1,234,567.123456'],
+    ['2.123456', '2.123456'],
+    ['999.995', '999.995'],
+    ['0.00001234', '0.00001234'],
+    ['-1234.5', '-1,234.5'],
+    ['—', '—'],
+    ['1e-7', '1e-7'],
+  ])('%s keeps every digit and reads %s', (input, out) => {
+    expect(groupedExact(input)).toBe(out);
   });
 });
 

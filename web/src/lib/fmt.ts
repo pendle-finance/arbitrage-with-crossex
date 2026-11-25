@@ -47,6 +47,12 @@ export function qtyGrouped(value: number | string, maxDp = 8): string {
   return frac === undefined ? grouped : `${grouped}.${frac}`;
 }
 
+export function groupedExact(text: string): string {
+  const m = /^(-?)(\d+)(\.\d+)?$/.exec(text);
+  if (!m) return text;
+  return `${m[1]}${m[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${m[3] ?? ''}`;
+}
+
 export function padTwo(text: string): string {
   const [whole = '', frac = ''] = text.split('.');
   return frac.length >= 2 ? text : `${whole}.${frac.padEnd(2, '0')}`;
