@@ -124,6 +124,36 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     expect(starts[0].deal).toMatchObject({ qty: '4.03', a: { reduceOnly: true }, b: { reduceOnly: true } });
   });
 
+  it('a shared Gate leg of 4.40 out of 8.0 against 4.03 BTC closes 4.03 on both and leaves 0.37 BTC', async () => {
+    const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
+    const starts: TwapStartBody[] = [];
+    server.use(
+      heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '8', HYPERLIQUID_FUTURE_BTC_USDT: '4.03' }, bodies),
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as TwapStartBody);
+        return HttpResponse.json(env({ id: 'job-1' }), { status: 202 });
+      }),
+    );
+    renderWithClient(
+      <ClosePairForm
+        base="BTC"
+        legs={[
+          { symbol: 'GATE_FUTURE_BTC_USDT', qty: 4.4, venue: 'GATE', partial: true },
+          { symbol: 'HYPERLIQUID_FUTURE_BTC_USDT', qty: 4.03, venue: 'HYPERLIQUID' },
+        ]}
+        allowTwap
+      />,
+    );
+    await twapOn();
+    expect(await screen.findByText(restLine('0.37 BTC Gate Long stays open. Close it as one leg.'))).toBeInTheDocument();
+    const btn = await screen.findByRole('button', { name: /Start TWAP close/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ symbol: 'GATE_FUTURE_BTC_USDT', qty: '4.03' });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(starts).toHaveLength(1), { timeout: 4000 });
+    expect(starts[0].deal).toMatchObject({ qty: '4.03', a: { reduceOnly: true }, b: { reduceOnly: true } });
+  });
+
   it('a $6M book of 1,000.37 against 1,000 ETH closes 1000 on both and leaves 0.37 ETH', async () => {
     const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
     server.use(heldPreviewHandler({ GATE_FUTURE_ETH_USDT: '1000.37', HYPERLIQUID_FUTURE_ETH_USDT: '1000' }, bodies));

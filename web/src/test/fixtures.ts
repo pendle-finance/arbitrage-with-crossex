@@ -4366,8 +4366,7 @@ export const positionsBodies = {
   deleverAbandonedAddBackWhale: positionsWithExposure(abandonedAddBackPositions(53.36, 56.028)),
 } satisfies Record<string, PositionsResponse>;
 
-const twapPosition = (symbol: string, side: 'LONG' | 'SHORT', qty: number, maintenanceRate: number): CrossexPosition => {
-  const mark = 1730;
+const twapPosition = (symbol: string, side: 'LONG' | 'SHORT', qty: number, maintenanceRate: number, mark = 1730): CrossexPosition => {
   const value = r2(qty * mark);
   return makeCrossexPosition({
     symbol, positionSide: side, positionQty: String(side === 'LONG' ? qty : -qty), positionValue: String(value),
@@ -4378,6 +4377,10 @@ const twapPosition = (symbol: string, side: 'LONG' | 'SHORT', qty: number, maint
 
 export const twapPositionsBodies = {
   p1: positionsWithExposure([twapPosition('GATE_FUTURE_ETH_USDT', 'LONG', 1, 0.01), twapPosition('HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', 1, 0.02)]),
+  unequal: positionsWithExposure([
+    twapPosition('GATE_FUTURE_BTC_USDT', 'LONG', 4.4, 0.01, 58_000),
+    twapPosition('HYPERLIQUID_FUTURE_BTC_USDC', 'SHORT', 4.03, 0.02, 58_000),
+  ]),
   whale: positionsWithExposure([
     twapPosition('GATE_FUTURE_ETH_USDT', 'LONG', 3468.208, 0.01),
     twapPosition('HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', 3468.208, 0.02),

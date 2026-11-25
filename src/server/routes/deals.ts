@@ -219,29 +219,34 @@ type DealFees = { rows: VenueFeeRow[]; read: Record<string, number> };
 
 const FEE_READ_DEADLINE_MS = 1_500;
 const FEE_READ_RETRY_MS = 10_000;
-const feeReadFailedAt = new WeakMap<AppDeps, number>();
+const feeReadFailedAt = new WeakMap<AppDeps, Map<string, number>>();
 
-async function readFeesWithin(deps: AppDeps, pairs: PairRow[]): Promise<Record<string, number>> {
-  const failedAt = feeReadFailedAt.get(deps);
-  if (failedAt !== undefined && Date.now() - failedAt < FEE_READ_RETRY_MS) return {};
+async function withinDeadline<T>(deps: AppDeps, kind: string, work: () => Promise<T>, fallback: T): Promise<T> {
+  const failures = feeReadFailedAt.get(deps) ?? new Map<string, number>();
+  feeReadFailedAt.set(deps, failures);
+  const failedAt = failures.get(kind);
+  if (failedAt !== undefined && Date.now() - failedAt < FEE_READ_RETRY_MS) return fallback;
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new Error('fee read timed out')), FEE_READ_DEADLINE_MS);
   });
   try {
-    const read = readChildFees(deps.engine!.store, cachedTradesOf(deps), pairs.map((pair) => pair.id));
+    const read = work();
     read.catch(() => undefined);
     return await Promise.race([read, deadline]);
   } catch {
-    feeReadFailedAt.set(deps, Date.now());
-    return {};
+    failures.set(kind, Date.now());
+    return fallback;
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function dealFeesFor(deps: AppDeps, pairs: PairRow[]): Promise<DealFees> {
-  const [rows, read] = await Promise.all([accountFeeRowsOf(deps), readFeesWithin(deps, pairs)]);
+  const [rows, read] = await Promise.all([
+    withinDeadline(deps, 'rows', () => accountFeeRowsOf(deps), []),
+    withinDeadline(deps, 'read', () => readChildFees(deps.engine!.store, cachedTradesOf(deps), pairs.map((pair) => pair.id)), {} as Record<string, number>),
+  ]);
   return { rows, read };
 }
 

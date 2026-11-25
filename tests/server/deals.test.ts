@@ -1128,6 +1128,36 @@ describe('deal window fee', () => {
     expect(second.json().data.fees.est).toBe(true);
     expect(reads).toBe(readsAfterFirst);
   });
+
+  it('answers inside the deadline when the account fee read hangs, then skips it on the next poll', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    gate()
+      .get((uri) => uri.includes('/history_trades'))
+      .query(true)
+      .reply(200, [])
+      .persist();
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    await tickPair(w.loop, 'deal-000001');
+    w.store.updateOrder('deal-000001', 'A', 1, { venueOrderId: 'v1', cumQty: '0.1', avgFillPrice: '2500' });
+    gate()
+      .get((uri) => uri.endsWith('/fee'))
+      .query(true)
+      .delay(8000)
+      .reply(200, feeWire)
+      .persist();
+    const started = Date.now();
+    const first = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(first.statusCode).toBe(200);
+    const again = Date.now();
+    const second = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - again).toBeLessThan(500);
+    expect(second.statusCode).toBe(200);
+  });
 });
 
 describe('deal commands + alerts', () => {

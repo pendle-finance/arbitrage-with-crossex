@@ -265,9 +265,10 @@ export function dealRunProps(
   }
 
   const rows: RunRow[] = [];
-  if (opening && !refused && pair.deadlineAt !== null) {
+  if (opening && pair.deadlineAt !== null) {
     const left = pair.deadlineAt - now;
-    rows.push({ label: t('trade.twap.run.limitResting'), value: t('trade.deal.untilConvert', { time: left <= 0 ? t('trade.deal.now') : clockSpan(left / 1000) }) });
+    const until = t('trade.deal.untilConvert', { time: left <= 0 ? t('trade.deal.now') : clockSpan(left / 1000) });
+    rows.push(refused ? { label: until, value: '' } : { label: t('trade.twap.run.limitResting'), value: until });
   } else if (opening && !refused) {
     rows.push({ label: t('trade.twap.run.noMarket'), value: '' });
   }
