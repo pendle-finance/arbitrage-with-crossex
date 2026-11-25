@@ -623,6 +623,7 @@
   },
   "delever": {
     "holdTwap": "长按降规模 {{qty}} {{coin}} · TWAP {{duration}}",
+    "borosGas": "Boros gas · {{n}} 笔平仓",
     "borosPerSlice": "每片 Boros 平仓",
     "borosPerSliceValue": "{{amount}} YU",
     "borosPerSliceHover": "不超过 10 美元的部分会等待，并在下一片一起平仓。"

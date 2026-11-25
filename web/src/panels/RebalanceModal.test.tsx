@@ -7,7 +7,7 @@ import { useAccount, usePositions, useRebalance, useTransfer } from '../api/quer
 import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
 import type { RebalanceJob, RouteName } from '../api/types';
 import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased, whaleRebalanceViews } from '../test/fixtures';
-import { extraRebalanceViews, transferHandler, transferViews } from '../test/fixtures';
+import { extraRebalanceViews, transferHandler, transferViews, twapFixtures } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { fmtAbout, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
@@ -1858,5 +1858,42 @@ describe('RebalanceModal Realize uPnL tab', () => {
     showOn(rebalanceViews.realizeRefused);
     expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
     expect(screen.queryByRole('radiogroup', { name: 'Orders' })).toBeNull();
+  });
+});
+
+describe('RebalanceModal TWAP run', () => {
+  const closeText = () => within(dialog()).getByText('Close', { selector: 'button' });
+
+  it('shows a stopped TWAP on the first open after a reload, with Close, then the form', () => {
+    const { onClose } = show(twapFixtures.normal.stopped.rebalance);
+    expect(screen.getByText(/^Stopped at slice \d+ of \d+$/)).toBeTruthy();
+    fireEvent.click(closeText());
+    expect(onClose).toHaveBeenCalled();
+    cleanup();
+    show(twapFixtures.normal.stopped.rebalance);
+    expect(screen.queryByText(/^Stopped at slice/)).toBeNull();
+  });
+
+  it('shows a done TWAP on the first open after a reload', () => {
+    show(twapFixtures.normal.done.rebalance);
+    expect(screen.getByText('Took')).toBeTruthy();
+    expect(closeText()).toBeTruthy();
+  });
+
+  it('a TWAP run has no tab row and one state chip', () => {
+    show(twapFixtures.normal.refused.rebalance);
+    expect(within(dialog()).queryByText('Move cash')).toBeNull();
+    expect(within(dialog()).getAllByText(/^(Paused|Stopped|Running|Not hedged)$/)).toHaveLength(1);
+  });
+
+  it('a refused pause on a slice run says why', async () => {
+    server.use(
+      http.post('/api/rebalance/:id/pause', () =>
+        HttpResponse.json({ ok: false, error: { category: 'validation', label: 'NOT_RUNNING', message: 'Nothing to pause.', retryable: false } }, { status: 409 }),
+      ),
+    );
+    show(rebalanceViews.deleverRunning);
+    fireEvent.click(screen.getByRole('button', { name: 'Pause after this slice' }));
+    expect(await screen.findByText('Nothing to pause.')).toBeTruthy();
   });
 });

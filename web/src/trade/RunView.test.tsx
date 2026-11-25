@@ -126,11 +126,11 @@ const rowOf = (label: string): HTMLElement => screen.getByText(label).closest('d
 
 describe('RunView, TWAP running', () => {
   it('slice and next slice rows', () => {
-    renderRun(job());
+    renderRun(job({}, { takerAfterSec: 120 }));
     expect(screen.getByText('TWAP · ETH pair open')).toBeTruthy();
     expect(screen.getByText(/12 slices over 1h/)).toBeTruthy();
     expect(screen.getByText('Slippage so far')).toBeTruthy();
-    expect(within(rowOf('Slice 3 of 12')).getByText('Est. about 47 min left')).toBeTruthy();
+    expect(within(rowOf('Slice 3 of 12')).getByText('Est. about 44 min left')).toBeTruthy();
     expect(within(rowOf('Next slice in')).getByText('2m 10s')).toBeTruthy();
   });
 
@@ -152,7 +152,7 @@ describe('RunView, TWAP running', () => {
         {},
       ),
     );
-    expect(within(rowOf('Boros')).getByText('900.00 → 873.75 YU')).toBeTruthy();
+    expect(within(rowOf('Boros')).getByText('900.00 → 873.75 YU · closes after each slice')).toBeTruthy();
     expect(screen.getByText('Boros 3.75 YU not hedged')).toBeTruthy();
     expect(screen.getByText('Boros refused the close after slice 8.')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Hold to retry closing 3.75 YU on Boros' })).toBeTruthy();
@@ -169,7 +169,7 @@ describe('RunView, TWAP running', () => {
   it('a Delever without before and now keeps the filled rows', () => {
     renderRun(job({ kind: 'delever', legs: [leg('Gate', 'LONG', '26.25', '1730', true), leg('Hyperliquid', 'SHORT', '26.25', '1730', true)] }));
     expect(screen.queryByText('Perps · each leg')).toBeNull();
-    expect(screen.getByText('Filled · each leg')).toBeTruthy();
+    expect(screen.getByText('Closed · each leg')).toBeTruthy();
   });
 
   it('filled each leg', () => {
@@ -193,20 +193,54 @@ describe('RunView, TWAP running', () => {
 
   it('fee row', () => {
     renderRun(job());
-    expect(within(rowOf('Fee so far')).getByText('$189 · est. $840')).toBeTruthy();
+    expect(within(rowOf('Fee so far')).getByText('$1,029 ($189 from Gate, $840 estimated)')).toBeTruthy();
+  });
+
+  it('a filled slice with no fee read yet shows the estimate, not $0', () => {
+    renderRun(job({ fees: { readUsd: 0, estUsd: 0.139, totalUsd: 0.139, est: true } }));
+    expect(within(rowOf('Fee so far')).getByText('$0.14 estimated')).toBeTruthy();
+  });
+
+  it('time left counts to the last slice start plus the taker wait', () => {
+    renderRun(job({}, { slice: 1, of: 2, durationSec: 300, intervalSec: 150, nextAt: NOW + 117_000, takerAfterSec: null }));
+    expect(within(rowOf('Slice 1 of 2')).getByText('Est. about 2 min left')).toBeTruthy();
+  });
+
+  it('a progress bar shows how much each leg has filled', () => {
+    renderRun(job());
+    expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('21');
+  });
+
+  it('pause stacks above hold to stop, full width, at one height', () => {
+    renderRun(job());
+    const pause = screen.getByRole('button', { name: 'Pause' });
+    const stop = screen.getByRole('button', { name: 'Hold to stop' });
+    expect(pause.parentElement).toBe(stop.parentElement);
+    expect(pause.parentElement?.className).toContain('flex-col');
+    expect(pause.parentElement?.className).not.toContain('grid-cols-2');
+    expect(pause.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(pause.className.split(' ')).toContain('btn');
+    expect(stop.className).toContain('h-9');
+    expect(stop.className).toContain('!text-[12px]');
+  });
+
+  it('the slippage label carries a hover with its unit', async () => {
+    renderRun(job());
+    fireEvent.mouseEnter(screen.getByText('Slippage so far'));
+    expect(await screen.findByText('Gap between the two average prices, in USDT per coin. Above zero is in your favor.')).toBeTruthy();
   });
 
   it('favorable is green', () => {
     renderRun(job());
     const value = screen.getByText(/Favorable/);
-    expect(value.textContent).toBe('+0.37 (+0.021%) Favorable');
+    expect(value.textContent).toBe('+0.37 USDT per coin (+0.021%) Favorable');
     expect(value.className).toContain('text-emerald-400');
   });
 
   it('adverse is red', () => {
     renderRun(job({ legs: [leg('Gate', 'LONG', '146.12', '1730.21'), leg('Hyperliquid', 'SHORT', '146.12', '1729.84')] }));
     const value = screen.getByText(/Adverse/);
-    expect(value.textContent).toBe('−0.37 (−0.021%) Adverse');
+    expect(value.textContent).toBe('−0.37 USDT per coin (−0.021%) Adverse');
     expect(value.className).toContain('text-rose-400');
   });
 
@@ -315,6 +349,8 @@ describe('RunView, TWAP paused and ended', () => {
 
   it('restart line', () => {
     renderRun(paused({ paused: false, haltKind: 'restart', updatedAt: at(14, 13) }));
+    expect(document.querySelector('.alert-amber')).not.toBeNull();
+    expect(document.querySelector('.alert-red')).toBeNull();
     expect(
       screen.getByText('The app restarted at 14:13. Slice 3 stopped: its rest is cancelled and what filled is hedged.'),
     ).toBeTruthy();
@@ -330,7 +366,14 @@ describe('RunView, TWAP paused and ended', () => {
   it('refused slice line', () => {
     renderRun(paused({ paused: false, haltKind: 'refused', haltReason: 'Gate refused slice 4: not enough margin' }));
     expect(screen.getByText('Gate refused slice 4: not enough margin')).toBeTruthy();
+    expect(screen.getByText('Gate refused slice 4: not enough margin').closest('.alert-red')).not.toBeNull();
     expect(screen.getByText('Add USDT to Gate CrossEx, then resume.')).toBeTruthy();
+  });
+
+  it('a margin refusal on Hyperliquid asks for USDC', () => {
+    const legs = [leg('Hyperliquid', 'LONG', '146.12', '1730'), leg('Gate', 'SHORT', '146.12', '1730.2')];
+    renderRun(paused({ paused: false, haltKind: 'refused', haltReason: 'Hyperliquid refused slice 4: not enough margin', legs }));
+    expect(screen.getByText('Add USDC to Hyperliquid CrossEx, then resume.')).toBeTruthy();
   });
 
   const hedgeRefused = () =>
@@ -345,7 +388,7 @@ describe('RunView, TWAP paused and ended', () => {
     renderRun(hedgeRefused());
     expect(screen.getByText('Hyperliquid refused the hedge in slice 4')).toBeTruthy();
     expect(screen.getByText('4.20 ETH not hedged ($7,266)')).toBeTruthy();
-    expect(screen.getByText('Add USDT to Hyperliquid on CrossEx to hedge')).toBeTruthy();
+    expect(screen.getByText('Add USDC to Hyperliquid on CrossEx to hedge')).toBeTruthy();
   });
 
   it('hedge refused offers two holds', () => {
@@ -368,7 +411,7 @@ describe('RunView, TWAP paused and ended', () => {
     const legs = [leg('Gate', 'LONG', '693.64', '1730.02'), leg('Hyperliquid', 'SHORT', '693.64', '1730.35')];
     renderRun(
       job(
-        { status: 'done', child: null, legs, fees: { readUsd: 861, estUsd: 0, est: false }, updatedAt: NOW },
+        { status: 'done', child: null, legs, fees: { readUsd: 861, estUsd: 0, totalUsd: 861, est: false }, updatedAt: NOW },
         { slice: 12, nextAt: null, startedAt: NOW - 3_720_000 },
       ),
     );
@@ -377,5 +420,67 @@ describe('RunView, TWAP paused and ended', () => {
     expect(screen.getByText('Slippage')).toBeTruthy();
     expect(within(rowOf('Fees')).getByText('$861')).toBeTruthy();
     expect(within(rowOf('Took')).getByText('1h 02m')).toBeTruthy();
+  });
+});
+
+describe('RunView, fix round', () => {
+  const closeLegs = (a: string, b: string) => [leg('Gate', 'LONG', a, '1730', true), leg('Hyperliquid', 'SHORT', b, '1730.3', true)];
+
+  it('hedge refused on a close names the order each hold sends', () => {
+    renderRun(paused({ paused: false, haltKind: 'hedge-margin', haltReason: 'Hyperliquid refused the hedge in slice 4', legs: closeLegs('177.61', '173.41') }));
+    const holds = screen.getAllByRole('button').map((b) => b.textContent ?? '').filter((text) => text.includes('at market'));
+    expect(holds).toEqual(['Hold to close Hyperliquid Short 4.20 ETH at market', 'Hold to open Gate Long 4.20 ETH at market']);
+  });
+
+  it('a close run reads Closed per leg', () => {
+    renderRun(job({ legs: closeLegs('146.12', '140') }));
+    expect(screen.getByText('Closed · Gate')).toBeTruthy();
+    expect(screen.getByText('Closed · Hyperliquid')).toBeTruthy();
+    expect(screen.queryByText('Filled · Gate')).toBeNull();
+  });
+
+  it('a size refusal does not ask for USDT', () => {
+    renderRun(paused({ paused: false, haltKind: 'refused', haltReason: "Slice 7 is under Binance's $50 minimum" }));
+    expect(screen.getByText("Slice 7 is under Binance's $50 minimum")).toBeTruthy();
+    expect(screen.getByText('Resume re-plans the rest.')).toBeTruthy();
+    expect(screen.queryByText(/^Add USDT/)).toBeNull();
+  });
+
+  it('paused rows carry since and left each leg', () => {
+    renderRun(paused());
+    expect(within(rowOf('Paused at slice 3 of 12')).getByText('Since 14:20')).toBeTruthy();
+    expect(within(rowOf('Left · each leg')).getByText('547.52 ETH')).toBeTruthy();
+  });
+
+  it('next slice waits for the live slice', () => {
+    renderRun(job({ child: restingChild({ mode: 'CONVERTING' }) }, { nextAt: null }));
+    expect(within(rowOf('Next slice')).getByText('after slice 3 ends')).toBeTruthy();
+  });
+
+  it('capped rest is a Rest row, with no On Resume row', () => {
+    const legs = closeLegs('690.64', '690.64');
+    renderRun(job({ status: 'halted', child: null, haltKind: 'capped-rest', haltReason: '3 ETH not closed', legs }, { slice: 12, nextAt: null, behindQty: '3' }));
+    expect(within(rowOf('Rest')).getByText('3.00 ETH not closed')).toBeTruthy();
+    expect(screen.queryByText('On Resume')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a Delever run says Delever and that Boros closes after each slice', () => {
+    const legs = closeLegs('26.25', '26.25');
+    renderRun(job({ kind: 'delever', legs, boros: { beforeYu: 900, nowYu: 873.75, leftYu: 0, refused: false, slice: 7 } }));
+    expect(screen.getByText('Delever ETH · Gate / Hyperliquid')).toBeTruthy();
+    expect(within(rowOf('Boros')).getByText('900.00 → 873.75 YU · closes after each slice')).toBeTruthy();
+  });
+
+  it('keep-awake line off macOS', () => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32');
+    renderRun(job());
+    expect(screen.getByText('Keep this computer awake until it ends.')).toBeTruthy();
+    expect(screen.queryByText(/Keeps this Mac awake/)).toBeNull();
+  });
+
+  it('a sleep over days names the dates', () => {
+    renderRun(paused({ paused: false, haltKind: 'sleep', sleptFrom: at(14, 11) - 2 * 86_400_000, sleptTo: at(14, 51), updatedAt: at(14, 51) }));
+    expect(screen.getByText(/^This Mac slept from 23 Nov 14:11 to 25 Nov 14:51\./)).toBeTruthy();
   });
 });

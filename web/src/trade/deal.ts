@@ -47,9 +47,14 @@ function makerFieldsOf(opts: DealOpts, pricePolicy: 'fixed' | 'touch') {
   return { timeoutSec: opts.timeoutSec, repegBehindBp: pricePolicy === 'touch' ? opts.repegBehindBp : null };
 }
 
-export function twapStartFrom(deal: DealRequest, plan: TwapPlanView, clientId: string): TwapStartBody {
+export function twapStartFrom(
+  deal: DealRequest,
+  plan: TwapPlanView,
+  clientId: string,
+): TwapStartBody {
   const { id, ...body } = deal;
-  return { kind: 'twap', clientId, deal: body, durationSec: plan.durationSec, slices: plan.slices };
+  const { durationSec, slices, intervalSec, sliceQty } = plan;
+  return { kind: 'twap', clientId, deal: body, durationSec, slices, intervalSec, sliceQty };
 }
 
 export function dealFromActions(

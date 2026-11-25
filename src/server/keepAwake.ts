@@ -23,7 +23,7 @@ export function startKeepAwake(deps: KeepAwakeDeps): { update(): void; stop(): v
       return;
     }
     if (child) return;
-    const started = deps.spawn('caffeinate', ['-i', '-w', String(deps.pid)], { stdio: 'ignore' });
+    const started = deps.spawn('/usr/bin/caffeinate', ['-i', '-w', String(deps.pid)], { stdio: 'ignore' });
     child = started;
     started.once('exit', () => {
       if (child === started) child = null;

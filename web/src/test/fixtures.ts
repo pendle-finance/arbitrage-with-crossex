@@ -210,7 +210,7 @@ export function makeDealView(overrides?: {
       allSettled: true,
       ...overrides?.projection,
     },
-    fees: overrides?.fees ?? { readUsd: 0, estUsd: 0, est: true },
+    fees: overrides?.fees ?? { readUsd: 0, estUsd: 0, totalUsd: 0, est: true },
     avgPrice: overrides?.avgPrice ?? { a: null, b: null },
     endedAt: overrides?.endedAt ?? null,
   };
@@ -2687,6 +2687,33 @@ export const deleverPlans = {
   whale: withTotals(deleverPlanOf(4100, [4100], 20, {}, WHALE_ETH_DELEVER)),
 } satisfies Record<string, DeleverPlan>;
 
+type DeleverTwapBody = { durationSec?: number; intervalSec?: number; slices?: number };
+
+function deleverTwapOf(plan: DeleverPlan, price: number, input: DeleverTwapBody, thinAtSlices: number): DeleverPlan {
+  const close = plan.legs[plan.makerLeg]!.closeQty;
+  const durationSec = input.durationSec ?? 3_600;
+  const intervalSec = input.intervalSec ?? 300;
+  const slices = Math.max(1, input.slices ?? Math.floor(durationSec / intervalSec));
+  const sliceQty = r6(close / slices);
+  const coin = plan.legs[0]!.base;
+  const refusal = slices <= thinAtSlices
+    ? {
+        field: 'sliceSize' as const,
+        text: `Book too thin for ${sliceQty} ${coin} a slice.`,
+        fix: { label: `Use ${r6(sliceQty / 2)} ${coin}`, patch: { durationSec, sliceQty: String(r6(sliceQty / 2)) } },
+      }
+    : null;
+  const planView = refusal
+    ? null
+    : { slices, sliceQty: String(sliceQty), lastQty: String(sliceQty), intervalSec, durationSec, takerAfterSec: Math.floor(intervalSec * 0.8) };
+  return { ...plan, twap: { plan: planView, refusal, price }, priceImpact: { whole: null, sliced: 1200 } };
+}
+
+export const deleverTwapPlans = {
+  twentyPctTwap: (input: DeleverTwapBody) => deleverTwapOf(deleverPlans.twentyPct, BTC_MID, input, 0),
+  whaleTwap: (input: DeleverTwapBody) => deleverTwapOf(deleverPlans.whale, WHALE_ETH_DELEVER.mid, input, 2),
+} satisfies Record<string, (input: DeleverTwapBody) => DeleverPlan>;
+
 const BTC_IM_USD = 4_050_000;
 
 function btcPair(size: number, boros: number[]): OpenPair {
@@ -3300,6 +3327,7 @@ interface TwapFixtureBook {
   run: TwapRunFixture;
   part: [number, number];
   neverPart: number;
+  scale: number;
   pausedPart?: number;
   pausedAvg?: number;
   view: RebalanceView;
@@ -3308,7 +3336,9 @@ interface TwapFixtureBook {
 
 type TwapFixtureState =
   | 'running' | 'pausing' | 'paused' | 'restart' | 'sleep' | 'refused' | 'hedgeMargin' | 'error' | 'stopped' | 'done'
-  | 'never' | 'singleLeg' | 'deleverRunning' | 'deleverBorosRefused';
+  | 'never' | 'singleLeg' | 'deleverRunning' | 'deleverBorosRefused' | 'closeRunning' | 'singleClose' | 'shortOpenRunning'
+  | 'hedgeMarginClose' | 'refusedMargin' | 'cappedRest' | 'repegRefused' | 'neverBehind' | 'doneGap' | 'stoppedGap'
+  | 'runningFeeEst' | 'sleepLong' | 'waitingChild';
 
 const TWAP_SLICE_AGO_MS = 60_000;
 const TWAP_DELEVER_SLICE = 13;
@@ -3373,7 +3403,7 @@ function twapJobOf(run: TwapRunFixture, s: TwapRunState): RebalanceJob {
         }
       : null,
     legs: hedgeQty === null ? [legOf(a, makerQty, makerAvg)] : [legOf(a, makerQty, makerAvg), legOf(b, hedgeQty, b.avg)],
-    fees: { readUsd: twapFeeUsd(makerQty * makerAvg, (hedgeQty ?? 0) * b.avg), estUsd: 0, est: false },
+    fees: (() => { const readUsd = twapFeeUsd(makerQty * makerAvg, (hedgeQty ?? 0) * b.avg); return { readUsd, estUsd: 0, totalUsd: readUsd, est: false }; })(),
     slippage: both > 0 ? { pct: r6(edge / longAvg), usd: r2(edge * both) } : null,
     orders: twapOrdersOf(run, s, startedAt),
     boros: null,
@@ -3419,7 +3449,7 @@ function twapDealOf(run: TwapRunFixture, d: TwapDealState): DealView {
       unhedged: String(d.hedge === null ? 0 : r6(d.maker - hedge)), residualA: String(residual), makerOrder: resting,
       allSettled: done,
     },
-    fees: { readUsd: twapFeeUsd(d.maker * makerAvg, hedge * b.avg), estUsd: 0, est: false },
+    fees: (() => { const readUsd = twapFeeUsd(d.maker * makerAvg, hedge * b.avg); return { readUsd, estUsd: 0, totalUsd: readUsd, est: false }; })(),
     avgPrice: { a: d.maker > 0 ? String(makerAvg) : null, b: hedge > 0 ? String(b.avg) : null },
     endedAt: done ? REBALANCE_NOW - 5_000 : null,
   });
@@ -3466,9 +3496,33 @@ function twapDeleverOf(f: TwapDeleverFixture, view: RebalanceView, refused: bool
   return { rebalance: withJob(view, job), child: twapChildOf(f.run, state) };
 }
 
+const twapCloseOf = (run: TwapRunFixture): TwapRunFixture => ({ ...run, reduceOnly: true, best: r2(run.rest - 0.35) });
+
+const twapShortOf = (run: TwapRunFixture): TwapRunFixture => ({
+  ...run, legs: twapEthLegs('SHORT', 1730.2, r2(run.legs[1].avg - 0.4)),
+});
+
+const twapHyperliquidMakerOf = (run: TwapRunFixture): TwapRunFixture => ({ ...run, legs: twapEthLegs('LONG', run.rest, run.legs[1].avg, true) });
+
+const twapWithTwap = (job: RebalanceJob, over: Partial<NonNullable<RebalanceJob['twap']>>): RebalanceJob => ({
+  ...job, twap: job.twap ? { ...job.twap, ...over } : job.twap,
+});
+
 function twapFixturesOf(book: TwapFixtureBook): Record<TwapFixtureState, { rebalance: RebalanceView; child: DealView | null }> {
-  const { run, part, view } = book;
-  const at = (s: TwapRunState) => ({ rebalance: withJob(view, twapJobOf(run, s)), child: twapChildOf(run, s) });
+  const { run, part, view, scale } = book;
+  const atRun = (r: TwapRunFixture, s: TwapRunState) => ({ rebalance: withJob(view, twapJobOf(r, s)), child: twapChildOf(r, s) });
+  const at = (s: TwapRunState) => atRun(run, s);
+  const closeRun = twapCloseOf(run);
+  const closeRunning: TwapRunState = { slice: 3, maker: part[0], hedge: part[1], live: true };
+  const closeHalt = (haltKind: NonNullable<RebalanceJob['haltKind']>, haltReason: string, s: TwapRunState) =>
+    atRun(closeRun, { ...s, live: false, over: { status: 'halted', haltKind, haltReason } });
+  const repegRun = twapHyperliquidMakerOf(run);
+  const repegJob = twapJobOf(repegRun, closeRunning);
+  const repegChild = twapChildOf(repegRun, closeRunning);
+  const neverJob = twapJobOf(run, { slice: 5, maker: book.neverPart, hedge: book.neverPart, live: true, never: true });
+  const waitJob = twapJobOf(run, closeRunning);
+  const waitChild = twapChildOf(run, closeRunning);
+  const cappedLeft = 3 * scale;
   const running: TwapRunState = { slice: 3, maker: part[0], hedge: part[1], live: true };
   const held = book.pausedPart ?? part[0];
   const paused: TwapRunState = { slice: 3, maker: held, hedge: held, live: false, avg: book.pausedAvg, over: { status: 'halted', paused: true } };
@@ -3503,15 +3557,58 @@ function twapFixturesOf(book: TwapFixtureBook): Record<TwapFixtureState, { rebal
     singleLeg: at({ ...running, hedge: null }),
     deleverRunning: twapDeleverOf(book.delever, view, false),
     deleverBorosRefused: twapDeleverOf(book.delever, view, true),
+    closeRunning: atRun(closeRun, closeRunning),
+    singleClose: atRun(closeRun, { ...closeRunning, hedge: null }),
+    shortOpenRunning: atRun(twapShortOf(run), closeRunning),
+    hedgeMarginClose: closeHalt('hedge-margin', `${closeRun.legs[1].name} refused the hedge in slice 3`, closeRunning),
+    refusedMargin: atRun(run, {
+      slice: 4, maker: 0, hedge: 0, live: false,
+      over: { status: 'halted', haltKind: 'refused', haltReason: `${run.legs[0].name} refused slice 4: not enough margin` },
+    }),
+    cappedRest: closeHalt(
+      'capped-rest', `${cappedLeft} ETH not closed`,
+      { slice: run.slices, maker: r6(run.lastQty - cappedLeft), hedge: r6(run.lastQty - cappedLeft), live: false },
+    ),
+    repegRefused: {
+      rebalance: withJob(view, {
+        ...repegJob,
+        child: repegJob.child ? { ...repegJob.child, repegRefused: { kind: 'order-allowance', at: REBALANCE_NOW - 20_000 } } : null,
+      }),
+      child: repegChild,
+    },
+    neverBehind: {
+      rebalance: withJob(view, twapWithTwap(neverJob, { behindQty: String(r2(21.4 * scale)), carryQty: String(r2(21.4 * scale)) })),
+      child: twapChildOf(run, { slice: 5, maker: book.neverPart, hedge: book.neverPart, live: true, never: true }),
+    },
+    doneGap: at({ slice: run.slices, maker: run.lastQty, hedge: r6(run.lastQty - 0.04), live: false, over: { status: 'done' } }),
+    stoppedGap: at({ slice: 3, maker: part[0], hedge: r6(part[0] - 0.04), live: false, over: { status: 'abandoned' } }),
+    runningFeeEst: at({
+      ...running, over: { fees: { readUsd: r2(120 * scale), estUsd: r2(56.6 * scale), totalUsd: r2(176.6 * scale), est: true } },
+    }),
+    sleepLong: halt({
+      haltKind: 'sleep', haltReason: 'This Mac slept during the TWAP. Nothing was sent while it slept. Press Resume.',
+      sleptFrom: REBALANCE_NOW - 2 * 86_400_000 - 300_000, sleptTo: REBALANCE_NOW - TWAP_SLICE_AGO_MS,
+    }),
+    waitingChild: {
+      rebalance: withJob(view, {
+        ...twapWithTwap(waitJob, { nextAt: null }),
+        child: waitJob.child ? { ...waitJob.child, mode: 'CONVERTING' } : null,
+      }),
+      child: waitChild ? { ...waitChild, pair: { ...waitChild.pair, mode: 'CONVERTING' } } : null,
+    },
   };
 }
 
-function twapPlainDealsOf(run: TwapRunFixture, qty: number, part: [number, number]): Record<'running' | 'never' | 'done', DealView> {
+function twapPlainDealsOf(
+  run: TwapRunFixture, qty: number, part: [number, number],
+): Record<'running' | 'never' | 'done' | 'closeRunning' | 'halted', DealView> {
   const base = { id: 'deal0001', qty, createdAt: REBALANCE_NOW - 8_000 };
   return {
     running: twapDealOf(run, { ...base, maker: part[0], hedge: part[1], mode: 'OPENING', deadlineAt: REBALANCE_NOW + 232_000 }),
     never: twapDealOf(run, { ...base, maker: part[0], hedge: part[1], mode: 'OPENING', deadlineAt: null }),
     done: twapDealOf(run, { ...base, maker: qty, hedge: qty, mode: 'DONE', deadlineAt: null }),
+    closeRunning: twapDealOf(twapCloseOf(run), { ...base, maker: part[0], hedge: part[1], mode: 'OPENING', deadlineAt: REBALANCE_NOW + 232_000 }),
+    halted: twapDealOf(run, { ...base, maker: part[0], hedge: part[1], mode: 'HALTED', deadlineAt: null }),
   };
 }
 
@@ -3552,14 +3649,14 @@ const WHALE_TWAP_DELEVER_RUN: TwapRunFixture = {
 
 export const twapFixtures = {
   normal: twapFixturesOf({
-    run: TWAP_RUN, part: [30.52, 30.1], neverPart: 36.407, view: acctView(OWNER_ACCOUNT),
+    run: TWAP_RUN, part: [30.52, 30.1], neverPart: 36.407, scale: 1, view: acctView(OWNER_ACCOUNT),
     delever: {
       run: TWAP_DELEVER_RUN, base: DELEVER_JOBS.running, before: 900, part: [2.1, 1.8], borosBefore: 900, borosPerSlice: 3.75,
       delever: DELEVER_JOBS.running.delever,
     },
   }),
   whale: twapFixturesOf({
-    run: WHALE_TWAP_RUN, part: [152.6, 150.4], neverPart: 189.021, pausedPart: 0.001, pausedAvg: 999_999.995 / 578.035,
+    run: WHALE_TWAP_RUN, part: [152.6, 150.4], neverPart: 189.021, scale: 5, pausedPart: 0.001, pausedAvg: 999_999.995 / 578.035,
     view: acctView(WHALE_ACCOUNT, null, WHALE_SLICE_USD),
     delever: {
       run: WHALE_TWAP_DELEVER_RUN, base: WHALE_DELEVER_JOBS.running, before: WHALE_DELEVER_BOOK_ETH, part: [40.1, 39.7],
@@ -3582,8 +3679,14 @@ export const twapDealViews = {
 };
 
 export const twapBookTouches = {
-  normal: { run: twapTouchesOf(TWAP_RUN), delever: twapTouchesOf(TWAP_DELEVER_RUN) },
-  whale: { run: twapTouchesOf(WHALE_TWAP_RUN), delever: twapTouchesOf(WHALE_TWAP_DELEVER_RUN) },
+  normal: {
+    run: twapTouchesOf(TWAP_RUN), delever: twapTouchesOf(TWAP_DELEVER_RUN), close: twapTouchesOf(twapCloseOf(TWAP_RUN)),
+    short: twapTouchesOf(twapShortOf(TWAP_RUN)),
+  },
+  whale: {
+    run: twapTouchesOf(WHALE_TWAP_RUN), delever: twapTouchesOf(WHALE_TWAP_DELEVER_RUN), close: twapTouchesOf(twapCloseOf(WHALE_TWAP_RUN)),
+    short: twapTouchesOf(twapShortOf(WHALE_TWAP_RUN)),
+  },
 };
 
 const GATE_CONVERT_EVEN = realizeEven(
@@ -4738,6 +4841,22 @@ export const assetViewPositions = {
     ...whaleBook.positions.positions,
     ...solWhaleLeg.perpOpen.map(positionFromPerp),
   ]),
+} satisfies Record<string, PositionsResponse>;
+
+const whaleFrpGroup = assetGroup(
+  'ETH', 2472.74,
+  [perpFromPosition(whaleHlEth, 1_783_000_000), perpFromPosition(whaleBinanceEth, 1_783_000_000)],
+  { open: [{ ...btcBoros(101, 4100, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'BINANCE']), collateral: 'ETH', notionalUsd: 4100 * 2472.74 }], history: [] },
+);
+
+export const deleverPairViews = {
+  btcFrp: assetViewBodies.btc900,
+  whaleFrp: { ...whaleBook.assetView, assets: [whaleFrpGroup] } satisfies AssetViewResponse,
+} satisfies Record<string, AssetViewResponse>;
+
+export const deleverPairPositions = {
+  btcFrp: positionsWithExposure(deleverPairViews.btcFrp.assets.flatMap((g) => g.perpOpen).map(positionFromPerp)),
+  whaleFrp: positionsWithExposure(whaleFrpGroup.perpOpen.map(positionFromPerp)),
 } satisfies Record<string, PositionsResponse>;
 
 function closeOnlyOpportunities(context: BorosPairContext): OpportunitiesResult {

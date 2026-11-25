@@ -864,6 +864,19 @@ describe('PairTicket layout C', () => {
     expect(screen.queryByRole('switch', { name: 'TWAP' })).toBeNull();
   });
 
+  it('estimate card reads whole run only with twap on', async () => {
+    await ready();
+    expect(screen.queryByText('whole run')).toBeNull();
+    await twapOn();
+    expect((await screen.findAllByText('whole run')).length).toBeGreaterThan(0);
+  });
+
+  it('never says it cannot send as one deal on a twap ticket', async () => {
+    await ready();
+    await twapOn();
+    expect(screen.queryByText("Can't send as one deal. Send each leg on its own.")).toBeNull();
+  });
+
   it('order type labels', async () => {
     await ready();
     expect(screen.getByRole('radio', { name: 'Limit + hedge' })).toBeInTheDocument();
@@ -1010,10 +1023,35 @@ describe('PairTicket layout C', () => {
     expect(document.body).toHaveTextContent(/SHORT\s*OKX · hedges\s*0\.4 ETH/);
   });
 
+  it('auto-chooses the cheaper maker venue and shows the saving', async () => {
+    server.use(
+      ...baseHandlers(),
+      ...ethSymbolHandlers(),
+      previewHandler({
+        calls: [],
+        makerLeg: { auto: 'b', why: 'fees' },
+        rates: { GATE: { maker: 0.0002, taker: 0.00048 }, OKX: { maker: 0, taker: 0.0005 } },
+      }),
+    );
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+    await openFold();
+    await waitFor(() => expect(screen.getByText(/Saves ≈ 0\.5 USDT/)).toBeInTheDocument(), { timeout: 4000 });
+    expect(screen.getByText(/vs 2 taker orders/)).toBeInTheDocument();
+  });
+
+  it('switching to Market and back turns TWAP off', async () => {
+    await ready();
+    await twapOn();
+    await userEvent.click(screen.getByRole('radio', { name: 'Market' }));
+    await userEvent.click(screen.getByRole('radio', { name: 'Limit + hedge' }));
+    expect(twapSwitch()).toHaveAttribute('aria-checked', 'false');
+  });
+
   it('leverage is venue max with no control', async () => {
     await ready();
     await waitFor(() => expect(screen.getByText('Leverage')).toBeInTheDocument(), { timeout: 4000 });
-    expect(document.body).toHaveTextContent(/Leverage\s*\d+x Long \/ \d+x Short venue max/);
+    expect(document.body).toHaveTextContent(/Leverage\s*\d+x Long \/ \d+x Short\s*· venue max/);
     expect(screen.queryByRole('spinbutton')).toBeNull();
     expect(screen.queryByRole('textbox', { name: /leverage/i })).toBeNull();
   });

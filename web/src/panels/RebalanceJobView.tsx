@@ -6,7 +6,7 @@ import type { JobViewProps } from './RebalanceJobBits';
 import { MoveJobView } from './RebalanceMoveJobView';
 import { isSliceJob, SliceJobView } from './RebalanceSliceJobView';
 
-const isTwapRun = (job: RebalanceJob): boolean =>
+export const isTwapRun = (job: RebalanceJob): boolean =>
   job.kind === 'twap' || (job.kind === 'delever' && job.twap != null);
 
 export function RebalanceJobView(props: JobViewProps) {

@@ -1,7 +1,9 @@
 import { prettyVenue } from '../../web/src/lib/fmt';
 import { classifyGateError, CoreError } from '../core/errors';
 import { parseSymbol } from '../core/numbers';
-import { planSlices, takerAfterCapSec, type TwapLegRule, usdText } from '../core/twap';
+import { dealSlippage } from '../../web/src/trade/dealSlippage';
+import { resolveFeeRates, type VenueFeeRow } from '../core/estimate/fees';
+import { restPlan, takerAfterCapSec, type TwapLegRule, usdText } from '../core/twap';
 import type { DealRequest } from '../engine/create';
 import type { Store } from '../engine/db';
 import { hasMarginRefusalLabel, project } from '../engine/decide';
@@ -99,7 +101,7 @@ export interface TwapJobView {
   twap: TwapView | null;
   child: TwapChildView | null;
   legs: RunLegView[];
-  fees: { readUsd: number; estUsd: number; est: boolean };
+  fees: { readUsd: number; estUsd: number; totalUsd: number; est: boolean };
   slippage: { pct: number; usd: number } | null;
   orders: RunOrderView[];
   boros: TwapBorosView | null;
@@ -189,9 +191,10 @@ function haltTwap(deps: TwapRunDeps, job: Job, kind: HaltKind | null, reason: st
   job.status = 'halted';
   job.haltKind = kind;
   job.haltReason = reason;
-  if (job.twap) {
+  if (job.kind === 'twap' && job.twap) {
     job.twap.nextAt = null;
     job.twap.replan = true;
+    replanOf(deps, job as Job & { twap: JobTwap });
   }
   deps.jobs.write(job);
   lastPass.delete(job.id);
@@ -246,18 +249,18 @@ export function sleepHaltTwap(deps: TwapRunDeps, job: Job, gap: { fromMs: number
   return job;
 }
 
-function replanOf(deps: TwapRunDeps, job: Job & { twap: JobTwap }, rest: Fx, slice: number): void {
+const restOf = (store: Store, job: Job & { twap: JobTwap }): Fx => fxMax(FX_ZERO, fx(job.twap.deal.totalQty) - filledAll(store, job));
+
+function replanOf(deps: TwapRunDeps, job: Job & { twap: JobTwap }): void {
   const { twap } = job;
-  const left = twap.slices - slice + 1;
+  const rest = restOf(deps.store, job);
+  if (rest <= FX_ZERO) return;
+  const left = Math.max(1, twap.slices - twap.sliceIndex);
   const mark = markOf(deps.store, job);
-  twap.carryQty = '0';
-  twap.replan = false;
-  if (left <= 1 || mark === null) {
-    if (left <= 1) twap.sliceQty = fxStr(rest);
-    return;
-  }
-  const result = planSlices(fxStr(rest), { intervalSec: twap.intervalSec, slices: left }, twap.deal.rules, mark);
-  twap.sliceQty = result.plan ? result.plan.sliceQty : fxStr(rest);
+  const plan = mark === null ? null : restPlan(fxStr(rest), left, twap.intervalSec, twap.deal.rules, mark);
+  twap.slices = twap.sliceIndex + (plan?.slices ?? left);
+  if (plan) twap.sliceQty = plan.sliceQty;
+  else if (left === 1) twap.sliceQty = fxStr(rest);
 }
 
 function childRequest(job: Job & { twap: JobTwap }, slice: number, qty: Fx): DealRequest {
@@ -282,8 +285,12 @@ function childRequest(job: Job & { twap: JobTwap }, slice: number, qty: Fx): Dea
 async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: number): Promise<void> {
   const { twap } = job;
   const slice = twap.sliceIndex + 1;
-  const rest = fxMax(FX_ZERO, fx(twap.deal.totalQty) - filledAll(deps.store, job));
-  if (twap.replan) replanOf(deps, job, rest, slice);
+  if (twap.replan) {
+    replanOf(deps, job);
+    twap.carryQty = '0';
+    twap.replan = false;
+  }
+  const rest = restOf(deps.store, job);
   const qty = slice >= twap.slices ? rest : fxMin(fx(twap.sliceQty) + fx(twap.carryQty), rest);
   if (qty <= FX_ZERO) return finishTwap(deps, job);
   const breach = limitBreachOf(qty, twap.deal.rules, markOf(deps.store, job), slice);
@@ -310,7 +317,7 @@ async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: 
     return haltTwap(deps, target, 'error', reason);
   }
   const after = deps.jobs.read();
-  if (after?.id !== job.id || after.status !== 'running' || after.pauseRequested) await stopLiveChild(deps, after ?? job);
+  if (after?.id !== job.id || after.status !== 'running' || after.pauseRequested) await stopLiveChild(deps, job);
   deps.engineWake();
 }
 
@@ -335,7 +342,7 @@ function settleEnded(deps: TwapRunDeps, job: Job & { twap: JobTwap }, child: Pai
   }
   const unfilled = fxMax(FX_ZERO, fx(child.targetQty) - fx(project(child, orders).aFilled));
   if (twap.sliceIndex >= twap.slices) {
-    const left = fxMax(FX_ZERO, fx(twap.deal.totalQty) - filledAll(deps.store, job));
+    const left = restOf(deps.store, job);
     if (left <= FX_ZERO) {
       finishTwap(deps, job);
       return 'stop';
@@ -508,7 +515,14 @@ function deleverLegPlans(job: Job): LegPlan[] {
   }));
 }
 
-export function feesOf(children: Pick<ChildDealView, 'orders' | 'feeUsd'>[]): TwapJobView['fees'] {
+function feeRateOf(feeRows: VenueFeeRow[], contract: string | undefined, kind: OrderRow['kind']): number {
+  const rates = contract === undefined ? null : resolveFeeRates(feeRows, contract);
+  const rate = rates === null ? NaN : kind === 'maker' ? rates.makerRate : rates.takerRate;
+  if (Number.isFinite(rate)) return rate;
+  return (kind === 'maker' ? MAKER_FEE_BP : TAKER_FEE_BP) / 10_000;
+}
+
+export function feesOf(children: (Pick<ChildDealView, 'orders' | 'feeUsd'> & { pair?: PairRow })[], feeRows: VenueFeeRow[] = []): TwapJobView['fees'] {
   let readUsd = 0;
   let estUsd = 0;
   for (const view of children) {
@@ -517,32 +531,24 @@ export function feesOf(children: Pick<ChildDealView, 'orders' | 'feeUsd'>[]): Tw
       continue;
     }
     for (const order of view.orders) {
-      const bp = order.kind === 'maker' ? MAKER_FEE_BP : TAKER_FEE_BP;
-      estUsd += (Number(order.cumQty) * Number(order.avgFillPrice) * bp) / 10_000;
+      const contract = order.leg === 'A' ? view.pair?.a.contract : view.pair?.b?.contract;
+      estUsd += Number(order.cumQty) * Number(order.avgFillPrice) * feeRateOf(feeRows, contract, order.kind);
     }
   }
-  return { readUsd, estUsd, est: estUsd > 0 };
+  return { readUsd, estUsd, totalUsd: readUsd + estUsd, est: estUsd > 0 };
 }
 
-function slippageOf(children: ChildDealView[]): TwapJobView['slippage'] {
-  let usd = 0;
-  let notional = 0;
-  for (const { pair, orders } of children) {
-    if (!pair.b) continue;
-    const sides = [
-      { side: pair.a.side, fills: fillsOf(orders.filter((order) => order.leg === 'A')) },
-      { side: pair.b.side, fills: fillsOf(orders.filter((order) => order.leg === 'B')) },
-    ];
-    const buy = sides.find((row) => row.side === 'BUY');
-    const sell = sides.find((row) => row.side === 'SELL');
-    const buyAvg = buy ? avgOf(buy.fills) : null;
-    const sellAvg = sell ? avgOf(sell.fills) : null;
-    if (!buy || !sell || buyAvg === null || sellAvg === null) continue;
-    const qty = Number(fxStr(fxMin(buy.fills.qty, sell.fills.qty)));
-    usd += (sellAvg - buyAvg) * qty;
-    notional += ((buyAvg + sellAvg) / 2) * qty;
-  }
-  return notional > 0 ? { usd, pct: usd / notional } : null;
+function slippageOf(legs: RunLegView[]): TwapJobView['slippage'] {
+  const [first, second] = legs;
+  if (!first || !second) return null;
+  const [long, short] = first.side === 'LONG' ? [first, second] : [second, first];
+  const slip = dealSlippage({
+    longAvg: Number(long.avgPrice),
+    shortAvg: Number(short.avgPrice),
+    qty: Math.min(Number(first.filledQty), Number(second.filledQty)),
+    close: first.reduceOnly,
+  });
+  return slip ? { usd: slip.usd, pct: slip.pct } : null;
 }
 
 function ordersOf(legA: string, children: ChildDealView[]): RunOrderView[] {
@@ -604,9 +610,17 @@ function borosViewOf(job: Job, slice: number): TwapBorosView | null {
   };
 }
 
-const EMPTY_VIEW: TwapJobView = { twap: null, child: null, legs: [], fees: { readUsd: 0, estUsd: 0, est: false }, slippage: null, orders: [], boros: null };
+const EMPTY_VIEW: TwapJobView = {
+  twap: null,
+  child: null,
+  legs: [],
+  fees: { readUsd: 0, estUsd: 0, totalUsd: 0, est: false },
+  slippage: null,
+  orders: [],
+  boros: null,
+};
 
-function deleverViewOf(job: Job, own: ChildDealView[]): TwapJobView {
+function deleverViewOf(job: Job, own: ChildDealView[], feeRows: VenueFeeRow[]): TwapJobView {
   const plan = job.deleverTwap;
   if (!plan) return EMPTY_VIEW;
   const step = job.steps.find((candidate) => candidate.name === SLICE_STEP);
@@ -614,6 +628,7 @@ function deleverViewOf(job: Job, own: ChildDealView[]): TwapJobView {
   const sliceLive = job.status === 'running' && step?.status !== 'done' && Boolean(step?.cut);
   const plans = deleverLegPlans(job);
   const latest = own.at(-1)?.pair ?? null;
+  const legs = legsOf(plans, own);
   return {
     twap: {
       slice,
@@ -629,19 +644,20 @@ function deleverViewOf(job: Job, own: ChildDealView[]): TwapJobView {
       takerAfterSec: job.exec === 'market' ? 0 : takerAfterCapSec(plan.intervalSec),
     },
     child: childViewOf(step?.status === 'done' ? null : (step?.lead?.text ?? null), slice, 'a', own),
-    legs: legsOf(plans, own),
-    fees: feesOf(own),
-    slippage: slippageOf(own),
+    legs,
+    fees: feesOf(own, feeRows),
+    slippage: slippageOf(legs),
     orders: ordersOf(plans[0]?.symbol ?? '', own),
     boros: borosViewOf(job, slice),
   };
 }
 
-export function twapViewOf(job: Job, children: ChildDealView[]): TwapJobView {
+export function twapViewOf(job: Job, children: ChildDealView[], feeRows: VenueFeeRow[] = []): TwapJobView {
   const own = children.filter((view) => isChildOf(job.id, view.pair.id));
-  if (job.kind === 'delever') return deleverViewOf(job, own);
+  if (job.kind === 'delever') return deleverViewOf(job, own, feeRows);
   const twap = job.twap;
   if (job.kind !== 'twap' || !twap) return EMPTY_VIEW;
+  const legs = legsOf(twapLegPlans(twap), own);
   return {
     twap: {
       slice: twap.sliceIndex,
@@ -657,9 +673,9 @@ export function twapViewOf(job: Job, children: ChildDealView[]): TwapJobView {
       takerAfterSec: twap.takerAfterSec,
     },
     child: childViewOf(childIdFor(job.id, twap.sliceIndex, 1), twap.sliceIndex, twap.makerLeg, own),
-    legs: legsOf(twapLegPlans(twap), own),
-    fees: feesOf(own),
-    slippage: slippageOf(own),
+    legs,
+    fees: feesOf(own, feeRows),
+    slippage: slippageOf(legs),
     orders: ordersOf(twap.deal.a.symbol, own),
     boros: null,
   };

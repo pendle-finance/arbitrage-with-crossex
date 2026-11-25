@@ -7,9 +7,9 @@ import { ChevronRight } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
-import { Chip } from '../components/Chip';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { SignedNumber } from '../components/SignedNumber';
+import { SideChip } from '../components/VenueChip';
 import { fieldValue, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import type { DealOpts } from '../trade/deal';
@@ -181,6 +181,11 @@ export function ClosePairForm({
     const n = notionalOf(p);
     return n === null ? null : n * p.fees.makerRate;
   };
+  const makerSaving = (() => {
+    const p = makerIdx === null ? undefined : previews?.[makerIdx];
+    const n = p ? notionalOf(p) : null;
+    return !twapOn && p?.fees && n !== null ? n * (p.fees.takerRate - p.fees.makerRate) : null;
+  })();
   /** Confirm-time only: the roles and maker settings never reach /preview. */
   const decorate = (acts: ActionInput[]): ActionInput[] => {
     if (!maker || !previews || previews.length !== 2 || makerIdx === null) return acts;
@@ -278,7 +283,7 @@ export function ClosePairForm({
           onToggle={twap.setOn}
           input={twap.input}
           onInput={twap.setInput}
-          preview={preview.data?.twap ?? null}
+          preview={actions ? (preview.data?.twap ?? null) : null}
           impact={preview.data?.priceImpact ?? null}
           coin={base}
         />
@@ -289,6 +294,8 @@ export function ClosePairForm({
           legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
           makerLeg={makerLeg}
           autoPick={autoPick}
+          saving={maker ? makerSaving : null}
+          savingHint={t('accounts.closePair.savingHint')}
           onMakerLeg={setMakerLeg}
           takerAfter={taker.takerAfter}
           onTakerAfter={taker.pick}
@@ -314,7 +321,12 @@ export function ClosePairForm({
         </div>
       )}
 
-      <EstimateCard dataUpdatedAt={preview.dataUpdatedAt} estimating={preview.estimating} isError={preview.isError}>
+      <EstimateCard
+        dataUpdatedAt={preview.dataUpdatedAt}
+        estimating={preview.estimating}
+        isError={preview.isError}
+        sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
+      >
         {previews && previews.length > 0 ? (
           <>
             <EstimateHeadline
@@ -337,9 +349,7 @@ export function ClosePairForm({
                   <tr key={p.symbol} className="border-t border-ink-800/80">
                     <td className="py-1.5">
                       <span className="inline-flex items-center gap-1.5">
-                        <Chip sm tone={p.side === 'BUY' ? 'green' : 'red'} className="font-semibold">
-                          {t(p.side === 'BUY' ? 'app.side.buy' : 'app.side.sell')}
-                        </Chip>
+                        <SideChip side={sideOf(p.symbol)} />
                         <span className="text-[12px] text-ink-50">{prettyVenue(legs[i]?.venue ?? '')}</span>
                         <span className="num text-[11px] text-ink-400">{p.qty ? sig(p.qty) : ''}</span>
                       </span>
@@ -408,7 +418,7 @@ export function ClosePairForm({
         )}
       </EstimateCard>
 
-      <div className="flex flex-col gap-1.5">
+      <div className="sticky bottom-0 z-10 flex flex-col gap-1.5 bg-ink-950 pb-1 pt-2">
         <ExecuteControl
           scope={`close-both-${base}`}
           actions={actions}

@@ -133,7 +133,6 @@ export async function preflightMargin(
   // Net off the share of each leg that only unwinds. Symbols uppercased both sides (as
   // create.ts/actions.ts do): a casing miss silently charges in full, i.e. the bug back.
   const posQty = new Map<string, number>();
-  let positionsKnown = false;
   if (isOneWayMode(account.positionMode)) {
     try {
       const rows = deps.getPositions
@@ -143,7 +142,6 @@ export async function preflightMargin(
         const q = Number(r?.positionQty);
         if (r?.symbol && Number.isFinite(q) && q !== 0) posQty.set(r.symbol.toUpperCase(), q);
       }
-      positionsKnown = true;
     } catch (err) {
       console.warn(`[preflight] positions read failed — charging every leg in full: ${(err as Error).message}`);
     }
@@ -179,7 +177,7 @@ export async function preflightMargin(
   const legs: LegRequirement[] = sized.map((p) => ({ index: p.index, symbol: p.symbol, notional: p.notional, leverage: p.leverage as number }));
   if (legs.length === 0) return; // nothing we can size confidently → fail-open
 
-  const closing = closeQtyBySymbolSide(resolved, posQty, positionsKnown);
+  const closing = closeQtyBySymbolSide(resolved, posQty);
   const freed = sized.reduce((s, p) => {
     const closed = creditedNotional(p.leg, p.notional, closing);
     return s + closed / (p.leverage as number) - closed * TAKER_FEE_RESERVE;
@@ -217,7 +215,6 @@ function closeKey(symbol: string, side: ResolvedAction['side']): string {
 function closeQtyBySymbolSide(
   resolved: ResolvedAction[],
   posQty: Map<string, number>,
-  positionsKnown: boolean,
 ): Map<string, number> {
   const closing = new Map<string, number>();
   for (const c of resolved) {
@@ -226,7 +223,6 @@ function closeQtyBySymbolSide(
     const key = closeKey(c.symbol, c.side);
     closing.set(key, (closing.get(key) ?? 0) + qty);
   }
-  if (!positionsKnown) return closing;
   for (const [key, qty] of closing) {
     const [symbol, side] = key.split('|');
     const position = posQty.get(symbol) ?? 0;

@@ -66,6 +66,17 @@ describe('ClosePopover', () => {
     expect(screen.getByText(/holds 0.1 of the 0.3 on the venue/)).toBeInTheDocument();
   });
 
+  it('shows a whale position with its lot digit and a comma', async () => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover
+        position={makeCrossexPosition({ positionQty: '3468.208', positionValue: '5999999.84', markPrice: '1730' })}
+        onDismiss={() => {}}
+      />,
+    );
+    expect((await screen.findAllByText('3,468.208 ETH')).length).toBeGreaterThan(0);
+  });
+
   it('opens an unshared position on its whole size', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
@@ -79,7 +90,7 @@ describe('ClosePopover', () => {
 
     expect(await screen.findByText(/limit price/i)).toBeInTheDocument();
     expect(screen.getByText('2497.45')).toBeInTheDocument();
-    expect(screen.getByText('Reduce-only')).toBeInTheDocument();
+    expect(screen.getByText('Reduce-only.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled();
   });
 
@@ -472,7 +483,7 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
   });
 });
 
-describe('ClosePopover — TWAP', () => {
+describe('ClosePopover: TWAP', () => {
   const bigLeg = makeCrossexPosition({ positionQty: '150', markPrice: '1730', upnl: '4740.43' });
 
   function twapPreviewHandler() {
@@ -563,5 +574,15 @@ describe('ClosePopover — TWAP', () => {
     expect(screen.getByText(/mark 1730/)).toBeInTheDocument();
     expect(screen.getByText('Reduce-only.')).toBeInTheDocument();
     expect(screen.getByText('Realized as each slice fills')).toBeInTheDocument();
+  });
+
+  it('names the leg by the position it closes, never buy or sell', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+
+    expect(await screen.findByText('Reduce-only IOC')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Close Gate Long perp' })).toBeInTheDocument();
+    expect(screen.queryByText('SELL')).toBeNull();
+    expect(screen.queryByText('BUY')).toBeNull();
   });
 });

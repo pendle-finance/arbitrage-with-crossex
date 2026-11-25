@@ -1,13 +1,15 @@
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDealCommand, useDealView, useRebalanceCommand, useRebalanceFix } from '../api/queries';
-import type { RunOrderView, TwapChildView } from '../api/types';
+import type { RebalanceJob, RunOrderView, TwapChildView } from '../api/types';
+import { Chip } from '../components/Chip';
 import { DataTable } from '../components/DataTable';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { HoverCard } from '../components/HoverCard';
 import { Skeleton } from '../components/Skeleton';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
-import { fmtUsd, num, parseSymbol, prettyVenue, sigGrouped } from '../lib/fmt';
+import { fmtUsd, num, padTwo, parseSymbol, prettyVenue, qtyGrouped } from '../lib/fmt';
 import { decimalsOf, formatRestPrice } from '../lib/ticks';
 import { LimitPriceBox } from './LimitPriceBox';
 import { DealBookImpact } from './PriceImpactGraph';
@@ -47,13 +49,17 @@ export function OrdersTable({ orders }: { orders: RunOrderView[] }) {
   );
 }
 
-export function padTwo(text: string): string {
-  const [whole, frac = ''] = text.split('.');
-  return frac.length >= 2 ? text : `${whole}.${frac.padEnd(2, '0')}`;
-}
+export { padTwo };
 
-export const qtyText = (v: number | string): string => padTwo(sigGrouped(v));
+export const qtyText = (v: number | string): string => padTwo(qtyGrouped(v));
 export const usdText = (v: number): string => fmtUsd(v, 0);
+
+export function feeText(fees: { readUsd: number; estUsd: number; est: boolean; totalUsd?: number }): string {
+  const total = fees.totalUsd ?? fees.readUsd + fees.estUsd;
+  if (!fees.est) return usdText(total);
+  if (fees.readUsd <= 0) return t('trade.twap.run.feeEstOnly', { total: usdText(total) });
+  return t('trade.twap.run.feeTotal', { total: usdText(total), read: usdText(fees.readUsd), est: usdText(fees.estUsd) });
+}
 
 export function clockSpan(sec: number): string {
   const s = Math.max(0, Math.round(sec));
@@ -73,13 +79,54 @@ export function leftText(sec: number): string {
 export const sideWord = (side: 'LONG' | 'SHORT'): string => t(side === 'LONG' ? 'trade.deal.long' : 'trade.deal.short');
 
 export function SideText({ side }: { side: 'LONG' | 'SHORT' }) {
-  return <span className={side === 'LONG' ? 'text-emerald-400' : 'text-rose-400'}>{side}</span>;
+  return (
+    <Chip sm tone={side === 'LONG' ? 'green' : 'red'}>
+      {sideWord(side)}
+    </Chip>
+  );
+}
+
+export function SlipLabel({ label }: { label: string }) {
+  return (
+    <HoverCard label={label} widthPx={260}>
+      {t('trade.deal.slippageHint')}
+    </HoverCard>
+  );
+}
+
+export const HOLD_IN_ROW = 'h-9 !py-0 !text-[12px] !font-medium';
+
+export type RunShape = 'pairOpen' | 'pairClose' | 'singleOpen' | 'singleClose';
+
+export function runShapeOf(job: RebalanceJob) {
+  const legs = job.legs ?? [];
+  const makerIdx = job.twap?.makerLeg === 'b' ? 1 : 0;
+  const maker = legs[makerIdx];
+  const hedge = legs.length > 1 ? legs[1 - makerIdx] : undefined;
+  const coin = legs[0]?.symbol ? parseSymbol(legs[0].symbol).base : '';
+  const close = maker?.reduceOnly ?? false;
+  const shape: RunShape = hedge ? (close ? 'pairClose' : 'pairOpen') : close ? 'singleClose' : 'singleOpen';
+  const side = maker ? sideWord(maker.side).toLowerCase() : '';
+  return { legs, makerIdx, maker, hedge, coin, close, shape, side };
+}
+
+function DealReadFailed({ onRetry }: { onRetry: () => void }) {
+  const { t: tr } = useTranslation();
+  return (
+    <div role="alert" className="flex items-center justify-between gap-2 text-[12px] text-rose-300">
+      <span>{tr('trade.twap.run.dealReadFailed')}</span>
+      <button type="button" className="btn" onClick={onRetry}>
+        {tr('common.retry')}
+      </button>
+    </div>
+  );
 }
 
 export function SliceGraph({ childId, oneLeg }: { childId: string; oneLeg: boolean }) {
   const view = useDealView(childId);
   const pair = view.data?.pair;
   const proj = view.data?.projection;
+  if ((!pair || !proj) && view.isError) return <DealReadFailed onRetry={() => void view.refetch()} />;
   if (!pair || !proj) return <Skeleton className="h-40 w-full" />;
   const open = proj.makerOrder?.state === 'OPEN' ? proj.makerOrder : null;
   const owed = Number(pair.targetQty) - Number(proj.bReserved);
@@ -101,6 +148,7 @@ export function SlicePriceBox({ child }: { child: TwapChildView }) {
   const repeg = useDealCommand('repeg');
   const [typed, setTyped] = useState<string | null>(null);
   const pair = view.data?.pair;
+  if (!pair && view.isError) return <DealReadFailed onRetry={() => void view.refetch()} />;
   if (!pair) return <Skeleton className="h-14 w-full" />;
   const decimals = decimalsOf(pair.a.tick);
   const venue = prettyVenue(parseSymbol(pair.a.contract).exchange);
@@ -116,7 +164,7 @@ export function SlicePriceBox({ child }: { child: TwapChildView }) {
     const n = Number(typed);
     if (typed === null || !Number.isFinite(n) || n <= 0) return;
     const price = formatRestPrice(n, child.side, pair.a.contract, pair.a.tick);
-    if (Number(price) > 0) repeg.mutate({ id: child.id, body: { price } });
+    if (Number(price) > 0) repeg.mutate({ id: child.id, body: { price } }, { onSuccess: () => setTyped(null) });
   };
   const toAuto = () => {
     setTyped(null);
@@ -178,7 +226,7 @@ export function TwapActs({
           <span className="num">{borosHold}</span>
         </HoldToConfirmButton>
       )}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="flex flex-col gap-2">
         {state === 'running' ? (
           <button type="button" className="btn" disabled={pending} onClick={() => pause.mutate(jobId)}>
             {tr('trade.twap.run.pause')}
@@ -187,10 +235,8 @@ export function TwapActs({
           <button type="button" className="btn-primary" disabled={pending} onClick={() => resume.mutate(jobId)}>
             {tr('trade.twap.run.resume')}
           </button>
-        ) : (
-          <span />
-        )}
-        <HoldToConfirmButton tone="outline" disabled={pending} onConfirm={() => abandon.mutate(jobId)}>
+        ) : null}
+        <HoldToConfirmButton tone="outline" className={HOLD_IN_ROW} disabled={pending} onConfirm={() => abandon.mutate(jobId)}>
           {tr('trade.twap.run.holdStop')}
         </HoldToConfirmButton>
       </div>

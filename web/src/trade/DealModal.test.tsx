@@ -45,6 +45,28 @@ function renderModal(view = makeDealView()) {
 }
 
 describe('DealModal', () => {
+  it('a failed book read shows a failed state, not Loading', async () => {
+    const view = makeDealView({ pair: { mode: 'OPENING', deadlineAt: null } });
+    server.use(
+      http.get('/api/deals/:id', () => HttpResponse.json(env(view))),
+      http.get('/api/books/:symbol', () => HttpResponse.json({ ok: false, error: { message: 'down' } }, { status: 500 })),
+      ...baseHandlers(),
+    );
+    renderWithClient(
+      <TradeFlowProvider>
+        <DealModal dealId={view.pair.id} onClose={() => {}} />
+      </TradeFlowProvider>,
+    );
+    expect(await screen.findByText("Can't read the venue books.")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('the deal window shows a progress bar and boxed side chips', async () => {
+    renderModal(makeDealView({ pair: { mode: 'OPENING', deadlineAt: null } }));
+    expect(await screen.findByRole('progressbar')).toBeInTheDocument();
+    expect(screen.getByText('Short').className).toContain('chip');
+  });
+
   it('first line with the market countdown', async () => {
     renderModal(makeDealView({ pair: { mode: 'OPENING', deadlineAt: Date.now() + 232_000 } }));
     expect(await screen.findByText('Limit resting')).toBeInTheDocument();
@@ -165,7 +187,7 @@ describe('DealModal', () => {
     // to spell them out).
     expect(
       document.querySelector('[data-leg="long"] [data-mark="limit"]')?.textContent,
-    ).toContain('Limit 2497 × 0.05');
+    ).toContain('Limit 2,497.00 × 0.05');
     expect(document.querySelector('[data-leg="short"] [data-mark="limit"]')).toBeNull();
     expect(document.querySelector('[data-leg="short"] [data-mark="bid"]')?.getAttribute('data-price')).toBe('2499');
     // The hedge column carries its market-order simulation — the market hedge
@@ -397,7 +419,7 @@ describe('DealModal', () => {
     expect(await screen.findByText('Opened · each leg')).toBeInTheDocument();
     expect(screen.getByText('Avg price · Gate')).toBeInTheDocument();
     expect(screen.getByText('Avg price · Binance')).toBeInTheDocument();
-    expect(screen.getByText(/^\+0\.33 \(\+0\.013%\) Favorable$/)).toBeInTheDocument();
+    expect(screen.getByText(/^\+0\.33 USDT per coin \(\+0\.013%\) Favorable$/)).toBeInTheDocument();
     expect(screen.getByText('Fees')).toBeInTheDocument();
     expect(screen.getByText('$0.09')).toBeInTheDocument();
     expect(screen.getByText('Took')).toBeInTheDocument();
@@ -454,5 +476,54 @@ describe('DealModal', () => {
     );
     expect(await screen.findByText('Opened · each leg')).toBeInTheDocument();
     expect(screen.queryByText('Slippage')).not.toBeInTheDocument();
+  });
+
+  it('close: the window names the position, not the order side, and the title says close', async () => {
+    const base = makeDealView();
+    renderModal(
+      makeDealView({
+        pair: { a: { ...base.pair.a, reduceOnly: true }, b: base.pair.b && { ...base.pair.b, reduceOnly: true } },
+      }),
+    );
+    expect(await screen.findByText('ETH pair close · limit + hedge')).toBeInTheDocument();
+    const legs = document.querySelector('span.num.text-\\[11px\\]')!.textContent;
+    expect(legs).toBe('Gate Short / Binance Long');
+  });
+
+  it('open: title from the job and no raw id', async () => {
+    renderModal();
+    expect(await screen.findByText('ETH pair open · limit + hedge')).toBeInTheDocument();
+    expect(screen.queryByText(/Deal/)).not.toBeInTheDocument();
+  });
+
+  it('done: Close button, no stray Done line, slippage carries its unit', async () => {
+    renderModal(
+      makeDealView({
+        pair: {
+          mode: 'DONE',
+          reportJson: JSON.stringify({ aFilled: '0.05', bFilled: '0.05', unhedged: '0', reason: 'target reached', aAvgFill: '2500', bAvgFill: '2500.33' }),
+        },
+        projection: { aFilled: '0.05', bFilled: '0.05', unhedged: '0' },
+      }),
+    );
+    expect(await screen.findByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.queryByText('Target reached')).not.toBeInTheDocument();
+    expect(screen.getByText(/^\+0\.33 USDT per coin \(\+0\.013%\) Favorable$/)).toBeInTheDocument();
+  });
+
+  it('a failed refresh says the numbers may be old', async () => {
+    const view = makeDealView();
+    let n = 0;
+    server.use(
+      http.get('/api/deals/:id', () => (n++ === 0 ? HttpResponse.json(env(view)) : HttpResponse.json({ ok: false, error: { message: 'x' } }, { status: 500 }))),
+      ...baseHandlers(),
+    );
+    renderWithClient(
+      <TradeFlowProvider>
+        <DealModal dealId="d1" onClose={() => {}} />
+      </TradeFlowProvider>,
+    );
+    await screen.findByText('Filled · each leg');
+    expect(await screen.findByText(/The numbers may be old/, undefined, { timeout: 4000 })).toBeInTheDocument();
   });
 });

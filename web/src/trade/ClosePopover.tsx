@@ -14,13 +14,13 @@
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import { useSymbolDetail } from '../api/queries';
 import type { ActionInput, CrossexPosition } from '../api/types';
-import { VenueIcon } from '../components/AssetIcon';
 import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip } from '../components/VenueChip';
-import { fieldValue, fmtUsd, fmtUsdCompact, parseSymbol, prettyVenue, sig, sigGrouped } from '../lib/fmt';
+import { fieldValue, fmtUsd, num, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
 import type { DealOpts } from './deal';
 import { EstimateHeadline } from './EstimateHeadline';
@@ -218,6 +218,7 @@ export function ClosePopover({
     };
   }, [slipInvalid, qtyInvalid, position.symbol, slip, closesEverything, qtyNum]);
 
+  const detail = useSymbolDetail(position.symbol);
   const twapState = useTwapInput();
   const twapOn = twapState.on;
   const taker = useTakerAfter();
@@ -259,7 +260,7 @@ export function ClosePopover({
 
   /** The tolerance editor — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
-  const { exchange, quote } = parseSymbol(position.symbol);
+  const { exchange } = parseSymbol(position.symbol);
   const notionalUsd = markOk ? posQty * mark : null;
   const heldSide: 'LONG' | 'SHORT' = Number(position.positionQty) < 0 ? 'SHORT' : 'LONG';
   const leftAfter = Math.max(0, maxQtyBase - (Number.isFinite(qtyNum) ? qtyNum : 0));
@@ -270,15 +271,10 @@ export function ClosePopover({
   // row competes with the row it is about.
   return (
     <Modal
-      title={
-        <>
-          {t('trade.close.title')}
-          <span className="ml-2 inline-flex items-center gap-1.5 text-[12px] font-normal text-ink-300">
-            <VenueIcon venue={exchange} size={14} />
-            {t('trade.close.venueLine', { venue: prettyVenue(exchange), base, quote: quote || 'USDT' })}
-          </span>
-        </>
-      }
+      title={t('trade.close.titleLeg', {
+        venue: prettyVenue(exchange),
+        side: t(heldSide === 'LONG' ? 'common.long' : 'common.short'),
+      })}
       onClose={onDismiss}
       widthClass="w-[460px]"
     >
@@ -289,12 +285,12 @@ export function ClosePopover({
           venue={prettyVenue(exchange)}
           side={heldSide}
           sub={position.symbol}
-          value={`${sigGrouped(wholeQty)} ${base}`}
+          value={`${qtyGrouped(wholeQty)} ${base}`}
           valueSub={
             markOk ? (
               <>
                 {t('trade.close.notionalMark', {
-                  notional: notionalUsd !== null ? fmtUsdCompact(notionalUsd) : '—',
+                  notional: notionalUsd !== null ? fmtUsd(notionalUsd) : '—',
                   mark: sig(mark),
                 })}
               </>
@@ -306,7 +302,7 @@ export function ClosePopover({
             Say so where the size is chosen, not after the fact. */}
         {shared && (
           <p className="text-[11px] leading-relaxed text-amber-400/90">
-            {t('trade.close.sharedNote', { held: sigGrouped(attributedQty ?? 0), whole: sigGrouped(wholeQty) })}
+            {t('trade.close.sharedNote', { held: qtyGrouped(attributedQty ?? 0), whole: qtyGrouped(wholeQty) })}
           </p>
         )}
         {hedgedSibling && (
@@ -333,7 +329,7 @@ export function ClosePopover({
             >
               <Trans
                 i18nKey="trade.close.maxLink"
-                values={{ amount: sigGrouped(maxInUnit), unit: effUnit === 'usd' ? 'USDT' : base }}
+                values={{ amount: qtyGrouped(maxInUnit), unit: effUnit === 'usd' ? 'USDT' : base }}
                 components={{ u: <span className="text-link underline decoration-link/40 underline-offset-2" /> }}
               />
             </button>
@@ -383,7 +379,7 @@ export function ClosePopover({
           {qtyInvalid && qtyStr.trim() !== '' ? (
             <span className="text-[11px] text-rose-300">
               {(() => {
-                const max = effUnit === 'usd' ? `${sigGrouped(maxInUnit)} USDT` : `${sigGrouped(maxInUnit)} ${base}`;
+                const max = effUnit === 'usd' ? `${qtyGrouped(maxInUnit)} USDT` : `${qtyGrouped(maxInUnit)} ${base}`;
                 return shared ? t('trade.close.exceedsShare', { max }) : t('trade.close.exceedsPosition', { max });
               })()}
             </span>
@@ -397,7 +393,7 @@ export function ClosePopover({
                 <>
                   <Trans
                     i18nKey="trade.close.partialOpen"
-                    values={{ left: sigGrouped(leftAfter), base }}
+                    values={{ left: qtyGrouped(leftAfter), base }}
                     components={{ n: <span className="num text-ink-200" /> }}
                   />
                 </>
@@ -408,7 +404,7 @@ export function ClosePopover({
                 <>
                   <Trans
                     i18nKey="trade.close.atMark"
-                    values={{ qty: sigGrouped(qtyNum), base, mark: sig(mark) }}
+                    values={{ qty: qtyGrouped(qtyNum), base, mark: sig(mark) }}
                     components={{ n: <span className="num" /> }}
                   />
                 </>
@@ -422,9 +418,10 @@ export function ClosePopover({
           onToggle={twapState.setOn}
           input={twapState.input}
           onInput={twapState.setInput}
-          preview={twapOn ? twapPreview : null}
+          preview={twapOn && action ? twapPreview : null}
           impact={preview.data?.priceImpact ?? null}
           coin={base}
+          lot={detail.data?.lotSize}
         />
         {twapOn && (
           <MakerSettings
@@ -458,11 +455,11 @@ export function ClosePopover({
                         side: t(heldSide === 'LONG' ? 'common.longUpper' : 'common.shortUpper'),
                         venue: prettyVenue(exchange),
                       })}
-                      value={p.qty ? `${sigGrouped(p.qty)} ${base}` : '—'}
+                      value={p.qty ? `${qtyGrouped(p.qty)} ${base}` : '—'}
                     />
                     <EstimateRow
                       label={t('pairTicket.bits.tradeCost')}
-                      value={makerFee !== null ? `≈ ${sig(makerFee)} USDT` : '—'}
+                      value={makerFee !== null ? `≈ ${num(makerFee)} USDT` : '—'}
                     />
                   </div>
                 ) : (
@@ -473,8 +470,8 @@ export function ClosePopover({
                     sub={t('trade.close.reduceOnlyIoc')}
                     value={
                       <span className="inline-flex items-center gap-1.5">
-                        <SideChip side={p.side} />
-                        {p.qty ? `${sigGrouped(p.qty)} ${base}` : '—'}
+                        <SideChip side={heldSide} />
+                        {p.qty ? `${qtyGrouped(p.qty)} ${base}` : '—'}
                       </span>
                     }
                   />
@@ -536,7 +533,7 @@ export function ClosePopover({
           />
         )}
 
-        <div className="flex flex-col gap-1.5">
+        <div className="sticky bottom-0 z-10 flex flex-col gap-1.5 bg-ink-950 pb-1 pt-2">
           <ExecuteControl
             scope={`close-${position.symbol}`}
             actions={action && (!twapOn || twapPlan) ? [action] : null}

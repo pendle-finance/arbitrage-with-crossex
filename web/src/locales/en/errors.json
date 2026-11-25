@@ -242,6 +242,7 @@
   "haltAbandonCheck": "Abandon it and check Positions.",
   "legGapThe": "The {{venue}} {{sideWord}} is {{size}} {{base}} smaller than the {{otherVenue}} {{otherSideWord}}.",
   "legGap": "{{venue}} {{sideWord}} is {{size}} {{base}} smaller than the {{otherVenue}} {{otherSideWord}}.",
+  "closeOnlyResume": "Resume when it does.",
   "closeOnlyNext": "Resume when it does, or close {{size}} {{base}} of the {{venue}} {{sideWord}} in Positions.",
   "quotesUsedNext": "Resume after Gate's count clears, within 24 hours, or close {{size}} {{base}} of the {{venue}} {{sideWord}} in Positions.",
   "refusedNext": "Resume to try again, or close {{size}} {{base}} of the {{venue}} {{sideWord}} in Positions.",

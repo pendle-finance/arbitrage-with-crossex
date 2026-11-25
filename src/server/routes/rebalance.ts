@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { CrossexTrade } from 'gate-api';
 import { classifyPlain, CoreError, describeError } from '../../core/errors';
 import { fetchBorosOrderBook, resolveBorosFetch, resolveCollateralPricesUsd } from '../../core/boros/client';
+import { BOROS_API_BASE } from '../../core/boros/borosApi';
 import { halfCapSeedPct } from '../../core/boros/rollProbe';
 import { borosTimeToMaturitySec } from '../../core/boros/opportunities';
 import type { NormalizedBook } from '../../core/estimate/books';
@@ -42,7 +44,10 @@ import {
 } from '../../core/rebalance/plan';
 import { touchOf } from '../../core/estimate/books';
 import { depthOf, makerLegOf, priceImpactOf, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
+import type { VenueFeeRow } from '../../core/estimate/fees';
 import { planSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult } from '../../core/twap';
+import type { Store } from '../../engine/db';
+import { fx, FX_ZERO, type Fx } from '../../engine/fx';
 import { type DealRequest, REPEG_CHOICES_BP, REPEG_DEFAULT_BP, takerAfterCapText, TIMEOUT_MIN_S } from '../../engine/create';
 import { deepBookOf } from '../deepBook';
 import type { AppDeps } from '../app';
@@ -51,7 +56,7 @@ import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { catchRateLimit, refuse, sendError } from '../errorReply';
 import { loadTwapChildren, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
 import { createDeal, type DealBody } from './deals';
-import { INTEREST_OVERFLOW, InterestFile, syncInterest } from '../interestLedger';
+import { INTEREST_OVERFLOW, INTEREST_PAGE_SIZE, InterestFile, syncInterest } from '../interestLedger';
 import {
   ADD_BACK_FIRST,
   addBackAbandonText,
@@ -75,6 +80,7 @@ import {
   type JobPerp,
   type MoneyLock,
   type StepName,
+  twapLockText,
 } from '../rebalanceJob';
 import { applyFix, cancelRestingLead, receivedOf, runJob, settleAddBack, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
 import { configuredRoot, createBorosCloseDeps, createPairPricer } from './borosPair';
@@ -116,6 +122,54 @@ const workingDeal = (deps: AppDeps, skipJob: string | null = null): string | nul
 const childLiveOf = (deps: AppDeps, job: Job | null): boolean =>
   job !== null && deps.engine!.store.listPairs({ activeOnly: true }).some((pair) => isChildOf(job.id, pair.id));
 
+export type TradeRow = Pick<CrossexTrade, 'orderId' | 'qty' | 'fee' | 'feeCoin'>;
+export type TradePage = (query: { page: number; limit: number; from: number }) => Promise<TradeRow[]>;
+
+const FEE_READ_PAGES = 10;
+const FEE_READ_SLACK_MS = 60_000;
+const USD_FEE_COINS: readonly string[] = ['', 'USDT', 'USDC'];
+
+const fxOrZero = (raw: unknown): Fx => {
+  try {
+    return fx(String(raw ?? '0'));
+  } catch {
+    return FX_ZERO;
+  }
+};
+
+export async function readChildFees(store: Pick<Store, 'listOrders'>, listTrades: TradePage, dealIds: string[]): Promise<Record<string, number>> {
+  const deals = dealIds.map((id) => ({
+    id,
+    orders: store.listOrders(id).filter((order) => fxOrZero(order.cumQty) > FX_ZERO),
+  }));
+  const orders = deals.flatMap((deal) => deal.orders);
+  if (orders.length === 0) return {};
+  const from = Math.min(...orders.map((order) => order.createdAt)) - FEE_READ_SLACK_MS;
+  const read = new Map<string, { qty: Fx; fee: number; usd: boolean }>();
+  for (let page = 1; page <= FEE_READ_PAGES; page += 1) {
+    const rows = await listTrades({ page, limit: INTEREST_PAGE_SIZE, from });
+    for (const row of rows) {
+      const id = String(row.orderId ?? '');
+      if (id === '') continue;
+      const seen = read.get(id) ?? { qty: FX_ZERO, fee: 0, usd: true };
+      const fee = Number(row.fee);
+      read.set(id, {
+        qty: seen.qty + fxOrZero(row.qty),
+        fee: seen.fee + (Number.isFinite(fee) ? Math.abs(fee) : 0),
+        usd: seen.usd && Number.isFinite(fee) && USD_FEE_COINS.includes(String(row.feeCoin ?? '').toUpperCase()),
+      });
+    }
+    if (rows.length < INTEREST_PAGE_SIZE) break;
+  }
+  const fees: Record<string, number> = {};
+  for (const deal of deals) {
+    const rows = deal.orders.map((order) => ({ order, got: order.venueOrderId === null ? undefined : read.get(order.venueOrderId) }));
+    const whole = rows.length > 0 && rows.every(({ order, got }) => got !== undefined && got.usd && got.qty >= fxOrZero(order.cumQty));
+    if (whole) fees[deal.id] = rows.reduce((sum, { got }) => sum + (got?.fee ?? 0), 0);
+  }
+  return fees;
+}
+
 export const moneyLockNow = (deps: AppDeps): MoneyLock | null => {
   const rebalance = deps.rebalance?.jobs.read() ?? null;
   return moneyLockFor({
@@ -133,13 +187,16 @@ interface OrderLeg {
 
 const legBookOf = (leg: OrderLeg, book: NormalizedBook | null): TwapLegBook => ({ ...leg, book, mid: touchOf(book)?.mid ?? null });
 
-export async function autoMakerLeg(deps: AppDeps, a: OrderLeg, b: OrderLeg, qty: string): Promise<'a' | 'b'> {
-  const feeRows = await deps.cache
+const accountFeeRows = (deps: AppDeps): Promise<VenueFeeRow[]> =>
+  deps.cache
     .get('fees', TTL.static, async () => (await deps.getClients().crossEx.getCrossexFee()).body)
     .then(
       ({ value }) => value,
       () => [],
     );
+
+export async function autoMakerLeg(deps: AppDeps, a: OrderLeg, b: OrderLeg, qty: string): Promise<'a' | 'b'> {
+  const feeRows = await accountFeeRows(deps);
   const sizedOf = async (leg: OrderLeg) => ({ ...legBookOf(leg, await deepBookOf(deps, leg.symbol)), qty: Number(qty) });
   const [legA, legB] = await Promise.all([sizedOf(a), sizedOf(b)]);
   return makerLegOf(feeRows, legA, legB).auto;
@@ -169,6 +226,25 @@ function twapInputOf(value: unknown): TwapInput | null {
   if (Object.values(input).some((field) => field === undefined)) throw new CoreError('twap needs numbers for durationSec, intervalSec and slices');
   return input;
 }
+
+const isDecimalQty = (value: string): boolean => /^\d+(\.\d{1,12})?$/.test(value) && fx(value) > FX_ZERO;
+
+interface ShownPlan {
+  intervalSec: number;
+  sliceQty: string;
+}
+
+function shownPlanOf(body: { intervalSec?: unknown; sliceQty?: unknown }): ShownPlan | null {
+  if (body.intervalSec === undefined && body.sliceQty === undefined) return null;
+  const { intervalSec, sliceQty } = body;
+  if (!isPositive(intervalSec) || !Number.isInteger(intervalSec) || typeof sliceQty !== 'string' || !isDecimalQty(sliceQty)) {
+    throw new CoreError(TWAP_NEEDS);
+  }
+  return { intervalSec, sliceQty };
+}
+
+const isShownPlan = (plan: TwapPlan | null, shown: ShownPlan, slices: number): boolean =>
+  plan !== null && plan.slices === slices && plan.intervalSec === shown.intervalSec && fx(plan.sliceQty) === fx(shown.sliceQty);
 
 const REPEG_OR_OFF: readonly unknown[] = [...REPEG_CHOICES_BP, null];
 const TWAP_NEEDS = 'A TWAP needs a client id, a deal, a duration and a slice count.';
@@ -430,13 +506,20 @@ export function rebalanceRoutes(deps: AppDeps) {
       if ('refusal' in outcome) throw new CoreError(outcome.refusal.message, outcome.refusal.category);
     };
 
+    const cachedTrades: TradePage = async (query) =>
+      (
+        await deps.cache.get(`twap:trades:${query.from}:${query.page}:${query.limit}`, TTL.trades, async () =>
+          (await deps.getClients().crossEx.listCrossexHistoryTrades(query)).body,
+        )
+      ).value;
+
     const twapDeps = (store: JobFile): TwapRunDeps => ({
       store: deps.engine!.store,
       engineWake: () => deps.engine!.wake?.(),
       createChild,
       now,
       jobs: store,
-      readFees: () => Promise.resolve({}),
+      readFees: (dealIds) => readChildFees(deps.engine!.store, cachedTrades, dealIds),
     });
 
     const twapViewFor = async (store: JobFile, job: Job) => {
@@ -448,7 +531,7 @@ export function rebalanceRoutes(deps: AppDeps) {
             : child,
         ),
       );
-      return twapViewOf(job, withBest);
+      return twapViewOf(job, withBest, await accountFeeRows(deps));
     };
 
     const bootJob = jobs?.read() ?? null;
@@ -457,7 +540,10 @@ export function rebalanceRoutes(deps: AppDeps) {
       bootJob !== null &&
       bootStep !== undefined &&
       (bootStep.venueId !== null || bootStep.text !== null);
-    if (jobs && bootJob && bootStep?.name === SLICE_STEP) {
+    if (jobs && deps.engine && bootJob?.kind === 'delever' && bootJob.deleverTwap && bootJob.status === 'running') {
+      void stopLiveChild(twapDeps(jobs), bootJob);
+      if (jobs.haltIfRunning()) onHalt(bootJob);
+    } else if (jobs && bootJob && bootStep?.name === SLICE_STEP) {
       inflight = cancelRestingLead(runnerDeps(jobs), bootJob)
         .then(() => {
           if (!bootJob.paused) onHalt(bootJob);
@@ -600,6 +686,18 @@ export function rebalanceRoutes(deps: AppDeps) {
       );
     };
 
+    const borosOrderGasUsd = (): Promise<number | null> =>
+      deps.cache
+        .get('boros:gas-price', TTL.boros, async () => {
+          const resp = await borosFetch(`${BOROS_API_BASE}/v1/gas-price/current`, { signal: AbortSignal.timeout(15_000) });
+          if (!resp.ok) throw new CoreError(`Boros gas price read returned HTTP ${resp.status}`, 'network');
+          return ((await resp.json()) as { estimatedOrderGasCostUsd?: unknown }).estimatedOrderGasCostUsd;
+        })
+        .then(
+          ({ value }) => (isPositive(value) ? value : null),
+          () => null,
+        );
+
     const loadDelever = async (request: DeleverRequest, fresh: boolean) => {
       const [account, positions, rules, fees, books, boros] = await Promise.all([
         readAccount(fresh),
@@ -646,7 +744,10 @@ export function rebalanceRoutes(deps: AppDeps) {
       return `rebalance ${lock.id} is ${lock.kind === 'halted' ? 'halted' : 'running'}`;
     };
 
-    const findLock = (): string | null => lockText(moneyLockNow(deps));
+    const findLock = (): string | null => {
+      const job = deps.rebalance?.jobs.read() ?? null;
+      return twapLockText(job, childLiveOf(deps, job)) ?? lockText(moneyLockNow(deps));
+    };
 
     const resumeLock = (job: Job): string | null =>
       lockText(moneyLockFor({ rebalance: null, transfer: deps.transfer?.jobs.read() ?? null, dealId: workingDeal(deps, job.id) }));
@@ -703,7 +804,10 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!request) throw new CoreError(DELEVER_NEEDS);
       const twapInput = twapInputOf((req.body as { twap?: unknown } | undefined)?.twap);
       const { plan, perps } = await loadDelever(request, false);
-      return reply.ok({ ...plan, ...(await deleverTwapOf(plan, perps, twapInput, false)) });
+      const twapped = await deleverTwapOf(plan, perps, twapInput, false);
+      const borosCloses = twapped.twap?.plan ? twapped.twap.plan.slices * plan.boros.filter((row) => row.closeSize > 0).length : 0;
+      const perCloseUsd = borosCloses > 0 ? await borosOrderGasUsd() : 0;
+      return reply.ok({ ...plan, ...twapped, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
     });
 
     interface StartBody {
@@ -724,6 +828,8 @@ export function rebalanceRoutes(deps: AppDeps) {
       deal?: unknown;
       durationSec?: unknown;
       slices?: unknown;
+      intervalSec?: unknown;
+      sliceQty?: unknown;
     }
 
     const refuse400 = (reply: FastifyReply, message: string): FastifyReply =>
@@ -758,6 +864,8 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!deal?.a?.symbol || typeof deal.qty !== 'string' || (deal.execution !== 'maker' && deal.execution !== 'taker')) {
         throw new CoreError(TWAP_NEEDS);
       }
+      if (!isDecimalQty(deal.qty)) throw new CoreError('qty must be a positive decimal string');
+      const shown = shownPlanOf(body);
       if (deal.makerLeg !== undefined && !['auto', 'a', 'b'].includes(deal.makerLeg)) throw new CoreError(`unknown maker leg ${String(deal.makerLeg)}`);
       const store = requireJobs();
       const seen = sameTwap(store, clientId);
@@ -766,8 +874,17 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (locked) return conflict(reply, locked);
       const a = { symbol: deal.a.symbol, side: deal.a.side };
       const b = deal.b ? { symbol: deal.b.symbol, side: deal.b.side } : null;
-      const planned = await catchRateLimit(twapPlanFor(b ? [a, b] : [a], deal.qty, { durationSec, slices }, true, null));
+      const legs = b ? [a, b] : [a];
+      const planFor = (input: TwapInput) => catchRateLimit(twapPlanFor(legs, deal.qty as string, input, true, null));
+      let planned = await planFor(shown ? { intervalSec: shown.intervalSec, slices } : { durationSec, slices });
+      if (planned && shown && !isShownPlan(planned.result.plan, shown, slices)) {
+        planned = await planFor({ intervalSec: shown.intervalSec, sliceQty: shown.sliceQty });
+      }
       if (!planned) return conflict(reply, STALE_TEXT);
+      const total = fx(deal.qty);
+      const offLot = planned.rules.findIndex((rule) => fxOrZero(rule.lot) > FX_ZERO && total % fxOrZero(rule.lot) !== FX_ZERO);
+      if (offLot >= 0) throw new CoreError(`Size ${deal.qty} is not a multiple of ${legs[offLot].symbol}'s lot ${planned.rules[offLot].lot}`);
+      if (shown && !isShownPlan(planned.result.plan, shown, slices)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (!planned.result.ok) return refuse400(reply, planned.result.refusal.text);
       const plan = planned.result.plan;
       const takerAfterSec = takerAfterOf(deal, plan);
@@ -861,9 +978,12 @@ export function rebalanceRoutes(deps: AppDeps) {
       const { plan, userId, account } = loaded;
       if (plan.refused) return conflict(reply, belowMinText(plan.refused));
       if (plan.legs.every((leg) => leg.closeQty <= 0)) return conflict(reply, NOTHING_TO_CLOSE);
-      const twapInput = twapInputOf((body.delever as { twap?: unknown } | undefined)?.twap);
+      const askedTwap = (body.delever as { twap?: { takerAfterSec?: number | null; repegBehindBp?: 2 | 5 | 10 | null } | null } | undefined)?.twap;
+      const twapInput = twapInputOf(askedTwap);
       const { twap } = await deleverTwapOf(plan, loaded.perps, twapInput, true);
       if (twap?.refusal) return refuse400(reply, twap.refusal.text);
+      const takerAfterSec = twap?.plan ? takerAfterOf({ timeoutSec: askedTwap?.takerAfterSec }, twap.plan) : null;
+      const repegBehindBp = repegOf({ repegBehindBp: askedTwap?.repegBehindBp });
       const cost = plan.estimates[exec];
       if (costRoseTooMuch(cost.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const [rates, paid] = await Promise.all([readRates(), interestPaid(userId)]);
@@ -891,7 +1011,9 @@ export function rebalanceRoutes(deps: AppDeps) {
           estimate: { feeUsd: cost.feePerpsUsd + cost.feeBorosUsd, impactUsd: cost.impactUsd, totalUsd: cost.totalUsd },
           delever: plan,
           imUsedStart: plan.imUsed.map((row) => ({ account: row.account, pct: row.before })),
-          twap: twap?.plan ? { durationSec: twap.plan.durationSec, intervalSec: twap.plan.intervalSec, slices: twap.plan.slices } : null,
+          twap: twap?.plan
+            ? { durationSec: twap.plan.durationSec, intervalSec: twap.plan.intervalSec, slices: twap.plan.slices, takerAfterSec, repegBehindBp }
+            : null,
         },
         now(),
       );

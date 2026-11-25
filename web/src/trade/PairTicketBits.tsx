@@ -8,7 +8,7 @@ import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
-import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { bpsOf, fmtAge, fmtUsd, num, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
 import { EstimateHeadline } from './EstimateHeadline';
@@ -288,7 +288,7 @@ export function LeverageValue({ text }: { text: string | null }) {
   const { t } = useTranslation();
   return text ? (
     <>
-      {text} <span className="text-[11px] font-normal text-ink-400">{t('pairTicket.bits.venueMax')}</span>
+      {text} <span className="text-[11px] font-normal text-ink-400">· {t('pairTicket.bits.venueMax')}</span>
     </>
   ) : (
     '—'
@@ -413,7 +413,7 @@ function LegRoleRow({ p, side, base }: { p: PreviewResult | undefined; side: 'LO
           {after}
         </>
       }
-      value={`${sig(p.qty)}${base ? ` ${base}` : ''}`}
+      value={`${qtyGrouped(p.qty)}${base ? ` ${base}` : ''}`}
     />
   );
 }
@@ -485,6 +485,7 @@ export function PairEstimate({
   leverage,
   marginRequired,
   book,
+  twapOn = false,
 }: {
   previews: PreviewResult[] | undefined;
   isError: boolean;
@@ -500,6 +501,7 @@ export function PairEstimate({
   marginRequired: number | null;
   /** The book + market-impact graph (already sized to this ticket). */
   book: ReactNode;
+  twapOn?: boolean;
 }) {
   const { t } = useTranslation();
   const [showBook, setShowBook] = useState(true);
@@ -529,6 +531,7 @@ export function PairEstimate({
       dataUpdatedAt={dataUpdatedAt}
       estimating={estimating}
       isError={isError}
+      sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
       aside={
         <button
           type="button"
@@ -550,7 +553,7 @@ export function PairEstimate({
           <EstimateHeadline
             label={t('pairTicket.bits.tradeCost')}
             sub={mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
-            value={tradeCost !== null ? `≈ ${sig(tradeCost)} USDT` : '—'}
+            value={tradeCost !== null ? `≈ ${num(tradeCost, 2)} USDT` : '—'}
           />
 
           {showRoles && (
@@ -582,7 +585,7 @@ export function PairEstimate({
               <EstimateRow
                 label={t('pairTicket.bits.sharedQty')}
                 sub={binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
-                value={`${sig(sharedQty)}${base ? ` ${base}` : ''}`}
+                value={`${qtyGrouped(sharedQty)}${base ? ` ${base}` : ''}`}
               />
             )}
             {spreadBps !== null && (

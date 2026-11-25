@@ -15,7 +15,9 @@ import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sigGrouped,
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
+import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
 import { TwapArea, useTwapInput } from '../trade/TwapArea';
+import { useTakerAfter, useTwapTakerAfter } from '../trade/useTwapTakerAfter';
 import { AffixedInput } from '../trade/PairTicketBits';
 import { daysLeftText, useOpenPairs, type OpenPair } from './assets/pairs';
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
@@ -62,7 +64,16 @@ function closeOf(pair: OpenPair, share: Share, customText: string): { close: num
   return { close, error: null };
 }
 
-function requestOf(pair: OpenPair, close: number, exec: RealizeExec, sliceUsd: number | null, twap: DeleverRequest['twap']): DeleverRequest {
+type MakerOpts = { takerAfterSec?: number | null; repegBehindBp?: number | null };
+type BorosGas = { borosCloses?: number; borosGasUsd?: number | null };
+
+function requestOf(
+  pair: OpenPair,
+  close: number,
+  exec: RealizeExec,
+  sliceUsd: number | null,
+  twap: (DeleverRequest['twap'] & MakerOpts) | undefined,
+): DeleverRequest {
   return {
     perps: pair.perps.map((p) => ({ symbol: p.symbol, qty: close })),
     boros: pair.boros.map((b) => ({ marketId: b.marketId, size: (b.size * close) / pair.size })),
@@ -135,9 +146,16 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const { close, error: amountText } = pair ? closeOf(pair, share, customText) : { close: null, error: null };
   const twap = useTwapInput();
   const sliceUsd = sliceUsdOf(slicePick, sliceText);
-  const twapSent = twap.on && !twap.startBlocked ? twap.input : undefined;
+  const taker = useTakerAfter();
+  const [repegBp, setRepegBp] = useState<number | null>(REPEG_DEFAULT_BP);
+  const makerOpts: MakerOpts = {
+    takerAfterSec: taker.sec,
+    repegBehindBp: repegBp,
+  };
+  const twapSent = twap.on && !twap.startBlocked ? { ...twap.input, ...(exec === 'maker' ? makerOpts : {}) } : undefined;
   const request = pair !== null && close !== null ? requestOf(pair, close, exec, twap.on ? null : sliceUsd, twapSent) : null;
   const query = useDeleverPlan(request);
+  const takerBad = useTwapTakerAfter(taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
 
   if (loading) return <Skeleton className="h-40 w-full" />;
   if (failed) {
@@ -165,7 +183,14 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const walletReady = !needsBoros || wallet.canTrade;
   const stale = plan !== null && query.isError;
   const twapPlan = twap.on ? (plan?.twap?.plan ?? null) : null;
-  const twapBody = twapPlan ? { durationSec: twapPlan.durationSec, slices: twapPlan.slices } : undefined;
+  const twapBody = twapPlan
+    ? { durationSec: twapPlan.durationSec, slices: twapPlan.slices, ...(exec === 'maker' ? makerOpts : {}) }
+    : undefined;
+  const gas = (plan ?? {}) as BorosGas;
+  const gasRow =
+    twapPlan && (gas.borosCloses ?? 0) > 0 && (gas.borosGasUsd ?? 0) > 0
+      ? [{ label: t('accounts.delever.borosGas', { n: gas.borosCloses }), usd: gas.borosGasUsd as number }]
+      : [];
   const slicePastBook = !twap.on && option?.pastBook === true;
   const twapBlocked = twap.blockedBy(plan?.twap);
   const ready =
@@ -175,6 +200,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     plan.refused === null &&
     !slicePastBook &&
     !twapBlocked &&
+    !takerBad &&
     lock === null &&
     !start.isPending &&
     walletReady;
@@ -186,6 +212,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     ? [
         { label: t('accounts.deleverTab.tradingFeePerps'), usd: estimate.feePerpsUsd, hover: SLICE_HOVER.tradingFeePerps },
         ...(plan && plan.boros.length > 0 ? [{ label: t('accounts.deleverTab.tradingFeeBoros'), usd: estimate.feeBorosUsd }] : []),
+        ...gasRow,
         { label: t('accounts.deleverTab.priceImpact'), usd: estimate.impactUsd, hover: SLICE_HOVER.priceImpact },
         { label: t('accounts.deleverTab.totalCost'), usd: estimate.totalUsd, strong: true },
       ]
@@ -216,6 +243,9 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     if (request === null) return null;
     if (query.isError && plan === null) return <VerdictAlert tone="warn" text={query.error.message} />;
     if (plan === null) return <Skeleton className="h-48 w-full" />;
+    const hedgeGapQty = twapPlan ? Number(twapPlan.sliceQty) : plan.notHedgedMaxQty;
+    const hedgeGapUsd = twapPlan ? (plan.notHedgedMaxUsd / plan.notHedgedMaxQty) * hedgeGapQty : plan.notHedgedMaxUsd;
+    const costBox = costRows.length > 0 && !twapBlocked && !plan.refused && !slicePastBook ? <TotalCost rows={costRows} /> : null;
     const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
     return (
       <>
@@ -235,7 +265,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           input={twap.input}
           onInput={twap.setInput}
           preview={plan.twap ?? null}
-          impact={plan.priceImpact ?? null}
+          impact={twapBlocked ? null : (plan.priceImpact ?? null)}
           coin={pair.base}
           offLabel={
             option && (
@@ -260,6 +290,20 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             )
           }
         />
+        {twap.on && exec === 'maker' && (
+          <MakerSettings
+            legs={null}
+            makerLeg="auto"
+            autoPick={null}
+            onMakerLeg={() => undefined}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            intervalSec={twap.input.intervalSec ?? twapPlan?.intervalSec ?? null}
+            repegBehindBp={repegBp}
+            repegLocked={false}
+            onRepeg={setRepegBp}
+          />
+        )}
         {twapPlan && borosGapYu > 0 && leadClose > 0 && (
           <div className="flex items-center justify-between gap-3 px-1 text-xs text-ink-300">
             <HoverCard label={t('accounts.delever.borosPerSlice')} widthPx={260}>
@@ -273,7 +317,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {plan.notHedgedMaxQty > 0 && (
           <NotHedgedLine
-            text={t('accounts.deleverTab.notHedged', { qty: qtyText(plan.notHedgedMaxQty), coin: pair.base, usd: fmtUsd(plan.notHedgedMaxUsd, 0) })}
+            text={t('accounts.deleverTab.notHedged', { qty: qtyText(hedgeGapQty), coin: pair.base, usd: fmtUsd(hedgeGapUsd, 0) })}
           />
         )}
         {borosGapYu > 0 && (
@@ -282,6 +326,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             text={t('accounts.deleverTab.borosGap', { amount: qtyText(borosGapYu), time: fmtAbout(option?.seconds[exec] ?? 0) })}
           />
         )}
+        {costBox}
         {walletBlocked && !wallet.loginLabel && (
           <p className="text-xs text-gold">{t('pairTicket.closeBoros.agentReason')}</p>
         )}
@@ -297,13 +342,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         ) : slicePastBook ? (
           <VerdictAlert tone="warn" text={realizeText('bookTitle')} sub={realizeText('sliceBookBody')} />
         ) : walletBlocked && wallet.loginLabel ? (
-          <div className="flex flex-col gap-3">
-            {costRows.length > 0 && <TotalCost rows={costRows} />}
-            <BorosLogInButton />
-          </div>
+          <BorosLogInButton />
         ) : (
           <RebalanceModalFooter
-            rows={costRows}
+            rows={[]}
             holdLabel={holdLabel}
             optional={false}
             stale={false}

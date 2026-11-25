@@ -13,7 +13,7 @@ import { dealSlippage } from './dealSlippage';
 import { LimitPriceBox } from './LimitPriceBox';
 import { DealBookImpact } from './PriceImpactGraph';
 import type { RunRow, RunViewProps } from './RunView';
-import { clockSpan, padTwo, qtyText, SideText, usdText } from './RunViewBits';
+import { clockSpan, feeText, HOLD_IN_ROW, padTwo, qtyText, sideWord, SideText, SlipLabel, usdText } from './RunViewBits';
 
 function venueReasonText(raw: string | null): string | null {
   if (!raw) return null;
@@ -52,7 +52,8 @@ function DealPriceBox({ pair, restPrice }: { pair: DealPair; restPrice: string |
   const buy = pair.a.side === 'BUY';
   const best = book.data ? (buy ? book.data.bestBid : book.data.bestAsk) : null;
   const rest = Number(restPrice);
-  const behind = best !== null && best > 0 && Number.isFinite(rest) && rest > 0 ? (Math.abs(best - rest) / best) * 100 : null;
+  const behind =
+    best !== null && best > 0 && Number.isFinite(rest) && rest > 0 ? (Math.max(0, buy ? best - rest : rest - best) / best) * 100 : null;
   const toAuto = () => {
     setTyped(null);
     repeg.mutate({ id: pair.id });
@@ -97,7 +98,7 @@ function DealActs({ dealId, mode }: { dealId: string; mode: DealPair['mode'] }) 
   const pending = convert.isPending || stop.isPending || resume.isPending;
   const error = (convert.error ?? stop.error ?? resume.error) as { message: string; hint?: string } | null;
   const holdStop = (
-    <HoldToConfirmButton tone="outline" disabled={pending} onConfirm={() => stop.mutate({ id: dealId })}>
+    <HoldToConfirmButton tone="outline" className={HOLD_IN_ROW} disabled={pending} onConfirm={() => stop.mutate({ id: dealId })}>
       {t('trade.twap.run.holdStop')}
     </HoldToConfirmButton>
   );
@@ -127,7 +128,23 @@ function DealActs({ dealId, mode }: { dealId: string; mode: DealPair['mode'] }) 
   );
 }
 
-export function dealRunProps(view: DealView, report: DealReport | null, now: number, extraLines: ReactNode[]): RunViewProps {
+const positionSide = (leg: { side: 'BUY' | 'SELL'; reduceOnly?: boolean }): 'LONG' | 'SHORT' =>
+  (leg.side === 'BUY') !== (leg.reduceOnly === true) ? 'LONG' : 'SHORT';
+
+export function dealTitle(pair: DealPair): string {
+  const coin = parseSymbol(pair.a.contract).base;
+  const close = pair.a.reduceOnly === true;
+  const key = pair.b ? (close ? 'titlePairClose' : 'titlePairOpen') : close ? 'titleSingleClose' : 'titleSingleOpen';
+  return t(`trade.deal.${key}`, { coin, side: sideWord(positionSide(pair.a)).toLowerCase() });
+}
+
+export function dealRunProps(
+  view: DealView,
+  report: DealReport | null,
+  now: number,
+  extraLines: ReactNode[],
+  onClose: () => void,
+): RunViewProps {
   const { pair, projection: proj, orders } = view;
   const { b } = pair;
   const coin = parseSymbol(pair.a.contract).base;
@@ -148,8 +165,8 @@ export function dealRunProps(view: DealView, report: DealReport | null, now: num
   const usdOf = (qty: number): string => (Number.isFinite(refPrice) ? usdText(qty * refPrice) : '');
   const { fees } = view;
   const legs = [
-    { name: venueOf(pair.a.contract), side: pair.a.side, avg: avgA, filled: aFilled },
-    ...(b ? [{ name: venueOf(b.contract), side: b.side, avg: avgB, filled: bFilled }] : []),
+    { name: venueOf(pair.a.contract), side: positionSide(pair.a), avg: avgA, filled: aFilled },
+    ...(b ? [{ name: venueOf(b.contract), side: positionSide(b), avg: avgB, filled: bFilled }] : []),
   ];
   const withUsd = (qty: number) =>
     t('trade.twap.run.filledEachValue', { done: qtyText(qty), total: qtyText(total), coin, usd: usdOf(qty) });
@@ -170,7 +187,7 @@ export function dealRunProps(view: DealView, report: DealReport | null, now: num
     const amount = `${sign}${sigGrouped(Math.abs(slip.usd / qty))}`;
     const pct = `${sign}${fmtPct(Math.abs(slip.pct), 3)}`;
     const word = t(slip.word === 'Favorable' ? 'trade.deal.favorable' : 'trade.deal.adverse');
-    return [{ label, value: `${t('trade.twap.run.slippageValue', { amount, pct })} ${word}`, tone: slip.usd >= 0 ? 'gain' : 'loss' }];
+    return [{ label: <SlipLabel label={label} />, value: `${t('trade.twap.run.slippageValue', { amount, pct })} ${word}`, tone: slip.usd >= 0 ? 'gain' : 'loss' }];
   };
   const gapRow = (qty: number): RunRow[] =>
     b ? [{ label: t('trade.twap.run.notHedged'), value: qty > 0 ? `${qtyText(qty)} ${coin} (${usdOf(qty)})` : `0 ${coin}` }] : [];
@@ -186,17 +203,14 @@ export function dealRunProps(view: DealView, report: DealReport | null, now: num
     <Chip tone={tone}>{t(pair.mode === 'HALTED' ? 'trade.deal.modeHalted' : pair.mode === 'CONVERTING' ? 'trade.deal.modeConverting' : 'trade.deal.modeStopping')}</Chip>
   );
   const title = (
-    <div className="flex flex-col gap-0.5">
-      <span>{coin}</span>
-      <span className="num text-[11px] font-normal text-ink-400">
-        {legs.map((leg, i) => (
-          <span key={leg.name}>
-            {i > 0 && ' / '}
-            {leg.name} <SideText side={leg.side === 'BUY' ? 'LONG' : 'SHORT'} />
-          </span>
-        ))}
-      </span>
-    </div>
+    <span className="num text-[11px] font-normal text-ink-400">
+      {legs.map((leg, i) => (
+        <span key={leg.name}>
+          {i > 0 && ' / '}
+          {leg.name} <SideText side={leg.side} />
+        </span>
+      ))}
+    </span>
   );
 
   const lines: ReactNode[] = [];
@@ -216,7 +230,7 @@ export function dealRunProps(view: DealView, report: DealReport | null, now: num
       </span>,
     );
   }
-  if (done && report) lines.push(upperFirst(localizeServerText(report.reason)));
+  if (done && report && !/^(done|filled|target reached)$/i.test(report.reason)) lines.push(upperFirst(localizeServerText(report.reason)));
   lines.push(...extraLines);
 
   const runOrders: RunOrderView[] = [...orders]
@@ -232,7 +246,9 @@ export function dealRunProps(view: DealView, report: DealReport | null, now: num
       state: o.state,
       createdAt: o.createdAt,
     }));
-  const base = { title, chip, orders: runOrders, lines };
+  const progress =
+    total > 0 ? ({ ratio: aFilled / total, tone: done ? 'done' : pair.mode === 'HALTED' ? 'stopped' : 'running' } as const) : null;
+  const base = { title, chip, progress, orders: runOrders, lines };
 
   if (done) {
     const rows: RunRow[] = [
@@ -243,7 +259,7 @@ export function dealRunProps(view: DealView, report: DealReport | null, now: num
       { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
       { label: t('trade.twap.run.took'), value: clockSpan(Math.max(0, (view.endedAt ?? pair.createdAt) - pair.createdAt) / 1000) },
     ];
-    return { ...base, firstLine: null, rows, graph: null, priceBox: null, acts: null, footer: false };
+    return { ...base, firstLine: null, rows, graph: null, priceBox: null, acts: <button type="button" className="btn-primary" onClick={onClose}>{t('common.close')}</button>, footer: false };
   }
 
   const rows: RunRow[] = [];
@@ -255,7 +271,7 @@ export function dealRunProps(view: DealView, report: DealReport | null, now: num
   }
   rows.push(...filledRows(), ...avgRows(), ...slippageRow(t('trade.twap.run.slippageSoFar')), ...gapRow(unhedged), {
     label: t('trade.twap.run.feeSoFar'),
-    value: fees.est ? t('trade.twap.run.feeValue', { fee: usdText(fees.readUsd), est: usdText(fees.estUsd) }) : usdText(fees.readUsd),
+    value: feeText(fees),
   });
   const open = proj.makerOrder?.state === 'OPEN' ? proj.makerOrder : null;
   const restPrice = open?.price ?? pair.limitPrice;

@@ -243,7 +243,7 @@ describe('preflightMargin', () => {
       ).rejects.toMatchObject({ category: 'insufficient-margin' });
     });
 
-    it('credits the close qty when the positions read fails', async () => {
+    it('credits nothing when the positions read fails', async () => {
       await expect(
         preflightMargin(clients, realize(100_000), {
           getAccount: async () => acct('3000'),
@@ -251,7 +251,7 @@ describe('preflightMargin', () => {
             throw new Error('boom');
           },
         }),
-      ).resolves.toBeUndefined();
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
     });
   });
 

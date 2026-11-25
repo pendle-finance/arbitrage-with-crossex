@@ -5,7 +5,7 @@ import type { PriceImpactPreview, TwapPlanPreview, TwapPlanView, TwapRefusalView
 import { HoverCard } from '../components/HoverCard';
 import { Switch } from '../components/Switch';
 import { localizeServerText } from '../i18n/serverMessages';
-import { fmtUsd, sigGrouped } from '../lib/fmt';
+import { fmtUsd, qtyGrouped } from '../lib/fmt';
 import { parseSpan, spanText } from '../lib/span';
 import { AffixedInput } from './PairTicketBits';
 
@@ -25,6 +25,33 @@ const BOX_OF_FIELD: Record<TwapRefusalView['field'], Box> = {
   interval: 'intervalSec',
   sliceSize: 'sliceQty',
 };
+
+const EMPTY_PLAN: TwapPlanView = { slices: 0, sliceQty: '0', lastQty: '0', intervalSec: 0, durationSec: 0, takerAfterSec: 0 };
+
+export function twapControlOf(
+  on: boolean,
+  plan: TwapPlanView | null,
+  blocked: boolean,
+): { plan: TwapPlanView; blocked: boolean } | null {
+  if (!on) return null;
+  return { plan: plan ?? EMPTY_PLAN, blocked: blocked || plan === null };
+}
+
+function lotDigits(lot: string | undefined): number | null {
+  if (!lot || !/^\d*\.?\d+$/.test(lot)) return null;
+  return (lot.split('.')[1] ?? '').replace(/0+$/, '').length;
+}
+
+function atLot(text: string, coin: string, lot: string | undefined): string {
+  const digits = lotDigits(lot);
+  if (digits === null || !coin) return text;
+  const pattern = new RegExp(`(\\d[\\d,]*)(\\.\\d+)? ${coin}\\b`, 'g');
+  return text.replace(pattern, (_, whole: string, frac: string | undefined) => {
+    const kept = (frac ?? '').slice(1, 1 + digits).replace(/0+$/, '');
+    const grouped = Number(whole.replace(/,/g, '')).toLocaleString('en-US', { maximumFractionDigits: 0 });
+    return `${grouped}${kept ? `.${kept}` : ''} ${coin}`;
+  });
+}
 
 const DEFAULT_INPUT: TwapInput = { durationSec: 3_600, intervalSec: 300 };
 
@@ -86,7 +113,7 @@ export function useTwapInput(): {
   return { on, setOn, input, setInput, startBlocked, blockedBy };
 }
 
-function ImpactPair({ impact }: { impact: PriceImpactPreview }) {
+function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {
   const { t } = useTranslation();
   return (
     <span className="ml-auto flex items-center gap-1.5 text-[11px] text-ink-400">
@@ -98,18 +125,29 @@ function ImpactPair({ impact }: { impact: PriceImpactPreview }) {
       </span>{' '}
       <ArrowRight size={12} aria-hidden />{' '}
       <span className="num text-grass">{fmtUsd(impact.sliced, 0)}</span>
+      {on && <span>{t('trade.twap.area.wholeRun')}</span>}
     </span>
   );
 }
 
-function RefusalLine({ refusal, onFix }: { refusal: TwapRefusalView; onFix: (patch: TwapInput) => void }) {
+function RefusalLine({
+  refusal,
+  onFix,
+  coin,
+  lot,
+}: {
+  refusal: TwapRefusalView;
+  onFix: (patch: TwapInput) => void;
+  coin: string;
+  lot?: string;
+}) {
   const fix = refusal.fix;
   return (
     <p className="text-[11px] text-rose-400">
-      <X size={12} aria-hidden className="inline" /> {localizeServerText(refusal.text)}{' '}
+      <X size={12} aria-hidden className="inline" /> {atLot(localizeServerText(refusal.text), coin, lot)}{' '}
       {fix && (
         <button type="button" className="btn-link text-[11px]" onClick={() => onFix(fix.patch)}>
-          {localizeServerText(fix.label)}
+          {atLot(localizeServerText(fix.label), coin, lot)}
         </button>
       )}
     </p>
@@ -124,6 +162,7 @@ export function TwapArea({
   preview,
   impact,
   coin,
+  lot,
   offLabel,
 }: {
   on: boolean;
@@ -133,6 +172,7 @@ export function TwapArea({
   preview: TwapPlanPreview | null;
   impact: PriceImpactPreview | null;
   coin: string;
+  lot?: string;
   offLabel?: ReactNode;
 }) {
   const { t } = useTranslation();
@@ -152,7 +192,13 @@ export function TwapArea({
   const type = (box: Box, raw: string) => {
     setDrafts((current) => ({ ...current, [box]: raw }));
     const own = typedEntry(box, raw);
-    if (own === null) return;
+    if (own === null) {
+      if (raw.trim() === '' && input[box] !== undefined) {
+        const { [box]: _cleared, ...rest } = input;
+        onInput(rest);
+      }
+      return;
+    }
     setRecent((current) => [...current.filter((other) => other !== box), box]);
     onInput(nextInput(input, box, own, recent, plan));
   };
@@ -204,10 +250,10 @@ export function TwapArea({
   return (
     <div className="flex flex-col gap-2.5 rounded-md border border-ink-700 px-3 py-2.5">
       <div className="flex items-center gap-3">
-        <HoverCard icon={false} underline={false} wrapsControl widthPx={260} label={<Switch on={on} onChange={onToggle} label={t('trade.twap.area.title')} />}>
+        <HoverCard underline={false} wrapsControl widthPx={260} label={<Switch on={on} onChange={onToggle} label={t('trade.twap.area.title')} />}>
           {t('trade.twap.area.hover')}
         </HoverCard>
-        {impact && <ImpactPair impact={impact} />}
+        {impact && <ImpactPair impact={impact} on={on} />}
       </div>
       {!on && offLabel}
       {on && (
@@ -217,12 +263,15 @@ export function TwapArea({
             {field('intervalSec', t('trade.twap.area.interval'))}
             {field('sliceQty', t('trade.twap.area.sliceSize'))}
           </div>
-          {refusal && <RefusalLine refusal={refusal} onFix={applyFix} />}
-          {plan && (
+          {refusal && <RefusalLine refusal={refusal} onFix={applyFix} coin={coin} lot={lot} />}
+          {!isComplete(input) && (
+            <span className="text-[11px] text-ink-400">{t('trade.twap.area.needTwo')}</span>
+          )}
+          {plan && !refusal && isComplete(input) && (
             <span className="num text-[11px] text-ink-300">
               {plan.lastQty === plan.sliceQty
                 ? t('trade.twap.area.slicesOnly', { n: plan.slices })
-                : t('trade.twap.area.slices', { n: plan.slices, qty: sigGrouped(plan.lastQty), coin })}
+                : t('trade.twap.area.slices', { n: plan.slices, qty: qtyGrouped(plan.lastQty), coin })}
             </span>
           )}
         </>

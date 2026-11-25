@@ -4,7 +4,7 @@ import type { DealReport } from '../api/types';
 import { Modal } from '../components/Modal';
 import { Spinner } from '../components/Spinner';
 import { useNow } from '../lib/useNow';
-import { dealRunProps } from './DealModalBits';
+import { dealRunProps, dealTitle } from './DealModalBits';
 import { RunView } from './RunView';
 
 export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => void }) {
@@ -30,11 +30,15 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
       onClose={onClose}
       widthClass="w-[560px]"
       title={
-        <Trans
-          i18nKey="trade.deal.title"
-          values={{ id: dealId.slice(0, 8) }}
-          components={{ n: <span className="num text-ink-400" /> }}
-        />
+        view.data ? (
+          dealTitle(view.data.pair)
+        ) : (
+          <Trans
+            i18nKey="trade.deal.title"
+            values={{ id: dealId.slice(0, 8) }}
+            components={{ n: <span className="num text-ink-400" /> }}
+          />
+        )
       }
     >
       {!view.data ? (
@@ -48,7 +52,14 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
           )}
         </div>
       ) : (
-        <RunView {...dealRunProps(view.data, report, now, alertLines)} />
+        <div className="flex flex-col gap-3">
+          {view.isError && (
+            <span role="alert" className="text-[12px] text-rose-300">
+              {t('trade.deal.refreshFailed')}
+            </span>
+          )}
+          <RunView {...dealRunProps(view.data, report, now, alertLines, onClose)} />
+        </div>
       )}
     </Modal>
   );

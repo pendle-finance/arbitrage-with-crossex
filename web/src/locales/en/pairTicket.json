@@ -22,6 +22,8 @@
     "hedgeAtMarketNote": "— first leg limit at mid ± slippage; hedge leg at market"
   },
   "bits": {
+    "bookUnavailable": "≈ est. (book unavailable)",
+    "bookUnavailableHint": "Order book unavailable. The price is a cross-venue mid estimate — verify before executing.",
     "estimate": "Estimate",
     "previewFailed": "Preview failed",
     "ago": "{{age}} ago",
@@ -278,12 +280,14 @@
     "takerNever": "never",
     "repegOff": "off",
     "makerLeg": "Maker leg",
+    "saving": "<g>Saves ≈ {{amount}} USDT</g> vs 2 taker orders",
+    "savingHint": "Fee saved vs opening both legs as taker",
     "auto": "Auto",
     "reset": "Reset",
     "autoFees": "Auto: the lower maker fee rests.",
     "autoBook": "Auto: fees tie, so the thinner book rests.",
-    "hoverRests": "Rests the limit order · maker fee {{bp}} bps",
-    "hoverHedges": "Hedges each fill at market · taker fee {{bp}} bps",
+    "hoverRests": "Rests the limit order · maker fee {{bp}} bps ({{pct}}%)",
+    "hoverHedges": "Hedges each fill at market · taker fee {{bp}} bps ({{pct}}%)",
     "takerAfter": "Taker after",
     "takerChoice": {
       "m5": "5m",
@@ -291,7 +295,7 @@
       "never": "Never",
       "custom": "Custom"
     },
-    "takerHover": "What is still unfilled then goes as a market order ({{bp}} bps taker fee).",
+    "takerHover": "What is still unfilled then goes as a market order ({{bp}} bps, {{pct}}%, taker fee).",
     "takerNeverHover": "Never: the limit order rests until it fills.",
     "takerOver": "Must be 80% of the interval or less ({{max}})",
     "customAria": "Taker after, custom time",

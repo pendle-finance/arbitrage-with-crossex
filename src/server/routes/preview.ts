@@ -47,7 +47,8 @@ export function previewRoutes(deps: AppDeps): FastifyPluginCallback {
         const { body: rows } = await clients.crossEx.getCrossexFee();
         return rows ?? [];
       });
-      const previews = await previewActions({ clients, feeRows: feeRows.value }, actions);
+      const sliced = body?.twap !== undefined && body.twap !== null;
+      const previews = await previewActions({ clients, feeRows: feeRows.value }, actions, sliced);
       const extras = await previewTwap({ feeRows: feeRows.value, book: (symbol) => deepBookOf(deps, symbol) }, previews, twapInput).catch(
         (err: unknown) => {
           if (err instanceof Error && err.message.startsWith('twap:')) throw new CoreError(err.message);

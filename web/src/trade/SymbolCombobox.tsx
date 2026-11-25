@@ -4,8 +4,6 @@
  *
  * - CoinCombobox (pair ticket): a "Coin" row — quick-pick majors as chips, a
  *   search box for anything else — that selects a BASE only.
- *
- * It hides ratio-pair bases (ETHBTC…) from the list (see lib/ratioBase).
  */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useMemo, useState, type ReactNode } from 'react';

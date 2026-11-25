@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { Clients } from '../../src/core/clients';
-import { resolveDeal, type DealRequest } from '../../src/engine/create';
+import { REPEG_DEFAULT_BP, resolveDeal, type DealRequest } from '../../src/engine/create';
 import { fxStr, fx } from '../../src/engine/fx';
 import { commands, startLoop, tickPair } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
@@ -1339,47 +1339,44 @@ describe('engine sleep flag', () => {
   });
 });
 
-describe('sleep during a venue read', () => {
-  it('a sleep that starts while a pass waits on the venue skips decide and flags the gap', async () => {
-    const w = mkWorld({ deadlineInMs: 60_000 });
-    await stepChecked(w);
-    const gaps: Array<{ fromMs: number; toMs: number }> = [];
-    const deps = {
-      ...w.deps,
-      onSleep: (gap: { fromMs: number; toMs: number }) => {
-        gaps.push(gap);
-        commands.stop(w.store, w.pairId);
-      },
-    };
-    const read = w.venue.getOrder.bind(w.venue);
-    w.venue.getOrder = async (ref) => {
-      w.clock.advance(40 * 60_000);
-      w.venue.getOrder = read;
-      return read(ref);
-    };
-    const action = await tickPair(deps, w.pairId);
-    expect(action.type).toBe('idle');
-    expect(gaps).toHaveLength(1);
-    expect(gaps[0].toMs - gaps[0].fromMs).toBe(40 * 60_000);
-    for (let i = 0; i < 8; i++) {
-      await tickPair(deps, w.pairId);
-      w.clock.advance(TUNING.TICK_MS);
-    }
-    expect(w.store.getPair(w.pairId)!.mode).toBe('DONE');
-    expect([...w.venue.orders.values()].some((o) => o.contract === A_CONTRACT && o.tif === 'ioc')).toBe(false);
-  });
-
-  it('a venue read under a minute is not a sleep', async () => {
+describe('a slow venue read is not a sleep', () => {
+  it('a single 65 s venue read with an on-time timer flags nothing', async () => {
     const w = mkWorld({ deadlineInMs: null });
     await stepChecked(w);
+    const abort = new AbortController();
     const gaps: Array<{ fromMs: number; toMs: number }> = [];
+    let reads = 0;
     const read = w.venue.getOrder.bind(w.venue);
     w.venue.getOrder = async (ref) => {
-      w.clock.advance(59_000);
+      if (reads === 0) w.clock.advance(65_000);
+      reads += 1;
       return read(ref);
     };
-    await tickPair({ ...w.deps, onSleep: (gap) => gaps.push(gap) }, w.pairId);
-    expect(gaps).toEqual([]);
+    startLoop({ ...w.deps, tuning: { TICK_MS: 20, FAST_TICK_MS: 5 }, onSleep: (gap) => gaps.push(gap) }, { signal: abort.signal });
+    try {
+      await waitFor(() => reads >= 3);
+      expect(gaps).toEqual([]);
+      expect(w.store.getPair(w.pairId)!.mode).toBe('OPENING');
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('a 70 s timer gap flags a sleep', async () => {
+    const w = mkWorld({ deadlineInMs: null });
+    const abort = new AbortController();
+    const gaps: Array<{ fromMs: number; toMs: number }> = [];
+    startLoop({ ...w.deps, tuning: { TICK_MS: 20, FAST_TICK_MS: 5 }, onSleep: (gap) => gaps.push(gap) }, { signal: abort.signal });
+    try {
+      await waitFor(() => w.venue.liveOrder(A_CONTRACT) !== undefined);
+      expect(gaps).toEqual([]);
+      w.clock.advance(70_000);
+      await waitFor(() => gaps.length > 0);
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0].toMs - gaps[0].fromMs).toBeGreaterThanOrEqual(70_000 - 20);
+    } finally {
+      abort.abort();
+    }
   });
 });
 
@@ -1407,25 +1404,27 @@ describe('refused re-peg', () => {
   });
 });
 
+const BASE_PAIR_TABLE = `CREATE TABLE pair (
+  id TEXT PRIMARY KEY, mode TEXT NOT NULL,
+  a_contract TEXT NOT NULL, a_side TEXT NOT NULL, a_lot TEXT NOT NULL,
+  a_min_size TEXT NOT NULL, a_min_notional TEXT NOT NULL,
+  a_tick TEXT NOT NULL DEFAULT '0.0001', a_reduce_only INTEGER NOT NULL DEFAULT 0,
+  b_contract TEXT, b_side TEXT, b_lot TEXT, b_min_size TEXT, b_min_notional TEXT,
+  b_tick TEXT, b_reduce_only INTEGER NOT NULL DEFAULT 0,
+  target_qty TEXT NOT NULL, limit_price TEXT,
+  price_policy TEXT NOT NULL DEFAULT 'touch', deadline_at INTEGER,
+  maker_not_before INTEGER NOT NULL DEFAULT 0, hedge_not_before INTEGER NOT NULL DEFAULT 0,
+  poc_rejects INTEGER NOT NULL DEFAULT 0, hedge_reject_streak INTEGER NOT NULL DEFAULT 0,
+  max_clip TEXT, clip_band_bp INTEGER, halt_reason TEXT, report_json TEXT,
+  created_at INTEGER NOT NULL)`;
+
 describe('store migration', () => {
   it('old deal rows load with the new fields at their defaults', () => {
     const dir = mkdtempSync(join(tmpdir(), 'engine-migrate-'));
     const file = join(dir, 'engine.sqlite');
     try {
       const old = new DatabaseSync(file);
-      old.exec(`CREATE TABLE pair (
-        id TEXT PRIMARY KEY, mode TEXT NOT NULL,
-        a_contract TEXT NOT NULL, a_side TEXT NOT NULL, a_lot TEXT NOT NULL,
-        a_min_size TEXT NOT NULL, a_min_notional TEXT NOT NULL,
-        a_tick TEXT NOT NULL DEFAULT '0.0001', a_reduce_only INTEGER NOT NULL DEFAULT 0,
-        b_contract TEXT, b_side TEXT, b_lot TEXT, b_min_size TEXT, b_min_notional TEXT,
-        b_tick TEXT, b_reduce_only INTEGER NOT NULL DEFAULT 0,
-        target_qty TEXT NOT NULL, limit_price TEXT,
-        price_policy TEXT NOT NULL DEFAULT 'touch', deadline_at INTEGER,
-        maker_not_before INTEGER NOT NULL DEFAULT 0, hedge_not_before INTEGER NOT NULL DEFAULT 0,
-        poc_rejects INTEGER NOT NULL DEFAULT 0, hedge_reject_streak INTEGER NOT NULL DEFAULT 0,
-        max_clip TEXT, clip_band_bp INTEGER, halt_reason TEXT, report_json TEXT,
-        created_at INTEGER NOT NULL)`);
+      old.exec(BASE_PAIR_TABLE);
       old
         .prepare(
           `INSERT INTO pair (id, mode, a_contract, a_side, a_lot, a_min_size, a_min_notional, target_qty, limit_price, deadline_at, created_at)
@@ -1447,6 +1446,36 @@ describe('store migration', () => {
       expect(patched.repegNotBefore).toBe(42);
       expect(patched.haltKind).toBe('hedge-margin');
       store.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a touch close in flight from before re-peg gets the default re-peg', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'engine-migrate-'));
+    const file = join(dir, 'engine.sqlite');
+    try {
+      const old = new DatabaseSync(file);
+      old.exec(BASE_PAIR_TABLE);
+      const insert = old.prepare(
+        `INSERT INTO pair (id, mode, a_contract, a_side, a_lot, a_min_size, a_min_notional, a_reduce_only, target_qty, limit_price, price_policy, deadline_at, created_at)
+         VALUES (?, ?, ?, 'SELL', '0.001', '0', '0', 1, '1.5', '2500', ?, 1700000300000, 1700000000000)`,
+      );
+      insert.run('close-touch', 'OPENING', A_CONTRACT, 'touch');
+      insert.run('close-typed', 'OPENING', A_CONTRACT, 'fixed');
+      insert.run('close-done', 'DONE', A_CONTRACT, 'touch');
+      old.close();
+
+      const store = new Store(file);
+      expect(store.getPair('close-touch')!.repegBehindBp).toBe(REPEG_DEFAULT_BP);
+      expect(store.getPair('close-touch')!.repegAutoBp).toBe(REPEG_DEFAULT_BP);
+      expect(store.getPair('close-typed')!.repegBehindBp).toBeNull();
+      expect(store.getPair('close-done')!.repegBehindBp).toBeNull();
+      store.updatePair('close-touch', { repegBehindBp: null });
+      store.close();
+      const reopened = new Store(file);
+      expect(reopened.getPair('close-touch')!.repegBehindBp).toBeNull();
+      reopened.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

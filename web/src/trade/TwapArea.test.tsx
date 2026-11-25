@@ -57,11 +57,13 @@ function Ticket({
   coin,
   impact = null,
   onStart = () => undefined,
+  lot,
 }: {
   previewOf: (input: TwapInput) => TwapPlanPreview;
   coin: string;
   impact?: PriceImpactPreview | null;
   onStart?: () => void;
+  lot?: string;
 }) {
   const twap = useTwapInput();
   const preview = twap.on ? previewOf(twap.input) : null;
@@ -75,6 +77,7 @@ function Ticket({
         preview={preview}
         impact={impact}
         coin={coin}
+        lot={lot}
       />
       <HoldToConfirmButton holdMs={50} disabled={twap.blockedBy(preview)} onConfirm={onStart}>
         Start TWAP
@@ -107,6 +110,23 @@ describe('TwapArea', () => {
     const row = twapSwitch().closest('div.flex') as HTMLElement;
     expect(row).toHaveTextContent(/Price impact.*\$1,320.*\$240/);
     expect(screen.getByText('$240')).toHaveClass('text-grass');
+  });
+
+  it('last slice keeps the lot digit and a comma at whale size', async () => {
+    const whale = (): TwapPlanPreview => ({
+      plan: { slices: 12, sliceQty: '2000', lastQty: '2000.011', intervalSec: 300, durationSec: 3_600, takerAfterSec: 240 },
+      refusal: null,
+    });
+    renderWithClient(<Ticket previewOf={whale} coin="ETH" />);
+    await turnOn();
+    expect(await screen.findByText('Slices 12 · Last slice 2,000.011 ETH')).toBeInTheDocument();
+  });
+
+  it('labels the impact pair as the whole run only with the switch on', async () => {
+    renderWithClient(<Ticket previewOf={ethPreview} coin="ETH" impact={{ whole: 1_320, sliced: 240 }} />);
+    expect(screen.queryByText('whole run')).toBeNull();
+    await turnOn();
+    expect(screen.getByText('whole run')).toBeInTheDocument();
   });
 
   it('price impact reads too thin when the book ends before the whole size', () => {
@@ -228,6 +248,31 @@ describe('TwapArea', () => {
     expect(screen.queryByText(/Binance takes at least/)).not.toBeInTheDocument();
     expect(box('Slice size')).not.toHaveAttribute('aria-invalid');
     expect(screen.getByRole('button', { name: /Start TWAP/ })).toBeEnabled();
+  });
+
+  it('a cleared interval box disarms Start and drops the old value', async () => {
+    renderWithClient(<Ticket previewOf={ethPreview} coin="ETH" />);
+    await turnOn();
+    expect(screen.getByRole('button', { name: /Start TWAP/ })).toBeEnabled();
+    await userEvent.clear(box('Interval'));
+    expect(screen.getByRole('button', { name: /Start TWAP/ })).toBeDisabled();
+    expect(screen.getByText('Set two of duration, interval and slice size.')).toBeInTheDocument();
+  });
+
+  it('a refusal hides the stale Slices line and rounds the fix size to the lot', async () => {
+    const thin: TwapPlanPreview = {
+      plan: ETH_PLAN,
+      refusal: {
+        field: 'sliceSize',
+        text: 'Book too thin for 439.97234 BTC a slice.',
+        fix: { label: 'Use 439.97234 BTC', patch: { sliceQty: '439.972' } },
+      },
+    };
+    renderWithClient(<Ticket previewOf={() => thin} coin="BTC" lot="0.001" />);
+    await turnOn();
+    expect(screen.queryByText(/Slices 12/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Book too thin for 439\.972 BTC a slice\./)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use 439.972 BTC' })).toBeInTheDocument();
   });
 
   it('turn TWAP off fix closes the area', async () => {

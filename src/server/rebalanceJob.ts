@@ -267,6 +267,8 @@ export interface DeleverTwap {
   durationSec: number;
   intervalSec: number;
   slices: number;
+  takerAfterSec?: number | null;
+  repegBehindBp?: 2 | 5 | 10 | null;
 }
 
 export const TO_VENUE_STEP = { HYPERLIQUID: 'To Hyperliquid', LIGHTER: 'To Lighter' } as const;
@@ -450,7 +452,9 @@ export function restGapOf(job: Job, lead: RealizeJobLeg, followSymbol: string, r
 export const REOPEN_HALT = {
   tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',
   closeOnly: (leg: OpenLeg, open: number): string =>
-    `Gate CrossEx takes no new orders on this contract. Resume when it does, or ${closeOtherText(leg, open)}.`,
+    open > 0
+      ? `Gate CrossEx takes no new orders on this contract. Resume when it does, or ${closeOtherText(leg, open)}.`
+      : 'Gate CrossEx takes no new orders on this contract. Resume when it does.',
   noCash: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
   quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>
     `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours, or ${closeOtherText(leg, open)}.`,
@@ -473,6 +477,7 @@ export const LOCK_TEXT = {
   twapRunning: 'A TWAP is running. Orders and transfers wait until it ends.',
   twapPaused: 'A TWAP is paused. Orders wait until it ends.',
   twapError: 'A TWAP stopped on an error. Orders and transfers wait until you resume or stop it.',
+  twapErrorOrders: 'A TWAP stopped on an error. Orders wait until you resume or stop it.',
 } as const;
 
 export type TransferLock = 'rebalance' | 'halted' | 'deal' | 'twapRunning' | 'twapError';
@@ -860,12 +865,17 @@ export function moneyLockFor(input: {
   return transfer?.status === 'moving' ? { kind: 'moving' } : null;
 }
 
-export function dealLockFor(input: { rebalance: Job | null; dealId: string }): string | null {
-  const job = input.rebalance;
+export function twapLockText(job: Job | null, childLive = true): string | null {
   if (job?.kind !== 'twap' || (job.status !== 'running' && job.status !== 'halted')) return null;
-  if (isChildOf(job.id, input.dealId)) return null;
   if (job.status === 'running') return LOCK_TEXT.twapRunning;
-  return TWAP_ERROR_KINDS.includes(job.haltKind) ? LOCK_TEXT.twapError : LOCK_TEXT.twapPaused;
+  if (!TWAP_ERROR_KINDS.includes(job.haltKind)) return LOCK_TEXT.twapPaused;
+  return childLive ? LOCK_TEXT.twapError : LOCK_TEXT.twapErrorOrders;
+}
+
+export function dealLockFor(input: { rebalance: Job | null; dealId: string; childLive?: boolean }): string | null {
+  const job = input.rebalance;
+  if (job === null || isChildOf(job.id, input.dealId)) return null;
+  return twapLockText(job, input.childLive);
 }
 
 export function newTwapJob(
@@ -975,7 +985,9 @@ function isDeleverTwap(value: unknown): value is DeleverTwap {
   return (
     typeof twap === 'object' &&
     twap !== null &&
-    [twap.durationSec, twap.intervalSec, twap.slices].every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0)
+    [twap.durationSec, twap.intervalSec, twap.slices].every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0) &&
+    (twap.takerAfterSec === undefined || twap.takerAfterSec === null || (Number.isFinite(twap.takerAfterSec) && twap.takerAfterSec > 0)) &&
+    [undefined, null, 2, 5, 10].includes(twap.repegBehindBp)
   );
 }
 

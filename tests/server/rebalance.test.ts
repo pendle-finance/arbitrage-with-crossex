@@ -13,6 +13,7 @@ import type { SliceOption } from '../../src/core/rebalance/slices';
 import { FEE_ROWS, GATE_ETH, OWNER_HL_ETH, ownerBook, perp, PERP_RULES, realizeBook, type RealizeBook } from '../unit/fixtures/realize-books';
 import { Store } from '../../src/engine/db';
 import { closeBorosLegs } from '../../src/server/borosClose';
+import { marketAcc, raw } from '../helpers/boros-fixtures';
 import { borosStub } from '../helpers/boros-stub';
 import { gateVenue } from '../../src/engine/venueGate';
 import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
@@ -1131,6 +1132,53 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
+  it.each([100, 6_000_000])('a delever TWAP start at %d USD keeps the taker-after and re-peg it was sent', async (usd) => {
+    const { h, ask, plan } = await deleverPlanAt(usd);
+    const twap = { durationSec: 3600, slices: 2, takerAfterSec: 600, repegBehindBp: 2 };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap } });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().deleverTwap).toEqual({ durationSec: 3600, intervalSec: 1800, slices: 2, takerAfterSec: 600, repegBehindBp: 2 });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever TWAP start with Never and re-peg off keeps both', async () => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const twap = { durationSec: 3600, slices: 2, takerAfterSec: null, repegBehindBp: null };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap } });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().deleverTwap).toMatchObject({ takerAfterSec: null, repegBehindBp: null });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([
+    ['a taker-after past 80% of the interval', { takerAfterSec: 1441 }],
+    ['a taker-after under 30 s', { takerAfterSec: 29 }],
+    ['a re-peg of 3 bp', { repegBehindBp: 3 }],
+  ])('a delever TWAP start refuses %s and writes no job', async (_name, over) => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const twap = { durationSec: 3600, slices: 2, ...over };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap } });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+  });
+
+  it('a delever plan with no Boros leg sends no Boros close', async () => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    const h = boot();
+
+    const res = await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, twap: DELEVER_TWAP });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data).toMatchObject({ borosCloses: 0, borosGasUsd: 0 });
+  });
+
   const SHALLOW_HL_ETH: NormalizedBook = { bids: [[1_820.9, 20]], asks: [[1_821.1, 20]], ts: 0 };
 
   function mockShallowHlBook(): void {
@@ -1335,6 +1383,42 @@ describe('POST /api/rebalance with a close and reopen', () => {
 
     afterEach(() => {
       delete process.env.BOROS_ROOT_ADDRESS;
+    });
+
+    const heldBoros = (gas: unknown): Record<string, unknown> => ({
+      ...marketsBody([ETH_MARKET]),
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [
+          {
+            marketAcc: marketAcc('0x00000000000000000000000000000000000000a1', 2),
+            netBalance: raw(20),
+            initialMargin: raw(1),
+            availableInitialMargin: raw(19),
+            positions: [{ marketId: 7, signedSize: raw(10), initialMargin: raw(1), maintMargin: raw(0.5), liquidationApr: raw(0.2), orders: [] }],
+          },
+        ],
+      },
+      '/apis/v1/accounts/active-positions': { results: [] },
+      ...(gas === undefined ? {} : { '/apis/v1/gas-price/current': gas }),
+    });
+
+    it.each([
+      ['prices the closes at the Boros gas read', { estimatedOrderGasCostUsd: 0.004 }, 12 * 0.004],
+      ['shows no gas figure when the gas read fails', undefined, null],
+      ['shows no gas figure when Boros has no estimate', { estimatedOrderGasCostUsd: null }, null],
+    ])('a delever TWAP plan with one Boros leg counts one close a slice and %s', async (_name, gas, gasUsd) => {
+      mockAccount(ownerAccount());
+      mockGateEthBook();
+      const h = boot({ borosFetch: borosStub(heldBoros(gas)) });
+
+      const res = await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, boros: [{ marketId: 7, size: 10 }], twap: { durationSec: 3600, slices: 12 } });
+
+      expect(res.statusCode, res.body).toBe(200);
+      const data = res.json().data;
+      expect(data.boros[0].closeSize).toBeGreaterThan(0);
+      expect(data.borosCloses).toBe(12);
+      if (gasUsd === null) expect(data.borosGasUsd).toBeNull();
+      else expect(data.borosGasUsd).toBeCloseTo(gasUsd, 9);
     });
 
     it.each([

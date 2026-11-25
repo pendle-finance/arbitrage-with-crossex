@@ -8,6 +8,7 @@
  * BEGIN IMMEDIATE (write lock up front).
  */
 import { DatabaseSync } from 'node:sqlite';
+import { REPEG_DEFAULT_BP } from './create';
 import { fx, fxDiv, fxMul, fxStr, FX_ZERO } from './fx';
 import type { AlertRow, LegSpec, OrderRow, PairMode, PairRow } from './types';
 
@@ -300,6 +301,9 @@ export class Store {
     const pairCols = this.db.prepare(`PRAGMA table_info(pair)`).all() as unknown as { name: string }[];
     if (!pairCols.some((c) => c.name === 'repeg_behind_bp')) {
       this.db.exec(`ALTER TABLE pair ADD COLUMN repeg_behind_bp INTEGER`);
+      this.db
+        .prepare(`UPDATE pair SET repeg_behind_bp = ? WHERE mode != 'DONE' AND price_policy = 'touch' AND a_reduce_only = 1`)
+        .run(REPEG_DEFAULT_BP);
     }
     if (!pairCols.some((c) => c.name === 'repeg_not_before')) {
       this.db.exec(`ALTER TABLE pair ADD COLUMN repeg_not_before INTEGER NOT NULL DEFAULT 0`);

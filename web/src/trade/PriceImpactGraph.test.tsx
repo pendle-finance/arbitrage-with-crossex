@@ -146,11 +146,11 @@ describe('PriceImpactGraph', () => {
     // the ask, i.e. its container starts higher (smaller top%) than the ask.
     const askTop = (container.querySelector('[data-leg="long"] [data-mark="ask"]') as HTMLElement).style.top;
     const arrowLong = container.querySelector('[data-leg="long"] [data-mark="impact"]') as HTMLElement;
-    expect(arrowLong.querySelector('.border-b-rose-400, .border-b-amber-400, .border-b-cyan-400')).not.toBeNull(); // up head
+    expect(arrowLong.querySelector('.border-b-rose-400, .border-b-amber-400, .border-b-cyan-400')).not.toBeNull();
     expect(parseFloat(arrowLong.style.top)).toBeLessThanOrEqual(parseFloat(askTop));
     // Short SELL fill (58.93) is BELOW its bid → a down head.
     const arrowShort = container.querySelector('[data-leg="short"] [data-mark="impact"]') as HTMLElement;
-    expect(arrowShort.querySelector('.border-t-rose-400, .border-t-amber-400, .border-t-cyan-400')).not.toBeNull(); // down head
+    expect(arrowShort.querySelector('.border-t-rose-400, .border-t-amber-400, .border-t-cyan-400')).not.toBeNull();
   });
 
   it('captions each column with its venue and shows the limit direction arrow', () => {

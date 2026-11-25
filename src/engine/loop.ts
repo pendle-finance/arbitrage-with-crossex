@@ -527,21 +527,12 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
   const pair0 = deps.store.getPair(pairId);
   if (!pair0 || pair0.mode === 'DONE') return { type: 'idle', reason: 'done' };
 
-  const sleep: { gap: SleepGap | null } = { gap: null };
-  const watch = async <T>(read: () => Promise<T>): Promise<T> => {
-    const fromMs = deps.clock.now();
-    const out = await read();
-    const toMs = deps.clock.now();
-    if (!sleep.gap && toMs - fromMs > SLEEP_GAP_MS) sleep.gap = { fromMs, toMs };
-    return out;
-  };
-
   // ---- OBSERVE ----
   for (const o of deps.store.listOrders(pairId)) {
     const pair = deps.store.getPair(pairId)!;
-    if (o.state === 'PENDING') await watch(() => resolvePending(deps, pair, o));
+    if (o.state === 'PENDING') await resolvePending(deps, pair, o);
     else if (o.state === 'OPEN' || (o.quarantinedStatus && o.state !== 'DEAD')) {
-      await watch(() => observeOpen(deps, pair, o));
+      await observeOpen(deps, pair, o);
     }
   }
 
@@ -577,17 +568,13 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
     fx(proj.residualA) > 0n &&
     (fx(pair.a.minNotional) > 0n || pair.clipBandBp !== null);
   const ctx: DecideCtx = {
-    touchA: needTouch ? await watch(() => deps.venue.touch(pair.a.contract, pair.a.side, pair.a.tick)) : null,
-    bestA: needBest ? await watch(() => deps.venue.best(pair.a.contract, pair.a.side, pair.a.tick)) : null,
+    touchA: needTouch ? await deps.venue.touch(pair.a.contract, pair.a.side, pair.a.tick) : null,
+    bestA: needBest ? await deps.venue.best(pair.a.contract, pair.a.side, pair.a.tick) : null,
     // '0' (unused) when no hedge is owed; a real fetch only when one is.
-    refB: needRefB ? await watch(() => deps.venue.refPrice(pair.b!.contract)) : '0',
-    refA: needRefA ? await watch(() => deps.venue.refPrice(pair.a.contract)) : '0',
+    refB: needRefB ? await deps.venue.refPrice(pair.b!.contract) : '0',
+    refA: needRefA ? await deps.venue.refPrice(pair.a.contract) : '0',
     maxClip: pair.maxClip ?? tuning(deps).MAX_CLIP,
   };
-  if (sleep.gap) {
-    reportSleep(deps, sleep.gap);
-    return { type: 'idle', reason: 'the computer slept during this tick' };
-  }
   // A hedge that cannot be SIZED is a hedge wall like any other. refPrice()
   // returns null on any failure — unsupported venue, a wrong native symbol, a
   // venue outage, a book slower than the 2.5s timeout — and with a positive

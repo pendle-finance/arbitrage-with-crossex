@@ -19,7 +19,7 @@ import { AffixedInput, PairEstimate, PairVenues, type ExecMode, storedExecMode }
 import { PairBookImpact } from './PriceImpactGraph';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
-import { TwapArea, useTwapInput } from './TwapArea';
+import { TwapArea, twapControlOf, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
 import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 import { TRACKED_PRICE_TOLERANCE, withinTrackedDrift } from './trackedPriceDrift';
@@ -288,7 +288,16 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
   const trackingMaker = mode === 'maker' && !pinned;
   const dealOpts: DealOpts | undefined =
     mode === 'maker' ? { makerLeg, repegBehindBp: repegBp, timeoutSec: takerSec } : undefined;
-  const twapControl = twapOn && twapPlan ? { plan: twapPlan, blocked: twap.blockedBy(twapPreview) } : null;
+  const twapControl = twapControlOf(twapOn, twapPlan, twapOn && twap.blockedBy(twapPreview));
+  const makerSaving = (() => {
+    const fl = legLong?.fees;
+    const fs = legShort?.fees;
+    if (twapOn || mode !== 'maker' || !fl || !fs || !notionalOk) return null;
+    const chosen = makerIsLong ? fl.makerRate + fs.takerRate : fs.makerRate + fl.takerRate;
+    const usd = sizeUnit === 'usd' ? notionalNum : (legLong?.estNotional ?? legShort?.estNotional ?? null);
+    if (usd === null || !Number.isFinite(usd)) return null;
+    return (fl.takerRate + fs.takerRate - chosen) * usd;
+  })();
   const legs =
     longSym && shortSym
       ? [
@@ -447,6 +456,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         value={mode}
         onChange={(m) => {
           setMode(m);
+          if (m === 'market') twap.setOn(false);
           setPricePinned(false);
         }}
         order={['maker', 'market']}
@@ -466,8 +476,10 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             preview={twapPreview}
             impact={previewData?.priceImpact ?? null}
             coin={base ?? ''}
+            lot={longDetail.data?.lotSize ?? shortDetail.data?.lotSize}
           />}
           {!twapOn && (
+            <>
             <LimitPriceBox
               bookPrice={makerTick !== null && touchPx !== undefined ? String(touchPx) : null}
               value={pinned ? makerPriceStr : null}
@@ -482,11 +494,18 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
               tick={makerTick ?? ''}
               unit={(makerSym && parseSymbol(makerSym).quote) || 'USDT'}
             />
+            {!pinned && touchPx !== undefined && !rest && (
+              <span className="text-[11px] text-amber-400/90" title={t('pairTicket.bits.bookUnavailableHint')}>
+                {t('pairTicket.bits.bookUnavailable')}
+              </span>
+            )}
+            </>
           )}
           <MakerSettings
             legs={legs}
             makerLeg={makerLeg}
             autoPick={autoPick ?? null}
+            saving={makerSaving}
             onMakerLeg={setMakerLeg}
             takerAfter={taker.takerAfter}
             onTakerAfter={taker.pick}
@@ -510,6 +529,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           mode={mode}
           leverage={leverageText}
           marginRequired={marginRequired}
+          twapOn={twapOn}
           book={
             <PairBookImpact
               longSym={longSym}
@@ -583,8 +603,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         // and, in maker mode, until the maker price has been tracked.
         extraDisabled={
           (mode === 'maker' && (!makerPriceStr || takerBlocked)) ||
-          (twapOn && !twapControl) ||
-          levLong === undefined ||
+                    levLong === undefined ||
           levShort === undefined
         }
         dealOpts={dealOpts}

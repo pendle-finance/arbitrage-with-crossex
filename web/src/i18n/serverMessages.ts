@@ -7,7 +7,8 @@ type TwapKey =
   | `trade.twap.server.${keyof Twap['server'] & string}`
   | `trade.twap.lock.${keyof Twap['lock'] & string}`
   | `trade.twap.area.${'use' | 'useInterval' | 'turnOff'}`
-  | 'trade.twap.run.restNotOpened';
+  | 'trade.twap.run.restNotOpened'
+  | 'trade.twap.run.restNotClosed';
 type Key = Exclude<keyof Messages, 'word' | 'sentences' | 'sentencesSpaced'> | TwapKey;
 type Word = keyof Messages['word'];
 type Names = readonly string[];
@@ -278,6 +279,7 @@ const RULES: readonly Rule[] = [
   [/^Abandon it and check Positions\.$/, 'haltAbandonCheck'],
   [/^The (\S+) (long|short) is (\S+) (\S+) smaller than the (\S+) (long|short)\.$/, 'legGapThe', ['venue', 'sideWord', 'size', 'base', 'otherVenue', 'otherSideWord']],
   [/^(\S+) (long|short) is (\S+) (\S+) smaller than the (\S+) (long|short)\.$/, 'legGap', ['venue', 'sideWord', 'size', 'base', 'otherVenue', 'otherSideWord']],
+  [/^Resume when it does\.$/, 'closeOnlyResume'],
   [/^Resume when it does, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'closeOnlyNext', ['size', 'base', 'venue', 'sideWord']],
   [/^Resume after Gate's count clears, within 24 hours, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'quotesUsedNext', ['size', 'base', 'venue', 'sideWord']],
   [/^Resume to try again, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'refusedNext', ['size', 'base', 'venue', 'sideWord']],
@@ -479,14 +481,15 @@ const RULES: readonly Rule[] = [
   [/^Book too thin for (\S+) (\S+) a slice\.$/, 'trade.twap.server.bookThin', ['qty', 'coin']],
   [/^Taker after must be 30s to 24h\.$/, 'trade.twap.server.takerAfterRange'],
   [/^(.+?) refused slice (\d+): not enough margin$/, 'trade.twap.server.refusedSlice', ['venue', 'n']],
-  [/^Add USDT to (.+?) CrossEx, then resume\.$/, 'trade.twap.server.refusedFix', ['venue']],
+  [/^Add (USDT|USDC) to (.+?) CrossEx, then resume\.$/, 'trade.twap.server.refusedFix', ['coin', 'venue']],
   [/^Slice (\d+) is under (.+?)'s (\S+) minimum$/, 'trade.twap.server.underMin', ['n', 'venue', 'min']],
   [/^(.+?) refused the hedge in slice (\d+)$/, 'trade.twap.server.hedgeRefused', ['venue', 'n']],
   [/^(\S+) (\S+) not hedged \((\S+)\)$/, 'trade.twap.server.hedgeGap', ['qty', 'coin', 'usd']],
-  [/^Add USDT to (.+?) on CrossEx to hedge$/, 'trade.twap.server.hedgeFix', ['venue']],
+  [/^Add (USDT|USDC) to (.+?) on CrossEx to hedge$/, 'trade.twap.server.hedgeFix', ['coin', 'venue']],
   [/^A TWAP is running\. Orders and transfers wait until it ends\.$/, 'trade.twap.lock.running'],
   [/^A TWAP is paused\. Orders wait until it ends\.$/, 'trade.twap.lock.paused'],
   [/^A TWAP stopped on an error\. Orders and transfers wait until you resume or stop it\.$/, 'trade.twap.lock.error'],
+  [/^A TWAP stopped on an error\. Orders wait until you resume or stop it\.$/, 'trade.twap.lock.errorOrders'],
   [/^(\d+) slices\. Min 2: slice size at most (\S+) (\S+)\.$/, 'trade.twap.server.countLowSize', ['n', 'qty', 'coin']],
   [/^1 slice\. Min 2: slice size at most (\S+) (\S+)\.$/, 'trade.twap.server.countLowSizeOne', ['qty', 'coin']],
   [/^Interval at most (\d+[hms](?: \d+[hms])*)\.$/, 'trade.twap.server.intervalMax', ['span']],
@@ -495,6 +498,7 @@ const RULES: readonly Rule[] = [
   [/^Slice (\d+) is over (.+?)'s (\S+) (\S+) maximum$/, 'trade.twap.server.sliceOverMax', ['n', 'venue', 'max', 'coin']],
   [/^This Mac slept during the TWAP\. Nothing was sent while it slept\. Press Resume\.$/, 'trade.twap.server.slept'],
   [/^(\S+) (\S+) not opened$/, 'trade.twap.run.restNotOpened', ['qty', 'coin']],
+  [/^(\S+) (\S+) not closed$/, 'trade.twap.run.restNotClosed', ['qty', 'coin']],
   [/^Turn TWAP off$/, 'trade.twap.area.turnOff'],
   [/^Use (\d+[hms](?: \d+[hms])*) interval$/, 'trade.twap.area.useInterval', ['value']],
   [/^Use (\d+[hms](?: \d+[hms])*)$/, 'trade.twap.area.use', ['value']],

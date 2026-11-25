@@ -4,18 +4,21 @@
  *    are moving server-side).
  *  - standing engine ALERTS (hedge walls, quarantined orders, halted deals) —
  *    rendered until acked; the engine keeps retrying underneath. */
+import { useEffect, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Pause, TriangleAlert } from 'lucide-react';
 import { useAckAlert, useActiveDeals, useAlerts, useRebalance } from '../api/queries';
 import type { RebalanceJob } from '../api/types';
 import { Spinner } from '../components/Spinner';
-import { parseSymbol, prettyVenue } from '../lib/fmt';
+import { useToast } from '../components/Toast';
 import { useRebalanceOpener } from '../panels/rebalanceOpener';
 import { useTradeFlow } from './TradeFlow';
+import { runShapeOf } from './RunViewBits';
 import { isTwapChildId, liveTwapJob } from './twapJob';
 import { localizeServerText } from '../i18n/serverMessages';
 
-type StripKey = 'running' | 'paused' | 'restart' | 'sleep' | 'refused' | 'hedge' | 'error' | 'capped' | 'boros';
+type StripKey = 'running' | 'pausing' | 'paused' | 'restart' | 'sleep' | 'refused' | 'hedge' | 'error' | 'capped' | 'boros';
 type StripTone = 'cyan' | 'amber' | 'rose';
 
 const STRIP_TONES: Record<StripTone, { box: string; text: string; button: string }> = {
@@ -25,7 +28,7 @@ const STRIP_TONES: Record<StripTone, { box: string; text: string; button: string
 };
 
 function stripKeyOf(job: RebalanceJob): StripKey {
-  if (job.status === 'running') return job.paused ? 'paused' : 'running';
+  if (job.status === 'running') return job.pauseRequested ? 'pausing' : job.paused ? 'paused' : 'running';
   switch (job.haltKind) {
     case 'restart':
       return 'restart';
@@ -49,8 +52,14 @@ function stripKeyOf(job: RebalanceJob): StripKey {
 
 function stripToneOf(key: StripKey): StripTone {
   if (key === 'running') return 'cyan';
-  if (key === 'paused' || key === 'restart' || key === 'sleep') return 'amber';
+  if (key === 'pausing' || key === 'paused' || key === 'restart' || key === 'sleep') return 'amber';
   return 'rose';
+}
+
+function runLabelOf(job: RebalanceJob, t: TFunction) {
+  const { maker, hedge, coin, shape, side } = runShapeOf(job);
+  const what = t(`trade.twap.strip.what.${shape}`, { coin, side, venue: maker?.name ?? '' });
+  return { what, makerVenue: maker?.name ?? '', hedgeVenue: (hedge ?? maker)?.name ?? '' };
 }
 
 function TwapStrip({ job }: { job: RebalanceJob }) {
@@ -59,11 +68,10 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
   const twap = job.twap!;
   const key = stripKeyOf(job);
   const tone = STRIP_TONES[stripToneOf(key)];
-  const coin = job.legs?.[0] ? parseSymbol(job.legs[0].name).base || job.legs[0].name : '';
-  const refusedLeg = job.legs?.[twap.makerLeg === 'a' ? 0 : 1];
-  const venue = refusedLeg ? prettyVenue(refusedLeg.exchange.toLowerCase()) : '';
+  const { what, makerVenue, hedgeVenue } = runLabelOf(job, t);
+  const venue = key === 'hedge' ? hedgeVenue : makerVenue;
   const icon =
-    key === 'running' ? (
+    key === 'running' || key === 'pausing' ? (
       <Spinner className="h-3 w-3" />
     ) : stripToneOf(key) === 'rose' ? (
       <TriangleAlert size={12} aria-hidden />
@@ -75,7 +83,7 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
       <div className={`mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-5 py-2 text-xs ${tone.text}`}>
         <span className="inline-flex items-center gap-2">
           {icon}
-          <span className="num">{t(`trade.twap.strip.${key}`, { coin, i: twap.slice, n: twap.of, venue })}</span>
+          <span className="num">{t(`trade.twap.strip.${key}`, { what, i: twap.slice, n: twap.of, venue })}</span>
         </span>
         <button type="button" className={`btn-ghost-xs ${tone.button}`} onClick={() => open()}>
           {t('trade.recovery.view')}
@@ -85,13 +93,42 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
   );
 }
 
+function useTwapEndNote(job: RebalanceJob | null | undefined) {
+  const { t } = useTranslation();
+  const { push } = useToast();
+  const seenLive = useRef(new Set<string>());
+  useEffect(() => {
+    if (!job?.twap) return;
+    const { id } = job;
+    if (liveTwapJob(job)) {
+      seenLive.current.add(id);
+      return;
+    }
+    if ((job.status !== 'done' && job.status !== 'abandoned') || !seenLive.current.has(id)) return;
+    const { what } = runLabelOf(job, t);
+    const text =
+      job.status === 'done'
+        ? t('trade.twap.strip.done', { what })
+        : t('trade.twap.strip.stopped', { what, i: job.twap.slice, n: job.twap.of });
+    const fire = () => {
+      if (document.visibilityState !== 'visible' || !seenLive.current.delete(id)) return;
+      push(job.status === 'done' ? 'success' : 'info', text);
+    };
+    fire();
+    document.addEventListener('visibilitychange', fire);
+    return () => document.removeEventListener('visibilitychange', fire);
+  }, [job, push, t]);
+}
+
 export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') => void }) {
   const { t } = useTranslation();
   const flow = useTradeFlow();
   const active = useActiveDeals();
   const alerts = useAlerts();
   const ack = useAckAlert();
-  const twapJob = liveTwapJob(useRebalance().data?.job);
+  const rebalanceJob = useRebalance().data?.job;
+  const twapJob = liveTwapJob(rebalanceJob);
+  useTwapEndNote(rebalanceJob);
 
   // A single resting limit order (no hedge leg, no deadline) is a plain order,
   // not a deal in flight — it lives in Open Orders and needs no supervision.
@@ -104,12 +141,11 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
   );
   const standing = alerts.data ?? [];
 
-  if (twapJob) return <TwapStrip job={twapJob} />;
-
+  let dealBand: ReactNode = null;
   if (!flow.modalOpen && deals.length > 0) {
     const newest = [...deals].sort((a, b) => b.pair.createdAt - a.pair.createdAt)[0];
     const halted = deals.filter((d) => d.pair.mode === 'HALTED').length;
-    return (
+    dealBand = (
       <div
         role="alert"
         className={`border-b ${halted ? 'border-rose-500/40 bg-rose-500/10' : 'border-cyan-500/30 bg-cyan-500/10'}`}
@@ -135,7 +171,27 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
         </div>
       </div>
     );
+  } else if (active.isError && !active.data) {
+    dealBand = (
+      <div role="alert" className="border-b border-amber-500/30 bg-amber-500/10">
+        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-5 py-2 text-xs text-amber-200">
+          <span>{t('trade.recovery.dealsFailed')}</span>
+          <button type="button" className="btn-ghost-xs border-amber-500/50 text-amber-300" onClick={() => void active.refetch()}>
+            {t('common.retry')}
+          </button>
+        </div>
+      </div>
+    );
   }
+
+  if (twapJob)
+    return (
+      <>
+        <TwapStrip job={twapJob} />
+        {dealBand}
+      </>
+    );
+  if (dealBand) return dealBand;
 
   if (standing.length === 0) return null;
   const alert = standing[0];

@@ -807,7 +807,8 @@ describe('ExecuteControl with TWAP', () => {
     await waitFor(() => expect(starts).toHaveLength(2));
     await hold('Start TWAP');
     await waitFor(() => expect(starts).toHaveLength(3));
-    expect(new Set(starts.map((b) => b.clientId)).size).toBe(1);
+    expect(starts[1].clientId).toBe(starts[0].clientId);
+    expect(starts[2].clientId).not.toBe(starts[0].clientId);
     expect(starts[0].clientId).toMatch(/^[a-zA-Z0-9-]{6,40}$/);
   });
 
@@ -844,6 +845,70 @@ describe('ExecuteControl with TWAP', () => {
     expect(
       await screen.findByText('A TWAP stopped on an error. Orders and transfers wait until you resume or stop it.'),
     ).toBeInTheDocument();
+  });
+
+  it('a twap over the venue max as one order but under it per slice arms the hold', async () => {
+    const bodies: Array<{ twap?: unknown }> = [];
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const body = (await request.json()) as { actions: ActionInput[]; twap?: unknown };
+        bodies.push(body);
+        const violations = body.twap ? [] : [{ code: 'over-max-size', message: 'over the venue max' } as never];
+        return HttpResponse.json(env({ previews: body.actions.map((a, i) => previewFor(a, { index: i, violations })) }));
+      }),
+    );
+    renderTwap();
+    const btn = await screen.findByRole('button', { name: 'Start TWAP' });
+    await waitFor(() => expect(btn).toBeEnabled());
+    expect(bodies.at(-1)?.twap).toEqual({ durationSec: 3600, slices: 12 });
+  });
+
+  it('the hold stays off after a start until the job read lands', async () => {
+    const starts: TwapStartBody[] = [];
+    let reads = 0;
+    server.use(
+      http.get('/api/rebalance', async () => {
+        reads += 1;
+        if (reads > 1) await new Promise(() => {});
+        return HttpResponse.json(env(makeRebalanceView()));
+      }),
+      ...baseHandlers(),
+      echoPreviewHandler(),
+      startHandler(starts),
+    );
+    renderTwap();
+    await hold('Start TWAP');
+    await waitFor(() => expect(starts).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.getByRole('button', { name: /Executing/ })).toBeDisabled();
+  });
+
+  it('an error halt with no live child reads the error line for orders only', async () => {
+    server.use(
+      rebalanceHandler(makeRebalanceView({ job: twapJob({ status: 'halted', haltKind: 'hedge-margin', child: null }) })),
+      ...baseHandlers(),
+      echoPreviewHandler(),
+    );
+    renderTwap();
+    expect(await screen.findByText('A TWAP stopped on an error. Orders wait until you resume or stop it.')).toBeInTheDocument();
+  });
+
+  it('a failed job read says the lock is unknown', async () => {
+    server.use(
+      http.get('/api/rebalance', () => HttpResponse.json({ ok: false, error: { category: 'network', message: 'boom', retryable: true } }, { status: 500 })),
+      ...baseHandlers(),
+      echoPreviewHandler(),
+    );
+    renderTwap();
+    expect(await screen.findByText('Could not check for a running TWAP. If one is running, the order is refused.')).toBeInTheDocument();
+  });
+
+  it('a Delever TWAP does not lock the ticket', async () => {
+    server.use(rebalanceHandler(makeRebalanceView({ job: twapJob({ kind: 'delever', child: liveChild }) })), ...baseHandlers(), echoPreviewHandler());
+    renderTwap();
+    await screen.findByRole('button', { name: 'Start TWAP' });
+    expect(screen.queryByText(/A TWAP is/)).toBeNull();
   });
 
   it('a done twap does not lock', async () => {

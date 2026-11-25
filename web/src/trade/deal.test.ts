@@ -174,7 +174,7 @@ describe('dealFromActions with maker opts', () => {
 });
 
 describe('twapStartFrom', () => {
-  it('wraps the deal body without its id', () => {
+  it('sends the shown interval and slice size, so the server runs the plan the ticket showed', () => {
     const plan = { slices: 12, sliceQty: '57.803', lastQty: '57.807', intervalSec: 300, durationSec: 3600, takerAfterSec: 240 };
     const deal = { id: 'c1', a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY' as const }, qty: '693.64', execution: 'maker' as const };
     expect(twapStartFrom(deal, plan, 'client-1')).toEqual({
@@ -183,6 +183,8 @@ describe('twapStartFrom', () => {
       deal: { a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY' }, qty: '693.64', execution: 'maker' },
       durationSec: 3600,
       slices: 12,
+      intervalSec: 300,
+      sliceQty: '57.803',
     });
   });
 });

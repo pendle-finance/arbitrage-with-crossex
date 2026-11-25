@@ -453,8 +453,44 @@ describe('DeleverTab TWAP', () => {
     await waitFor(() => expect(hold).toBeEnabled());
     fireEvent.pointerDown(hold);
     await waitFor(() => expect(starts).toHaveLength(1));
-    expect(starts[0]!.delever.twap).toEqual({ durationSec: 14_400, slices: 48 });
+    expect(starts[0]!.delever.twap).toMatchObject({ durationSec: 14_400, slices: 48, repegBehindBp: 5 });
     expect(starts[0]!.delever.sliceUsd).toBeUndefined();
+  });
+
+  it('maker settings fold sends the taker wait and re-peg on the twap plan request', async () => {
+    const sent = servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    await screen.findByText(/^Slices 48/);
+    expect(screen.getByRole('button', { name: /Maker settings/ })).toBeInTheDocument();
+    await waitFor(() => expect(sent[sent.length - 1]!.twap).toMatchObject({ repegBehindBp: 5 }));
+    expect(sent[sent.length - 1]!.twap).toHaveProperty('takerAfterSec');
+  });
+
+  it('taker after Never sends a null taker wait, not the default', async () => {
+    const sent = servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    await screen.findByText(/^Slices 48/);
+    fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Never' }));
+    await waitFor(() => expect(sent[sent.length - 1]!.twap).toMatchObject({ takerAfterSec: null }));
+  });
+
+  it('no maker settings fold with twap off', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await screen.findByText('Total cost');
+    expect(screen.queryByRole('button', { name: /Maker settings/ })).toBeNull();
+  });
+
+  it('boros gas line with the close count in the cost box under twap', async () => {
+    servePlan({ ...deleverPlans.twentyPct, borosCloses: 48, borosGasUsd: 0.24 } as DeleverPlan);
+    show(openPairs.btc900);
+    expect(screen.queryByText(/^Boros gas/)).toBeNull();
+    await turnTwapOn('4h', '5m');
+    expect(await screen.findByText('Boros gas · 48 closes')).toBeInTheDocument();
+    expect(screen.getByText('$0.24')).toBeInTheDocument();
   });
 
   it('a twap slice past the book refuses with the text and fix from the plan', async () => {
@@ -480,5 +516,23 @@ describe('DeleverTab TWAP', () => {
     const last = sent[sent.length - 1]!;
     expect(last.twap).toMatchObject({ durationSec: 14_400, intervalSec: 300 });
     expect(last.sliceUsd).toBeUndefined();
+  });
+
+  it('with twap on the not hedged line shows the per slice figure', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    await screen.findByText(/^Slices 48/);
+    expect(await screen.findByText(/^Not hedged during each slice: max 3\.75 BTC/)).toBeInTheDocument();
+  });
+
+  it('a twap refusal clears the cost box', async () => {
+    const refusal = { field: 'sliceSize' as const, text: 'Book too thin for 15 BTC a slice.', fix: null };
+    servePlan(deleverPlans.twentyPct, { plan: null, refusal, price: 100_000 });
+    show(openPairs.btc900);
+    expect(await screen.findByText('Total cost')).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('switch', { name: 'TWAP' }));
+    expect(await screen.findByText(/^Book too thin for 15 BTC a slice\./)).toBeInTheDocument();
+    expect(screen.queryByText('Total cost')).not.toBeInTheDocument();
   });
 });

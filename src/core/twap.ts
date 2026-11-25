@@ -346,6 +346,23 @@ function planOf(ctx: Context, shape: Shape): TwapPlan | null {
   };
 }
 
+export function restPlan(restQty: string, slicesLeft: number, intervalSec: number, legs: TwapLegRule[], mark: number): TwapPlan | null {
+  const ctx = contextOf(restQty, legs, mark, null);
+  const total = ctx.totalLots;
+  if (total <= 0n) return null;
+  const lastOf = (n: bigint): bigint => total - (total / n) * (n - 1n);
+  const most = total / ctx.minLeg.minLots;
+  let count = BigInt(Math.max(1, Math.floor(slicesLeft)));
+  if (count > most) count = most > 0n ? most : 1n;
+  const cap = ctx.maxLeg?.maxLots ?? null;
+  if (cap !== null && cap > 0n) {
+    count = fxMax(count, ceilDiv(total, cap));
+    while (count < total && lastOf(count) > cap) count += 1n;
+  }
+  const slices = Number(count);
+  return planOf(ctx, { mode: 'interval-slices', slices, intervalSec, durationSec: slices * intervalSec, baseLots: total / count, lastLots: lastOf(count) });
+}
+
 export function planSlices(
   totalQty: string,
   input: TwapInput,

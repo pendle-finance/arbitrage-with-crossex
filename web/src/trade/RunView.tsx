@@ -5,21 +5,23 @@ import type { RebalanceJob, RunLegView, RunOrderView } from '../api/types';
 import { Chip } from '../components/Chip';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
-import { fmtClock, fmtPct, sigGrouped, parseSymbol } from '../lib/fmt';
-import { VerdictAlert } from '../panels/RebalanceBits';
+import { fmtAbout, fmtClock, fmtDateShort, fmtPct, sigGrouped } from '../lib/fmt';
+import { ProgressBar, VerdictAlert } from '../panels/RebalanceBits';
 import { spanText } from '../lib/span';
 import { dealSlippage } from './dealSlippage';
 import { FoldRow } from './FoldRow';
 import { EstimateRow } from './PairTicketBits';
 import {
   clockSpan,
-  leftText,
+  feeText,
   OrdersTable,
   padTwo,
   qtyText,
+  runShapeOf,
   sideWord,
   SideText,
   SliceGraph,
+  SlipLabel,
   SlicePriceBox,
   TwapActs,
   usdText,
@@ -34,6 +36,7 @@ export interface RunRow {
 export interface RunViewProps {
   title: ReactNode;
   chip: ReactNode;
+  progress?: { ratio: number; tone: 'running' | 'done' | 'stopped' } | null;
   firstLine: ReactNode;
   rows: RunRow[];
   graph: ReactNode | null;
@@ -44,11 +47,21 @@ export interface RunViewProps {
   footer: boolean;
 }
 
+const TITLE_KEY = {
+  pairOpen: 'titlePairOpen',
+  pairClose: 'titlePairClose',
+  singleOpen: 'titleSingleOpen',
+  singleClose: 'titleSingleClose',
+} as const;
+
 const TONE_CLASS = { gain: 'text-emerald-400', loss: 'text-rose-400' } as const;
+
+const USDC_VENUES: readonly string[] = ['HYPERLIQUID', 'LIGHTER'];
+const marginCoinOf = (leg: RunLegView | undefined): string => (leg && USDC_VENUES.includes(leg.exchange) ? 'USDC' : 'USDT');
 
 const isMac = (): boolean => typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform);
 
-export function RunView({ title, chip, firstLine, rows, graph, priceBox, orders, lines, acts, footer }: RunViewProps) {
+export function RunView({ title, chip, progress, firstLine, rows, graph, priceBox, orders, lines, acts, footer }: RunViewProps) {
   const { t: tr } = useTranslation();
   const [ordersOpen, setOrdersOpen] = useState(false);
   return (
@@ -57,6 +70,7 @@ export function RunView({ title, chip, firstLine, rows, graph, priceBox, orders,
         <div className="min-w-0 text-sm font-semibold text-ink-50">{title}</div>
         <div className="shrink-0">{chip}</div>
       </div>
+      {progress && <ProgressBar ratio={progress.ratio} tone={progress.tone} />}
       {firstLine}
       {rows.length > 0 && (
         <div className="flex flex-col gap-1.5 rounded border border-ink-700 px-3 py-2.5">
@@ -90,7 +104,7 @@ export function RunView({ title, chip, firstLine, rows, graph, priceBox, orders,
       {footer && (
         <div className="flex flex-col gap-0.5 text-[11px] text-ink-500">
           <span>{tr('trade.twap.footer.runsInApp')}</span>
-          {isMac() && <span>{tr('trade.twap.footer.awake')}</span>}
+          <span>{tr(isMac() ? 'trade.twap.footer.awake' : 'trade.twap.run.awakeOther')}</span>
         </div>
       )}
     </div>
@@ -99,15 +113,9 @@ export function RunView({ title, chip, firstLine, rows, graph, priceBox, orders,
 
 export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   const twap = job.twap ?? null;
-  const legs = job.legs ?? [];
-  const makerIdx = twap?.makerLeg === 'b' ? 1 : 0;
-  const maker = legs[makerIdx];
-  const hedge = legs.length > 1 ? legs[1 - makerIdx] : undefined;
+  const { legs, makerIdx, maker, hedge, coin, close, shape, side } = runShapeOf(job);
   const pair = hedge !== undefined;
   const child = job.child ?? null;
-  const coin = legs[0]?.symbol ? parseSymbol(legs[0].symbol).base : '';
-  const close =
-    maker?.reduceOnly ?? false;
   const total = Number(legs[0]?.plannedQty ?? 0);
   const filled = legs.map((leg) => Number(leg.filledQty));
   const makerFilled = filled[makerIdx] ?? 0;
@@ -120,9 +128,10 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   const halted = job.status === 'halted';
   const pausing = running && job.pauseRequested === true;
   const kind = halted ? (job.haltKind ?? null) : null;
+  const redHalt = kind === 'refused' || kind === 'hedge-margin' || kind === 'error';
   const never = twap?.takerAfterSec === null;
   const lastSlice = slice >= of;
-  const fees = job.fees ?? { readUsd: 0, estUsd: 0, est: false };
+  const fees = job.fees ?? { readUsd: 0, estUsd: 0, totalUsd: 0, est: false };
 
   const perpsSet = legs.length > 0 && legs.every((leg) => leg.beforeQty !== undefined && leg.nowQty !== undefined);
   const perpsRows = (): RunRow[] => {
@@ -135,8 +144,13 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
     if (perpsSet) return perpsRows();
     const withUsd = (qty: number) =>
       t('trade.twap.run.filledEachValue', { done: qtyText(qty), total: qtyText(total), coin, usd: usdOf(qty) });
-    if (pair && filled[0] === filled[1]) return [{ label: t('trade.twap.run.filledEach'), value: withUsd(makerFilled) }];
-    return legs.map((leg, i) => ({ label: t('trade.twap.run.filledVenue', { venue: leg.name }), value: withUsd(filled[i] ?? 0) }));
+    if (pair && filled[0] === filled[1]) return [{ label: t(close ? 'trade.twap.run.closedEach' : 'trade.twap.run.filledEach'), value: withUsd(makerFilled) }];
+    const venueKey = close ? 'trade.twap.run.closedVenue' : 'trade.twap.run.filledVenue';
+    return legs.map((leg, i) => ({ label: t(venueKey, { venue: leg.name }), value: withUsd(filled[i] ?? 0) }));
+  };
+  const leftRow: RunRow = {
+    label: pair ? t('trade.twap.run.leftEach') : t('trade.twap.run.leftVenue', { venue: maker?.name ?? '' }),
+    value: t('trade.twap.run.qtyValue', { qty: qtyText(Math.max(0, total - makerFilled)), coin }),
   };
   const avgRows = (): RunRow[] =>
     legs
@@ -153,7 +167,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
     const amount = `${sign}${sigGrouped(Math.abs(slip.usd / qty))}`;
     const pct = `${sign}${fmtPct(Math.abs(slip.pct), 3)}`;
     const word = t(slip.word === 'Favorable' ? 'trade.deal.favorable' : 'trade.deal.adverse');
-    return [{ label, value: `${t('trade.twap.run.slippageValue', { amount, pct })} ${word}`, tone: slip.usd >= 0 ? 'gain' : 'loss' }];
+    return [{ label: <SlipLabel label={label} />, value: `${t('trade.twap.run.slippageValue', { amount, pct })} ${word}`, tone: slip.usd >= 0 ? 'gain' : 'loss' }];
   };
   const notHedgedRow = (): RunRow[] =>
     pair
@@ -161,7 +175,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
       : [];
   const feeRow: RunRow = {
     label: t('trade.twap.run.feeSoFar'),
-    value: fees.est ? t('trade.twap.run.feeValue', { fee: usdText(fees.readUsd), est: usdText(fees.estUsd) }) : usdText(fees.readUsd),
+    value: feeText(fees),
   };
   const boros = job.boros ?? null;
   const borosRow = (): RunRow[] =>
@@ -171,10 +185,15 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
     value: t('trade.twap.run.onResumeValue', { n: Math.max(0, of - slice), interval: spanText(twap?.intervalSec ?? 0) }),
   };
 
-  const titleKey = pair ? (close ? 'titlePairClose' : 'titlePairOpen') : close ? 'titleSingleClose' : 'titleSingleOpen';
+  const titleKey = TITLE_KEY[shape];
+  const venueOn = (side: RunLegView['side']) => legs.find((leg) => leg.side === side)?.name ?? '';
+  const titleText =
+    job.kind === 'delever'
+      ? t('accounts.sliceRun.deleverHeader', { coin, long: venueOn('LONG'), short: venueOn('SHORT') })
+      : t(`trade.twap.run.${titleKey}`, { coin, side, venue: maker?.name ?? '' });
   const title = (
     <div className="flex flex-col gap-0.5">
-      <span>{t(`trade.twap.run.${titleKey}`, { coin, side: maker ? sideWord(maker.side).toLowerCase() : '', venue: maker?.name ?? '' })}</span>
+      <span>{titleText}</span>
       <span className="num text-[11px] font-normal text-ink-400">
         {pair && maker && hedge && (
           <>
@@ -194,9 +213,13 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   ) : job.status === 'abandoned' ? (
     <Chip>{t('common.stopped')}</Chip>
   ) : (
-    <Chip tone={kind === 'refused' || kind === 'hedge-margin' || kind === 'error' ? 'red' : 'amber'}>{t('common.paused')}</Chip>
+    <Chip tone={redHalt ? 'red' : 'amber'}>{t('common.paused')}</Chip>
   );
 
+  const progress =
+    total > 0
+      ? { ratio: makerFilled / total, tone: job.status === 'done' ? 'done' : job.status === 'abandoned' || redHalt ? 'stopped' : 'running' } as const
+      : null;
   const resting = running && !pausing && child !== null && child.mode === 'OPENING';
   const graph = resting && child ? <SliceGraph key={`${child.id}-graph`} childId={child.id} oneLeg={!pair} /> : null;
   const priceBox = resting && child ? <SlicePriceBox key={`${child.id}-price`} child={child} /> : null;
@@ -210,7 +233,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   }
   if (!pair && (running || halted)) lines.push(t('trade.single.notHedged'));
 
-  const base = { title, chip, graph, priceBox, orders: job.orders ?? [], lines, footer: running || halted };
+  const base = { title, chip, progress, graph, priceBox, orders: job.orders ?? [], lines, footer: running || halted };
   const sliceLabel = t('trade.twap.run.slice', { i: slice, n: of });
 
   if (job.status === 'done' || job.status === 'abandoned') {
@@ -249,21 +272,31 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   if (halted) {
     const venueOf = (leg: RunLegView | undefined) => leg?.name ?? '';
     let firstLine: ReactNode = null;
-    let rows: RunRow[] = [...filledRows(), ...borosRow(), resumeRow, ...notHedgedRow()];
-    if (kind === null) rows = [{ label: t('trade.twap.run.paused', { i: slice, n: of }), value: '' }, ...rows];
+    let rows: RunRow[] = [...filledRows(), leftRow, ...borosRow(), resumeRow, ...notHedgedRow()];
+    if (kind === null) rows = [{ label: t('trade.twap.run.paused', { i: slice, n: of }), value: t('trade.twap.run.since', { time: fmtClock(job.updatedAt) }) }, ...rows];
     if (kind === 'restart') firstLine = <VerdictAlert tone="warn" text={t('trade.twap.run.restarted', { time: fmtClock(job.updatedAt), i: slice })} />;
     if (kind === 'sleep') {
-      const text = t('trade.twap.run.slept', { from: fmtClock(job.sleptFrom ?? job.updatedAt), to: fmtClock(job.sleptTo ?? job.updatedAt), i: slice });
-      firstLine = <VerdictAlert tone="warn" text={text} />;
+      const from = job.sleptFrom ?? job.updatedAt;
+      const to = job.sleptTo ?? job.updatedAt;
+      const oneDay = new Date(from).toDateString() === new Date(to).toDateString();
+      const stamp = (ms: number) => (oneDay ? fmtClock(ms) : `${fmtDateShort(ms / 1000)} ${fmtClock(ms)}`);
+      firstLine = <VerdictAlert tone="warn" text={t('trade.twap.run.slept', { from: stamp(from), to: stamp(to), i: slice })} />;
+    }
+    if (kind === 'capped-rest') {
+      const rest = t(close ? 'trade.twap.run.restNotClosed' : 'trade.twap.run.restNotOpened', { qty: qtyText(Number(twap?.behindQty ?? 0)), coin });
+      rows = [...filledRows(), { label: t('trade.twap.run.rest'), value: rest }, ...borosRow(), ...notHedgedRow()];
     }
     if (kind === 'refused') {
+      const margin = /refused slice \d+: not enough margin/.test(job.haltReason ?? '');
       const text = (
         <>
           <span className="block">{localizeServerText(job.haltReason ?? '')}</span>
-          <span className="block text-ink-300">{t('trade.twap.server.refusedFix', { venue: venueOf(maker) })}</span>
+          <span className="block text-ink-300">
+            {margin ? t('trade.twap.server.refusedFix', { venue: venueOf(maker), coin: marginCoinOf(maker) }) : t('trade.twap.run.refusedSize')}
+          </span>
         </>
       );
-      firstLine = <VerdictAlert tone="warn" text={text} />;
+      firstLine = <VerdictAlert tone="act" text={text} />;
       rows = [...filledRows(), ...notHedgedRow()];
     }
     if (kind === 'hedge-margin') {
@@ -271,10 +304,10 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
         <>
           <span className="block">{localizeServerText(job.haltReason ?? '')}</span>
           <span className="num block text-ink-300">{t('trade.twap.server.hedgeGap', { qty: qtyText(gap), coin, usd: usdOf(gap) })}</span>
-          <span className="block text-ink-300">{t('trade.twap.server.hedgeFix', { venue: venueOf(hedge) })}</span>
+          <span className="block text-ink-300">{t('trade.twap.server.hedgeFix', { venue: venueOf(hedge), coin: marginCoinOf(hedge) })}</span>
         </>
       );
-      firstLine = <VerdictAlert tone="warn" text={text} />;
+      firstLine = <VerdictAlert tone="act" text={text} />;
       rows = filledRows();
     }
     const borosHold = kind === 'boros' && boros?.refused ? t('accounts.sliceRun.holdRetryBoros', { amount: qtyText(boros.leftYu) }) : null;
@@ -287,16 +320,16 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
       );
       firstLine = <VerdictAlert tone="warn" text={text} />;
       rows = [{ label: t('trade.twap.run.paused', { i: slice, n: of }), value: '' }, ...filledRows(), ...borosRow()];
-    } else if (kind !== null && kind !== 'restart' && kind !== 'sleep' && kind !== 'refused' && kind !== 'hedge-margin') {
-      firstLine = <VerdictAlert tone="warn" text={localizeServerText(job.haltReason ?? '')} />;
+    } else if (kind !== null && kind !== 'restart' && kind !== 'sleep' && kind !== 'refused' && kind !== 'hedge-margin' && kind !== 'capped-rest') {
+      firstLine = <VerdictAlert tone={redHalt ? 'act' : 'warn'} text={localizeServerText(job.haltReason ?? '')} />;
     }
-    const ahead = filled[0] !== undefined && filled[1] !== undefined && filled[0] > filled[1] ? 0 : 1;
+    const holdOn = (key: 'holdOpenHedge' | 'holdCloseFilled', leg: RunLegView) =>
+      t(`trade.twap.run.${key}`, { venue: leg.name, side: sideWord(leg.side), qty: qtyText(gap), coin });
     const holds =
       kind === 'hedge-margin' && maker && hedge
-        ? {
-            open: t('trade.twap.run.holdOpenHedge', { venue: legs[1 - ahead]!.name, side: sideWord(legs[1 - ahead]!.side), qty: qtyText(gap), coin }),
-            close: t('trade.twap.run.holdCloseFilled', { venue: legs[ahead]!.name, side: sideWord(legs[ahead]!.side), qty: qtyText(gap), coin }),
-          }
+        ? close
+          ? { open: holdOn('holdCloseFilled', hedge), close: holdOn('holdOpenHedge', maker) }
+          : { open: holdOn('holdOpenHedge', hedge), close: holdOn('holdCloseFilled', maker) }
         : null;
     return { ...base, firstLine, rows, acts: <TwapActs jobId={job.id} state="halted" holds={holds} borosHold={borosHold} /> };
   }
@@ -308,11 +341,13 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
           label: sliceLabel,
           value:
             twap?.nextAt != null
-              ? t('trade.twap.run.left', { time: leftText((twap.nextAt - now) / 1000 + Math.max(0, of - slice) * twap.intervalSec) })
+              ? t('trade.twap.run.left', { time: fmtAbout(Math.max(60, (twap.nextAt - now) / 1000 + Math.max(0, of - slice - 1) * twap.intervalSec + (twap.takerAfterSec ?? 0))) })
               : '',
         };
   const rows: RunRow[] = [firstRow];
-  if (twap?.nextAt != null && !lastSlice) rows.push({ label: t('trade.twap.run.nextSlice'), value: clockSpan((twap.nextAt - now) / 1000) });
+  const waiting = !lastSlice && child !== null && child.mode !== 'DONE' && (twap?.nextAt == null || twap.nextAt <= now);
+  if (waiting) rows.push({ label: t('trade.twap.run.nextSliceWait'), value: t('trade.twap.run.afterSliceEnds', { i: slice }) });
+  else if (twap?.nextAt != null && !lastSlice) rows.push({ label: t('trade.twap.run.nextSlice'), value: clockSpan((twap.nextAt - now) / 1000) });
   rows.push(...filledRows());
   const behind = Number(twap?.behindQty ?? 0);
   if (never && !lastSlice && behind > 0) rows.push({ label: t('trade.twap.run.behind'), value: t('trade.twap.run.qtyValue', { qty: qtyText(behind), coin }) });

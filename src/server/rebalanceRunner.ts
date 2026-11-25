@@ -133,6 +133,7 @@ export const QUOTE_FLOOR = 0.997;
  * the 11th Convert order refused within about 6 s. 2 s between Convert quotes keeps a
  * run at 5 orders per 10 s. The same doc caps Convert quotes at 100 per day. */
 export const CONVERT_GAP_MS = 2_000;
+export const QUOTE_RECHECK_MS = 60_000;
 export const TRANSFER_STEP = String(MIN_TRANSFER);
 const CENT_STEP = '0.01';
 const SWEEP_PAGE_SIZE = 100;
@@ -146,11 +147,7 @@ const INTO_VENUE: readonly string[] = Object.values(TO_VENUE_STEP);
 const RETRY_CONVERT_HEADROOM = 1.05;
 
 const lotsOf = (qty: number, lot: string): number => Math.round(qty / Number(lot));
-const lotsDownOf = (qty: number, lot: string): number => {
-  const lots = qty / Number(lot);
-  const near = Math.round(lots);
-  return Math.abs(lots - near) <= 1e-9 * Math.max(1, near) ? near : Math.floor(lots);
-};
+export const lotsDownOf = (qty: number, lot: string): number => Math.round(Number(roundToStep(qty, lot, 'down')) / Number(lot));
 
 const NOT_FOUND = /NOT_FOUND/i;
 const TRANSFER_DEAD = /FAIL|CANCEL|REJECT|EXPIRE/i;
@@ -1364,6 +1361,68 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return retryConvert(step, leg);
   };
 
+  const isCloseOnly = async (symbol: string): Promise<boolean> => {
+    try {
+      const { body } = await crossEx().listCrossexRuleSymbols({ symbols: symbol });
+      const rule = (body ?? []).find((candidate) => candidate.symbol === symbol);
+      return rule !== undefined && (rule.state !== 'live' || positiveOf(rule.delistTime) > 0);
+    } catch {
+      return false;
+    }
+  };
+
+  const hasQuoteLeft = async (convert: Step, amount: number): Promise<boolean> => {
+    const spec = convertSpec(convert);
+    const wait = lastQuoteAt + CONVERT_GAP_MS - deps.now();
+    if (wait > 0) await deps.sleep(wait);
+    lastQuoteAt = deps.now();
+    try {
+      await crossEx().createCrossexConvertQuote({
+        crossexConvertQuoteRequest: {
+          exchangeType: spec.venue,
+          fromCoin: spec.fromCoin,
+          toCoin: spec.toCoin,
+          fromAmount: stripZeros(floorToStep(amount, CENT_STEP)),
+        },
+      });
+      return true;
+    } catch (err) {
+      const c = classifyGateError(err);
+      if (c.category === 'insufficient-margin') return true;
+      if (c.category !== 'rate-limited') throw err;
+      return false;
+    }
+  };
+
+  const checkQuotes = async (): Promise<boolean> => {
+    const kinds = new Map<string, Step>();
+    for (const step of job.steps) {
+      const unsent = step.phase === 'realize' && step.status !== 'done' && !isSent(step);
+      if (unsent && STEPS[step.name as StepName]?.kind === 'convert' && !kinds.has(convertSpec(step).symbol)) kinds.set(convertSpec(step).symbol, step);
+    }
+    if (kinds.size === 0) return true;
+    const account = await readAccount(crossEx());
+    for (const convert of kinds.values()) {
+      const spec = convertSpec(convert);
+      const wallet = spec.fromCoin === 'USDT' ? USDT_WALLET : poolWallet(spec.venue);
+      const amount = Math.min(floorCents(convert.planned ?? 0), floorCents(Math.max(0, account.cash(wallet))));
+      if (amount < HYPERLIQUID_MIN_USDC || (await hasQuoteLeft(convert, amount))) continue;
+      await deps.sleep(QUOTE_RECHECK_MS);
+      if (await hasQuoteLeft(convert, amount)) continue;
+      halt(HALT_TEXT.quotesUsed);
+      return false;
+    }
+    return true;
+  };
+
+  const mayStartSlice = async (step: Step, leg: RealizeJobLeg): Promise<boolean> => {
+    if (await isCloseOnly(leg.symbol)) {
+      halt(REOPEN_HALT.closeOnly(leg, openOf(leg, step)));
+      return false;
+    }
+    return step.cut !== null || checkQuotes();
+  };
+
   const pauseNow = (): void => {
     job.status = 'halted';
     job.paused = true;
@@ -1404,8 +1463,9 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       ...base,
       execution: 'maker',
       pricePolicy: 'touch',
-      timeoutSec: twap ? takerAfterCapSec(twap.intervalSec) : MAKER_REST_MS / 1000,
+      timeoutSec: twap ? (twap.takerAfterSec === undefined ? takerAfterCapSec(twap.intervalSec) : twap.takerAfterSec) : MAKER_REST_MS / 1000,
       ...(twap ? { deadlineCapSec: takerAfterCapSec(twap.intervalSec) } : {}),
+      ...(twap?.repegBehindBp === undefined ? {} : { repegBehindBp: twap.repegBehindBp }),
     };
   };
 
@@ -1577,6 +1637,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       if (lotsDownOf(pairLeft, lot) > 0) {
         const mid = await midOf(deps, perp.symbol);
         if (mid === null) return deps.sleep(POLL_MS);
+        if (job.kind === 'realize' && !(await mayStartSlice(step, leg))) return;
         return await startSlice(step, perp, follow, leg, pairLeft, lot, rule, mid);
       }
       const excessLead = followWhole !== null && wholeLegOf(job, leg.symbol) !== null && leadLive > 0;

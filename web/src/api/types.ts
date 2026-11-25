@@ -309,7 +309,14 @@ export interface DeleverRequest {
   boros: { marketId: number; size: number }[];
   exec: RealizeExec;
   sliceUsd?: number;
-  twap?: { durationSec?: number; intervalSec?: number; slices?: number; sliceQty?: string };
+  twap?: {
+    durationSec?: number;
+    intervalSec?: number;
+    slices?: number;
+    sliceQty?: string;
+    takerAfterSec?: number | null;
+    repegBehindBp?: number | null;
+  };
 }
 
 export interface DeleverEstimate {
@@ -332,6 +339,8 @@ export interface DeleverPlan {
   refused: { reason: 'below-min'; venue: string; minQty: number; coin: string } | { reason: 'same-side'; coin: string } | null;
   twap?: (TwapPlanPreview & { price: number }) | null;
   priceImpact?: PriceImpactPreview | null;
+  borosCloses?: number;
+  borosGasUsd?: number | null;
 }
 
 export type RebalanceFixAction = 'market' | 'limit' | 'boros-retry' | 'add-back' | 'unwind';
@@ -546,7 +555,7 @@ export interface RebalanceJob {
   twap?: TwapView | null;
   child?: TwapChildView | null;
   legs?: RunLegView[];
-  fees?: { readUsd: number; estUsd: number; est: boolean };
+  fees?: { readUsd: number; estUsd: number; totalUsd: number; est: boolean };
   slippage?: { pct: number; usd: number } | null;
   orders?: RunOrderView[];
   boros?: TwapBorosView | null;
@@ -1305,7 +1314,7 @@ export interface DealView {
   pair: DealPair;
   orders: DealOrder[];
   projection: DealProjection;
-  fees: { readUsd: number; estUsd: number; est: boolean };
+  fees: { readUsd: number; estUsd: number; totalUsd?: number; est: boolean };
   avgPrice: { a: string | null; b: string | null };
   endedAt: number | null;
 }
@@ -1355,6 +1364,8 @@ export interface TwapStartBody {
   deal: Omit<DealBody, 'id'>;
   durationSec: number;
   slices: number;
+  intervalSec?: number;
+  sliceQty?: string;
 }
 
 /** GET /api/books/:symbol — the venue's live touch (re-peg decision data). */

@@ -11,7 +11,7 @@ import {
 import type { ActionInput, Side } from '../api/types';
 import { Chip } from '../components/Chip';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { fieldValue, fmtUsd, prettyVenue, sig } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig } from '../lib/fmt';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
 import { formatRestPrice } from '../lib/ticks';
@@ -33,7 +33,7 @@ import {
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
 import { TRACKED_PRICE_TOLERANCE } from './trackedPriceDrift';
-import { TwapArea, useTwapInput } from './TwapArea';
+import { TwapArea, twapControlOf, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
 import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 
@@ -156,6 +156,17 @@ export function SingleTicket() {
   const plan = twapPreview?.plan ?? null;
   const intervalSec = twapOn ? (twap.input.intervalSec ?? plan?.intervalSec ?? null) : null;
 
+  const zeroSize = (p?.violations ?? []).some((v) => /rounds down to zero/.test(v.message));
+  const sliceMin =
+    twapOn && !plan && zeroSize && p?.rule && ref
+      ? t('trade.twap.server.sliceMin', {
+          venue: prettyVenue(parseSymbol(p.symbol).exchange),
+          min: p.rule.minSize,
+          coin: base ?? '',
+          usd: fmtUsd(Number(p.rule.minSize) * ref, 0),
+        })
+      : null;
+
   const takerBad = useTwapTakerAfter(taker, twapOn, plan?.takerAfterSec ?? null);
   const takerBlocked = twapOn && takerBad;
 
@@ -172,7 +183,7 @@ export function SingleTicket() {
       ? null
       : sizeMode === 'usdt'
         ? t('trade.single.maxUsd', { amount: fmtUsd(maxSize, 0) })
-        : t('trade.single.maxBase', { amount: sig(maxSize, 4), base: base ?? '' });
+        : t('trade.single.maxBase', { amount: qtyGrouped(maxSize, 4), base: base ?? '' });
 
   const marginRequired = preview.previews
     ? estimateMargin(preview.previews, positions.data?.positions, account.data?.positionMode).required
@@ -339,8 +350,11 @@ export function SingleTicket() {
           preview={twapPreview}
           impact={impact}
           coin={base ?? ''}
+          lot={detail.data?.lotSize}
         />
       )}
+
+      {sliceMin && <p className="text-[11px] text-rose-400">{sliceMin}</p>}
 
       {type === 'LIMIT' && !twapOn && (
         <div className="flex flex-col gap-1.5">
@@ -378,7 +392,12 @@ export function SingleTicket() {
       )}
 
       {action && (
-        <EstimateCard dataUpdatedAt={preview.dataUpdatedAt} estimating={estimating} isError={preview.isError}>
+        <EstimateCard
+          dataUpdatedAt={preview.dataUpdatedAt}
+          estimating={estimating}
+          isError={preview.isError}
+          sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
+        >
           {p ? (
             <>
               {type === 'MARKET' && p.fillEstimate && (
@@ -427,7 +446,7 @@ export function SingleTicket() {
                         <span className="text-amber-400">{t('trade.single.realNotional', { amount: fmtUsd(p.estNotional) })}</span>
                       ) : undefined
                     }
-                    value={`${sig(p.qty)}${base ? ` ${base}` : ''}`}
+                    value={`${qtyGrouped(p.qty)}${base ? ` ${base}` : ''}`}
                   />
                 )}
                 <EstimateRow label={t('trade.single.estFee')} sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
@@ -442,7 +461,7 @@ export function SingleTicket() {
                   strong
                 />
               </div>
-              <ViolationList violations={p.violations} warnings={p.warnings} />
+              <ViolationList violations={sliceMin ? p.violations.filter((v) => !/rounds down to zero/.test(v.message)) : p.violations} warnings={p.warnings} />
             </>
           ) : (
             <div className="text-[11px]">
@@ -470,7 +489,7 @@ export function SingleTicket() {
           dealOpts={
             twapOn ? { makerLeg: 'auto', repegBehindBp: repeg, timeoutSec: taker.sec } : undefined
           }
-          twap={twapOn && plan ? { plan, blocked: twapBlocked || takerBlocked } : null}
+          twap={twapControlOf(twapOn, plan, twapBlocked || takerBlocked)}
           intentKey={JSON.stringify([
             symbol,
             side,

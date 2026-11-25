@@ -40,7 +40,7 @@ describe('caffeinate while live', () => {
     t.setLive(true);
     t.keep.update();
     t.keep.update();
-    expect(t.calls).toEqual([{ cmd: 'caffeinate', args: ['-i', '-w', '4242'] }]);
+    expect(t.calls).toEqual([{ cmd: '/usr/bin/caffeinate', args: ['-i', '-w', '4242'] }]);
   });
 
   it('ends the process when nothing is live', () => {

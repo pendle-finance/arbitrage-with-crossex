@@ -242,6 +242,7 @@
   "haltAbandonCheck": "请放弃并检查持仓。",
   "legGapThe": "{{venue}} {{sideWord}}比 {{otherVenue}} {{otherSideWord}}少 {{size}} {{base}}。",
   "legGap": "{{venue}} {{sideWord}}比 {{otherVenue}} {{otherSideWord}}少 {{size}} {{base}}。",
+  "closeOnlyResume": "请等合约恢复接单后点击恢复。",
   "closeOnlyNext": "请等合约恢复接单后点击恢复，或在持仓中平掉 {{venue}} {{sideWord}}的 {{size}} {{base}}。",
   "quotesUsedNext": "请等 Gate 的计数清零（24 小时内）后点击恢复，或在持仓中平掉 {{venue}} {{sideWord}}的 {{size}} {{base}}。",
   "refusedNext": "点击恢复重试，或在持仓中平掉 {{venue}} {{sideWord}}的 {{size}} {{base}}。",

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isTwapChildId } from './twapJob';
+import type { RebalanceJob } from '../api/types';
+import { isTwapChildId, liveTwapJob } from './twapJob';
 
 describe('isTwapChildId', () => {
   it('accepts a slice child id', () => {
@@ -19,5 +20,19 @@ describe('isTwapChildId', () => {
     expect(isTwapChildId('job1-s3', 'job1')).toBe(false);
     expect(isTwapChildId('deal-abc', 'job1')).toBe(false);
     expect(isTwapChildId('-s3-1', '')).toBe(false);
+  });
+});
+
+describe('liveTwapJob', () => {
+  const job = (over: Partial<RebalanceJob>) => ({ id: 'j', status: 'running', twap: { slice: 1, of: 2 }, ...over }) as unknown as RebalanceJob;
+
+  it('takes a TWAP and a Delever TWAP while running or halted', () => {
+    expect(liveTwapJob(job({ kind: 'twap' }))).not.toBeNull();
+    expect(liveTwapJob(job({ kind: 'delever', status: 'halted' }))).not.toBeNull();
+  });
+
+  it('skips a Delever without TWAP and an ended run', () => {
+    expect(liveTwapJob(job({ kind: 'delever', twap: undefined }))).toBeNull();
+    expect(liveTwapJob(job({ kind: 'twap', status: 'done' }))).toBeNull();
   });
 });

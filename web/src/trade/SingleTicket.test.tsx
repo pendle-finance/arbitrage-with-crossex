@@ -456,3 +456,51 @@ describe('SingleTicket with TWAP', () => {
     expect(screen.queryByRole('button', { name: 'Execute now' })).toBeNull();
   });
 });
+
+describe('SingleTicket TWAP under the venue minimum', () => {
+  function zeroSizeHandler() {
+    return http.post('/api/preview', async ({ request }) => {
+      const { actions } = (await request.json()) as { actions: ActionInput[] };
+      return HttpResponse.json(
+        env<PreviewResponse>({
+          previews: [
+            previewFor(actions[0], {
+              qty: '0',
+              estNotional: 0,
+              rule: { ...BTC_BINANCE, minSize: '0.001', lotSize: '0.001' },
+              violations: [{ code: 'qty-invalid', message: 'size rounds down to zero' }],
+            }),
+          ],
+          twap: { plan: null, refusal: null },
+        }),
+      );
+    });
+  }
+
+  async function open() {
+    server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), zeroSizeHandler());
+    renderWithClient(<SingleTicket />);
+    await pickBinanceBtc();
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+    await userEvent.type(screen.getByLabelText('Size'), '1');
+  }
+
+  it('names the venue minimum a slice instead of rounds down to zero', async () => {
+    await open();
+    expect(await screen.findByText('Binance takes at least 0.001 BTC ($3) a slice.')).toBeInTheDocument();
+    expect(screen.queryByText(/rounds down to zero/)).toBeNull();
+  });
+
+  it('keeps Start TWAP off with a reason on screen when the slice size is empty', async () => {
+    await open();
+    await screen.findByText('Binance takes at least 0.001 BTC ($3) a slice.');
+    expect(screen.getByLabelText('Slice size')).toHaveValue('');
+    expect(screen.getByRole('button', { name: /Start TWAP/ })).toBeDisabled();
+  });
+
+  it('never offers one deal while TWAP is on', async () => {
+    await open();
+    await screen.findByText('Binance takes at least 0.001 BTC ($3) a slice.');
+    expect(screen.queryByText("Can't send as one deal. Send each leg on its own.")).toBeNull();
+  });
+});

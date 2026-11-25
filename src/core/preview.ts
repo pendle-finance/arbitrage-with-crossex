@@ -26,8 +26,8 @@ interface PreviewDeps {
   fetchBook?: typeof fetchVenueBook;
 }
 
-export async function previewActions(deps: PreviewDeps, actions: ActionInput[]): Promise<PreviewResult[]> {
-  const resolved = await resolveActions(deps.clients, actions, { mode: 'preview' });
+export async function previewActions(deps: PreviewDeps, actions: ActionInput[], sliced = false): Promise<PreviewResult[]> {
+  const resolved = await resolveActions(deps.clients, actions, { mode: 'preview', sliced });
   return Promise.all(
     resolved.map(async (r): Promise<PreviewResult> => {
       const preview: PreviewResult = { ...r, warnings: [...r.warnings] };
@@ -216,11 +216,11 @@ export async function previewTwap(
   );
   const qty = previews[0].qty;
   const sameQty = previews.every((preview) => Number(preview.qty) === Number(qty));
-  const twap = Number(qty) > 0 && sameQty ? twapPlanOf(previews, legs, qty, input) : null;
-  if (!isPair) return { makerLeg: null, priceImpact: null, twap };
-  return {
-    makerLeg: makerLegOf(deps.feeRows, { ...legs[0], qty: Number(previews[0].qty) }, { ...legs[1], qty: Number(previews[1].qty) }),
-    priceImpact: twap?.plan ? priceImpactOf(legs, Number(qty), twap.plan) : null,
-    twap,
-  };
+  const underLot = !(Number(qty) > 0) && previews.every(({ input: typed }) => Number(typed.qty ?? ('notional' in typed ? typed.notional : undefined)) > 0);
+  const twap = sameQty && (Number(qty) > 0 || underLot) ? twapPlanOf(previews, legs, underLot ? '0' : qty, input) : null;
+  const priceImpact = twap?.plan ? priceImpactOf(legs, Number(qty), twap.plan) : null;
+  const makerLeg = isPair
+    ? makerLegOf(deps.feeRows, { ...legs[0], qty: Number(previews[0].qty) }, { ...legs[1], qty: Number(previews[1].qty) })
+    : null;
+  return { makerLeg, priceImpact, twap };
 }

@@ -21,7 +21,7 @@ import { useVenueBook } from '../api/queries';
 import type { ActionInput, BookTouch, PreviewResult } from '../api/types';
 import { VenueIcon } from '../components/AssetIcon';
 import { FreshnessButton } from '../components/FreshnessIndicator';
-import { parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { padTwo, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { usePreviewDebounced } from './usePreview';
 
 const isNum = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -126,6 +126,8 @@ export function assembleImpactMarks(long: LegImpact, short: LegImpact): ImpactSc
 /** Slippage-magnitude tone → literal Tailwind classes (dynamic names don't
  * survive Tailwind's scan, so map to constants). Mirrors previewBits'
  * slippageClass thresholds. */
+const priceText = (v: number | string): string => padTwo(sigGrouped(v));
+
 function toneOf(impactPct: number | null): 'cyan' | 'amber' | 'rose' {
   const a = Math.abs(impactPct ?? 0);
   return a < 0.05 ? 'cyan' : a < 0.3 ? 'amber' : 'rose';
@@ -177,7 +179,7 @@ function PriceLine({
       style={{ top: `${mark.yPct}%` }}
       data-mark={dataMark}
       data-price={mark.price}
-      title={title ?? (tag ? `${tag} ${sig(mark.price)}` : sig(mark.price))}
+      title={title ?? (tag ? `${tag} ${priceText(mark.price)}` : priceText(mark.price))}
     >
       {side === 'left' && label}
       <div className={`flex-1 border-t ${lineClass} ${dim ? 'opacity-60' : ''}`} />
@@ -241,7 +243,7 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
     marks.impactPct === null
       ? ''
       : t('trade.impact.bps', { value: `${marks.impactPct >= 0 ? '+' : ''}${Math.round(marks.impactPct * 100)}` });
-  const fillPrice = marks.fill ? sig(marks.fill.price) : '—';
+  const fillPrice = marks.fill ? priceText(marks.fill.price) : '—';
   const fillTitle = `${isLong ? t('trade.impact.fillBuy', { price: fillPrice }) : t('trade.impact.fillSell', { price: fillPrice })}${
     impactBps ? t('trade.impact.impactPart', { bps: impactBps }) : ''
   }${marks.partialDepth ? t('trade.impact.partialPart') : ''}`;
@@ -271,8 +273,8 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
           dim={dim}
           title={
             isLong
-              ? t('trade.impact.fromAsk', { title: fillTitle, price: sig(crossTouch.price) })
-              : t('trade.impact.fromBid', { title: fillTitle, price: sig(crossTouch.price) })
+              ? t('trade.impact.fromAsk', { title: fillTitle, price: priceText(crossTouch.price) })
+              : t('trade.impact.fromBid', { title: fillTitle, price: priceText(crossTouch.price) })
           }
         />
       )}
@@ -308,7 +310,7 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
           mark={marks.limit}
           tag={
             leg.limitQty
-              ? t('trade.impact.limitTag', { price: sig(marks.limit.price), qty: sig(leg.limitQty) })
+              ? t('trade.impact.limitTag', { price: priceText(marks.limit.price), qty: qtyGrouped(leg.limitQty) })
               : t('trade.impact.limit')
           }
           arrow={dirArrow}
@@ -318,7 +320,7 @@ function LegColumn({ leg, marks, dim }: { leg: LegImpact; marks: LegMarks; dim: 
           textClass="text-cyan-300"
           title={
             leg.limitQty
-              ? t('trade.impact.limitTitle', { qty: sig(leg.limitQty), price: sig(marks.limit.price) })
+              ? t('trade.impact.limitTitle', { qty: qtyGrouped(leg.limitQty), price: priceText(marks.limit.price) })
               : undefined
           }
         />
@@ -334,6 +336,7 @@ export function PriceImpactGraph({
   updatedAt,
   staleError,
   onRefetch,
+  readFailed = false,
   dim = false,
   embedded = false,
   oneLeg,
@@ -343,6 +346,7 @@ export function PriceImpactGraph({
   updatedAt: number;
   staleError: boolean;
   onRefetch: () => void;
+  readFailed?: boolean;
   /** Dim the impact marks while the preview describes a stale input. */
   dim?: boolean;
   /** Render inside a caller's card: no border, heading or freshness chip of
@@ -394,13 +398,22 @@ export function PriceImpactGraph({
           <span className="text-[12px] font-normal leading-[14.52px] text-ink-300">
             {t('trade.impact.heading')}
           </span>
-          <FreshnessButton
-            dataUpdatedAt={updatedAt}
-            staleError={staleError}
-            title={t('trade.impact.refetch')}
-            onRefetch={onRefetch}
-            dense
-          />
+          {readFailed ? (
+            <span role="alert" className="inline-flex items-center gap-2 text-[11px] text-rose-300">
+              {t('trade.impact.readFailed')}
+              <button type="button" className="btn-ghost-xs" onClick={onRefetch}>
+                {t('common.retry')}
+              </button>
+            </span>
+          ) : (
+            <FreshnessButton
+              dataUpdatedAt={updatedAt}
+              staleError={staleError}
+              title={t('trade.impact.refetch')}
+              onRefetch={onRefetch}
+              dense
+            />
+          )}
         </div>
       )}
 
@@ -409,7 +422,7 @@ export function PriceImpactGraph({
       ) : (
         <div className="flex gap-1" data-price-graph>
           {/* price axis gutter */}
-          <div className="relative w-10 shrink-0">
+          <div className="relative w-14 shrink-0">
             <div className="relative h-40">
               {scale.ticks.map((tick) => (
                 <div
@@ -417,7 +430,7 @@ export function PriceImpactGraph({
                   className="num absolute right-1 -translate-y-1/2 text-[9px] text-ink-400"
                   style={{ top: `${tick.yPct}%` }}
                 >
-                  {sig(tick.price)}
+                  {priceText(tick.price)}
                 </div>
               ))}
             </div>
@@ -615,6 +628,9 @@ export function DealBookImpact({
   const staleError =
     (makerBook.isError && makerBook.data !== undefined) ||
     (hedgeBook.isError && hedgeBook.data !== undefined);
+  const readFailed =
+    (makerBook.isError && makerBook.data === undefined) ||
+    (hedgeContract !== null && hedgeBook.isError && hedgeBook.data === undefined);
 
   return (
     <PriceImpactGraph
@@ -623,6 +639,7 @@ export function DealBookImpact({
       updatedAt={updatedAt}
       staleError={staleError}
       dim={preview.estimating}
+      readFailed={readFailed}
       oneLeg={hedgeContract === null ? (makerIsLong ? 'long' : 'short') : undefined}
       onRefetch={() => {
         void makerBook.refetch();

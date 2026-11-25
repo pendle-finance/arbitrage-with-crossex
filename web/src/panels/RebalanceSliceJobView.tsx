@@ -224,9 +224,12 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
           {sk('pausing', { i: num(index, 0), n: num(count, 0) })}
         </p>
       ) : (
-        <button type="button" className="btn px-4 py-2 text-sm" disabled={pending} onClick={() => pause.mutate(job.id)}>
-          {sk('holdPause')}
-        </button>
+        <>
+          <button type="button" className="btn px-4 py-2 text-sm" disabled={pending} onClick={() => pause.mutate(job.id)}>
+            {sk('holdPause')}
+          </button>
+          {pause.error instanceof Error && <Line tone="text-guava">{localizeServerText(pause.error.message)}</Line>}
+        </>
       ),
     });
   }

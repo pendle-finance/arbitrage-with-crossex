@@ -318,7 +318,7 @@ describe('ClosePairForm — Limit + hedge close', () => {
   }, 15_000);
 });
 
-describe('ClosePairForm — the maker leg comes from the preview', () => {
+describe('ClosePairForm: the maker leg comes from the preview', () => {
   it('a manual pick of the second leg rests that leg', async () => {
     const posted: DealRequest[] = [];
     server.use(

@@ -590,9 +590,17 @@ export function useRebalance() {
     // trader could pick one. The server re-prices at send
     // and refuses a fee that rose past its tolerance, so a slower quote
     // cannot send a worse move than the one shown.
-    refetchInterval: shown ? (q) => (q.state.data?.job?.status === 'running' ? 1_000 : 10_000) : false,
+    refetchInterval: shown ? (q) => rebalancePollMs(q.state.data?.job ?? null, Date.now()) : false,
     refetchIntervalInBackground: true,
   });
+}
+
+export function rebalancePollMs(job: RebalanceJob | null, now: number): number {
+  if (job?.status !== 'running') return 10_000;
+  const twap = job.twap;
+  const childLive = job.child != null && job.child.mode !== 'DONE';
+  if (!twap || childLive || job.pauseRequested || twap.nextAt == null) return 1_000;
+  return Math.min(10_000, Math.max(1_000, twap.nextAt - now));
 }
 
 export interface CustomMove {
@@ -657,10 +665,8 @@ export function useStartRebalance() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: StartRebalanceBody | TwapStartBody) => postJson<{ id: string }>('/rebalance', body),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: qk.rebalance });
-      void qc.invalidateQueries({ queryKey: qk.transfer });
-    },
+    onSuccess: () =>
+      Promise.all([qc.invalidateQueries({ queryKey: qk.rebalance }), qc.invalidateQueries({ queryKey: qk.transfer })]),
     onError: () => {
       void qc.invalidateQueries({ queryKey: qk.rebalance });
     },

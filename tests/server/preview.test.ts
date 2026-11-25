@@ -196,7 +196,18 @@ describe('POST /api/preview with twap', () => {
     expect(data.twap?.refusal).toBeNull();
   });
 
-  it('a single leg gets the plan alone, and a slice past the book is refused with the largest that fits', async () => {
+  it('a single leg under one lot gets the venue minimum line, not a plan of nothing', async () => {
+    mockPairStack();
+
+    const { status, data } = await previewTwap([{ kind: 'open-market', symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'BUY', notional: '1' }]);
+
+    expect(status).toBe(200);
+    expect(data.twap?.plan).toBeNull();
+    expect(data.twap?.refusal?.field).toBe('sliceSize');
+    expect(data.twap?.refusal?.text).toMatch(/^Too small for 2 slices: Binance takes at least \S+ ETH \(\$\S+\) a slice\.$/);
+  });
+
+  it('a single leg gets the plan and its price impact, and a slice past the book is refused with the largest that fits', async () => {
     mockPairStack();
 
     const { status, data } = await previewTwap(
@@ -206,7 +217,8 @@ describe('POST /api/preview with twap', () => {
 
     expect(status).toBe(200);
     expect(data.makerLeg).toBeNull();
-    expect(data.priceImpact).toBeNull();
+    expect(data.priceImpact?.whole).toBeNull();
+    expect(data.priceImpact?.sliced).toBeCloseTo(3, 6);
     expect(data.twap?.refusal).toEqual({
       field: 'sliceSize',
       text: 'Book too thin for 2.5 ETH a slice.',

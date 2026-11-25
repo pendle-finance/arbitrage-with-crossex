@@ -46,19 +46,25 @@ import { useRebalanceOpener } from '../panels/rebalanceOpener';
 
 const STALE_MS = 10_000;
 
-type TwapLock = 'running' | 'paused' | 'error';
+type TwapLock = 'running' | 'paused' | 'error' | 'errorOrders';
 
 const LOCK_TEXT = {
   running: 'trade.twap.lock.running',
   paused: 'trade.twap.lock.paused',
   error: 'trade.twap.lock.error',
+  errorOrders: 'trade.twap.lock.errorOrders',
 } as const;
+
+const ERROR_HALTS: readonly (RebalanceJob['haltKind'] | undefined)[] = ['error', 'hedge-margin'];
 
 function twapLockOf(found: RebalanceJob | null | undefined): TwapLock | null {
   const job = liveTwapJob(found);
-  if (!job) return null;
+  if (!job || job.kind !== 'twap') return null;
   const childLive = job.child != null && job.child.mode !== 'DONE';
-  if (job.status === 'halted') return childLive ? 'error' : 'paused';
+  if (job.status === 'halted') {
+    if (childLive) return 'error';
+    return ERROR_HALTS.includes(job.haltKind) ? 'errorOrders' : 'paused';
+  }
   return job.paused && !childLive ? 'paused' : 'running';
 }
 
@@ -133,7 +139,9 @@ export function ExecuteControl({
   const account = useAccount();
   const positions = usePositions();
   const now = useNow(1_000);
-  const lock = twapLockOf(useRebalance().data?.job);
+  const rebalance = useRebalance();
+  const lock = twapLockOf(rebalance.data?.job);
+  const lockUnknown = rebalance.isError && !rebalance.data;
   const openRebalance = useRebalanceOpener();
   const startTwap = useStartRebalance();
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -163,6 +171,7 @@ export function ExecuteControl({
   const preview = usePreviewDebounced(scope, previewActions, {
     debounceMs: previewOpts?.debounceMs ?? 400,
     refetchInterval: previewOpts?.refetchInterval ?? 3_000,
+    twap: twap ? { durationSec: twap.plan.durationSec, slices: twap.plan.slices } : undefined,
     tolerate:
       trackedPriceTolerance !== undefined
         ? (shown, current) => withinTrackedDrift(shown, current, trackedPriceTolerance)
@@ -336,6 +345,7 @@ export function ExecuteControl({
       setReplayedDeal(null);
       startTwap.mutate(twapStartFrom(deal, twap.plan, clientId), {
         onSuccess: () => {
+          basketIdRef.current = null;
           clearPendingBasket(inflightIntentRef.current);
           onExecuted?.();
           openRebalance();
@@ -406,6 +416,7 @@ export function ExecuteControl({
           )}
         </HoldToConfirmButton>
       )}
+      {lockUnknown && <p role="status" className="mt-1 text-[11px] text-amber-200">{t('trade.twap.lock.unknown')}</p>}
       {viewOnly && <p className="mt-1 text-[11px] text-ink-400">{t('trade.execute.viewOnly')}</p>}
       {placedResting && (
         <div

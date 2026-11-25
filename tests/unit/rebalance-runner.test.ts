@@ -52,6 +52,7 @@ import {
   LOOKUP_WINDOW_MS,
   POLL_MS,
   QUOTE_FLOOR,
+  QUOTE_RECHECK_MS,
   quoteFloor,
   applyFix,
   BOROS_LATE_SEND_MS,
@@ -6254,6 +6255,23 @@ describe('slices on engine children', () => {
     expect(run.h.jobs.read()).toMatchObject({ status: 'done' });
   });
 
+  it.each([
+    [0.02, { takerAfterSec: 40, repegBehindBp: 2 as const }, { timeoutSec: 40, repegBehindBp: 2 }],
+    [2_000, { takerAfterSec: null, repegBehindBp: null }, { timeoutSec: null, repegBehindBp: null }],
+    [2_000, {}, { timeoutSec: 48 }],
+  ])('a TWAP slice of %d ETH sends the taker-after and re-peg the run was started with', async (q, picked, sent) => {
+    const run = deleverRun(whole({ symbol: HL_ETH, side: 'SHORT', qty: q }, { symbol: GATE_ETH, side: 'LONG', qty: q }, q), [[HL_ETH, -q], [GATE_ETH, q]], 2);
+    const job = run.h.jobs.read()!;
+    job.deleverTwap = { ...job.deleverTwap!, ...picked };
+    run.h.jobs.write(job);
+    await run.h.run();
+    expect(run.engine.requests).toHaveLength(2);
+    for (const req of run.engine.requests) {
+      expect(req).toMatchObject({ execution: 'maker', deadlineCapSec: 48, ...sent });
+      if (!('repegBehindBp' in sent)) expect(req.repegBehindBp).toBeUndefined();
+    }
+  });
+
   it("boros share follows the smaller leg's fill", async () => {
     const run = deleverRun(whole({ symbol: GATE_ETH, side: 'LONG', qty: 4.4 }, { symbol: HL_ETH, side: 'SHORT', qty: 4.03 }, 4.03), [[GATE_ETH, 4.4], [HL_ETH, -4.03]], 11, (_req, index) => (index === 0 ? { a: '0.37', b: '0.37' } : {}));
     await run.h.run();
@@ -6522,6 +6540,117 @@ describe('realize slices: a child found again after a restart', () => {
     const later = engine.requests.slice(1).reduce((sum, req) => sum + Number(req.qty), 0);
     expect(later).toBeCloseTo(total - part, 4);
     expect(h.jobs.read()?.realize?.legs[0].filledQty).toBeCloseTo(total, 4);
+    expect(h.jobs.read()?.status).toBe('done');
+  });
+});
+
+describe('realize slices: guards before a close', () => {
+  const RUNGS = [50, 5_000, 100_000, 1_000_000, 6_000_000];
+  const MID = 3000;
+  const DELISTED = { delistTime: '1764000000' };
+  const lotted = (value: number): number => Number((Math.floor(value / 0.0001 + 1e-9) * 0.0001).toFixed(4));
+  const ruleRows = (hl: Record<string, string>) => ({
+    body: [HL_ETH, GATE_ETH].map((symbol) => ({ symbol, state: 'live', lotSize: '0.0001', minSize: '0.0001', tickSize: '0.1', businessType: 'FUTURE', ...(symbol === HL_ETH ? hl : {}) })),
+  });
+  const realizeAt = (usd: number, venue: ReturnType<typeof sliceVenue>, leg: Partial<RealizeLeg> = {}) => {
+    const total = lotted(usd / MID);
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: usd / 2, leg: { qty: total, positionQty: total * 2, ...leg } });
+    return { h, total };
+  };
+  const CONVERTS: [number, number][] = [
+    [50, 11.37],
+    [5_000, 1_000.01],
+    [100_000, 20_000.03],
+    [1_000_000, 200_000.07],
+    [6_000_000, 1_200_000.07],
+  ];
+  const withConvert = (amount: number): Partial<RealizeLeg> => ({ convert: { amount, count: chunkCount(amount), feeUsd: 0 } });
+  const firstConvertPlanned = (h: ReturnType<typeof sliceRun>): number =>
+    h.jobs.read()!.steps.find((step) => step.name.startsWith('Convert'))?.planned ?? 0;
+
+  it.each(RUNGS.flatMap((usd) => [[usd, 'a delist time', DELISTED], [usd, 'a state not live', { state: 'delisting' }]] as const))(
+    'a $%d Realize on a contract with %s halts before any close',
+    async (usd, _why, rule) => {
+      const venue = sliceVenue();
+      venue.handlers.listCrossexRuleSymbols = async () => ruleRows(rule);
+      const { h } = realizeAt(usd, venue);
+      const engine = childEngine(h);
+      await h.run();
+      const job = h.jobs.read()!;
+      expect(engine.requests).toHaveLength(0);
+      expect(venue.placed).toHaveLength(0);
+      expect(job.realize?.legs[0].filledQty).toBe(0);
+      expect(job).toMatchObject({ status: 'halted', haltKind: 'other' });
+      expect(job.haltReason).toContain('Gate CrossEx takes no new orders on this contract.');
+    },
+  );
+
+  it.each(RUNGS)('a delist between two $%d Realize slices halts before the next close with the leg whole', async (usd) => {
+    let delisted = false;
+    const venue = sliceVenue();
+    venue.handlers.listCrossexRuleSymbols = async () => ruleRows(delisted ? DELISTED : {});
+    const { h, total } = realizeAt(usd, venue);
+    const engine = childEngine(h, () => {
+      delisted = true;
+      return {};
+    });
+    await h.run();
+    const job = h.jobs.read()!;
+    const first = Number(engine.requests[0]?.qty);
+    expect(engine.requests).toHaveLength(1);
+    expect(first).toBeLessThan(total);
+    expect(job.realize?.legs[0].filledQty).toBeCloseTo(first, 8);
+    expect(job.steps[0].qty).toBeCloseTo(first, 8);
+    expect(job).toMatchObject({ status: 'halted', haltKind: 'other' });
+  });
+
+  it.each(CONVERTS)('a $%d Realize checks one quote of its first Convert of %d before the first close and never sends it', async (usd, amount) => {
+    const venue = sliceVenue(filled, account({ hyperliquid: amount }));
+    const { h } = realizeAt(usd, venue, withConvert(amount));
+    const planned = firstConvertPlanned(h);
+    const seen: [number, number][] = [];
+    childEngine(h, (_req, index) => {
+      if (index === 0) seen.push([h.count('createCrossexConvertQuote'), h.count('createCrossexConvertOrder')]);
+      return {};
+    });
+    await h.run();
+    expect(seen).toEqual([[1, 0]]);
+    expect(Number(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount)).toBeCloseTo(Math.min(planned, amount), 2);
+  });
+
+  it.each(CONVERTS)('a $%d Realize with the cash for its %d Convert not yet in the wallet closes without a check quote', async (usd, amount) => {
+    const venue = sliceVenue(filled, account({ hyperliquid: 10 }));
+    const { h } = realizeAt(usd, venue, withConvert(amount));
+    const seen: number[] = [];
+    const engine = childEngine(h, (_req, index) => {
+      if (index === 0) seen.push(h.count('createCrossexConvertQuote'));
+      return {};
+    });
+    await h.run();
+    expect(seen).toEqual([0]);
+    expect(engine.requests.length).toBeGreaterThan(0);
+  });
+
+  it.each(CONVERTS)("a $%d Realize with the day's Convert quotes used halts before any close, after one wait (Convert %d)", async (usd, amount) => {
+    const venue = sliceVenue(filled, account({ hyperliquid: amount }));
+    venue.handlers.createCrossexConvertQuote = seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests'));
+    const { h } = realizeAt(usd, venue, withConvert(amount));
+    const engine = childEngine(h);
+    const start = h.clock.now();
+    await h.run();
+    expect(engine.requests).toHaveLength(0);
+    expect(venue.placed).toHaveLength(0);
+    expect(h.count('createCrossexConvertQuote')).toBe(2);
+    expect(h.clock.now() - start).toBeGreaterThanOrEqual(QUOTE_RECHECK_MS);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'other', haltReason: HALT_TEXT.quotesUsed });
+  });
+
+  it.each(RUNGS)('a $%d Realize with no Convert asks Gate for no quote', async (usd) => {
+    const venue = sliceVenue();
+    const { h } = realizeAt(usd, venue);
+    childEngine(h);
+    await h.run();
+    expect(h.count('createCrossexConvertQuote')).toBe(0);
     expect(h.jobs.read()?.status).toBe('done');
   });
 });

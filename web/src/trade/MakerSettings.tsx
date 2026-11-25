@@ -1,10 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import type { MakerLegPreview } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { num } from '../lib/fmt';
+import { num, sig } from '../lib/fmt';
 import { parseSpan, spanText } from '../lib/span';
 import { stripZeros } from '../lib/ticks';
 import { FoldRow } from './FoldRow';
@@ -90,6 +90,8 @@ export function MakerSettings({
   legs,
   makerLeg,
   autoPick,
+  saving,
+  savingHint,
   onMakerLeg,
   takerAfter,
   onTakerAfter,
@@ -102,6 +104,8 @@ export function MakerSettings({
   legs: { name: string; side: Side }[] | null;
   makerLeg: 'auto' | LegPick;
   autoPick: MakerLegPreview | null;
+  saving?: number | null;
+  savingHint?: string;
   onMakerLeg: (v: 'auto' | LegPick) => void;
   takerAfter: TakerAfter;
   onTakerAfter: (v: TakerAfter) => void;
@@ -149,8 +153,8 @@ export function MakerSettings({
                     {picked && (
                       <span className="text-ink-300">
                         {rests
-                          ? t('pairTicket.makerSettings.hoverRests', { bp: MAKER_FEE_BP })
-                          : t('pairTicket.makerSettings.hoverHedges', { bp: TAKER_FEE_BP })}
+                          ? t('pairTicket.makerSettings.hoverRests', { bp: MAKER_FEE_BP, pct: num(MAKER_FEE_BP / 100, 2) })
+                          : t('pairTicket.makerSettings.hoverHedges', { bp: TAKER_FEE_BP, pct: num(TAKER_FEE_BP / 100, 2) })}
                       </span>
                     )}
                   </div>
@@ -168,6 +172,15 @@ export function MakerSettings({
               </button>
             )}
           </div>
+          {saving != null && saving > 0 && (
+            <span className="text-[11px] text-ink-400" title={savingHint ?? t('pairTicket.makerSettings.savingHint')}>
+              <Trans
+                i18nKey="pairTicket.makerSettings.saving"
+                values={{ amount: sig(saving) }}
+                components={{ g: <span className="num text-emerald-400" /> }}
+              />
+            </span>
+          )}
           <SegmentedToggle<LegPick | ''>
             ariaLabel={t('pairTicket.makerSettings.makerLeg')}
             fill
@@ -190,7 +203,7 @@ export function MakerSettings({
 
       <div className="flex flex-col gap-1.5">
         <SettingLabel label={t('pairTicket.makerSettings.takerAfter')}>
-          <span>{t('pairTicket.makerSettings.takerHover', { bp: TAKER_FEE_BP })}</span>
+          <span>{t('pairTicket.makerSettings.takerHover', { bp: TAKER_FEE_BP, pct: num(TAKER_FEE_BP / 100, 2) })}</span>
           <span className="text-ink-400">{t('pairTicket.makerSettings.takerNeverHover')}</span>
         </SettingLabel>
         <SegmentedToggle<TakerAfter['kind']>
@@ -250,7 +263,10 @@ export function MakerSettings({
             fill
             value={String(marketSlippage.value)}
             onChange={(v) => marketSlippage.onChange(Number(v))}
-            options={MARKET_SLIPPAGE_PCT.map((p) => ({ value: String(p), label: pct(p) }))}
+            options={(MARKET_SLIPPAGE_PCT as readonly number[])
+              .concat(MARKET_SLIPPAGE_PCT.includes(marketSlippage.value as never) ? [] : [marketSlippage.value])
+              .sort((a, b) => a - b)
+              .map((p) => ({ value: String(p), label: pct(p) }))}
           />
         </div>
       )}

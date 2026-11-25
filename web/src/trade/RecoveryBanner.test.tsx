@@ -46,8 +46,8 @@ function twapJob(overrides: Partial<RebalanceJob> = {}): RebalanceJob {
     status: 'running',
     twap: { slice: 3, of: 12, makerLeg: 'a' },
     legs: [
-      { name: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', side: 'LONG' },
-      { name: 'BINANCE_FUTURE_ETH_USDT', exchange: 'BINANCE', side: 'SHORT' },
+      { name: 'Gate', exchange: 'gate', symbol: 'GATE_FUTURE_ETH_USDT', side: 'LONG', reduceOnly: false },
+      { name: 'Binance', exchange: 'binance', symbol: 'BINANCE_FUTURE_ETH_USDT', side: 'SHORT', reduceOnly: false },
     ],
     ...overrides,
   } as unknown as RebalanceJob;
@@ -90,6 +90,65 @@ describe('RecoveryBanner', () => {
   it('refused band', async () => {
     renderTwap(twapJob({ status: 'halted', haltKind: 'refused', twap: { slice: 4, of: 12, makerLeg: 'a' } as never }));
     expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: Gate refused slice 4 · ETH pair open');
+  });
+
+  it('a close names the coin from the symbol and says close', async () => {
+    const legs = twapJob().legs!.map((leg) => ({ ...leg, reduceOnly: true }));
+    renderTwap(twapJob({ legs }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP · ETH pair close · slice 3/12');
+  });
+
+  it('a one-leg run is named as the run view names it', async () => {
+    renderTwap(twapJob({ legs: twapJob().legs!.slice(0, 1) }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP · ETH long open · Gate · slice 3/12');
+  });
+
+  it('a hedge refusal names the hedge venue, not the limit venue', async () => {
+    renderTwap(twapJob({ status: 'halted', haltKind: 'hedge-margin' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: Binance refused the hedge · ETH pair open · slice 3/12');
+  });
+
+  it('pausing reads differently from running', async () => {
+    renderTwap(twapJob({ pauseRequested: true }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP pausing · ETH pair open · slice 3/12');
+  });
+
+  it('a Delever TWAP halted at the Boros close shows its strip', async () => {
+    const legs = twapJob().legs!.map((leg) => ({ ...leg, reduceOnly: true }));
+    renderTwap(twapJob({ kind: 'delever', status: 'halted', haltKind: 'boros', legs }), [
+      makeDealView({ pair: { id: 'job1-s3-1', mode: 'OPENING' } }),
+    ]);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('TWAP paused: Boros close refused · ETH pair close');
+    expect(alert).not.toHaveTextContent(/deal is still working/i);
+  });
+
+  it('a halted plain deal still shows under the TWAP strip', async () => {
+    renderTwap(twapJob(), [makeDealView({ pair: { id: 'plain1', mode: 'HALTED' } })]);
+    await screen.findByText(/halted — needs you/);
+    expect(screen.getAllByRole('alert')).toHaveLength(2);
+  });
+
+  it('a failed deal read says so', async () => {
+    server.use(
+      http.get('/api/deals', () => HttpResponse.json({ ok: false, error: { category: 'network', message: 'boom', retryable: true } }, { status: 500 })),
+      http.get('/api/alerts', () => HttpResponse.json(env([]))),
+    );
+    renderWithClient(
+      <TradeFlowProvider>
+        <RecoveryBanner />
+      </TradeFlowProvider>,
+    );
+    expect(await screen.findByRole('alert', {}, { timeout: 5000 })).toHaveTextContent('Could not load live deals. One may be working.');
+  });
+
+  it('a run that ends leaves a done note', async () => {
+    let job = twapJob();
+    server.use(http.get('/api/rebalance', () => HttpResponse.json(env({ ...makeRebalanceView(), job }))));
+    renderBanner([]);
+    await screen.findByText(/TWAP · ETH pair open/);
+    job = twapJob({ status: 'done' });
+    expect(await screen.findByText('TWAP done · ETH pair open', {}, { timeout: 4000 })).toBeInTheDocument();
   });
 
   it('never deal keeps its band', async () => {

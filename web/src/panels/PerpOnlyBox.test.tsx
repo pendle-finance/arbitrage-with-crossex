@@ -15,7 +15,9 @@ const LEGS = [
 
 const PLAN = { slices: 12, sliceQty: '10', lastQty: '10', intervalSec: 300, durationSec: 3_600, takerAfterSec: 240 };
 
-function previewHandler(bodies: Array<{ twap?: unknown }> = []) {
+const FEES = { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { taker: 51.9 } };
+
+function previewHandler(bodies: Array<{ twap?: unknown }> = [], fees?: typeof FEES) {
   return http.post('/api/preview', async ({ request }) => {
     const body = (await request.json()) as { actions: ActionInput[]; twap?: unknown };
     bodies.push(body);
@@ -34,6 +36,7 @@ function previewHandler(bodies: Array<{ twap?: unknown }> = []) {
             price: '1730',
             estNotional: 207_600,
             closing: { positionQty: '120', upnl: '590', mark: 1730 },
+            ...(fees ? { fees } : {}),
           }),
         ),
       }),
@@ -76,6 +79,23 @@ describe('ClosePairForm, close perps with TWAP', () => {
     await twapOn();
     expect(await screen.findByRole('button', { name: /Start TWAP close/ })).toBeInTheDocument();
     expect(screen.getByText('Reduce-only. Each fill is hedged at once.')).toBeInTheDocument();
+  });
+
+  it('shows the fee saved against two taker orders in maker settings', async () => {
+    server.use(...baseHandlers(), previewHandler([], FEES));
+    renderPlain();
+    await userEvent.click(await screen.findByRole('button', { name: /Maker settings/ }));
+    expect(await screen.findByText(/Saves ≈ 62.28 USDT/)).toBeInTheDocument();
+    expect(screen.getByText(/vs 2 taker orders/)).toBeInTheDocument();
+  });
+
+  it('hides the saving line with twap on', async () => {
+    server.use(...baseHandlers(), previewHandler([], FEES));
+    renderPlain();
+    await twapOn();
+    await userEvent.click(await screen.findByRole('button', { name: /Maker settings/ }));
+    await screen.findByText('PnL to realize');
+    expect(screen.queryByText(/vs 2 taker orders/)).toBeNull();
   });
 
   it('fixed rate pair has no switch', async () => {
@@ -132,5 +152,14 @@ describe('ClosePairForm, close perps with TWAP', () => {
         clipBandPct: 0.5,
       },
     });
+  });
+
+  it('the leg table names legs LONG or SHORT, never buy or sell', async () => {
+    server.use(...baseHandlers(), previewHandler());
+    renderPlain();
+    expect(await screen.findByText('Limit price')).toBeInTheDocument();
+    expect(screen.queryByText('SELL')).toBeNull();
+    expect(screen.queryByText('BUY')).toBeNull();
+    expect(screen.getAllByText('LONG').length).toBeGreaterThan(0);
   });
 });

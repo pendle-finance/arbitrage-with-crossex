@@ -54,7 +54,10 @@ const currentJob = (deps: AppDeps): Job | null => deps.rebalance?.jobs.read() ??
 
 function rebalanceLockFor(deps: AppDeps, dealId: string, what: string): string | null {
   const job = currentJob(deps);
-  if (job?.kind === 'twap') return dealLockFor({ rebalance: job, dealId });
+  if (job?.kind === 'twap') {
+    const childLive = deps.engine!.store.listPairs({ activeOnly: true }).some((pair) => isChildOf(job.id, pair.id));
+    return dealLockFor({ rebalance: job, dealId, childLive });
+  }
   if (!job || isChildOf(job.id, dealId)) return null;
   const blocks = job.status === 'running' || (job.status === 'halted' && job.paused);
   return blocks ? `A rebalance is still running. Wait for it to finish, then ${what}.` : null;

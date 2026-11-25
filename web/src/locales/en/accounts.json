@@ -630,6 +630,7 @@
   },
   "delever": {
     "holdTwap": "Hold to delever {{qty}} {{coin}} · TWAP {{duration}}",
+    "borosGas": "Boros gas · {{n}} closes",
     "borosPerSlice": "Boros close per slice",
     "borosPerSliceValue": "{{amount}} YU",
     "borosPerSliceHover": "A share of $10 or less waits and closes with the next slice."
