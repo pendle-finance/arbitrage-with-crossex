@@ -419,6 +419,35 @@ describe('PairTicket execution modes', () => {
     );
   });
 
+  it('an Auto price from an off-step mid goes out on the maker venue step, so no rounding warning shows', async () => {
+    const calls: ActionInput[][] = [];
+    server.use(
+      ...baseHandlers(),
+      ...ethSymbolHandlers(),
+      previewHandler({
+        calls,
+        makerLeg: { auto: 'b', why: 'book' },
+        touch: { bestBid: 2499.99, bestAsk: 2500.02, mid: 2500.005 },
+      }),
+    );
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+
+    await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
+    await waitFor(() => expect(foldRow()).toHaveTextContent('OKX maker'), { timeout: 4000 });
+    await waitFor(
+      () => {
+        const sent = calls.flat().filter((a) => a.kind === 'open-limit' && a.price);
+        expect(sent.length).toBeGreaterThan(0);
+      },
+      { timeout: 4000 },
+    );
+
+    const prices = calls.flat().flatMap((a) => (a.kind === 'open-limit' && a.price ? [a.price] : []));
+    expect(prices).not.toContain('2500.005');
+    for (const price of prices) expect(Number((Number(price) * 100).toFixed(6)) % 1).toBe(0);
+  });
+
   it('picking a timeout sends makerTimeoutSec on the maker leg', async () => {
     const calls: ActionInput[][] = [];
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));

@@ -7,6 +7,7 @@ import { ExecModeToggle } from '../components/ExecModeToggle';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
+import { formatRestPrice } from '../lib/ticks';
 import { fieldValue, fmtUsd, parseSymbol, prettyVenue } from '../lib/fmt';
 import { useDebounced } from '../lib/useDebounced';
 import { uuid } from '../lib/uuid';
@@ -276,12 +277,14 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         : rest.bestAsk
       : restOffsetPrice(rest, makerIsLong)
     : (makerPreviewLeg?.fillEstimate?.midPrice ?? hedgePreviewLeg?.fillEstimate?.midPrice);
-  useEffect(() => {
-    if (mode !== 'maker' || pinned) return;
-    if (Number.isFinite(touchPx) && (touchPx as number) > 0) setMakerPriceStr(String(touchPx));
-  }, [mode, pinned, touchPx]);
   const makerSym = makerIsLong ? longSym : shortSym;
   const makerTick = (makerIsLong ? longDetail : shortDetail).data?.tickSize ?? makerPreviewLeg?.rule?.tickSize ?? null;
+  useEffect(() => {
+    if (mode !== 'maker' || pinned) return;
+    if (!Number.isFinite(touchPx) || (touchPx as number) <= 0) return;
+    const px = touchPx as number;
+    setMakerPriceStr(makerSym && makerTick ? formatRestPrice(px, makerIsLong ? 'BUY' : 'SELL', makerSym, makerTick) : String(px));
+  }, [mode, pinned, touchPx, makerSym, makerTick, makerIsLong]);
 
   const estimating = preview.estimating;
 
