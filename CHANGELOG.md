@@ -5,8 +5,9 @@ in-app update check compares against).
 
 ## 1.8.0 — 2026-11-19
 
-TLDR: Rebalance can turn a perp's open profit into cash. A perp pair can close with Limit + hedge
-for lower fees. The roll-over signal compares against what holding still earns.
+TLDR: Rebalance can turn a perp's open profit into cash, and Delever makes a pair smaller. Large
+moves run in slices. TWAP splits a perp open or close into timed slices. A perp pair can close
+with Limit + hedge for lower fees. The roll-over signal compares against what holding still earns.
 
 - **Rebalance realizes profit.** When the paying wallet is short of cash, step 1 closes part of
   the profitable perp, converts the cash and reopens the same size at once. Step 2 moves the rest.
@@ -30,6 +31,22 @@ for lower fees. The roll-over signal compares against what holding still earns.
 - **Aster perps.** Gate CrossEx now lists Aster BTC, ETH and HYPE perps. Fill estimates read
   Aster's own order book. Aster margin and fees use the shared USDT · CrossEx wallet, so
   Rebalance and Transfer need no change.
+- **TWAP for perp opens and closes.** A TWAP switch on the Pair ticket, the Single ticket, Close
+  perps, Close one leg, Delever and Realize uPnL splits the order into timed slices: you pick the
+  duration, the interval and the slice size. Each slice is one limit + hedge deal. A run view
+  shows the slice count, the next slice, fills, average prices, slippage and fees, with Pause,
+  Resume and Hold to stop. A strip on every tab shows a running, paused or stopped TWAP, and the
+  tickets wait until it ends. Unequal close legs close the matched size and name what is left.
+- **Rebalance has three tabs: Move cash, Realize uPnL and Delever.** The Borrow card says "Reduce
+  borrow recommended" only when the whole plan costs less than 30 days of interest. Delever makes
+  a Fixed Rate Pair smaller: the perps first, then the Boros share.
+- **Large realizes and Delevers run in slices** of $25k to $100k, maker or market. A run never
+  closes more than one slice plus one venue minimum at a time. A stopped run shows where the money
+  is, with one hold per fix and Abandon, which names any perp left uneven.
+- **Tickets show an Estimate card** with the trade cost, and prices and fees group thousands
+  (2,866.53, not 2866.53).
+- **Gate's "too many open orders" refusal stops the order and says so.** Before, the terminal sent
+  the order again every 90 s.
 
 ## 1.7.9 — 2026-11-10
 

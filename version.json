@@ -1,6 +1,8 @@
 {
   "version": "1.8.0",
   "highlights": [
+    "TWAP: split a perp open or close into timed slices, with Pause, Resume and Hold to stop",
+    "Rebalance has Move cash, Realize uPnL and Delever tabs; large moves run in slices",
     "Rebalance can turn a perp's open profit into cash: it closes part of the profitable perp and reopens the same size at once",
     "Close a perp pair with Limit + hedge: one leg rests as a maker order, the other hedges each fill, for lower fees",
     "The roll-over banner and Telegram alert no longer count fees you already paid, so a lower later rate no longer reads as better",
