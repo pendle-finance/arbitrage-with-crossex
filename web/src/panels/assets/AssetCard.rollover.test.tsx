@@ -144,12 +144,10 @@ describe('AssetCard — roll over', () => {
     expect(within(panel).getByText('Ready to roll')).toBeInTheDocument();
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
 
-    // The popup names the pair; with nothing to roll into there is no target,
-    // so the pick page's "Roll over →" stays disabled.
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Roll over' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Pair' })).toHaveTextContent(/Gate.*LONG.*Hyperliquid.*SHORT/);
-    expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
+    expect(within(dialog).queryByRole('button', { name: 'Roll over' })).toBeNull();
     // No maturity lists a market at BOTH venues, so there is nothing to roll
     // into -- the table says so rather than inventing a target.
     expect(await within(dialog).findByText(/No later maturity on both venues yet/)).toBeInTheDocument();
