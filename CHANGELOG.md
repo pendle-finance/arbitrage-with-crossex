@@ -78,6 +78,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   with its own Total cost, then "Can it fund?".
 - **Close perps and Close Boros drop the standing line under the button** ("Reduce-only…" and
   "Cancels resting orders…"). The orders they send are unchanged.
+- **Roll over takes a Custom %** after 25, 50, 75 and 100%. Close perps' After card shows
+  "Perps · Flat" when the whole pair closes and "Price PnL booked" with each leg in the hover, and
+  the Boros row shows its size, not hedged, in amber.
 - **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
   the sale adds up to the amount converted.
 - **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,
