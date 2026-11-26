@@ -14,6 +14,7 @@ import {
   realizeTabOf,
 } from '../../src/core/rebalance/plan';
 import {
+  capsUsdOf,
   convertFor,
   marginPerConvertUsdc,
   planRealize,
@@ -460,6 +461,31 @@ describe('realize fix round', () => {
     expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 50_000 }))?.refused).toBeNull();
     expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 100_000 }))?.refused).toEqual({ reason: 'past-book', bp: null });
     expect(planRealize(hlShortInput(50, thin))?.refused).toBeNull();
+  });
+
+  it('past-book judges the TWAP slice: a 150 ETH close on a 30 ETH book is refused as one order and in 4 slices, fine in 10', () => {
+    const thin = { books: { HYPERLIQUID_FUTURE_ETH_USDC: evenBook(2800, 3, 10) } };
+    const planOf = (twapSlices?: number) => planRealize(hlShortInput(20_000, { ...thin, twapSlices }));
+    expect(planOf()?.refused).toEqual({ reason: 'past-book', bp: null });
+    expect(planOf(4)?.legs[0].qty).toBeGreaterThan(4 * 30);
+    expect(planOf(4)?.refused).toEqual({ reason: 'past-book', bp: null });
+    expect(planOf(10)?.legs[0].qty).toBe(150);
+    expect(planOf(10)?.refused).toBeNull();
+    expect(planOf(40)?.refused).toBeNull();
+  });
+
+  it('stores each perp cap: Hyperliquid by max leverage, Gate by its max market size', () => {
+    const caps = capsUsdOf(
+      [
+        { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', markPrice: '3000', maxLeverage: '10' },
+        { symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', markPrice: '60000', maxLeverage: '40' },
+        { symbol: 'GATE_FUTURE_ETH_USDT', markPrice: '3000', maxLeverage: '25' },
+        { symbol: 'GATE_FUTURE_BTC_USDT', markPrice: '60000' },
+        { symbol: 'LIGHTER_FUTURE_ETH_USDC', markPrice: '0' },
+      ],
+      { GATE_FUTURE_ETH_USDT: { maxMarketSize: '100' } },
+    );
+    expect(caps).toEqual({ HYPERLIQUID_FUTURE_ETH_USDC: 2_000_000, HYPERLIQUID_FUTURE_BTC_USDC: 30_000_000, GATE_FUTURE_ETH_USDT: 300_000 });
   });
 
   it('caps the custom slice row at the venue max order size', () => {

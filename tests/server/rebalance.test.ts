@@ -814,6 +814,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
     mark_price: perp.markPrice,
     initial_margin: perp.initialMargin,
     upnl: String(Number(perp.positionQty) * (Number(perp.markPrice) - Number(perp.entryPrice))),
+    ...(perp.maxLeverage ? { max_leverage: perp.maxLeverage } : {}),
   });
 
   const OWNER_RATES = [
@@ -1543,8 +1544,9 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
-  it('a realize start with TWAP off sends no slice size and runs one order', async () => {
-    mockAccount(ownerAccount());
+  it('a realize start with TWAP off sends no slice size, runs one order, and stores the Hyperliquid cap of 10x', async () => {
+    const book = ownerAccount();
+    mockAccount({ ...book, spec: { ...book.spec, perps: book.spec.perps.map((perp) => (perp.symbol === HL_ETH ? { ...perp, maxLeverage: '10' } : perp)) } });
     refuseSends();
     const h = boot();
     const { realize } = (await h.view()).data;
@@ -1556,6 +1558,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
 
     expect(res.statusCode, res.body).toBe(202);
     expect(h.file().slice).toMatchObject({ count: 1, sizeUsd: 0 });
+    expect(h.file().slice?.capsUsd?.[HL_ETH]).toBe(2_000_000);
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 

@@ -10,6 +10,7 @@ import { DEFAULT_STEP, parseSymbol } from '../../core/numbers';
 import { type DeleverInput, type DeleverPlan, type DeleverRequest, planDelever } from '../../core/rebalance/delever';
 import { computeExposure } from '../../core/positions';
 import {
+  capsUsdOf,
   isInProfit,
   positiveOf,
   type PerpRule,
@@ -1043,7 +1044,6 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (twap?.refusal) return refuse400(reply, twap.refusal.text);
       if (twapInput && !twap?.plan) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const sliceUsd = cappedSliceOf(tab.sliceOptions, shownSlice ?? tab.defaultSliceUsd);
-      if (!twap?.plan && tab.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const takerAfterSec = twap?.plan ? takerAfterOf({ timeoutSec: askedTwap?.takerAfterSec }, twap.plan) : null;
       const repegBehindBp = repegOf({ repegBehindBp: askedTwap?.repegBehindBp });
       const estimate = twap?.estimates ? twap.estimates[exec] : realizeTabEstimateOf(tab, plan, exec, sliceUsd);
@@ -1069,6 +1069,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           exec,
           sliceUsd: shownSlice === undefined ? 0 : sliceUsd,
           sliceCount: twap?.plan ? twap.plan.slices : sliceCountOf(tab.sliceOptions, sliceUsd, notionalUsd),
+          capsUsd: capsUsdOf(view.perps, view.perpRules),
           estimate,
           twap: twap?.plan
             ? {
@@ -1134,6 +1135,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           exec,
           sliceUsd,
           sliceCount: sliceCountOf(plan.sliceOptions, sliceUsd, leadUsd),
+          capsUsd: capsUsdOf(loaded.perps, loaded.input.rules),
           estimate: { feeUsd: cost.feePerpsUsd + cost.feeBorosUsd, impactUsd: cost.impactUsd, totalUsd: cost.totalUsd },
           delever: plan,
           imUsedStart: plan.imUsed.map((row) => ({ account: row.account, pct: row.before })),

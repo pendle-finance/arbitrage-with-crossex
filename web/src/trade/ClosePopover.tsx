@@ -233,7 +233,7 @@ export function ClosePopover({
   const p = preview.previews?.[0];
   const estimating = preview.estimating;
   const twapPreview = preview.data?.twap ?? null;
-  useTwapDefault(twapState, preview.data?.priceImpact?.twapDefault, 'maker');
+  useTwapDefault(twapState, preview.data && (preview.data.priceImpact?.twapDefault ?? null), 'maker');
   const twapPlan = twapOn ? (twapPreview?.plan ?? null) : null;
 
   const takerAfterBad = useTwapTakerAfter(taker, twapOn, twapPlan?.takerAfterSec ?? null);

@@ -382,4 +382,20 @@ describe('useTwapDefault', () => {
     expect(screen.getByRole('button', { name: 'off' })).toBeInTheDocument();
     expect(screen.getByTestId('span')).toHaveTextContent('900/300');
   });
+
+  it('typing a span keeps a suggested TWAP on when the suggestion later turns off', async () => {
+    const { rerender } = render(<Probe value={ON} exec="maker" />);
+    await userEvent.click(screen.getByRole('button', { name: 'type' }));
+    rerender(<Probe value={TWAP_OFF} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'on' })).toBeInTheDocument();
+    expect(screen.getByTestId('span')).toHaveTextContent('900/300');
+  });
+
+  it('a preview with no price impact clears an old suggestion; one still loading keeps it', () => {
+    const { rerender } = render(<Probe value={ON} exec="maker" />);
+    rerender(<Probe value={undefined as unknown as typeof ON} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'on' })).toBeInTheDocument();
+    rerender(<Probe value={null as unknown as typeof ON} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'off' })).toBeInTheDocument();
+  });
 });

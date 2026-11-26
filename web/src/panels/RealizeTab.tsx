@@ -166,10 +166,9 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const cost = active ? costFor(active, exec) : null;
   const legCosts = active && cost && !pricing ? legCostsOf(active, exec, cost) : null;
   const net = active && cost ? netOf(active, cost) : 0;
-  const slicePastBook = !twap.on && options.find((o) => o.sizeUsd === shownSliceUsd)?.pastBook === true;
   const twapBlocked = twap.blockedBy(activeTwap);
   const otherRefusal = active?.refused && active.refused.reason !== 'past-book' ? active.refused : null;
-  const sliceRefused = !otherRefusal && (slicePastBook || active?.refused?.reason === 'past-book');
+  const sliceRefused = !otherRefusal && active?.refused?.reason === 'past-book' && (!twap.on || liveTab !== null);
   const refusal = !active
     ? null
     : otherRefusal
