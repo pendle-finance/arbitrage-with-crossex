@@ -292,17 +292,21 @@
     "emptyHint": "向 CrossEx 存入抵押品即可开始。"
   },
   "closePair": {
-    "pairSlice": "组合份额",
-    "wholePosition": "整个仓位",
-    "ofHeld": "交易所持有 {{held}}",
-    "sizeLabel": "平仓规模 · 两条腿",
+    "sizeLabel": "平仓规模",
     "maxTitle": "平掉整个组合",
     "max": "最大",
     "sizeAria": "平仓规模，同时用于两条腿",
     "sizeInvalid": "规模须大于 0 且不超过 {{max}} {{base}}",
-    "sizeHint": "各交易所按自身最小下单单位向下取整，见上方各行",
     "pnlToRealise": "预计实现盈亏",
     "pnlSub": "两条腿 · 未扣手续费",
+    "after": {
+      "left": "剩余",
+      "notInPair": "不属于此组合",
+      "boros": "Boros",
+      "perps": "永续",
+      "openUnhedged": "仍持仓，未对冲",
+      "openFloating": "仍持仓，资金费率浮动"
+    },
     "head": {
       "leg": "腿",
       "limitPx": "限价",
@@ -334,8 +338,7 @@
       "start": "开始 TWAP 平仓",
       "reduceOnly": "只减仓。每笔成交立即对冲。",
       "marketSlippage": "市价滑点",
-      "marketSlippageHint": "市价步骤最多可让价格移动的幅度。",
-      "restOpen": "<n>{{qty}} {{coin}}</n> {{venue}} {{side}}仍保持持仓。请按单腿平仓。"
+      "marketSlippageHint": "市价步骤最多可让价格移动的幅度。"
     }
   },
   "tracked": {

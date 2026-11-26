@@ -9,24 +9,21 @@ import { useTranslation } from 'react-i18next';
 import { useSymbolDetail } from '../api/queries';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
 import { MARKET_ORDER_SEC, OrdersGroup } from '../components/OrdersGroup';
-import { fieldValue, prettyVenue } from '../lib/fmt';
+import { fieldValue, prettyVenue, sig } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import type { DealOpts } from '../trade/deal';
 import { ExecuteControl } from '../trade/ExecuteControl';
 import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
-import { pairModeFees } from '../trade/previewBits';
-import { type ExecMode, storedExecMode } from '../trade/PairTicketBits';
-import { ClosePairEstimate, matchedCloseOf } from './ClosePairFormBits';
+import { type ExecMode, SlippageLine, storedExecMode } from '../trade/PairTicketBits';
+import { pairModeFees, ViolationList } from '../trade/previewBits';
+import { type CloseAfterRow, ClosePairAfter, ClosePairCost, matchedCloseOf } from './ClosePairFormBits';
 import {
   buildCloseActions,
-  closeBookOf,
-  CloseHeldLegs,
   CloseMechanics,
-  CloseRestNotes,
   CloseSizeField,
-  CloseSlipField,
   closeCosts,
   decorateClose,
+  shownLegOf,
 } from './ClosePairParts';
 import { TwapArea, useTwapInput } from '../trade/TwapArea';
 import { usePreviewDebounced } from '../trade/usePreview';
@@ -60,6 +57,7 @@ export function ClosePairForm({
   legs,
   livePositions,
   allowTwap = false,
+  borosUnhedged = false,
 }: {
   base: string;
   /** `partial`: close exactly `qty` rather than the whole venue position —
@@ -68,6 +66,7 @@ export function ClosePairForm({
   /** symbol → live position, for the uPnL each close realises. */
   livePositions?: Map<string, CrossexPosition>;
   allowTwap?: boolean;
+  borosUnhedged?: boolean;
 }) {
   const { t } = useTranslation();
   const flow = useTradeFlowOptional();
@@ -80,6 +79,7 @@ export function ClosePairForm({
    * expressed. Validated on the same (0,10] band the server enforces.
    */
   const [slipStr, setSlipStr] = useState('0.5');
+  const [slipOpen, setSlipOpen] = useState(false);
   /** Same default as the open ticket: the perp entry picked on Opportunities. */
   const [mode, setMode] = useState<ExecMode>(() => storedExecMode());
   const [makerLeg, setMakerLeg] = useState<'auto' | 'a' | 'b'>('auto');
@@ -123,7 +123,6 @@ export function ClosePairForm({
     legs.length === 2 && !slipInvalid && !qtyInvalid
       ? buildCloseActions({ legs, pairGroupId, slip, matched, closeQtyOf })
       : null;
-  const restLegs = matched && atMax ? legs.flatMap((l, i) => (matched.rests[i] !== '0' ? [{ leg: l, qty: matched.rests[i] }] : [])) : [];
   // Not lazy: the dialog exists to show this, so it loads with the form.
   const preview = usePreviewDebounced(`close-pair-${base}`, actions, {
     refetchInterval: 5000,
@@ -168,22 +167,27 @@ export function ClosePairForm({
     : undefined;
 
   const { tradeCost, makerSaving } = closeCosts(previews, maker, makerIdx, twapOn);
-  const planLines =
-    maker && makerIdx !== null && previews
-      ? previews.map((p, i) => ({
-          symbol: p.symbol,
-          side: sideOf(p.symbol),
-          role: i === makerIdx ? ('rests' as const) : ('hedges' as const),
-          qty: p.qty,
-        }))
-      : [];
-  const book = closeBookOf({ previews, makerIdx, maker, qtyStr, estimating: preview.estimating, mode });
+  const legRows = (previews ?? []).map((p, i) => {
+    const rests = maker && i === makerIdx;
+    return { side: sideOf(p.symbol), p: shownLegOf(p, rests), rests };
+  });
+  const afterRows: CloseAfterRow[] = legs.flatMap((l, i) => {
+    const p = previews?.find((x) => x.symbol === l.symbol) ?? previews?.[i];
+    const eps = Math.max(1e-9, l.qty * 1e-7);
+    const shown = { symbol: l.symbol, venue: l.venue, side: sideOf(l.symbol) };
+    const rows: CloseAfterRow[] = [];
+    const closing = qtyInvalid ? null : p && Number(p.qty) > 0 ? Number(p.qty) : closeQtyOf(l.qty);
+    if (closing !== null && l.qty - closing > eps) rows.push({ ...shown, kind: 'left', qty: sig(l.qty - closing) });
+    const live = livePositions?.get(l.symbol)?.positionQty ?? p?.closing?.positionQty;
+    const held = live === undefined ? NaN : Math.abs(Number(live));
+    if (l.partial && held - l.qty > eps) rows.push({ ...shown, kind: 'notInPair', qty: sig(held - l.qty) });
+    return rows;
+  });
+  const bandLeg = previews?.[0]?.fillEstimate;
   const decorate = (acts: ActionInput[]) => decorateClose(acts, previews, makerIdx, maker);
 
   return (
     <div className="flex flex-col gap-4">
-      <CloseHeldLegs base={base} legs={legs} livePositions={livePositions} sideOf={sideOf} />
-
       <CloseSizeField
         base={base}
         qtyStr={qtyStr}
@@ -228,23 +232,47 @@ export function ClosePairForm({
           />
         )}
       </OrdersGroup>
-      {!maker && <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />}
-      <CloseRestNotes base={base} restLegs={restLegs} sideOf={sideOf} />
-
-      <ClosePairEstimate
+      <ClosePairCost
         previews={previews}
         isError={preview.isError}
         error={preview.error}
         estimating={preview.estimating}
         dataUpdatedAt={preview.dataUpdatedAt}
         twapOn={twapOn}
-        totalPnl={totalPnl}
+        rows={legRows}
         tradeCost={tradeCost}
-        plan={planLines}
-        book={book}
+        slippage={
+          maker ? null : (
+            <SlippageLine
+              est={bandLeg ? `${bandLeg.slippagePct >= 0 ? '+' : ''}${bandLeg.slippagePct.toFixed(3)}%` : null}
+              max={`${slipStr}%`}
+              open={slipOpen || slipInvalid}
+              onToggle={() => setSlipOpen((v) => !v)}
+              value={slipStr}
+              onChange={setSlipStr}
+              invalid={slipInvalid}
+              invalidText={t('accounts.closePair.slipInvalid')}
+              inputAriaLabel={t('accounts.closePair.twap.marketSlippage')}
+              hint={t('accounts.closePair.slipTitle')}
+              quick={['0.2', '0.5', '1', '2']}
+            />
+          )
+        }
+      />
+
+      <ClosePairAfter
+        base={base}
+        twapOn={twapOn}
+        totalPnl={totalPnl}
+        rows={afterRows}
+        borosUnhedged={borosUnhedged}
       />
 
       <div className="sticky bottom-0 z-10 flex flex-col gap-1.5 bg-ink-950 pb-1 pt-2">
+        <ViolationList
+          violations={(previews ?? []).flatMap((p) => p.violations ?? [])}
+          warnings={(previews ?? []).flatMap((p) => p.warnings ?? [])}
+        />
         <ExecuteControl
           scope={`close-both-${base}`}
           actions={actions}
