@@ -63,7 +63,8 @@ describe('RebalanceModal hold', () => {
     renderWithClient(<Polled views={[{ ...done, job: { ...done.job!, status: 'running' } }, done]} />);
     await act(async () => poll());
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
-    expect(screen.getByText('Done. This is what each wallet holds now.')).toBeInTheDocument();
+    expect(screen.getByText('Done.')).toBeInTheDocument();
+    expect(screen.queryByText(/what each wallet holds/)).toBeNull();
   });
 
   it('a running job that finishes with the modal open shows Done, not the picker', async () => {
@@ -72,7 +73,8 @@ describe('RebalanceModal hold', () => {
     await act(async () => poll());
     expect(screen.queryByRole('radio', { name: 'Custom amount' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
-    expect(screen.getByText('Done. This is what each wallet holds now.')).toBeInTheDocument();
+    expect(screen.getByText('Done.')).toBeInTheDocument();
+    expect(screen.queryByText(/what each wallet holds/)).toBeNull();
   });
 });
 

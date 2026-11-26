@@ -169,8 +169,10 @@ export function dealRunProps(
     { name: venueOf(pair.a.contract), side: positionSide(pair.a), avg: avgA, filled: aFilled },
     ...(b ? [{ name: venueOf(b.contract), side: positionSide(b), avg: avgB, filled: bFilled }] : []),
   ];
-  const withUsd = (qty: number) =>
-    t('trade.twap.run.filledEachValue', { done: qtyText(qty), total: qtyText(total), coin, usd: usdOf(qty) });
+  const withUsd = (qty: number) => {
+    const usd = usdOf(qty);
+    return t(usd ? 'trade.twap.run.filledEachValue' : 'trade.twap.run.filledEachValueNoUsd', { done: qtyText(qty), total: qtyText(total), coin, usd });
+  };
   const filledRows = (): RunRow[] =>
     b && aFilled !== bFilled
       ? legs.map((leg) => ({ label: t('trade.twap.run.filledVenue', { venue: leg.name }), value: withUsd(leg.filled) }))
@@ -191,7 +193,7 @@ export function dealRunProps(
     return [{ label: <SlipLabel label={label} />, value: `${t('trade.twap.run.slippageValue', { amount, pct })} ${word}`, tone: slip.usd >= 0 ? 'gain' : 'loss' }];
   };
   const gapRow = (qty: number): RunRow[] =>
-    b ? [{ label: t('trade.twap.run.notHedged'), value: qty > 0 ? `${qtyText(qty)} ${coin} (${usdOf(qty)})` : `0 ${coin}` }] : [];
+    b ? [{ label: t('trade.twap.run.notHedged'), value: qty > 0 ? `${qtyText(qty)} ${coin}${usdOf(qty) ? ` (${usdOf(qty)})` : ''}` : `0 ${coin}` }] : [];
 
   const done = pair.mode === 'DONE';
   const opening = pair.mode === 'OPENING';
@@ -255,7 +257,7 @@ export function dealRunProps(
 
   if (done) {
     const rows: RunRow[] = [
-      { label: t(close ? 'trade.twap.run.closedEach' : 'trade.twap.run.openedEach'), value: t('trade.twap.run.openedValue', { qty: qtyText(aFilled), coin, usd: usdOf(aFilled) }) },
+      { label: t(close ? 'trade.twap.run.closedEach' : 'trade.twap.run.openedEach'), value: t(usdOf(aFilled) ? 'trade.twap.run.openedValue' : 'trade.twap.run.openedValueNoUsd', { qty: qtyText(aFilled), coin, usd: usdOf(aFilled) }) },
       ...avgRows(),
       ...slippageRow(t('trade.deal.slippage')),
       ...(unhedged > 0 ? gapRow(unhedged) : []),
