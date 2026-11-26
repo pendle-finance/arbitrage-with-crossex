@@ -109,9 +109,9 @@ export function AmountPresets<T extends string>({
               }}
               onBlur={apply}
               title={customError ?? undefined}
-              className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none"
+              className="num w-full min-w-0 bg-transparent text-xs font-semibold text-ink-50 outline-none"
             />
-            <span className="shrink-0 text-[11.5px] text-ink-400">{custom.unit}</span>
+            <span className="shrink-0 text-xs text-ink-400">{custom.unit}</span>
           </span>
         )}
       </div>

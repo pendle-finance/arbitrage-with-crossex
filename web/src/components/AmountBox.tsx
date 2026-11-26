@@ -35,7 +35,7 @@ export function AmountBox({
         bad ? 'border-guava/60' : 'border-ink-700'
       } ${lit ? 'bg-wash/[0.15]' : 'bg-wash/[0.05]'}`}
     >
-      {prefix !== undefined && <span className="text-[11.5px] text-ink-400">{prefix}</span>}
+      {prefix !== undefined && <span className="text-xs text-ink-400">{prefix}</span>}
       <input
         type="text"
         inputMode={inputMode}
@@ -47,11 +47,11 @@ export function AmountBox({
         onFocus={onFocus}
         onBlur={onBlur}
         title={title}
-        className={`num w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-ink-500 ${
+        className={`num w-full min-w-0 bg-transparent text-xs outline-none placeholder:text-ink-500 ${
           lit ? 'font-medium text-ink-200' : 'font-semibold text-ink-50'
         }`}
       />
-      {suffix !== undefined && <span className="shrink-0 text-[11.5px] text-ink-400">{suffix}</span>}
+      {suffix !== undefined && <span className="shrink-0 text-xs text-ink-400">{suffix}</span>}
     </span>
   );
 }

@@ -18,7 +18,7 @@ export function BoxSelect<T extends string>({
         aria-label={ariaLabel}
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
-        className="num h-[35px] w-full cursor-pointer appearance-none rounded border border-ink-700 bg-wash/[0.05] pl-2.5 pr-8 text-sm font-medium text-ink-50 transition-colors hover:bg-wash/[0.08] focus:border-info/70 focus:outline-none [&>option]:bg-ink-900"
+        className="num h-[35px] w-full cursor-pointer appearance-none rounded border border-ink-700 bg-wash/[0.05] pl-2.5 pr-8 text-xs font-medium text-ink-50 transition-colors hover:bg-wash/[0.08] focus:border-info/70 focus:outline-none [&>option]:bg-ink-900"
       >
         {children}
       </select>
