@@ -88,7 +88,6 @@
     "atMarket": "{{side}} {{venue}} · 市价"
   },
   "symbol": {
-    "quickPick": "快速选择币种",
     "venueChips": "交易所选项",
     "loadingVenues": "正在加载交易所…",
     "noPerpsFor": "{{base}} 暂无可交易的永续合约",

@@ -98,6 +98,7 @@ export function ListPicker<K extends string>({
       <button
         ref={button}
         id={id}
+        data-value={value}
         type="button"
         disabled={disabled}
         aria-label={label}
@@ -146,6 +147,7 @@ export function ListPicker<K extends string>({
               <button
                 key={row.key}
                 id={optionId(row)}
+                data-value={row.key}
                 type="button"
                 role="option"
                 tabIndex={-1}

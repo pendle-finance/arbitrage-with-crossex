@@ -15,6 +15,7 @@ import type {
 import type { TwapInput } from './TwapArea';
 import { baseHandlers, BTC_BINANCE, ETH_GATE, previewFor, symbolHandlers } from '../test/fixtures';
 import { env, server } from '../test/server';
+import { pickOption } from '../test/picker';
 import { renderWithClient } from '../test/utils';
 import { PairTicket } from './PairTicket';
 import { useTradeFlow, type PairPrefill } from './TradeFlow';
@@ -119,13 +120,10 @@ function previewHandler(opts: {
   });
 }
 
-/** The venues are dropdowns keyed by full symbol; the option for a symbol only
- * exists once that base's rules have loaded, so wait for it. */
 async function pickVenues(longSymbol: string, shortSymbol: string) {
-  const longSel = (await screen.findByLabelText('Long venue')) as HTMLSelectElement;
-  await waitFor(() => expect(longSel.querySelector(`option[value="${longSymbol}"]`)).not.toBeNull());
-  await userEvent.selectOptions(longSel, longSymbol);
-  await userEvent.selectOptions(screen.getByLabelText('Short venue'), shortSymbol);
+  const user = userEvent.setup();
+  await pickOption(user, 'Long venue', longSymbol);
+  await pickOption(user, 'Short venue', shortSymbol);
 }
 
 /** Fill an already-mounted ticket: ETH via quick-pick, GATE as the LONG venue,
