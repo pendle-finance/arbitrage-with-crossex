@@ -105,10 +105,7 @@ export function matchedCloseOf(
   };
 }
 
-export type CloseAfterRow = { symbol: string; venue: string; side: 'LONG' | 'SHORT' } & (
-  | { kind: 'pair'; before: string; after: string }
-  | { kind: 'notInPair'; qty: string }
-);
+export type CloseAfterRow = { symbol: string; venue: string; side: 'LONG' | 'SHORT'; before: string; after: string };
 
 export function ClosePairCost({
   previews,
@@ -226,14 +223,9 @@ export function ClosePairAfter({
         <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
           {rows.map((r) => (
             <EstimateRow
-              key={`${r.symbol}-${r.kind}`}
+              key={r.symbol}
               label={<LegName side={r.side} venue={r.venue} />}
-              sub={r.kind === 'notInPair' ? t('accounts.closePair.after.notInPair') : undefined}
-              value={
-                r.kind === 'pair'
-                  ? `${qtyGrouped(r.before)} ${base} → ${qtyGrouped(r.after)} ${base}`
-                  : `${qtyGrouped(r.qty)} ${base}`
-              }
+              value={`${qtyGrouped(r.before)} ${base} → ${qtyGrouped(r.after)} ${base}`}
             />
           ))}
           {borosUnhedged && (

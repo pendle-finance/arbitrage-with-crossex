@@ -391,7 +391,6 @@
   "makerTifForced": "Maker leg is post-only (was {{tif}})",
   "priceAdjusted": "Price rounded to the venue's price step: {{from}} → {{to}}",
   "noRefPriceEstimates": "No reference price, so no estimates",
-  "sizeSetShared": "Size set to {{size}} (was {{was}}) so both legs trade the same amount",
   "closeQtyFloored": "Close size rounded down to the lot {{lot}}: {{from}} → {{to}}",
   "looksLikePair": "looks like a delta-neutral pair with action #{{index}} — link them (pairGroupId) to arm the unhedged guard",
   "noFillEstimate": "No fill estimate (no book, no reference price)",

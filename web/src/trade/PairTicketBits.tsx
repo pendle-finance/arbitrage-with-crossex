@@ -577,7 +577,6 @@ export function PairEstimate({
   dataUpdatedAt,
   legLong,
   legShort,
-  mode,
   leverage,
   marginRequired,
   twapOn = false,
@@ -590,7 +589,6 @@ export function PairEstimate({
   dataUpdatedAt: number;
   legLong: PreviewResult | undefined;
   legShort: PreviewResult | undefined;
-  mode: ExecMode;
   /** "10x long / 50x short" once both caps are known; null while loading. */
   leverage: string | null;
   /** Total initial margin the two legs post, in USD; null while unknown. */
@@ -645,8 +643,11 @@ export function PairEstimate({
 
             {spreadBps !== null && (
               <EstimateRow
-                label={t('pairTicket.bits.netSpread')}
-                sub={t('pairTicket.bits.netSpreadSub')}
+                label={
+                  <HoverCard label={t('pairTicket.bits.netSpread')} widthPx={240}>
+                    {t('pairTicket.bits.netSpreadSub')}
+                  </HoverCard>
+                }
                 value={
                   <span className={spreadBps <= 0 ? 'text-emerald-400' : 'text-rose-400'}>{spreadBps.toFixed(1)} bps</span>
                 }
@@ -655,7 +656,6 @@ export function PairEstimate({
             <div className="mt-0.5 border-t border-ink-800 pt-1.5">
               <EstimateRow
                 label={t('pairTicket.bits.tradeCost')}
-                sub={mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
                 value={fmtTradeCost(tradeCost)}
                 strong
               />

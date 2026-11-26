@@ -177,14 +177,9 @@ export function ClosePairForm({
   const afterRows: CloseAfterRow[] = legs.flatMap((l, i) => {
     const p = previews?.find((x) => x.symbol === l.symbol) ?? previews?.[i];
     const eps = Math.max(1e-9, l.qty * 1e-7);
-    const shown = { symbol: l.symbol, venue: l.venue, side: sideOf(l.symbol) };
-    const rows: CloseAfterRow[] = [];
     const closing = qtyInvalid ? null : p && Number(p.qty) > 0 ? Number(p.qty) : closeQtyOf(l.qty);
-    if (closing !== null) rows.push({ ...shown, kind: 'pair', before: sig(l.qty), after: l.qty - closing > eps ? sig(l.qty - closing) : '0' });
-    const live = livePositions?.get(l.symbol)?.positionQty ?? p?.closing?.positionQty;
-    const held = live === undefined ? NaN : Math.abs(Number(live));
-    if (l.partial && held - l.qty > eps) rows.push({ ...shown, kind: 'notInPair', qty: sig(held - l.qty) });
-    return rows;
+    if (closing === null) return [];
+    return [{ symbol: l.symbol, venue: l.venue, side: sideOf(l.symbol), before: sig(l.qty), after: l.qty - closing > eps ? sig(l.qty - closing) : '0' }];
   });
   const legPnl = (previews ?? []).map((p, i) => ({
     venue: legs.find((l) => l.symbol === p.symbol)?.venue ?? legs[i]?.venue ?? '',

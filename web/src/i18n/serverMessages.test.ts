@@ -376,7 +376,6 @@ const ENGLISH = [
   "Maker leg is post-only (was GTC)",
   "Price rounded to the venue's price step: 3000.123 → 3000.12",
   "No reference price, so no estimates",
-  "Size set to 0.5 (was 0.52) so both legs trade the same amount",
   "Close size rounded down to the lot 0.01: 1.234 → 1.23",
   "looks like a delta-neutral pair with action #2 — link them (pairGroupId) to arm the unhedged guard",
   "No fill estimate (no book, no reference price)",

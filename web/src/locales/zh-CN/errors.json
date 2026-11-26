@@ -391,7 +391,6 @@
   "makerTifForced": "挂单腿已设为只做挂单（原为 {{tif}}）",
   "priceAdjusted": "价格已按交易所最小变动价位取整：{{from}} → {{to}}",
   "noRefPriceEstimates": "没有参考价格，无法估算",
-  "sizeSetShared": "规模已设为 {{size}}（原为 {{was}}），使两条腿交易相同数量",
   "closeQtyFloored": "平仓规模已按最小下单单位 {{lot}} 向下取整：{{from}} → {{to}}",
   "looksLikePair": "看起来与第 {{index}} 个操作构成 Delta 中性组合，请用 pairGroupId 关联它们以启用未对冲保护",
   "noFillEstimate": "无法估算成交（没有订单簿，也没有参考价格）",

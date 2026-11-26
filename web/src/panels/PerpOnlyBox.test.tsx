@@ -154,7 +154,7 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     );
     await twapOn();
     expect(await afterRow('0.37 BTC')).toMatch(/^LONG.*Gate/);
-    expect(await afterRow('3.6 BTC')).toMatch(/^LONG.*Gate.*not in this pair/);
+    expect((await afterCard()).textContent).not.toMatch(/not in this pair|3\.6 BTC/);
     const btn = await screen.findByRole('button', { name: /Start TWAP close/ });
     await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ symbol: 'GATE_FUTURE_BTC_USDT', qty: '4.03' });
@@ -179,7 +179,7 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     await twapOn();
     await waitFor(() => expect(screen.getByRole('button', { name: /Start TWAP close/ })).toBeEnabled(), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ symbol: 'GATE_FUTURE_BTC_USDT', qty: '4.03' });
-    expect(await afterRow('3.97 BTC')).toMatch(/^LONG.*Gate.*not in this pair/);
+    expect((await afterCard()).textContent).not.toMatch(/not in this pair|3\.97 BTC/);
     expect(within(await afterCard()).queryAllByText(/→ (?!0 [A-Z])/)).toHaveLength(0);
   });
 

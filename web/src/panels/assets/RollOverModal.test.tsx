@@ -619,6 +619,7 @@ describe('RollOverModal — the atomic roll', () => {
     // Both sides are reported, grouped Exit / Re-entry.
     expect(within(dialog).getByText('Exit')).toBeInTheDocument();
     expect(within(dialog).getByText('Re-entry')).toBeInTheDocument();
+    expect(within(dialog).getByText('Exit').closest('[role="status"]')).toBe(within(dialog).getByText('Re-entry').closest('[role="status"]'));
 
     const retry = within(dialog).getByRole('button', { name: 'Retry' });
     await user.pointer({ keys: '[MouseLeft>]', target: retry });
@@ -737,7 +738,7 @@ describe('RollOverModal — the atomic roll', () => {
         sent.push(body);
         if (n === 1) {
           return HttpResponse.json(
-            { ok: false, error: { category: 'validation', message: 'the book moved', retryable: false }, data: { blockers: [] } },
+            { ok: false, error: { category: 'validation', message: 'Exit: the book moved', retryable: false }, data: { blockers: [] } },
             { status: 409 },
           );
         }
@@ -747,8 +748,9 @@ describe('RollOverModal — the atomic roll', () => {
     const dialog = await armAndHold(user);
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
 
-    expect(await within(dialog).findByText(/Roll — not sent/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/the book moved/)).toBeInTheDocument();
+    expect(await within(dialog).findByText('Roll not sent')).toBeInTheDocument();
+    expect(within(dialog).getByText('the book moved')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Retry' })).toHaveClass('h-9');
 
     const retry = within(dialog).getByRole('button', { name: 'Retry' });
     await user.pointer({ keys: '[MouseLeft>]', target: retry });
