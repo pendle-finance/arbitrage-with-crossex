@@ -255,7 +255,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
   const legLong = preview.previews?.[0];
   const legShort = preview.previews?.[1];
   const previewData = preview.previews ? preview.data : undefined;
-  useTwapDefault(twap, previewData?.priceImpact?.twapDefault, mode);
+  useTwapDefault(twap, previewData && (previewData.priceImpact?.twapDefault ?? null), mode);
   const landedTwap = useRef<string | null>(null);
   if (preview.data && !preview.isPlaceholderData && twapSettled) landedTwap.current = twapJson;
   const twapFresh = twapOn && twapSettled && landedTwap.current === twapJson;

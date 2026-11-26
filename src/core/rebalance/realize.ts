@@ -347,13 +347,22 @@ interface SliceVerdict {
   overCapUsd: number | null;
 }
 
-function sliceVerdictOf(leg: Paying, qty: number, sliceUsd: number | undefined): SliceVerdict {
-  const touch = touchOf(leg.book);
-  if (!leg.book || !touch) return { pastBook: true, overCapUsd: null };
-  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : ONE_ORDER_USD;
+function sliceVerdictOf(leg: Paying, qty: number): SliceVerdict {
+  if (!leg.book || !touchOf(leg.book)) return { pastBook: true, overCapUsd: null };
   const capQty = leg.capUsd / leg.mark;
-  const sliceQty = Math.min(qty, Math.max(leg.minQty, Math.min(askedUsd / touch.mid, capQty)));
+  const sliceQty = Math.min(qty, Math.max(leg.minQty, ...slicesOf(leg, qty)));
   return { pastBook: priceOrder(leg, sliceQty).pastBook, overCapUsd: Math.min(qty, leg.minQty) > capQty ? leg.capUsd : null };
+}
+
+export function capsUsdOf(perps: RealizePerp[], rules: Record<string, PerpRule>): Record<string, number> {
+  return Object.fromEntries(
+    perps.flatMap((perp) => {
+      const mark = positiveOf(perp.markPrice);
+      if (!perp.symbol || !(mark > 0)) return [];
+      const capUsd = marketCapUsd(perp, rules[perp.symbol] ?? {}, parseSymbol(perp.symbol).exchange, mark);
+      return Number.isFinite(capUsd) ? [[perp.symbol, capUsd]] : [];
+    }),
+  );
 }
 
 function refusalOf(verdicts: SliceVerdict[], unfunded: boolean): RealizeRefusal | null {
@@ -449,7 +458,7 @@ export function planRealize(input: RealizeInput): RealizePlan | null {
     if (state.left <= 0) break;
     const order = sizeOrder(leg, state);
     orders.push(order);
-    verdicts.push(sliceVerdictOf(leg, order.qty, input.sliceUsd));
+    verdicts.push(sliceVerdictOf(leg, order.qty));
     shown.push(legOf(input.pool, leg, order));
     // A leg that frees no cash at any size only adds cost, so it is not planned.
     // A refusal still names and shows it, so a book it runs past says so.
