@@ -269,16 +269,19 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
       <>
         <PlanSteps label={t('accounts.deleverTab.steps')} rows={steps} />
         <Field label={t('accounts.realizeTab.orders')}>
-          <ExecModeToggle
-            ariaLabel={t('accounts.realizeTab.orders')}
-            fill
-            value={exec}
-            onChange={setExec}
-            order={['maker', 'market']}
-            labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
-          />
+          <div className="flex flex-col">
+            <ExecModeToggle
+              ariaLabel={t('accounts.realizeTab.orders')}
+              fill
+              className={exec === 'maker' ? 'seg-attached' : undefined}
+              value={exec}
+              onChange={setExec}
+              order={['maker', 'market']}
+              labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
+            />
+            {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} attached />}
+          </div>
         </Field>
-        {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
         <TwapArea
           on={twap.on}
           onToggle={twap.setOn}

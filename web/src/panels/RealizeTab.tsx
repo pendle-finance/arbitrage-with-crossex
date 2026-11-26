@@ -319,17 +319,19 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
         <>
           <div className="flex flex-col gap-1.5">
             <span className={microLabelClass}>{t('accounts.realizeTab.orders')}</span>
-            <ExecModeToggle
-              ariaLabel={t('accounts.realizeTab.orders')}
-              fill
-              value={exec}
-              onChange={setExec}
-              order={EXEC_ORDER}
-              labels={{ maker: execLabel('maker'), market: execLabel('market') }}
-            />
+            <div className="flex flex-col">
+              <ExecModeToggle
+                ariaLabel={t('accounts.realizeTab.orders')}
+                fill
+                className={exec === 'maker' ? 'seg-attached' : undefined}
+                value={exec}
+                onChange={setExec}
+                order={EXEC_ORDER}
+                labels={{ maker: execLabel('maker'), market: execLabel('market') }}
+              />
+              {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} attached />}
+            </div>
           </div>
-
-          {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} />}
 
           {wholeOption && (
             <SplitArea

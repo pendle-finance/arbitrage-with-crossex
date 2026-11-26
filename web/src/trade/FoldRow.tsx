@@ -7,15 +7,17 @@ export function FoldRow({
   open,
   onToggle,
   children,
+  attached = false,
 }: {
   label: ReactNode;
   summary: ReactNode;
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
+  attached?: boolean;
 }) {
   return (
-    <div className="rounded border border-ink-700">
+    <div className={`border border-ink-700 ${attached ? 'rounded-b border-t-0' : 'rounded'}`}>
       <button
         type="button"
         aria-expanded={open}

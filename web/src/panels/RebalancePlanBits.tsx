@@ -82,7 +82,10 @@ export function PlanSteps({ label, rows }: { label: string; rows: PlanStep[] }) 
   if (rows.length === 0) return null;
   return (
     <div className="flex flex-col gap-1.5">
-      <span className={microLabelClass}>{label}</span>
+      <div className="flex items-center justify-between gap-3 pr-3">
+        <span className={microLabelClass}>{label}</span>
+        {rows.some((row) => row.usd !== null) && <span className={microLabelClass}>{t('accounts.moveCash.cost')}</span>}
+      </div>
       <ol className="flex flex-col gap-1">
         {rows.map((row, index) => (
           <li key={row.key} className="flex items-center gap-3 rounded border border-ink-800 px-3 py-1.5 text-xs text-ink-100">

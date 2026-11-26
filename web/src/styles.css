@@ -109,6 +109,10 @@
     @apply py-[7px] text-[12px];
   }
 
+  .seg-attached .seg-btn {
+    @apply first:rounded-bl-none last:rounded-br-none;
+  }
+
   /* The first styled checkbox in the app: native input, house colours. Native
      keeps keyboard + screen-reader behaviour for free, which a div-based
      lookalike would have to rebuild. */
