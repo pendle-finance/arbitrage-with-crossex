@@ -252,7 +252,7 @@ describe('borrow pill', () => {
 
     expect(tab(/^Accounts/)).toHaveAttribute('aria-selected', 'true');
     expect(panel('balances')).toBeVisible();
-    expect(within(panel('balances')).getByRole('region', { name: 'Rebalance' })).toBeVisible();
+    expect(within(panel('balances')).getByRole('region', { name: 'Borrow' })).toBeVisible();
 
     await userEvent.hover(pill);
     const card = await screen.findByRole('tooltip');

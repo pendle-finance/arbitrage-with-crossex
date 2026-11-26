@@ -22,6 +22,8 @@
     "hedgeAtMarketNote": "— first leg limit at mid ± slippage; hedge leg at market"
   },
   "bits": {
+    "bookUnavailable": "≈ est. (book unavailable)",
+    "bookUnavailableHint": "Order book unavailable. The price is a cross-venue mid estimate — verify before executing.",
     "estimate": "Estimate",
     "previewFailed": "Preview failed",
     "ago": "{{age}} ago",
@@ -37,22 +39,7 @@
     "longVenue": "Long venue",
     "swapVenues": "Swap venues",
     "swapVenuesHint": "Swap the Long and Short venues",
-    "makerLeg": "Maker leg",
-    "autoHint": "Auto-chosen: the cheapest maker+taker fee combo",
-    "auto": "Auto",
-    "savingHint": "Fee saved vs opening both legs as taker",
-    "saving": "<g>Saves ≈ {{amount}} USDT</g> vs 2 taker orders",
-    "makerPrice": "Maker price",
-    "makerPriceHint": "Defaults to one bid–ask gap behind the touch and follows the book until you type a price.",
-    "pinned": "Pinned —",
-    "trackBook": "track book",
-    "tracking": "Tracking the book — type to pin",
-    "bookUnavailableHint": "Order book unavailable. The price is a cross-venue mid estimate — verify before executing.",
-    "bookUnavailable": "≈ est. (book unavailable)",
     "fetchingTouch": "Fetching price…",
-    "convertHint": "After this time, the unfilled rest fills at market on both venues.",
-    "convertAfter": "Convert to taker after",
-    "minutes": "{{n}}m",
     "makerChipHint": "Post-only, one bid–ask gap behind the best same-side price. The other leg hedges as it fills.",
     "maker": "Maker",
     "rests": "Rests",
@@ -141,13 +128,9 @@
     "sizePerLegAria": "Size per leg ({{unit}})",
     "sizeIn": "Size in {{unit}}",
     "sizePerLegPlaceholder": "Size per leg",
-    "execution": "Perp entry",
-    "executionAria": "Perp entry mode",
-    "twoMarket": "2 market orders",
-    "limitHedge": "Limit + hedge",
     "execute": "Execute pair",
-    "leverageDetail": "Leverage {{long}}x Long / {{short}}x Short (venue max)",
-    "pegNote": "Maker price pegs to the best price when sent"
+    "leverageDetail": "Leverage {{long}}x Long / {{short}}x Short · venue max",
+    "pegNote": "Limit price pegs to the best price when sent"
   },
   "borosBits": {
     "directionAria": "{{prefix}} direction",
@@ -289,5 +272,55 @@
     "sizePerMarket": "Size per market",
     "sizePerMarketAria": "Size per market ({{unit}})",
     "shareOfMax": "Share of max size"
+  },
+  "makerSettings": {
+    "title": "Maker settings",
+    "foldValue": "{{leg}} maker · taker {{taker}} · re-peg {{repeg}}",
+    "foldValueSingle": "Taker {{taker}} · re-peg {{repeg}}",
+    "takerNever": "never",
+    "repegOff": "off",
+    "makerLeg": "Maker leg",
+    "saving": "<g>Saves ≈ {{amount}} USDT</g> vs 2 taker orders",
+    "savingHint": "Fee saved vs opening both legs as taker",
+    "auto": "Auto",
+    "reset": "Reset",
+    "autoFees": "Auto: the lower maker fee rests.",
+    "autoBook": "Auto: fees tie, so the thinner book rests.",
+    "hoverRests": "Rests the limit order · maker fee {{bp}} bps ({{pct}}%)",
+    "hoverHedges": "Hedges each fill at market · taker fee {{bp}} bps ({{pct}}%)",
+    "takerAfter": "Taker after",
+    "takerChoice": {
+      "m5": "5m",
+      "m10": "10m",
+      "never": "Never",
+      "custom": "Custom"
+    },
+    "takerHover": "What is still unfilled then goes as a market order ({{bp}} bps, {{pct}}%, taker fee).",
+    "takerNeverHover": "Never: the limit order rests until it fills.",
+    "takerOver": "Must be 80% of the interval or less ({{max}})",
+    "customAria": "Taker after, custom time",
+    "customRange": "30s to 24h",
+    "repeg": "Re-peg if behind",
+    "repegChoiceOff": "Off",
+    "repegHover": "Moves the limit to the best price once it is this far behind. At most once every 5s."
+  },
+  "limitPrice": {
+    "label": "Limit price",
+    "auto": "Auto",
+    "autoHint": "Follows the book until you type a price.",
+    "typedHint": "Your price holds. Re-peg is off.",
+    "resetAria": "Use the book price again"
+  },
+  "estimate": {
+    "legRole": {
+      "rests": "{{side}} {{venue}} · rests as maker",
+      "hedges": "{{side}} {{venue}} · hedges"
+    }
+  },
+  "orderType": {
+    "aria": "Order type",
+    "limitHedge": "Limit + hedge",
+    "market": "Market",
+    "limit": "Limit"
   }
 }

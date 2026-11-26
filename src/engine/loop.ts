@@ -7,6 +7,7 @@
  * committed durable state plus current venue state. There is deliberately no
  * recovery module, no adopt-window, no repeg protocol.
  */
+import { classifyGateError } from '../core/errors';
 import { fx, fxStr } from './fx';
 import { POC_REASON, decide, project, sizeFor, type DecideCtx } from './decide';
 import type { Store } from './db';
@@ -33,7 +34,23 @@ export interface LoopDeps {
    * crash point is just "a fresh tick".) */
   crashAfterCommit?: () => boolean;
   onFinish?: (pairId: string) => void;
+  onSleep?: (gap: SleepGap) => void;
 }
+
+export const SLEEP_GAP_MS = 60_000;
+
+type SleepGap = { fromMs: number; toMs: number };
+
+function reportSleep(deps: LoopDeps, gap: SleepGap): void {
+  try {
+    deps.onSleep?.(gap);
+  } catch (err) {
+    console.error('[engine] sleep handler failed', err);
+  }
+}
+
+export const isOrderAllowanceRefusal = (label: string): boolean =>
+  classifyGateError({ response: { data: { label } } }).category === 'order-allowance';
 
 // Open-world status decoder: known strings map; anything else is quarantined,
 // never guessed terminal or non-terminal (hazard 11).
@@ -377,6 +394,15 @@ async function performPlace(
       closeReason: `rejected:${out.label}`,
       resolvedAt: deps.clock.now(),
     });
+    if (a.leg === 'A' && a.kind === 'maker' && isOrderAllowanceRefusal(out.label)) {
+      const refusedAt = deps.clock.now();
+      deps.store.updatePair(pair.id, {
+        limitPrice: pair.limitPrice,
+        repegNotBefore: refusedAt + tuning(deps).REPEG_REFUSED_WAIT_MS,
+        makerNotBefore: refusedAt + tuning(deps).POC_BACKOFF_MS,
+      });
+      return;
+    }
     if (a.leg === 'A') {
       // Every definitive A-leg create rejection draws the SAME failure budget —
       // POC would-cross (requote), REDUCE_ONLY (position vanished), margin/size
@@ -448,6 +474,7 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
       deps.store.updatePair(pair.id, {
         mode: action.mode,
         ...(action.haltReason ? { haltReason: action.haltReason } : {}),
+        ...(action.haltKind ? { haltKind: action.haltKind } : {}),
         ...(action.resetClipBudget ? { pocRejects: 0, makerNotBefore: 0 } : {}),
       });
       if (action.alert) deps.store.alert('warn', pair.id, action.alert, deps.clock.now());
@@ -505,7 +532,7 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
     const pair = deps.store.getPair(pairId)!;
     if (o.state === 'PENDING') await resolvePending(deps, pair, o);
     else if (o.state === 'OPEN' || (o.quarantinedStatus && o.state !== 'DEAD')) {
-      await observeOpen(deps, pair, o); // DEAD rows are proven absent — nothing to observe
+      await observeOpen(deps, pair, o);
     }
   }
 
@@ -520,12 +547,13 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
   // dragging Stop/Convert. While frozen (an order in doubt) decide() only ever
   // cancels — which needs no price — so skip all fetches then.
   const frozen = proj.anyPending || proj.anyQuarantined;
-  // A resting close order also needs it: decide() re-pegs it toward the market.
   const needTouch =
     !frozen &&
     pair.mode === 'OPENING' &&
     pair.pricePolicy === 'touch' &&
-    (proj.makerOrder?.state !== 'OPEN' || pair.a.reduceOnly === true);
+    pair.repegBehindBp === null &&
+    proj.makerOrder?.state !== 'OPEN';
+  const needBest = !frozen && pair.mode === 'OPENING' && pair.pricePolicy === 'touch' && pair.repegBehindBp !== null;
   // A reference price is needed ONLY for a min-notional sizing check (taker legs
   // are plain MARKET, so no band pricing). Fetch it only when a leg with a
   // min-notional is actually about to submit.
@@ -541,6 +569,7 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
     (fx(pair.a.minNotional) > 0n || pair.clipBandBp !== null);
   const ctx: DecideCtx = {
     touchA: needTouch ? await deps.venue.touch(pair.a.contract, pair.a.side, pair.a.tick) : null,
+    bestA: needBest ? await deps.venue.best(pair.a.contract, pair.a.side, pair.a.tick) : null,
     // '0' (unused) when no hedge is owed; a real fetch only when one is.
     refB: needRefB ? await deps.venue.refPrice(pair.b!.contract) : '0',
     refA: needRefA ? await deps.venue.refPrice(pair.a.contract) : '0',
@@ -593,7 +622,9 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
   if (
     intent.mode !== pair.mode ||
     intent.limitPrice !== pair.limitPrice ||
-    intent.pricePolicy !== pair.pricePolicy
+    intent.pricePolicy !== pair.pricePolicy ||
+    intent.repegBehindBp !== pair.repegBehindBp ||
+    intent.repegNotBefore !== pair.repegNotBefore
   ) {
     return { type: 'idle', reason: 'intent changed mid-tick — deferring to a fresh tick' };
   }
@@ -638,7 +669,7 @@ export const commands = {
   resumeAfterHalt(store: Store, pairId: string): void {
     const p = store.getPair(pairId);
     if (p && p.mode === 'HALTED') {
-      store.updatePair(pairId, { mode: 'STOPPING', hedgeRejectStreak: 0, hedgeNotBefore: 0 });
+      store.updatePair(pairId, { mode: 'STOPPING', hedgeRejectStreak: 0, hedgeNotBefore: 0, haltKind: null });
     }
   },
 };
@@ -657,12 +688,27 @@ export const commands = {
  * pass queues exactly one immediate follow-up pass (still never overlapping). */
 export function startLoop(deps: LoopDeps, opts?: { signal?: AbortSignal }): { wake: () => void } {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let scheduledAt: number | null = null;
   let running = false;
   let wakeQueued = false;
+
+  const arm = (delay: number): void => {
+    scheduledAt = Math.min(scheduledAt ?? Infinity, deps.clock.now() + delay);
+    timer = setTimeout(run, delay);
+  };
+
+  const flagSleep = (): void => {
+    const firedAt = deps.clock.now();
+    const due = scheduledAt;
+    scheduledAt = null;
+    if (due === null || firedAt - due <= SLEEP_GAP_MS) return;
+    reportSleep(deps, { fromMs: due, toMs: firedAt });
+  };
 
   const run = async (): Promise<void> => {
     if (opts?.signal?.aborted) return;
     timer = null;
+    flagSleep();
     running = true;
     let acted = false;
     // The loop's spine is fault-isolated end to end: a throw anywhere (listPairs
@@ -689,7 +735,7 @@ export function startLoop(deps: LoopDeps, opts?: { signal?: AbortSignal }): { wa
       running = false;
       const delay = wakeQueued ? 0 : acted ? tuning(deps).FAST_TICK_MS : tuning(deps).TICK_MS;
       wakeQueued = false;
-      timer = setTimeout(run, delay);
+      arm(delay);
     }
   };
 
@@ -702,7 +748,7 @@ export function startLoop(deps: LoopDeps, opts?: { signal?: AbortSignal }): { wa
         return;
       }
       if (timer) clearTimeout(timer);
-      timer = setTimeout(run, 0);
+      arm(0);
     },
   };
 }

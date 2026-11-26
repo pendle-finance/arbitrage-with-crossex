@@ -20,6 +20,7 @@
  */
 import { Check, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { sigFigsDirectional } from '../lib/ticks';
 import type { BorosLegFill, BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { fixedRateText } from '../components/FixedRate';
@@ -30,6 +31,7 @@ import { spreadName } from '../lib/spread';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { FieldLabel } from './SymbolCombobox';
+import { EstimateHeadline } from './EstimateHeadline';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -74,15 +76,6 @@ type CloseLeg = StrategyLeg & { spreadVenues?: [string, string] | null };
 
 /** Used until the market's own deviation cap is known, or if it is degenerate. */
 const FALLBACK_SLIPPAGE_PCT = 1;
-
-/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8). */
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  // toPrecision trims the float noise that `Math.floor(x / step) * step`
-  // leaves behind (0.4 / 0.1 is 4.000000000000001 in binary floating point).
-  return Number((Math.floor(x / step) * step).toPrecision(12));
-}
 
 export function CloseBorosForm({
   legs,
@@ -167,7 +160,7 @@ export function CloseBorosForm({
     // cap — rounding up could seed a tolerance the venue will not accept.
     // Flooring a positive number to 1 s.f. cannot reach zero, but a degenerate
     // cap can, and a zero tolerance would block every close.
-    const floored = floorTo1Sf(pct);
+    const floored = sigFigsDirectional(pct, 1, 'down');
     return floored > 0 ? floored : FALLBACK_SLIPPAGE_PCT;
   })();
   const [slipEdited, setSlipEdited] = useState<string | null>(null);
@@ -629,15 +622,11 @@ export function CloseBorosForm({
       >
         {/* The PnL this close realises — (locked − execution rate) × size ×
             time to maturity, before the fee — summed over the legs. */}
-        <div className="flex items-end justify-between gap-3">
-          <div className="flex flex-col">
-            <span className="text-[12.5px] text-ink-50">{t('pairTicket.closeBoros.estPnl')}</span>
-            <span className="text-[11px] text-ink-400">{t('pairTicket.closeBoros.beforeFee')}</span>
-          </div>
-          <span className="num text-lg font-semibold">
-            {totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
-          </span>
-        </div>
+        <EstimateHeadline
+          label={t('pairTicket.closeBoros.estPnl')}
+          sub={t('pairTicket.closeBoros.beforeFee')}
+          value={totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
+        />
         {/* Per-leg simulation. One leg: plain rows. Two legs: a table, one
             row per market, with any per-leg notice under it. */}
         {(() => {

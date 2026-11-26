@@ -25,13 +25,15 @@ import { SetupPage } from './panels/setup/SetupPage';
 import { SETUP_SHOWN_KEY, useSetupState, type SetupStep } from './panels/setup/setupState';
 import { TrackedAddressProvider } from './panels/trackedAddress';
 import { RollSignalProvider } from './panels/rollSignal';
+import { RebalanceModalHost } from './panels/RebalanceModal';
+import { RebalanceOpenerProvider } from './panels/rebalanceOpener';
 import { RollOverBanner } from './panels/RollOverBanner';
 import { TradesPanel } from './panels/TradesPanel';
 import { Drawer } from './components/Drawer';
 import { RecoveryBanner } from './trade/RecoveryBanner';
 import { StrategyWizard } from './trade/StrategyWizard';
 import { TradeFlowProvider, useTradeFlow } from './trade/TradeFlow';
-import { TradeRail } from './trade/TradeRail';
+import { TradeRail, TradeRailTabs, type Venue } from './trade/TradeRail';
 
 // The markdown renderer is ~160kB and only the guide needs it — split it out so
 // opening the terminal doesn't pay for a document most sessions never read.
@@ -180,6 +182,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
     <TradeFlowProvider>
       <RollSignalProvider>
       <TrackedAddressProvider onOpenSettings={openSettings} onOpenLogin={openLogin}>
+      <RebalanceOpenerProvider>
         <TooltipLayer />
         <DisclaimerGate />
         {/* Only once the terminal is usable: the disclaimer gate is a locked
@@ -279,6 +282,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
               <OrderTicketDrawer />
             </>
           )}
+          <RebalanceModalHost />
           <SettingsDrawer
             open={settingsOpen}
             focusStep={settingsFocus}
@@ -297,6 +301,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
             </Suspense>
           )}
         </div>
+      </RebalanceOpenerProvider>
       </TrackedAddressProvider>
       </RollSignalProvider>
     </TradeFlowProvider>
@@ -347,16 +352,18 @@ function OrderTicketButton() {
 function OrderTicketDrawer() {
   const flow = useTradeFlow();
   const [busy, setBusy] = useState(false);
+  const [venue, setVenue] = useState<Venue>('perp');
   const { t } = useTranslation();
   return (
     <Drawer
       open={flow.railOpen}
       title={t('app.orderTicket')}
+      header={<TradeRailTabs venue={venue} onChange={setVenue} />}
       locked={busy}
       onClose={flow.closeRail}
       widthClass="w-[560px]"
     >
-      <TradeRail onBusyChange={setBusy} />
+      <TradeRail venue={venue} onVenueChange={setVenue} onBusyChange={setBusy} />
     </Drawer>
   );
 }

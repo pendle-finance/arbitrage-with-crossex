@@ -20,7 +20,11 @@ interface Props {
 export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]', children }: Props) {
   const { t } = useTranslation();
   const panel = useRef<HTMLDivElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
   useFocusTrap(panel, true);
+  useEffect(() => {
+    heading.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus({ preventScroll: true });
+  }, []);
   // Lock the page behind the modal (see Drawer): saved and restored, so a
   // modal stacked over another hands back the state it found.
   useEffect(() => {
@@ -51,7 +55,7 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
       />
       <div ref={panel} className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-950 ${widthClass}`}>
         <div className="flex items-center justify-between gap-3 px-5 pt-5">
-          <h2 className="text-[20px] font-bold leading-[24.2px] text-ink-50">{title}</h2>
+          <h2 ref={heading} className="text-[20px] font-bold leading-[24.2px] text-ink-50">{title}</h2>
           {!locked && (
             <button
               type="button"

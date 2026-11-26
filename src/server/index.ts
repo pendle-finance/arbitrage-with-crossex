@@ -4,6 +4,7 @@
  * SQLite ledger, and runs the reconcile loop. The public marketing site and the
  * shared-position page live in a separate repo (arbitrage-landing) and share no
  * code with this one. */
+import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +23,8 @@ import { TtlCache, TTL } from './cache';
 import { readOrCreateApiToken } from './authToken';
 import { InterestFile } from './interestLedger';
 import { JobFile, TransferFile } from './rebalanceJob';
+import { startKeepAwake } from './keepAwake';
+import { bootHaltTwap, sleepHaltTwap, type TwapRunDeps } from './twapRun';
 import { tokenizedIndexHtml } from './spa';
 import { restrictToOwner } from './secretFile';
 import { botBaseUrl, createBotClient } from './telegram/botClient';
@@ -84,6 +87,16 @@ setClientTagContext({ version: readLocalVersion(repoRoot), active: Boolean(clien
 // The engine: SQLite ledger + reconcile loop.
 let engine: { store: Store; venue: VenuePort; clock: Clock; wake?: () => void } | undefined;
 let loopDeps: LoopDeps | undefined;
+const twapBootDeps = (store: Store): TwapRunDeps => ({
+  store,
+  engineWake: () => engine?.wake?.(),
+  createChild: () => Promise.reject(new Error('A TWAP slice cannot start while the server boots.')),
+  now: Date.now,
+  jobs: rebalanceJobs,
+  readFees: () => Promise.resolve({}),
+});
+const rebalanceJobs = new JobFile(dataDir);
+const keepAwake: { current: ReturnType<typeof startKeepAwake> | null } = { current: null };
 {
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
 
@@ -125,9 +138,28 @@ let loopDeps: LoopDeps | undefined;
     store,
     venue: gateVenue(getClients),
     clock: { now: () => Date.now() },
-    onFinish: () => telegramSync.requestSync('deal'),
+    onFinish: () => {
+      telegramSync.requestSync('deal');
+      keepAwake.current?.update();
+    },
+    onSleep: (gap) => {
+      const job = rebalanceJobs.read();
+      if (job) sleepHaltTwap(twapBootDeps(store), job, gap);
+    },
   };
   engine = { store, venue: loopDeps.venue, clock: loopDeps.clock };
+
+  const bootJob = rebalanceJobs.read();
+  if (bootJob) void bootHaltTwap(twapBootDeps(store), bootJob);
+  keepAwake.current = startKeepAwake({
+    platform: process.platform,
+    pid: process.pid,
+    spawn,
+    isLive: () => store.listPairs({ activeOnly: true }).length > 0 || rebalanceJobs.read()?.status === 'running',
+  });
+  const keepAwakeTimer = setInterval(() => keepAwake.current?.update(), 5000);
+  keepAwakeTimer.unref();
+  process.once('exit', () => keepAwake.current?.stop());
 }
 
 // Boros order placement. Absent config is the normal state (the panel still
@@ -224,7 +256,7 @@ const appDeps = {
   install: readInstallInfo(repoRoot),
   updateCheck: { current: readLocalVersion(repoRoot), disabled: process.env.UPDATE_CHECK === '0' },
   rebalance: {
-    jobs: new JobFile(dataDir),
+    jobs: rebalanceJobs,
     interest: new InterestFile(dataDir),
     onDone: () => telegramSync.requestSync('rebalance'),
   },

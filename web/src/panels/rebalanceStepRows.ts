@@ -1,9 +1,8 @@
-import type { PlannedStep, Pool, RealizeJobLeg, RebalanceJob, RebalanceStep, RoutePlan } from '../api/types';
+import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RoutePlan } from '../api/types';
 import { t } from '../i18n';
 import { fmtAbout, fmtAge, num } from '../lib/fmt';
 import type { StepRow } from './RebalanceBits';
 import { LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
-import { closeRowText } from './RebalanceRealizeBits';
 
 type StepTextInput = Pick<PlannedStep, 'kind' | 'buy' | 'move' | 'arrives' | 'from' | 'to'> & { borrowLeft: number | null };
 
@@ -73,39 +72,20 @@ function jobStepText(steps: RebalanceStep[], round: number | null) {
 interface StepGroup {
   round: number | null;
   steps: RebalanceStep[];
-  realize: boolean;
 }
 
 function groupSteps(steps: RebalanceStep[]): StepGroup[] {
   const groups: StepGroup[] = [];
-  let open: StepGroup | null = null;
   for (const step of steps) {
-    if (step.name === 'Close') {
-      open = { round: null, steps: [step], realize: true };
-      groups.push(open);
-      continue;
-    }
-    if (open) {
-      open.steps.push(step);
-      if (step.name === 'Reopen') open = null;
-      continue;
-    }
     const last = groups.at(-1);
     const head = last?.steps[0];
-    if (last && head && !last.realize && last.round === step.round && head.from === step.from && head.to === step.to) last.steps.push(step);
-    else groups.push({ round: step.round, steps: [step], realize: false });
+    if (last && head && last.round === step.round && head.from === step.from && head.to === step.to) last.steps.push(step);
+    else groups.push({ round: step.round, steps: [step] });
   }
   return groups;
 }
 
-function closeGroupText(job: RebalanceJob, close: RebalanceStep): string {
-  const leg: RealizeJobLeg | undefined = job.realize?.legs.find((l) => l.symbol === close.perp?.symbol);
-  if (!leg) return close.perp?.symbol ?? close.name;
-  return closeRowText(leg, leg.filledQty > 0 ? leg.filledQty : leg.qty);
-}
-
-function groupBase(job: RebalanceJob, { round, steps, realize }: StepGroup, index: number) {
-  if (realize) return { key: `realize:${index}`, label: '', text: closeGroupText(job, steps[0]), sub: '' };
+function groupBase({ round, steps }: StepGroup, index: number) {
   const label = round === null ? t('accounts.rebalance.hover.title.convert') : t('accounts.rebalanceBits.round', { n: num(round, 0) });
   return { key: `${round ?? 'convert'}:${index}`, label, ...jobStepText(steps, round) };
 }
@@ -115,11 +95,11 @@ export function jobRows(job: RebalanceJob, now: number, borrow: number | null): 
   const jobSteps = hasBorrow ? job.steps : job.steps.map((step) => ({ ...step, borrowLeft: null }));
   const current = jobSteps[job.stepIndex];
   return groupSteps(jobSteps).map((group, index): StepRow => {
-    const { round, steps, realize } = group;
+    const { round, steps } = group;
     const { from, to } = steps[0];
     const expected = round === null ? 0 : roundSeconds(from, to);
     const started = steps.find((step) => step.startedAt !== null)?.startedAt ?? null;
-    const base = groupBase(job, group, index);
+    const base = groupBase(group, index);
     const doneAt = steps.at(-1)?.doneAt ?? null;
     if (steps.every((step) => step.status === 'done')) {
       const took = started === null || doneAt === null ? '' : fmtAge(doneAt - started);
@@ -129,12 +109,11 @@ export function jobRows(job: RebalanceJob, now: number, borrow: number | null): 
       return { ...base, state: 'pending', progress: 0, right: expected > 0 ? fmtAbout(expected) : t('accounts.rebalance.hover.title.time.instant') };
     }
     const elapsed = started === null ? 0 : Math.max(0, (job.status === 'running' ? now : job.updatedAt) - started);
-    const doneShare = steps.filter((step) => step.status === 'done').length / steps.length;
-    const progress = expected > 0 ? elapsed / 1000 / expected : realize ? doneShare : 0;
+    const progress = expected > 0 ? elapsed / 1000 / expected : 0;
     if (job.status !== 'running') return { ...base, state: 'stopped', progress, right: t('accounts.rebalanceBits.stopped') };
     const right =
       expected > 0 ? t('accounts.rebalanceBits.elapsedOf', { elapsed: fmtAge(elapsed), expected: fmtAbout(expected) }) : fmtAge(elapsed);
-    return { ...base, sub: realize ? base.sub : (LEG_TEXT[current.name] ?? base.sub), state: 'running', progress, right };
+    return { ...base, sub: LEG_TEXT[current.name] ?? base.sub, state: 'running', progress, right };
   });
 }
 

@@ -70,6 +70,24 @@ describe('locale files', () => {
     });
   }
 
+  it('borrow tabs keys in zh-CN', () => {
+    const spaces = [
+      'accounts.borrowCard.',
+      'accounts.moveCash.',
+      'accounts.realizeTab.',
+      'accounts.slices.',
+      'accounts.deleverTab.',
+      'accounts.sliceRun.',
+      'accounts.rebalanceTabs.',
+      'assetCard.actions.delever',
+    ];
+    const zh = readLanguage('zh-CN');
+    const mine = [...baseKeys(en)].filter((k) => spaces.some((s) => k.startsWith(s)));
+    expect(mine.length).toBeGreaterThan(100);
+    expect(mine.filter((k) => !baseKeys(zh).has(k))).toEqual([]);
+    expect([...en.values()].filter((v) => v.includes('bp of price impact. The most is'))).toEqual([]);
+  });
+
   it('has no empty line in any language', () => {
     for (const { code } of LANGUAGES) {
       const empty = [...readLanguage(code)].filter(([, v]) => v.trim() === '').map(([k]) => k);

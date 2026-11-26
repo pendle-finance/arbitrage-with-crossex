@@ -8,11 +8,13 @@ import {
   fmtClock,
   fmtDateLocal,
   fmtDateShort,
+  fmtNotionalShort,
   fmtPct,
   fmtSyncAge,
   fmtTokenQty,
   fmtUsd,
   fmtUsdCompact,
+  groupedExact,
   num,
   parseDateLocal,
   parseSymbol,
@@ -41,6 +43,22 @@ describe('sig (port of core numbers.sig)', () => {
     [0.000012345, '0.00001234'],
   ])('sig(%f) -> %s', (value, expected) => {
     expect(sig(value)).toBe(expected);
+  });
+});
+
+describe('groupedExact', () => {
+  it.each([
+    ['2675.5', '2,675.5'],
+    ['65010.55', '65,010.55'],
+    ['1234567.123456', '1,234,567.123456'],
+    ['2.123456', '2.123456'],
+    ['999.995', '999.995'],
+    ['0.00001234', '0.00001234'],
+    ['-1234.5', '-1,234.5'],
+    ['—', '—'],
+    ['1e-7', '1e-7'],
+  ])('%s keeps every digit and reads %s', (input, out) => {
+    expect(groupedExact(input)).toBe(out);
   });
 });
 
@@ -249,6 +267,19 @@ describe('fmtUsdCompact', () => {
     [1_000_000, '$1.00M'],
   ])('fmtUsdCompact(%f) -> %s', (n, expected) => {
     expect(fmtUsdCompact(n)).toBe(expected);
+  });
+});
+
+describe('fmtNotionalShort', () => {
+  it.each([
+    [999_499.99, '$999k'],
+    [999_500, '$1M'],
+    [999_999.99, '$1M'],
+    [1_000_000, '$1M'],
+    [99_949, '$99.9k'],
+    [99_950, '$100k'],
+  ])('fmtNotionalShort(%f) -> %s', (n, expected) => {
+    expect(fmtNotionalShort(n)).toBe(expected);
   });
 });
 

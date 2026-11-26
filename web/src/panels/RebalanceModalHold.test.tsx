@@ -1,4 +1,4 @@
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
@@ -8,6 +8,7 @@ import { accountBodies, accountHandler, rebalanceViews, transferHandler, transfe
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RebalanceModal } from './RebalanceModal';
+import { RebalanceModalFooter } from './RebalanceModalFooter';
 
 const NO_POSITIONS: PositionsResponse = { positions: [], exposure: [] };
 
@@ -32,60 +33,15 @@ function Polled({ views }: { views: RebalanceView[] }) {
   return <RebalanceModal view={views[index]} onClose={vi.fn()} />;
 }
 
-const hold = () => screen.getByRole('button', { name: /^Hold to rebalance/ });
-
-const follows = (first: Node, second: Node): boolean => (first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+const hold = () => screen.getByRole('button', { name: /^Hold to (rebalance|clear debt|move)/ });
 
 describe('RebalanceModal hold', () => {
-  it('refused realize offers the plain move', () => {
-    show(rebalanceViews.refusedMargin);
-    const title = screen.getByText('Not enough margin to reopen.');
-    expect(screen.getByText('Add USDT to USDT · CrossEx, then try again.')).toBeInTheDocument();
-    expect(follows(screen.getByText('How it runs'), title)).toBe(true);
-    expect(screen.queryByText(/^Realize .+ of profit$/)).toBeNull();
-    expect(screen.getByText('Total cost')).toBeInTheDocument();
-    expect(follows(title, screen.getByText('Total cost'))).toBe(true);
-    expect(hold()).toBeEnabled();
-  });
-
-  it('total cost and the hold stay in a sticky footer', () => {
-    show(rebalanceViews.ownerBook);
-    const footer = hold().closest('.sticky');
-    expect(footer).not.toBeNull();
-    expect(within(footer as HTMLElement).getByText('Total cost')).toBeInTheDocument();
-  });
-
   it.each(['accountA', 'hyperliquidFreeBorrow'] as const)('a move with no interest shows no nothing-to-move line on %s', (key) => {
     show(rebalanceViews[key]);
     expect(hold()).toBeInTheDocument();
     expect(screen.queryByText('No interest yet. Nothing to move.')).toBeNull();
   });
 
-  it('no fee rate shows why', () => {
-    const plan = rebalanceViews.refusedMargin.plans.even;
-    const refused = { ...plan, realize: { legs: plan.realize!.legs, refused: { reason: 'no-fee-rate' as const, bp: null, maxBp: 25 } } };
-    show({ ...rebalanceViews.refusedMargin, plans: { ...rebalanceViews.refusedMargin.plans, even: refused } });
-    const title = screen.getByText('Fee rate not loaded.');
-    expect(screen.getByText('Profit stays open. The cash move runs without it.')).toBeInTheDocument();
-    expect(follows(screen.getByText('How it runs'), title)).toBe(true);
-    expect(screen.queryByText(/^Realize .+ of profit$/)).toBeNull();
-    expect(hold()).toBeEnabled();
-  });
-
-  it('price impact keeps its hover', async () => {
-    const user = userEvent.setup();
-    show(rebalanceViews.ownerBook);
-    const footer = hold().closest('.sticky') as HTMLElement;
-    const trigger = within(footer).getByText('Price impact');
-    const card = await waitFor(async () => {
-      if (!screen.queryByRole('tooltip')) {
-        await user.unhover(trigger);
-        await user.hover(trigger);
-      }
-      return screen.getByRole('tooltip');
-    });
-    expect(card).toHaveTextContent('Not a fee. USDC bought above $1 or sold below it on Gate spot, and depth taken past the top of the book.');
-  });
 
   it('route head keeps its hover', async () => {
     const user = userEvent.setup();
@@ -114,8 +70,31 @@ describe('RebalanceModal hold', () => {
     serve();
     renderWithClient(<Polled views={[rebalanceViews.accountARunning, rebalanceViews.convertDone]} />);
     await act(async () => poll());
-    expect(screen.queryByRole('button', { name: 'Custom amount' })).toBeNull();
+    expect(screen.queryByRole('radio', { name: 'Custom amount' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
     expect(screen.getByText('Done. This is what each wallet holds now.')).toBeInTheDocument();
+  });
+});
+
+describe('RebalanceModalFooter', () => {
+  const footer = (over: { quoteStale?: boolean; lock?: string | null }) =>
+    renderWithClient(
+      <RebalanceModalFooter
+        rows={[]} holdLabel="Hold to move 3,000 USDC" optional={false} stale={false} pricing={false} disabled={false}
+        lock={over.lock ?? null} quoteStale={over.quoteStale} onRefresh={vi.fn()} onConfirm={vi.fn()}
+      />,
+    );
+
+  it('a stale quote disables the hold and says why', () => {
+    footer({ quoteStale: true });
+    expect(screen.getByText('The quote is out of date. Waiting for a fresh one.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to move 3,000 USDC' })).toBeDisabled();
+  });
+
+  it('a running job draws the waits line in place of the hold', () => {
+    footer({ lock: 'New deals and transfers wait until it ends.', quoteStale: true });
+    expect(screen.getByText('New deals and transfers wait until it ends.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
+    expect(screen.queryByText('The quote is out of date. Waiting for a fresh one.')).toBeNull();
   });
 });

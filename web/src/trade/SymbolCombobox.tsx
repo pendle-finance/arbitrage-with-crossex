@@ -4,20 +4,13 @@
  *
  * - CoinCombobox (pair ticket): a "Coin" row — quick-pick majors as chips, a
  *   search box for anything else — that selects a BASE only.
- * - MarketPicker (single ticket): "Market" = a VENUE chip row over a COIN chip
- *   row. Pick a coin, then one of its venues; searching a non-major coin lists
- *   it with its venue chips, and clicking a venue selects that full symbol.
- *   Pasting a full symbol (OKX_FUTURE_BTC_USDT) selects it directly.
- *
- * Both hide ratio-pair bases (ETHBTC…) from the list (see lib/ratioBase).
  */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchJson } from '../api/client';
-import { qk, useSymbolsByBase } from '../api/queries';
+import { qk } from '../api/queries';
 import type { SymbolRule } from '../api/types';
-import { parseSymbol } from '../lib/fmt';
 import { isRatioBase } from '../lib/ratioBase';
 import { useDebounced } from '../lib/useDebounced';
 
@@ -138,30 +131,6 @@ function CoinChips({
   );
 }
 
-/** Pickable venue chip for a SymbolRule (search rows here + the single
- * ticket's venue row): exchange with a dim non-USDT quote note, plus
- * active/disabled states. */
-export function VenuePickChip({
-  rule,
-  onPick,
-  active,
-  disabled,
-  disabledTitle,
-}: {
-  rule: SymbolRule;
-  onPick: () => void;
-  active?: boolean;
-  disabled?: boolean;
-  disabledTitle?: string;
-}) {
-  return (
-    <PickChip active={active} disabled={disabled} title={disabled ? disabledTitle : rule.symbol} onClick={onPick}>
-      {rule.exchange}
-      {rule.quote !== 'USDT' && <span className="text-[9px] font-medium opacity-70">{rule.quote}</span>}
-    </PickChip>
-  );
-}
-
 function SearchResults({
   q,
   isPending,
@@ -193,108 +162,6 @@ export function FieldLabel({ children, htmlFor }: { children: ReactNode; htmlFor
     <label htmlFor={htmlFor} className="text-[11.5px] text-ink-200">
       {children}
     </label>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Market picker (single ticket): venue row over coin row
-// ---------------------------------------------------------------------------
-
-interface MarketPickerProps {
-  /** The coin, chosen or implied by the symbol. */
-  base: string | null;
-  /** The full symbol, once a venue is picked too. */
-  symbol: string | null;
-  /** A coin was picked by hand — the venue is chosen next. */
-  onBase: (base: string) => void;
-  /** A full symbol was picked (venue chip, search row, or a pasted symbol). */
-  onSymbol: (symbol: string) => void;
-  /** Back to nothing picked: shows the search box. */
-  onClear: () => void;
-}
-
-export function MarketPicker({ base, symbol, onBase, onSymbol, onClear }: MarketPickerProps) {
-  const { t } = useTranslation();
-  const [text, setText] = useState('');
-  const q = useDebounced(text.trim(), 250);
-  const results = useSymbolSearch(q);
-  const groups = useMemo(() => groupByBase(results.data, q), [results.data, q]);
-  const venues = useSymbolsByBase(base);
-
-  const choose = (sym: string) => {
-    onSymbol(sym);
-    setText('');
-  };
-
-  // Full-symbol paste: an exact symbol match selects immediately.
-  useEffect(() => {
-    const upper = q.toUpperCase();
-    if (upper.split('_').length < 4) return;
-    const hit = (results.data ?? []).find((s) => s.symbol === upper);
-    if (hit) choose(hit.symbol);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q, results.data]);
-
-  const rules = (venues.data ?? []).filter((r) => r.base === base);
-
-  return (
-    <div className="flex flex-col gap-2">
-      <FieldLabel>{t('common.market')}</FieldLabel>
-      {/* Venue first, as the mock reads it — but a venue is only meaningful
-          for a coin, so the row states what it is waiting for until then. */}
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('trade.symbol.venueChips')}>
-        {base ? (
-          <>
-            {rules.map((r) => (
-              <VenuePickChip key={r.symbol} rule={r} active={symbol === r.symbol} onPick={() => choose(r.symbol)} />
-            ))}
-            {venues.isPending && <span className="text-[10.5px] text-ink-500">{t('trade.symbol.loadingVenues')}</span>}
-            {!venues.isPending && rules.length === 0 && (
-              <span className="text-[10.5px] text-ink-500">{t('trade.symbol.noPerpsFor', { base })}</span>
-            )}
-          </>
-        ) : (
-          <span className="text-[10.5px] text-ink-500">{t('trade.symbol.pickCoin')}</span>
-        )}
-      </div>
-      <CoinChips
-        active={base}
-        onPick={(coin) => {
-          if (coin !== base) onBase(coin);
-        }}
-        onOther={base ? onClear : undefined}
-      />
-      {!base && (
-        <>
-          <input
-            className="input"
-            placeholder={t('trade.symbol.searchSymbol')}
-            aria-label={t('trade.symbol.symbolSearch')}
-            autoComplete="off"
-            spellCheck={false}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
-          {text.trim() !== '' && (
-            <SearchResults
-              q={q}
-              isPending={results.isPending || q !== text.trim()}
-              groups={groups}
-              renderGroup={(b, rs) => (
-                <div key={b} className="flex items-center gap-2 border-t border-ink-800 px-2.5 py-1.5 first:border-t-0">
-                  <span className="w-14 shrink-0 text-xs font-semibold text-ink-100">{b}</span>
-                  <span className="flex flex-wrap gap-1">
-                    {rs.map((r) => (
-                      <VenuePickChip key={r.symbol} rule={r} onPick={() => choose(r.symbol)} />
-                    ))}
-                  </span>
-                </div>
-              )}
-            />
-          )}
-        </>
-      )}
-    </div>
   );
 }
 
@@ -376,9 +243,4 @@ export function CoinCombobox({ value, onSelect, onClear, aside }: CoinComboboxPr
       )}
     </div>
   );
-}
-
-/** The coin a full symbol names — for callers that hold only the symbol. */
-export function baseOfSymbol(symbol: string | null): string | null {
-  return symbol ? parseSymbol(symbol).base || null : null;
 }

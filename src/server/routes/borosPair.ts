@@ -35,8 +35,7 @@ import {
   type FetchLike,
 } from '../../core/boros/client';
 import { borosInitialMarginUsd, borosTimeToMaturitySec, normalizeUnderlying } from '../../core/boros/opportunities';
-import { COIN_NOT_SUPPORTED_TEXT, isSupportedCoin } from '../../core/coins';
-import { normalizeVenue } from '../../core/boros/venue';
+import { isSupportedCoin } from '../../core/coins';
 import { isSpreadMarket, knownRateOf } from '../../core/boros/spread';
 import { readAgentApproval } from '../borosAgentApproval';
 import { isUpdating } from '../updater';
@@ -44,9 +43,6 @@ import {
   classifyLegFailure,
   describeLegFailure,
   limitAprFor,
-  submitBorosPair,
-  type BorosMarketOrderRequest,
-  type BorosOrderClient,
 } from '../../core/boros/orders';
 import {
   evaluateRollGate,
@@ -61,7 +57,6 @@ import {
   chooseGasTopUpZone,
   attachMaxFundedSize,
   evaluatePairGate,
-  legMarginNeed,
   pairEligibility,
   reducingOrderSize,
   simulateBorosPair,
@@ -79,6 +74,19 @@ import {
 import { CoreError } from '../../core/errors';
 import { PLAN_NOTE, PLAN_SHARE } from '../../core/positionLimit';
 import type { AppDeps } from '../app';
+import {
+  CLOSE_RUNNING,
+  EXECUTION_MEMO_MS,
+  MAY_HAVE_FILLED,
+  ORDER_RUNNING,
+  forgetBorosExecutions,
+  freeCrossOf,
+  gasTopUpMarketFor,
+  lockBorosMarkets,
+  pendingBorosExecutions,
+  sendBorosPair,
+  type BorosCloseDeps,
+} from '../borosClose';
 import { TTL } from '../cache';
 import { catchRateLimit, refuse } from '../errorReply';
 import { perpLimitBreach } from '../perpLimit';
@@ -89,9 +97,6 @@ const HEDGE_LIMIT_UNREAD = 'Could not check the hedge against the perp position 
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 
-const CLOSE_RUNNING = 'A close on this market is already running.';
-const ORDER_RUNNING = 'An order on this market is already running.';
-const MAY_HAVE_FILLED = ' — Boros gave no answer, so the orders may have filled. Check your positions on Boros before sending again.';
 const CLOSE_ISOLATED = 'This position is on isolated margin. Close it on Boros.';
 const READS_LIMITED_NOTHING_SENT = 'Boros is limiting requests. Nothing was sent. Try again in a minute.';
 const READS_LIMITED_AFTER_CANCEL =
@@ -104,21 +109,6 @@ const READS_LIMITED_AFTER_CANCEL =
  * stuck behind the same blocker. Still bounded, and still reported.
  */
 const CLOSE_SLIPPAGE_APR = 0.01;
-
-/**
- * How long a completed execution is remembered for replay protection.
- *
- * Boros's order DTO has NO client-order-id field, so the venue cannot dedupe
- * for us: the same batch sent twice fills twice. The panel's own failure mode
- * is narrow and specific — a response lost in flight, and the user pressing
- * Confirm again with the SAME ids, because the ticket only re-mints ids when
- * the intent changes — so remembering recent executions here closes it.
- *
- * Deliberately not sold as more than it is: this is per-process and does not
- * survive a restart, and it cannot stop a second client. It removes the retry
- * double-fill, not every double-fill.
- */
-const EXECUTION_MEMO_MS = 10 * 60_000;
 
 /** Wire shape of one leg, as the panel sends it. */
 interface LegBody {
@@ -138,7 +128,7 @@ interface LegBody {
   clientOrderId?: unknown;
 }
 
-interface PairBody {
+export interface PairBody {
   address?: unknown;
   legs?: unknown;
   intent?: unknown;
@@ -299,7 +289,7 @@ function parseClientOrderId(raw: unknown, which: string): string {
  * stops being true this is the one place to correct it (§6 requires they not
  * count as available).
  */
-interface AccountView {
+export interface AccountView {
   /** marketId → signed netted size, collateral units (+ long fixed). */
   positionByMarket: Map<number, number>;
   /**
@@ -330,29 +320,6 @@ interface AccountView {
   isolatedByMarket: Map<number, BorosMarginBucket>;
   /** Markets with a resting order in the cross account — what a close or roll cancels. */
   restingOrderMarkets: Set<number>;
-}
-
-const freeCrossOf = (account: AccountView): Map<number, number> => new Map(account.crossFreeWithOrdersByToken);
-
-/** The automatic gas top-up's zone: the traded one when it can spare the
- * dollars, else the best-funded one; the traded one again when none can.
- * The traded zone keeps its order-exclusive free margin (a close cancels its
- * own orders first), or `tradedFreeAfter` (a roll's preview). */
-function gasTopUpMarketFor(markets: BorosMarket[], account: AccountView, tradedFreeAfter?: number | null) {
-  return (amountUsd: number, tradedMarketId: number): number => {
-    const freeCrossByToken = freeCrossOf(account);
-    const tokenId = markets.find((m) => m.marketId === tradedMarketId)?.tokenId;
-    const tradedFree = typeof tradedFreeAfter === 'number' ? tradedFreeAfter : account.crossByToken.get(tokenId ?? -1)?.available;
-    if (tokenId !== undefined && tradedFree !== undefined) freeCrossByToken.set(tokenId, tradedFree);
-    const zone = chooseGasTopUpZone({
-      amountUsd,
-      markets,
-      freeCrossByToken,
-      pricesUsd: resolveCollateralPricesUsd(markets),
-      preferMarketId: tradedMarketId,
-    });
-    return zone.ok ? zone.marketId : tradedMarketId;
-  };
 }
 
 function holdsPositionOrOrders(p: {
@@ -435,19 +402,6 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
   return view;
 }
 
-interface ExecutionPayload {
-  result: Awaited<ReturnType<typeof submitBorosPair>>;
-  estimate: ReturnType<typeof simulateBorosPair>;
-  warnings: string[];
-}
-const recentExecutions = new Map<string, { at: number; result: Promise<ExecutionPayload> }>();
-const sweepExecutions = (): void => {
-  const now = Date.now();
-  for (const [k, v] of recentExecutions) {
-    if (now - v.at > EXECUTION_MEMO_MS) recentExecutions.delete(k);
-  }
-};
-
 interface RollPayload {
   result: BorosRollResult;
   exit: { simulation: ReturnType<typeof simulateBorosPair>; gate: ReturnType<typeof evaluatePairGate> };
@@ -463,10 +417,12 @@ const sweepRolls = (): void => {
 };
 
 export function borosExecutionsPending(): number {
-  sweepExecutions();
+  const executions = pendingBorosExecutions();
   sweepRolls();
-  return recentExecutions.size + recentRolls.size;
+  return executions + recentRolls.size;
 }
+
+export type PairPricer = ReturnType<typeof createPairPricer>;
 
 export function createPairPricer(deps: AppDeps) {
   const fetchImpl: FetchLike = resolveBorosFetch(deps.borosFetch);
@@ -745,8 +701,59 @@ function bustBorosFills(cache: AppDeps['cache'], marketIds: readonly number[]): 
   cache.bustWhere((key) => key.startsWith('boros:txns:') && traded.has(key.split(':')[3]));
 }
 
+function assertNotUpdating(): void {
+  if (isUpdating()) {
+    throw new CoreError(
+      'The app is updating. It restarts shortly, then you can send this again.',
+      'validation',
+    );
+  }
+}
+
+async function assertAgentNotExpired(deps: AppDeps): Promise<void> {
+  const refuseExpired = (): never => {
+    throw new CoreError(
+      'Your Boros login has expired. Log in again before trading.',
+      'auth',
+    );
+  };
+  const raw = Number(process.env.BOROS_AGENT_EXPIRY);
+  if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) refuseExpired();
+  const root = process.env.BOROS_ROOT_ADDRESS;
+  const agentPrivateKey = process.env.BOROS_AGENT_PRIVATE_KEY;
+  if (!root || !agentPrivateKey) return;
+  const approval = await readAgentApproval(
+    resolveBorosFetch(deps.borosFetch),
+    { root, accountId: Number(process.env.BOROS_ACCOUNT_ID ?? 0) || 0, agentPrivateKey },
+    { timeoutMs: 2_000 },
+  );
+  if (approval.state === 'expired') refuseExpired();
+  if (approval.state === 'not-approved') {
+    throw new CoreError(
+      'Your Boros login was rejected or revoked. Log in again before trading.',
+      'auth',
+    );
+  }
+}
+
+export function createBorosCloseDeps(deps: AppDeps, pricer: PairPricer = createPairPricer(deps)): BorosCloseDeps {
+  return {
+    getBorosOrders: deps.getBorosOrders,
+    checkCanTrade: async () => {
+      assertNotUpdating();
+      await assertAgentNotExpired(deps);
+    },
+    parseTradableAddress: (raw) => {
+      const address = parseAddress(raw);
+      assertTradableAddress(address);
+      return address;
+    },
+    pricer,
+  };
+}
+
 export function borosPairRoutes(deps: AppDeps) {
-  recentExecutions.clear();
+  forgetBorosExecutions();
   recentRolls.clear();
   /** A roll the venue REFUSED provably traded nothing, so its ids may be
    * reused for an honest retry; one that rolled or was never confirmed is
@@ -759,70 +766,9 @@ export function borosPairRoutes(deps: AppDeps) {
       })
       .catch(() => recentRolls.delete(key));
   };
-  const rememberExecution = (key: string, pending: Promise<ExecutionPayload>): void => {
-    recentExecutions.set(key, { at: Date.now(), result: pending });
-    // A submission that provably left NO position — every submitted leg failed
-    // outright with nothing filled and none 'unknown' — is dropped, so an
-    // honest retry is not refused a second attempt. `submitBorosPair` folds
-    // errors into resolved fills rather than rejecting, so this has to be
-    // judged from the RESULT; an 'unknown' leg may have filled, which is
-    // exactly what the memo exists to protect.
-    pending
-      .then(({ result }) => {
-        const { legs } = result;
-        const anyFailed = legs.some((l) => l.failure !== null);
-        const mayHaveFilled = legs.some((l) => l.filledSize > 0 || l.failure?.code === 'unknown');
-        if (anyFailed && !mayHaveFilled) recentExecutions.delete(key);
-      })
-      .catch(() => recentExecutions.delete(key));
-  };
-
-  /**
-   * BOROS_AGENT_EXPIRY is absolute unix seconds (see routes/borosAgent.ts).
-   * An expired approval otherwise fails at the venue as AuthAgentExpired —
-   * AFTER a confirm the user already committed to — so the write routes
-   * refuse up front instead.
-   */
-  const assertNotUpdating = (): void => {
-    if (isUpdating()) {
-      throw new CoreError(
-        'The app is updating. It restarts shortly, then you can send this again.',
-        'validation',
-      );
-    }
-  };
-
-  const assertAgentNotExpired = async (): Promise<void> => {
-    const refuseExpired = (): never => {
-      throw new CoreError(
-        'Your Boros login has expired. Log in again before trading.',
-        'auth',
-      );
-    };
-    const raw = Number(process.env.BOROS_AGENT_EXPIRY);
-    if (Number.isFinite(raw) && raw > 0 && raw <= Math.floor(Date.now() / 1000)) refuseExpired();
-    // The chain's answer too: a rejected approval or a revoke leaves the .env
-    // expiry in the future. A failed read lets the order through, and the venue
-    // still refuses an unapproved agent.
-    const root = process.env.BOROS_ROOT_ADDRESS;
-    const agentPrivateKey = process.env.BOROS_AGENT_PRIVATE_KEY;
-    if (!root || !agentPrivateKey) return;
-    // A short read: a slow Boros must not stall a close.
-    const approval = await readAgentApproval(
-      resolveBorosFetch(deps.borosFetch),
-      { root, accountId: Number(process.env.BOROS_ACCOUNT_ID ?? 0) || 0, agentPrivateKey },
-      { timeoutMs: 2_000 },
-    );
-    if (approval.state === 'expired') refuseExpired();
-    if (approval.state === 'not-approved') {
-      throw new CoreError(
-        'Your Boros login was rejected or revoked. Log in again before trading.',
-        'auth',
-      );
-    }
-  };
-
-  const { loadMarkets, loadQuoteMarkets, loadAccount, settleAfterWrite, marketOr404, readGasBalance, priceRequest } = createPairPricer(deps);
+  const pricer = createPairPricer(deps);
+  const { loadMarkets, loadQuoteMarkets, loadAccount, settleAfterWrite, marketOr404, readGasBalance, priceRequest } = pricer;
+  const closeDeps = createBorosCloseDeps(deps, pricer);
 
 
   return async function plugin(app: FastifyInstance): Promise<void> {
@@ -942,211 +888,60 @@ export function borosPairRoutes(deps: AppDeps) {
       });
     });
 
-    const closingMarkets = new Set<number>();
-    const lockCloses = (marketIds: readonly number[]): ((keep?: readonly number[]) => void) | null => {
-      if (marketIds.some((id) => closingMarkets.has(id))) return null;
-      const held = new Set(marketIds);
-      for (const id of held) closingMarkets.add(id);
-      return (keep = []) => {
-        for (const id of held) {
-          if (keep.includes(id)) continue;
-          held.delete(id);
-          closingMarkets.delete(id);
-        }
-      };
-    };
-
     /**
      * Send both legs. Re-prices from scratch first — see the header note: the
      * client's gate is UX, this one is the failsafe.
      */
     app.post('/boros/pair/execute', async (req, reply) => {
       const body = req.body as PairBody;
-      // Bound BEFORE pricing: the gate below is only a failsafe if it reasons
-      // over the account the orders will actually hit.
-      assertTradableAddress(parseAddress(body.address));
+      const address = parseAddress(body.address);
+      assertTradableAddress(address);
       const bodyLegs = parseLegs(body.legs);
       const clientOrderIds = bodyLegs.map((leg, i) => parseClientOrderId(leg.clientOrderId, `legs[${i}].clientOrderId`));
-      if (new Set(clientOrderIds).size !== clientOrderIds.length) {
-        throw new CoreError('every leg needs its own clientOrderId', 'validation');
-      }
-      const orders = deps.getBorosOrders?.();
-      if (!orders) {
-        throw new CoreError(
-          'Boros order placement is not configured on this install.',
-          'not-configured',
-        );
-      }
-      assertNotUpdating();
-      await assertAgentNotExpired();
-
-      // The memo is consulted BEFORE re-pricing. A lost-response retry must
-      // get the ORIGINAL outcome, and the first execution changed the very
-      // account state the gate would now re-judge — its margin is spent, its
-      // position is open — so re-running the gate first could 409 the exact
-      // retry the memo exists to answer, hiding that the trade happened.
-      const memoKey = [...clientOrderIds].sort().join('|');
-      sweepExecutions();
-      const replay = recentExecutions.get(memoKey);
-      if (replay) {
-        const payload = await replay.result;
-        // `replayed` says the fills below are the ORIGINAL submission's, not a
-        // second one — the panel says so rather than implying a fresh trade.
-        return reply.ok({ ...payload, replayed: true });
-      }
-
-      const unlockCloses = lockCloses(bodyLegs.map((leg) => leg.marketId));
-      if (!unlockCloses) return refuse(reply, {
+      const outcome = await sendBorosPair(closeDeps, {
+        body,
+        address,
+        marketIds: bodyLegs.map((leg) => leg.marketId),
+        clientOrderIds,
+      });
+      if (outcome.kind === 'replayed') return reply.ok({ ...outcome.payload, replayed: true });
+      if (outcome.kind === 'busy') return refuse(reply, {
         code: 409,
         category: 'validation',
         message: parseIntent(body.intent) === 'close' ? CLOSE_RUNNING : ORDER_RUNNING,
         retryable: false,
       });
-      try {
-        // Fresh account read: margin and positions decide the gate, and a cached
-        // copy could be up to TTL.boros old — far too stale to authorise an order.
-        const { simulation, gate, intent, account, markets, legs: pricedLegs } = await priceRequest(body, true);
-        const legs = pricedLegs.map((leg, i) => ({ market: leg.market, sizing: simulation.legs[i].sizing }));
-        unlockCloses(legs.filter((l) => l.sizing.opposing).map((l) => l.market.marketId));
-        const addsToUnsupportedCoin = legs.some(
-          (l) =>
-            l.sizing.deltaSize !== 0 &&
-            !isSupportedCoin(normalizeUnderlying(l.market.base)) &&
-            (intent === 'open' || !l.sizing.opposing),
-        );
-        const mixed = gate.blockers.find((b) => b.code === 'mixed-open');
-        if (mixed) throw new CoreError(mixed.message, 'validation');
-        if (addsToUnsupportedCoin) return refuse(reply, {
-          code: 409,
-          category: 'validation',
-          message: COIN_NOT_SUPPORTED_TEXT,
-          retryable: false,
+      if (outcome.kind === 'refused') return refuse(reply, {
+        code: 409,
+        category: 'validation',
+        message: outcome.message,
+        retryable: false,
+      });
+      if (outcome.kind === 'blocked') {
+        return reply.code(409).send({
+          ok: false,
+          error: {
+            category: 'validation',
+            message: outcome.blockers[0].message,
+            retryable: false,
+          },
+          data: { blockers: outcome.blockers },
         });
-        if (gate.blockers.length > 0) {
-          return reply.code(409).send({
-            ok: false,
-            error: {
-              category: 'validation',
-              message: gate.blockers[0].message,
-              retryable: false,
-            },
-            data: { blockers: gate.blockers },
-          });
-        }
-        if (simulation.legs.length === 2 && simulation.receiveLeg === null) {
-          throw new CoreError('The two legs do not offset — no spread to trade', 'validation');
-        }
-
-        /**
-         * null for a leg with nothing to trade.
-         *
-         * A zero-delta leg has no execution rate either (the book was never
-         * walked), so building an order for it produced `null - slippage` — a
-         * NEGATIVE rate bound on a zero-size order. Both legs share one batch, so
-         * that entry's rejection could take the legitimate leg with it.
-         */
-        const orderFor = (
-          leg: (typeof simulation.legs)[number],
-          clientOrderId: string,
-        ): BorosMarketOrderRequest | null => {
-          const size = Math.abs(leg.sizing.deltaSize);
-          if (size === 0 || leg.execApr === null) return null;
-          const raw = account.positionRawByMarket.get(leg.marketId);
-          const reducing =
-            leg.sizing.opposing && !leg.sizing.flips && raw !== undefined ? reducingOrderSize(raw, size) : null;
-          // The side the ORDER takes, from the delta.
-          const { orderSide } = leg.sizing;
-          return {
-            marketId: leg.marketId,
-            direction: orderSide,
-            size: reducing?.size ?? size,
-            // The simulation's limit: the user's bound off the book MID (the
-            // anchor the ticket's "Est." and "Max" use), clamped inside the
-            // venue's band: Boros refuses a fill whose last matched level
-            // sits past it, and a limit inside it can never match one.
-            limitApr: leg.limitApr as number,
-            clientOrderId,
-            ...(reducing?.sizeWei !== undefined ? { sizeWei: reducing.sizeWei } : {}),
-          };
-        };
-
-        const legOrders = simulation.legs.map((leg, i) => orderFor(leg, clientOrderIds[i]));
-        if (legOrders.every((o) => o === null)) {
-          throw new CoreError('No leg has anything to trade', 'validation');
-        }
-
-        // A second request that priced concurrently with this one lands here
-        // too — re-check so the two coalesce onto ONE submission instead of
-        // racing into two batches. (No await between this check and the set.)
-        const raced = recentExecutions.get(memoKey);
-        if (raced) {
-          const payload = await raced.result;
-          return reply.ok({ ...payload, replayed: true });
-        }
-        const thrown: unknown[] = [];
-        const client: BorosOrderClient = {
-          ...orders,
-          placeMarketOrders: (reqs, opts) =>
-            orders.placeMarketOrders(reqs, opts).catch((err: unknown) => {
-              thrown.push(err);
-              throw err;
-            }),
-        };
-        const pending: Promise<ExecutionPayload> = submitBorosPair({
-          client,
-          legs: legOrders,
-          venues: legs.map((l) => l.market.spreadVenues ?? [normalizeVenue(l.market.venue)]),
-          feeDragApr: simulation.feeDragApr,
-          receiveLeg: simulation.receiveLeg,
-          // A close only reduces, so the gas top-up stays out of its way unless
-          // the budget genuinely cannot pay — an exit is never taxed a dollar.
-          reducing: intent === 'close',
-          // The gate lets margin one leg frees back another (the same sum as
-          // its `required`), which holds only when the freeing leg runs first.
-          sendFirst: simulation.legs.flatMap((leg, i) =>
-            (legMarginNeed(leg, pricedLegs[i].committedMargin) ?? 0) < 0 ? [i] : [],
-          ),
-          // A close clears its markets' resting orders in the same batch, so
-          // none is left to re-open a leg once it is flat.
-          cancelOrdersOn:
-            intent === 'close'
-              ? legOrders.flatMap((o) => (o && account.restingOrderMarkets.has(o.marketId) ? [o.marketId] : []))
-              : undefined,
-          // An open the gate sent to the fallback treats its own coin as having
-          // nothing to spare, so the top-up comes from the best-funded one.
-          gasTopUpMarket: gasTopUpMarketFor(markets, account, intent !== 'close' && gate.gasTopUpFromFallback ? 0 : undefined),
-        }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
-        rememberExecution(memoKey, pending);
-        const payload = await pending;
-
-        /**
-         * ⚠ Bust the Boros reads this OPEN just invalidated.
-         *
-         * The close route has always done this; the open route never did, and
-         * the asymmetry IS the bug: /asset-view serves boros:collaterals from a
-         * 30s cache (TTL.boros), so a freshly opened leg could be invalidated
-         * client-side, refetched at once, and still come back from the PRE-TRADE
-         * snapshot. The position then appeared only when the TTL happened to
-         * lapse — "it takes a while, and sometimes I have to refresh by hand".
-         */
-        await settleAfterWrite(parseAddress(body.address), account, simulation.legs.map((l) => l.marketId));
-
-        if (thrown.length > 0) {
-          const unknown = classifyLegFailure(thrown[0]) === 'unknown';
-          return reply.code(502).send({
-            ok: false,
-            error: {
-              category: 'network',
-              message: unknown ? `${describeLegFailure(thrown[0])}${MAY_HAVE_FILLED}` : describeLegFailure(thrown[0]),
-              retryable: false,
-            },
-            data: { ...payload, replayed: false },
-          });
-        }
-        return reply.ok({ ...payload, replayed: false });
-      } finally {
-        unlockCloses();
       }
+      const { payload, thrown } = outcome;
+      if (thrown.length > 0) {
+        const unknown = classifyLegFailure(thrown[0]) === 'unknown';
+        return reply.code(502).send({
+          ok: false,
+          error: {
+            category: 'network',
+            message: unknown ? `${describeLegFailure(thrown[0])}${MAY_HAVE_FILLED}` : describeLegFailure(thrown[0]),
+            retryable: false,
+          },
+          data: { ...payload, replayed: false },
+        });
+      }
+      return reply.ok({ ...payload, replayed: false });
     });
 
     /**
@@ -1246,7 +1041,7 @@ export function borosPairRoutes(deps: AppDeps) {
         throw new CoreError('Boros order placement is not configured on this install.', 'not-configured');
       }
       assertNotUpdating();
-      await assertAgentNotExpired();
+      await assertAgentNotExpired(deps);
 
       // Memo BEFORE re-pricing, for the same reason as /pair/execute: a
       // lost-response retry must get the original outcome, and a roll that
@@ -1256,7 +1051,7 @@ export function borosPairRoutes(deps: AppDeps) {
       const replay = recentRolls.get(memoKey);
       if (replay) return reply.ok({ ...(await replay.result), replayed: true });
 
-      const unlockRoll = lockCloses([...parseLegs(body.exit?.legs), ...parseLegs(body.entry?.legs)].map((leg) => leg.marketId));
+      const unlockRoll = lockBorosMarkets([...parseLegs(body.exit?.legs), ...parseLegs(body.entry?.legs)].map((leg) => leg.marketId));
       if (!unlockRoll) return refuse(reply, { code: 409, category: 'validation', message: ORDER_RUNNING, retryable: false });
       try {
         const { exit, entry, gate, venue, account, openSizeWei, cancelOrdersOn } = await priceRoll(body, true);
@@ -1379,9 +1174,9 @@ export function borosPairRoutes(deps: AppDeps) {
       }
 
       assertNotUpdating();
-      await assertAgentNotExpired();
+      await assertAgentNotExpired(deps);
 
-      const unlockClose = lockCloses([marketId]);
+      const unlockClose = lockBorosMarkets([marketId]);
       if (!unlockClose) return refuse(reply, {
         code: 409,
         category: 'validation',

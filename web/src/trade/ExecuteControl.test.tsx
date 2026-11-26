@@ -2,8 +2,18 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import type { ActionInput, DealRequest } from '../api/types';
-import { account, agentStatus, baseHandlers, echoPreviewHandler, ethPosition, previewFor } from '../test/fixtures';
+import type { ActionInput, DealRequest, RebalanceJob, TwapChildView, TwapStartBody, TwapView } from '../api/types';
+import {
+  account,
+  agentStatus,
+  baseHandlers,
+  echoPreviewHandler,
+  ethPosition,
+  makeRebalanceView,
+  previewFor,
+  REALIZE_RUNNING_JOB,
+  rebalanceHandler,
+} from '../test/fixtures';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -713,5 +723,219 @@ describe('ExecuteControl for a view-only wallet', () => {
     } finally {
       localStorage.clear();
     }
+  });
+});
+
+describe('ExecuteControl with TWAP', () => {
+  const plan = { slices: 12, sliceQty: '0.033', lastQty: '0.037', intervalSec: 300, durationSec: 3600, takerAfterSec: 240 };
+  const dealOpts = { makerLeg: 'auto' as const, repegBehindBp: 5 as const, timeoutSec: 240 };
+  const limit: ActionInput = { kind: 'open-limit', symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY', qty: '0.4', price: '2500', tif: 'POC' };
+  const peg = (a: ActionInput[]) => a.map((x) => (x.kind === 'open-limit' ? { ...x, pegToTouch: true } : x));
+
+  function startHandler(calls: TwapStartBody[], failFirst = false) {
+    return http.post('/api/rebalance', async ({ request }) => {
+      calls.push((await request.json()) as TwapStartBody);
+      if (failFirst && calls.length === 1) {
+        return HttpResponse.json({ ok: false, error: { category: 'network', message: 'boom', retryable: true } }, { status: 500 });
+      }
+      return HttpResponse.json(env({ id: 'job-1' }), { status: 202 });
+    });
+  }
+
+  const twapView: TwapView = {
+    slice: 3,
+    of: 12,
+    nextAt: null,
+    durationSec: 3600,
+    intervalSec: 300,
+    startedAt: 0,
+    carryQty: '0',
+    behindQty: '0',
+    makerLeg: 'a',
+    repegBehindBp: 5,
+    takerAfterSec: 240,
+  };
+
+  function twapJob(over: Partial<RebalanceJob>): RebalanceJob {
+    return { ...REALIZE_RUNNING_JOB, kind: 'twap', status: 'running', paused: false, child: null, twap: twapView, ...over };
+  }
+
+  const liveChild: TwapChildView = {
+    id: 'job-1-s3-1',
+    mode: 'OPENING',
+    slice: 3,
+    makerLeg: 'a',
+    side: 'BUY',
+    restPrice: null,
+    bestPrice: null,
+    behindPct: null,
+    repegRefused: null,
+  };
+
+  function renderTwap(blocked = false) {
+    return renderWithClient(
+      <ExecuteControl scope="t" actions={[limit]} label="Start TWAP" holdMs={50} decorate={peg} dealOpts={dealOpts} twap={{ plan, blocked }} />,
+    );
+  }
+
+  it('start posts one job with the deal body and no deal', async () => {
+    const starts: TwapStartBody[] = [];
+    const deals: DealRequest[] = [];
+    server.use(...baseHandlers(), echoPreviewHandler({ overrides: { qty: '0.4' } }), startHandler(starts), dealHandler(deals));
+    renderTwap();
+
+    await hold('Start TWAP');
+    await waitFor(() => expect(starts).toHaveLength(1));
+    expect(starts[0]).toMatchObject({
+      kind: 'twap',
+      durationSec: 3600,
+      slices: 12,
+      deal: { a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY' }, qty: '0.4', execution: 'maker', pricePolicy: 'touch', timeoutSec: 240, repegBehindBp: 5 },
+    });
+    expect(starts[0].deal).not.toHaveProperty('id');
+    expect(deals).toHaveLength(0);
+  });
+
+  it('twap start sends one client id per hold', async () => {
+    const starts: TwapStartBody[] = [];
+    server.use(...baseHandlers(), echoPreviewHandler(), startHandler(starts, true));
+    renderTwap();
+
+    await hold('Start TWAP');
+    await waitFor(() => expect(starts).toHaveLength(1));
+    await hold('Start TWAP');
+    await waitFor(() => expect(starts).toHaveLength(2));
+    await hold('Start TWAP');
+    await waitFor(() => expect(starts).toHaveLength(3));
+    expect(starts[1].clientId).toBe(starts[0].clientId);
+    expect(starts[2].clientId).not.toBe(starts[0].clientId);
+    expect(starts[0].clientId).toMatch(/^[a-zA-Z0-9-]{6,40}$/);
+  });
+
+  it('a blocked plan keeps the hold disabled', async () => {
+    server.use(...baseHandlers(), echoPreviewHandler());
+    renderTwap(true);
+    const btn = await screen.findByRole('button', { name: 'Start TWAP' });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(btn).toBeDisabled();
+  });
+
+  it('locked while a twap runs: the line and View replace the hold', async () => {
+    server.use(rebalanceHandler(makeRebalanceView({ job: twapJob({ child: liveChild }) })), ...baseHandlers(), echoPreviewHandler());
+    renderWithClient(<ExecuteControl scope="t" actions={[notionalAction]} label="Execute" holdMs={50} />);
+
+    expect(await screen.findByText('A TWAP is running. Orders and transfers wait until it ends.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Execute' })).toBeNull();
+  });
+
+  it('a paused twap with no live child reads the paused line', async () => {
+    server.use(rebalanceHandler(makeRebalanceView({ job: twapJob({ paused: true }) })), ...baseHandlers(), echoPreviewHandler());
+    renderWithClient(<ExecuteControl scope="t" actions={[notionalAction]} label="Execute" holdMs={50} />);
+    expect(await screen.findByText('A TWAP is paused. Orders wait until it ends.')).toBeInTheDocument();
+  });
+
+  it('a twap halted with a live child reads the error line', async () => {
+    server.use(
+      rebalanceHandler(makeRebalanceView({ job: twapJob({ status: 'halted', haltKind: 'error', child: { ...liveChild, mode: 'HALTED' } }) })),
+      ...baseHandlers(),
+      echoPreviewHandler(),
+    );
+    renderWithClient(<ExecuteControl scope="t" actions={[notionalAction]} label="Execute" holdMs={50} />);
+    expect(
+      await screen.findByText('A TWAP stopped on an error. Orders and transfers wait until you resume or stop it.'),
+    ).toBeInTheDocument();
+  });
+
+  it('a twap over the venue max as one order but under it per slice arms the hold', async () => {
+    const bodies: Array<{ twap?: unknown }> = [];
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const body = (await request.json()) as { actions: ActionInput[]; twap?: unknown };
+        bodies.push(body);
+        const violations = body.twap ? [] : [{ code: 'over-max-size', message: 'over the venue max' } as never];
+        return HttpResponse.json(env({ previews: body.actions.map((a, i) => previewFor(a, { index: i, violations })) }));
+      }),
+    );
+    renderTwap();
+    const btn = await screen.findByRole('button', { name: 'Start TWAP' });
+    await waitFor(() => expect(btn).toBeEnabled());
+    expect(bodies.at(-1)?.twap).toEqual({ durationSec: 3600, slices: 12 });
+  });
+
+  it('the hold stays off after a start until the job read lands', async () => {
+    const starts: TwapStartBody[] = [];
+    let reads = 0;
+    server.use(
+      http.get('/api/rebalance', async () => {
+        reads += 1;
+        if (reads > 1) await new Promise(() => {});
+        return HttpResponse.json(env(makeRebalanceView()));
+      }),
+      ...baseHandlers(),
+      echoPreviewHandler(),
+      startHandler(starts),
+    );
+    renderTwap();
+    await hold('Start TWAP');
+    await waitFor(() => expect(starts).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(screen.getByRole('button', { name: /Executing/ })).toBeDisabled();
+  });
+
+  it('an error halt with no live child reads the error line for orders only', async () => {
+    server.use(
+      rebalanceHandler(makeRebalanceView({ job: twapJob({ status: 'halted', haltKind: 'hedge-margin', child: null }) })),
+      ...baseHandlers(),
+      echoPreviewHandler(),
+    );
+    renderTwap();
+    expect(await screen.findByText('A TWAP stopped on an error. Orders wait until you resume or stop it.')).toBeInTheDocument();
+  });
+
+  it('a failed job read says the lock is unknown', async () => {
+    server.use(
+      http.get('/api/rebalance', () => HttpResponse.json({ ok: false, error: { category: 'network', message: 'boom', retryable: true } }, { status: 500 })),
+      ...baseHandlers(),
+      echoPreviewHandler(),
+    );
+    renderTwap();
+    expect(await screen.findByText('Could not check for a running TWAP. If one is running, the order is refused.')).toBeInTheDocument();
+  });
+
+  it('a Delever TWAP does not lock the ticket', async () => {
+    server.use(rebalanceHandler(makeRebalanceView({ job: twapJob({ kind: 'delever', child: liveChild }) })), ...baseHandlers(), echoPreviewHandler());
+    renderTwap();
+    await screen.findByRole('button', { name: 'Start TWAP' });
+    expect(screen.queryByText(/A TWAP is/)).toBeNull();
+  });
+
+  it('a done twap does not lock', async () => {
+    server.use(rebalanceHandler(makeRebalanceView({ job: twapJob({ status: 'done' }) })), ...baseHandlers(), echoPreviewHandler());
+    renderWithClient(<ExecuteControl scope="t" actions={[notionalAction]} label="Execute" holdMs={50} />);
+    expect(await screen.findByRole('button', { name: 'Execute' })).toBeInTheDocument();
+    expect(screen.queryByText(/A TWAP is/)).toBeNull();
+  });
+
+  it('with twap off an unequal pair close keeps the client split', async () => {
+    const deals: DealRequest[] = [];
+    const closes: ActionInput[] = [
+      { kind: 'close-position', symbol: 'GATE_FUTURE_ETH_USDT', qty: '1' },
+      { kind: 'close-position', symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', qty: '2' },
+    ];
+    const sizedPreview = http.post('/api/preview', async ({ request }) => {
+      const { actions } = (await request.json()) as { actions: ActionInput[] };
+      return HttpResponse.json(env({ previews: actions.map((a, i) => previewFor(a, { index: i, qty: 'qty' in a ? a.qty : undefined })) }));
+    });
+    server.use(...baseHandlers(), sizedPreview, dealHandler(deals));
+    renderWithClient(<ExecuteControl scope="t" actions={closes} label="Close" holdMs={50} />);
+
+    await hold('Close');
+    await waitFor(() => expect(deals).toHaveLength(2));
+    expect(deals.map((d) => [d.a.symbol, d.qty, d.execution])).toEqual([
+      ['GATE_FUTURE_ETH_USDT', '1', 'taker'],
+      ['HYPERLIQUID_FUTURE_ETH_USDC', '2', 'taker'],
+    ]);
   });
 });

@@ -82,6 +82,25 @@ describe('TransferSection', () => {
     expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeDisabled();
   });
 
+  it('a TWAP lock names the reason, and disables the button', async () => {
+    await renderCard({ ...transferViews.lockRebalance, lock: 'twapRunning' });
+    expect(screen.getByText('TWAP running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeDisabled();
+    cleanup();
+
+    await renderCard({ ...transferViews.lockRebalance, lock: 'twapError' });
+    expect(screen.getByText('TWAP stopped')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeDisabled();
+  });
+
+  it('a running TWAP locks the button before the transfer read catches up', async () => {
+    const job = { id: 'tw1', kind: 'twap', status: 'running' } as never;
+    server.use(transferHandler(transferViews.accountB), rebalanceHandler({ ...rebalanceViews.accountB, job }));
+    renderWithClient(<TransferSection holdMs={50} />);
+    expect(await screen.findByText('TWAP running')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Manual transfer' })).toBeDisabled();
+  });
+
   it('a moving transfer opens the modal on the sending view', async () => {
     await renderCard(transferViews.moving);
 

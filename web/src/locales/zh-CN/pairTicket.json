@@ -22,6 +22,8 @@
     "hedgeAtMarketNote": "— 第一条腿按中间价 ± 滑点限价；对冲腿按市价"
   },
   "bits": {
+    "bookUnavailable": "≈ 估算（订单簿不可用）",
+    "bookUnavailableHint": "订单簿不可用。价格为跨交易所中间价估算，执行前请核对。",
     "estimate": "预估",
     "previewFailed": "预览失败",
     "ago": "{{age}}前",
@@ -37,22 +39,7 @@
     "longVenue": "多头交易所",
     "swapVenues": "互换交易所",
     "swapVenuesHint": "互换多头与空头交易所",
-    "makerLeg": "挂单腿",
-    "autoHint": "自动选择：挂单 + 吃单手续费最低的组合",
-    "auto": "自动",
-    "savingHint": "开仓手续费节省（对比两腿均吃单）",
-    "saving": "<g>节省 ≈ {{amount}} USDT</g>（对比 2 笔吃单）",
-    "makerPrice": "挂单价格",
-    "makerPriceHint": "默认挂在盘口最优价后一个买卖价差处，并跟随盘口，直到您输入价格。",
-    "pinned": "已固定 —",
-    "trackBook": "跟随盘口",
-    "tracking": "跟随盘口 — 输入价格即固定",
-    "bookUnavailableHint": "订单簿不可用。价格为跨交易所中间价估算，执行前请核对。",
-    "bookUnavailable": "≈ 估算（订单簿不可用）",
     "fetchingTouch": "获取价格…",
-    "convertHint": "超过此时间后，未成交部分在两个交易所以市价成交。",
-    "convertAfter": "转为吃单时限",
-    "minutes": "{{n}} 分钟",
     "makerChipHint": "只做挂单，挂在同侧最优价后一个买卖价差处。成交时另一腿随之对冲。",
     "maker": "挂单",
     "rests": "挂单中",
@@ -138,13 +125,9 @@
     "sizePerLegAria": "每腿规模（{{unit}}）",
     "sizeIn": "以 {{unit}} 计的规模",
     "sizePerLegPlaceholder": "每腿规模",
-    "execution": "永续开仓",
-    "executionAria": "永续开仓方式",
-    "twoMarket": "2 笔市价单",
-    "limitHedge": "限价 + 对冲",
     "execute": "执行组合",
-    "leverageDetail": "杠杆 多头 {{long}}x / 空头 {{short}}x（交易所上限）",
-    "pegNote": "发送时挂单价格锚定最优价"
+    "leverageDetail": "杠杆 {{long}}x 多 / {{short}}x 空 · 交易所上限",
+    "pegNote": "限价在发送时对齐最优价"
   },
   "borosBits": {
     "directionAria": "{{prefix}} 方向",
@@ -286,5 +269,55 @@
     "sizePerMarket": "每个市场规模",
     "sizePerMarketAria": "每个市场规模（{{unit}}）",
     "shareOfMax": "占最大规模比例"
+  },
+  "makerSettings": {
+    "title": "挂单设置",
+    "foldValue": "{{leg}} 挂单 · 吃单 {{taker}} · 改价 {{repeg}}",
+    "foldValueSingle": "吃单 {{taker}} · 改价 {{repeg}}",
+    "takerNever": "永不",
+    "repegOff": "关",
+    "makerLeg": "挂单腿",
+    "saving": "<g>节省 ≈ {{amount}} USDT</g>（对比 2 笔吃单）",
+    "savingHint": "开仓手续费节省（对比两腿均吃单）",
+    "auto": "自动",
+    "reset": "重置",
+    "autoFees": "自动：挂单手续费较低的一条腿挂单。",
+    "autoBook": "自动：手续费相同，盘口较薄的一条腿挂单。",
+    "hoverRests": "挂限价单 · 挂单手续费 {{bp}} bps（{{pct}}%）",
+    "hoverHedges": "每笔成交以市价对冲 · 吃单手续费 {{bp}} bps（{{pct}}%）",
+    "takerAfter": "转吃单时限",
+    "takerChoice": {
+      "m5": "5 分钟",
+      "m10": "10 分钟",
+      "never": "永不",
+      "custom": "自定义"
+    },
+    "takerHover": "仍未成交的部分随后以市价单成交（吃单手续费 {{bp}} bps，{{pct}}%）。",
+    "takerNeverHover": "永不：限价单一直挂到成交。",
+    "takerOver": "不得超过间隔的 80%（{{max}}）",
+    "customAria": "转吃单时限，自定义时间",
+    "customRange": "30 秒到 24 小时",
+    "repeg": "落后时改价",
+    "repegChoiceOff": "关",
+    "repegHover": "落后到这个幅度时，把限价移到最优价。最多每 5 秒一次。"
+  },
+  "limitPrice": {
+    "label": "限价",
+    "auto": "自动",
+    "autoHint": "跟随盘口，直到你输入价格。",
+    "typedHint": "保持你输入的价格。改价已关闭。",
+    "resetAria": "恢复使用盘口价格"
+  },
+  "estimate": {
+    "legRole": {
+      "rests": "{{side}} {{venue}} · 作为挂单方",
+      "hedges": "{{side}} {{venue}} · 对冲"
+    }
+  },
+  "orderType": {
+    "aria": "订单类型",
+    "limitHedge": "限价 + 对冲",
+    "market": "市价",
+    "limit": "限价"
   }
 }

@@ -208,6 +208,11 @@ describe('TransferModal', () => {
     expect(screen.getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeDisabled();
   });
 
+  it('a TWAP lock shows its long line', async () => {
+    await open({ ...transferViews.lockRebalance, lock: 'twapRunning' });
+    expect(screen.getByText('A TWAP is running. Orders and transfers wait until it ends.')).toBeInTheDocument();
+  });
+
   it('a moving transfer does not change the wallet', async () => {
     await open(transferViews.moving);
 

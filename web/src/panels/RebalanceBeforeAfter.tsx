@@ -1,21 +1,22 @@
 import { ArrowRight } from 'lucide-react';
-import type { EvenPlan, PerpSize, RebalanceBucket, RebalanceJob, RebalanceView, RoutePlan, WalletAfter } from '../api/types';
+import type { EvenPlan, RebalanceBucket, RebalanceView, RoutePlan, WalletAfter } from '../api/types';
 import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { borrowingBuckets } from '../lib/borrow';
-import { fmtUsd, parseSymbol, prettyVenue, sigGrouped } from '../lib/fmt';
+import { fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { borrowLeftOf, interestAfterOf, isRateUnknown, keyOf, MONTH_DAYS, Term, WalletTerm } from './RebalanceHovers';
-import { HOVER, hoverCash, modalFrees, sideText, sizeText, WALLET_LABEL } from './rebalanceCopy';
-import { lots, walletsNow } from './rebalanceJobSteps';
+import { HOVER, hoverCash, modalFrees, sizeText, WALLET_LABEL } from './rebalanceCopy';
 
 export interface ChangeRow {
   label: string;
   before: number | null;
   after: number;
-  unit: 'usd' | 'coin';
+  unit: 'usd' | 'coin' | 'pct' | 'text';
   coin?: string;
   hover?: string;
+  suffix?: string;
+  text?: { before: string; after: string };
 }
 
 export interface WalletChange {
@@ -29,7 +30,7 @@ const moved = (a: number, b: number): boolean => floorCents(Math.abs(a - b)) > 0
 const freedWeight = (bucket: RebalanceBucket, left: number): number =>
   bucket.borrow > 0 ? ((bucket.borrow - left) * bucket.imHeldUsd) / bucket.borrow : 0;
 
-function borrowRows(bucket: RebalanceBucket, left: number, freesUsd: number | null): ChangeRow[] {
+export function borrowRows(bucket: RebalanceBucket, left: number, freesUsd: number | null): ChangeRow[] {
   const interest: ChangeRow[] = isRateUnknown(bucket)
     ? []
     : [{
@@ -79,69 +80,42 @@ export function walletChanges(view: RebalanceView, _plan: EvenPlan, route: Route
   return changesOf(view.buckets, route.after, route.marginFreedUsd);
 }
 
-export function receiptChanges(job: RebalanceJob, buckets: RebalanceBucket[], live: PerpSize[] | null): WalletChange[] {
-  const before = job.before?.buckets ?? buckets;
-  const wallets = job.target ? changesOf(before, walletsNow(job, before), null) : [];
-  const legs = job.realize?.legs ?? [];
-  if (legs.length === 0) return wallets;
-  const perps: WalletChange = { key: 'perps', label: t('accounts.rebalanceRealize.perps'), rows: perpRows(job, live ?? []) };
-  return [...wallets, perps];
-}
-
-const perpLabel = (perp: Pick<PerpSize, 'exchange' | 'side'>): string => `${prettyVenue(perp.exchange)} ${sideText(perp.side)}`;
-
-function perpRows(job: RebalanceJob, live: PerpSize[]): ChangeRow[] {
-  const legs = job.realize?.legs ?? [];
-  const before = job.before?.perps ?? [];
-  const of = (list: PerpSize[], symbol: string) => list.find((perp) => perp.symbol === symbol);
-  const paying = legs.map((leg): ChangeRow => {
-    const reopened = job.steps.find((step) => step.name === 'Reopen' && step.perp?.symbol === leg.symbol)?.qty ?? 0;
-    return {
-      label: perpLabel(leg),
-      before: of(before, leg.symbol)?.qty ?? leg.positionQty,
-      after: of(live, leg.symbol)?.qty ?? lots(leg.positionQty - leg.filledQty + reopened),
-      unit: 'coin',
-      coin: leg.base,
-    };
-  });
-  const bases = legs.map((leg) => leg.base);
-  const hedges = [...before, ...live]
-    .filter((perp, index, all) => all.findIndex((p) => p.symbol === perp.symbol) === index)
-    .filter((perp) => bases.includes(parseSymbol(perp.symbol).base) && !legs.some((leg) => leg.symbol === perp.symbol))
-    .map((perp): ChangeRow => ({
-      label: perpLabel(perp),
-      before: of(before, perp.symbol)?.qty ?? null,
-      after: of(live, perp.symbol)?.qty ?? perp.qty,
-      unit: 'coin',
-      coin: parseSymbol(perp.symbol).base,
-    }));
-  return [...paying, ...hedges];
-}
-
 const COLUMN = 'w-28 shrink-0 text-right';
 
 function valueText(row: ChangeRow, value: number): string {
   if (row.coin) return `${sizeText(value)} ${row.coin}`;
+  if (row.unit === 'pct') return fmtPct(value, 1);
   return row.unit === 'usd' ? fmtUsd(value) : sigGrouped(value);
 }
 
+function textsOf(row: ChangeRow): { before: string; after: string; changed: boolean } {
+  if (row.unit === 'text') {
+    const before = row.text?.before ?? '';
+    const after = row.text?.after ?? '';
+    return { before, after, changed: before !== after };
+  }
+  const before = row.before === null ? '' : valueText(row, row.before);
+  return { before, after: valueText(row, row.after), changed: row.before === null || moved(row.before, row.after) };
+}
+
 function Line({ row }: { row: ChangeRow }) {
-  const changed = row.before === null || moved(row.before, row.after);
-  const beforeTone = row.before !== null && row.before < 0 ? 'text-rose-400' : 'text-ink-400';
-  const afterTone = row.after < 0 ? 'text-rose-400' : changed ? 'text-ink-50' : 'text-ink-100';
+  const { before, after, changed } = textsOf(row);
+  const numeric = row.unit !== 'text';
+  const beforeTone = numeric && row.before !== null && row.before < 0 ? 'text-rose-400' : 'text-ink-400';
+  const afterTone = numeric && row.after < 0 ? 'text-rose-400' : changed ? 'text-ink-50' : 'text-ink-100';
   return (
     <div role="row" className="flex items-center gap-2">
       <span role="rowheader" className="min-w-0 flex-1 pl-2.5 text-ink-300">
         {row.hover ? <Term label={row.label} text={row.hover} /> : row.label}
       </span>
       <span role="cell" data-column="before" className={`num ${COLUMN} ${beforeTone}`}>
-        {row.before === null ? null : valueText(row, row.before)}
+        {before}
       </span>
       <span className="flex w-4 shrink-0 justify-center text-ink-500">
-        {row.before !== null && <ArrowRight size={12} aria-hidden />}
+        {before !== '' && <ArrowRight size={12} aria-hidden />}
       </span>
-      <span role="cell" data-column="after" className={`num ${COLUMN} ${afterTone} ${changed ? 'font-semibold' : ''}`}>
-        {valueText(row, row.after)}
+      <span role="cell" data-column="after" className={`num ${numeric ? COLUMN : 'shrink-0 whitespace-nowrap text-right'} ${afterTone} ${changed ? 'font-semibold' : ''}`}>
+        {row.suffix ? `${after} ${row.suffix}` : after}
       </span>
     </div>
   );
@@ -152,6 +126,11 @@ export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mod
   const afterHead = mode === 'after' ? t('accounts.rebalanceRealize.after') : t('accounts.rebalanceRealize.now');
   return (
     <div role="table" className="card flex flex-col gap-2 p-3 text-xs">
+      {mode === 'after' && (
+        <div role="caption" className="text-[14px] font-semibold text-ink-50">
+          {t('accounts.moveCash.after')}
+        </div>
+      )}
       {rows.map((group, index) => (
         <div key={group.key} role="rowgroup" aria-label={group.label} className={`flex flex-col gap-2 ${index > 0 ? 'mt-2' : ''}`}>
           <div role="row" className="flex items-center gap-2">
@@ -166,8 +145,8 @@ export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mod
               </>
             )}
           </div>
-          {group.rows.map((row) => (
-            <Line key={row.label} row={row} />
+          {group.rows.map((row, i) => (
+            <Line key={`${i}:${row.label}`} row={row} />
           ))}
         </div>
       ))}
