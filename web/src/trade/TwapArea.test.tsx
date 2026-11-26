@@ -400,7 +400,7 @@ describe('useTwapDefault', () => {
     expect(screen.getByRole('button', { name: 'off' })).toBeInTheDocument();
   });
 
-  it('a landed preview with no suggestion waits while the old suggestion still drives the switch', async () => {
+  it('a landed preview with no suggestion waits until the trader picks on or off', async () => {
     const { rerender } = render(<Probe value={ON} exec="maker" landed />);
     expect(screen.queryByText('waiting')).toBeNull();
     rerender(<Probe value={undefined} exec="maker" landed={false} />);
@@ -414,8 +414,10 @@ describe('useTwapDefault', () => {
     expect(screen.queryByText('waiting')).toBeNull();
   });
 
-  it('a landed preview with no suggestion does not wait when nothing was suggested', () => {
+  it('a fresh ticket whose first book read fails waits too, until the trader picks on or off', async () => {
     render(<Probe value={undefined} exec="maker" landed />);
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'off' }));
     expect(screen.queryByText('waiting')).toBeNull();
   });
 });

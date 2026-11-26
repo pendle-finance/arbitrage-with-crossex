@@ -89,6 +89,7 @@ describe('SingleTicket', () => {
         const { actions } = (await request.json()) as { actions: ActionInput[] };
         return HttpResponse.json(
           env<PreviewResponse>({
+            twapDefault: null,
             previews: [
               previewFor(actions[0], {
                 qty: '',
@@ -140,6 +141,7 @@ describe('SingleTicket', () => {
         const { actions } = (await request.json()) as { actions: ActionInput[] };
         return HttpResponse.json(
           env<PreviewResponse>({
+            twapDefault: null,
             previews: [
               previewFor(actions[0], {
                 qty: '0.0015',
@@ -212,6 +214,7 @@ describe('SingleTicket', () => {
         const poc = a.kind === 'open-limit' && a.tif === 'POC';
         return HttpResponse.json(
           env<PreviewResponse>({
+            twapDefault: null,
             previews: [
               previewFor(a, {
                 type: 'LIMIT',
@@ -511,6 +514,7 @@ describe('SingleTicket TWAP under the venue minimum', () => {
       const { actions } = (await request.json()) as { actions: ActionInput[] };
       return HttpResponse.json(
         env<PreviewResponse>({
+          twapDefault: null,
           previews: [
             previewFor(actions[0], {
               qty: '0',
