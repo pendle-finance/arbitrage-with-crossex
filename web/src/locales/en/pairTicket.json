@@ -154,6 +154,8 @@
     "totalMarginHint": "The two markets summed, not netted: each market's account carries its own margin.",
     "bucketMarginHint": "Initial margin this market's account must carry",
     "tradeFee": "Trade fee",
+    "totalCost": "Total cost",
+    "totalCostHint": "Trade fee plus estimated slippage. At max slippage: {{max}}.",
     "tradeFeeLegs": "Trade fee · {{n}} markets",
     "tradeFeeHint": "Boros taker fee at this size — charged once, when the order fills",
     "tradeFeeLegsHint": "Boros taker fee on both markets at this size — charged once, when the orders fill",

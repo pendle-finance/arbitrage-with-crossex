@@ -151,6 +151,8 @@
     "totalMarginHint": "两个市场相加，不相互抵消：每个市场所在账户各自承担保证金。",
     "bucketMarginHint": "此市场所在账户需承担的初始保证金",
     "tradeFee": "交易手续费",
+    "totalCost": "总成本",
+    "totalCostHint": "交易手续费加预估滑点。按最大滑点：{{max}}。",
     "tradeFeeLegs": "交易手续费 · {{n}} 个市场",
     "tradeFeeHint": "此规模下的 Boros 吃单手续费 — 订单成交时收取一次",
     "tradeFeeLegsHint": "此规模下两个市场的 Boros 吃单手续费 — 订单成交时收取一次",

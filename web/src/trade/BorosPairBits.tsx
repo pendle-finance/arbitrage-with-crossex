@@ -23,6 +23,7 @@ import type {
   BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
+import { HoverCard } from '../components/HoverCard';
 import { ListPicker } from '../components/ListPicker';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { fmtDateShort, fmtDateUtc, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
@@ -253,8 +254,16 @@ function Row({
         ? 'text-[12px] text-ink-300'
         : 'text-[12.5px] text-ink-50';
   return (
-    <div className="flex items-baseline justify-between gap-3" title={title}>
-      <span className={`shrink-0 ${dim ? 'pl-3 text-[11.5px] text-ink-400' : 'text-[12px] text-ink-200'}`}>{label}</span>
+    <div className="flex items-baseline justify-between gap-3">
+      <span className={`shrink-0 ${dim ? 'pl-3 text-[11.5px] text-ink-400' : 'text-[12px] text-ink-200'}`}>
+        {title ? (
+          <HoverCard label={label} widthPx={260}>
+            <span className="whitespace-pre-line">{title}</span>
+          </HoverCard>
+        ) : (
+          label
+        )}
+      </span>
       <span className={`num truncate text-right ${tone}`}>{value}</span>
     </div>
   );
@@ -283,10 +292,26 @@ function CollateralAmount({ n, sim, bare }: { n: number | null; sim: BorosPairSi
 
 const YEAR_SECONDS = 365 * 86_400;
 
-export function aprCostUsd(sim: BorosPairSimulation, parts: { apr: number; size: number }[]): number | null {
-  if (sim.collateralPriceUsd === null) return null;
+export function aprCost(sim: BorosPairSimulation, parts: { apr: number; size: number }[]): number {
   const years = Math.max(0, sim.secondsToMaturity) / YEAR_SECONDS;
-  return parts.reduce((sum, part) => sum + Math.max(0, part.apr) * Math.abs(part.size) * years, 0) * sim.collateralPriceUsd;
+  return parts.reduce((sum, part) => sum + Math.max(0, part.apr) * Math.abs(part.size) * years, 0);
+}
+
+export const usdOf = (sim: BorosPairSimulation, n: number | null): number | null =>
+  n === null || sim.collateralPriceUsd === null ? null : n * sim.collateralPriceUsd;
+
+export function TotalCostRow({ sim, slippage }: { sim: BorosPairSimulation; slippage: { est: number | null; max: number } }) {
+  const { t } = useTranslation();
+  const est = slippage.est === null ? null : sim.costToCrossSize + slippage.est;
+  const max = sim.costToCrossSize + slippage.max;
+  return (
+    <Row
+      label={t('pairTicket.borosBits.totalCost')}
+      title={t('pairTicket.borosBits.totalCostHint', { max: `${size(max)} ${sim.collateral}` })}
+      value={<CollateralAmount n={est} sim={sim} />}
+      weight="strong"
+    />
+  );
 }
 
 /**
@@ -634,8 +659,12 @@ export function AvailableMarginLines({
   return (
     <>
       {lines.map((l) => (
-        <div key={l.key} className="flex items-baseline justify-between gap-3" title={t('pairTicket.borosBits.availableMarginHint')}>
-          <span className="text-[11.5px] text-ink-200">{l.label}</span>
+        <div key={l.key} className="flex items-baseline justify-between gap-3">
+          <span className="text-[11.5px] text-ink-200">
+            <HoverCard label={l.label} widthPx={260}>
+              {t('pairTicket.borosBits.availableMarginHint')}
+            </HoverCard>
+          </span>
           <span className="num text-[12px] text-ink-400">
             {size(l.before)}
             {l.after !== null && (
