@@ -215,11 +215,6 @@ export function SingleTicket() {
           setSymbol(null);
           resetCoin();
         }}
-        onClear={() => {
-          setBase(null);
-          setSymbol(null);
-          resetCoin();
-        }}
       />
 
       <div className="grid grid-cols-2 items-end gap-3">
@@ -370,7 +365,7 @@ export function SingleTicket() {
 
       {sliceMin && <p className="text-[11px] text-rose-400">{sliceMin}</p>}
 
-      {type === 'LIMIT' && !twapOn && (
+      {type === 'LIMIT' && !twapOn && symbol && (
         <div className="flex flex-col gap-1.5">
           <LimitPriceBox
             bookPrice={autoPrice}

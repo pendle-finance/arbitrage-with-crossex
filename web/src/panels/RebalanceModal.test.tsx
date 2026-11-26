@@ -1410,8 +1410,8 @@ describe('RebalanceModal presets and custom amount', () => {
     await user.click(screen.getByRole('radio', { name: 'Custom amount' }));
     expect(within(presets()).getByRole('radio', { checked: true })).toHaveAccessibleName('Custom amount');
     expect(screen.getByRole('textbox', { name: 'Amount' })).toHaveValue('22.18');
-    expect(screen.getByRole('combobox', { name: 'From' })).toHaveValue('HYPERLIQUID');
-    expect(screen.getByRole('combobox', { name: 'To' })).toHaveValue('CROSSEX');
+    expect(screen.getByRole('button', { name: 'From' })).toHaveTextContent('USDC · Hyperliquid');
+    expect(screen.getByRole('button', { name: 'To' })).toHaveTextContent('USDT · CrossEx');
     await user.clear(screen.getByRole('textbox', { name: 'Amount' }));
     await user.type(screen.getByRole('textbox', { name: 'Amount' }), '50');
     const hold = await screen.findByRole('button', { name: /^Hold to move/ }, { timeout: 3000 });
