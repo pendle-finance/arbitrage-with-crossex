@@ -70,7 +70,7 @@ export function CoinCombobox({ value, coins: offered = QUICK_PICK_COINS, onSelec
         <FieldLabel>{t('common.coin')}</FieldLabel>
         {aside}
       </div>
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('trade.symbol.quickPick')}>
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.coin')}>
         {coins.map((coin) => (
           <PickChip key={coin} active={isValue(coin)} onClick={() => onSelect(coin)}>
             <TokenIcon symbol={coin} size={14} />

@@ -22,7 +22,7 @@
  * distance on the book; "0.25% of the rate" would be a different number of
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ExternalLink } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sigFigsDirectional } from '../lib/ticks';
@@ -52,7 +52,8 @@ import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SpreadIcon } from '../components/AssetIcon';
 import { amountError } from '../lib/amount';
 import { spreadName } from '../lib/spread';
-import { daysToMaturity, isUsdCollateral } from '../lib/boros';
+import { borosMarketUrl, daysToMaturity, isUsdCollateral } from '../lib/boros';
+import { daysLeftText } from '../panels/assets/pairs';
 import { fieldValue, fmtDateLocal, fmtDateShort, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
@@ -1159,7 +1160,19 @@ export function BorosPairTicket({
           <FieldLabel>{t('pairTicket.boros.tradeOn')}</FieldLabel>
           <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-ink-50">
             <SpreadIcon venues={rowA.spreadVenues} />
-            <span className="truncate">{spreadName(rowA.base, rowA.spreadVenues)}</span>
+            <a
+              href={borosMarketUrl(rowA.marketId, dirA)}
+              target="_blank"
+              rel="noreferrer"
+              title={t('pairTicket.boros.openOnBoros')}
+              className="flex min-w-0 items-center gap-1 hover:text-link"
+            >
+              <span className="truncate">{spreadName(rowA.base, rowA.spreadVenues)}</span>
+              <ExternalLink size={12} aria-hidden className="shrink-0 text-ink-400" />
+            </a>
+            <span className="num shrink-0 font-normal text-ink-400">
+              · {daysLeftText(rowA.maturity, Math.floor(now / 1000))}
+            </span>
           </span>
         </div>
       )}

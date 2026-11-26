@@ -89,7 +89,6 @@
     "atMarket": "{{side}} {{venue}} · at market"
   },
   "symbol": {
-    "quickPick": "Quick pick coin",
     "venueChips": "Venue chips",
     "loadingVenues": "Loading venues…",
     "noPerpsFor": "No live perps for {{base}}",
