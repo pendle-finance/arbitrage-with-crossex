@@ -6,7 +6,7 @@ import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { SignedNumber } from '../components/SignedNumber';
 import { AmountPresets } from '../components/AmountPresets';
-import { fieldValue, fmtUsd, prettyVenue, qtyGrouped } from '../lib/fmt';
+import { fieldValue, fmtDateLocal, fmtUsd, prettyVenue, qtyGrouped } from '../lib/fmt';
 import { decimalsOf, stripZeros } from '../lib/ticks';
 import { EstimateAge, EstimateRow, LegTable, SummaryCard } from '../trade/PairTicketBits';
 import { PreviewFallback } from '../trade/previewBits';
@@ -173,6 +173,7 @@ export function ClosePairAfter({
   rows,
   flat,
   borosUnhedged,
+  bookedBefore,
 }: {
   base: string;
   twapOn: boolean;
@@ -181,15 +182,22 @@ export function ClosePairAfter({
   rows: CloseAfterRow[];
   flat: boolean;
   borosUnhedged: { qty: number; coin: string } | null;
+  bookedBefore: { usd: number; sinceSec: number } | null;
 }) {
   const { t } = useTranslation();
+  const before = bookedBefore !== null && Math.abs(bookedBefore.usd) >= 0.005 ? bookedBefore : null;
+  const total = totalPnl !== null ? totalPnl + (before?.usd ?? 0) : null;
   return (
     <SummaryCard title={t('accounts.moveCash.after')}>
       <EstimateRow
         label={
           <HoverCard label={t('accounts.closePair.priceBooked')} widthPx={300}>
             <span className="flex flex-col gap-1">
-              <span>{t('accounts.closePair.priceBookedHover')}</span>
+              <span>
+                {bookedBefore !== null
+                  ? t('accounts.closePair.priceBookedSince', { date: fmtDateLocal(bookedBefore.sinceSec) })
+                  : t('accounts.closePair.priceBookedHover')}
+              </span>
               {legPnl.map((l) => (
                 <span key={`${l.venue}-${l.side}`} className="flex justify-between gap-4">
                   <span>{`${prettyVenue(l.venue)} ${t(l.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}`}</span>
@@ -198,11 +206,19 @@ export function ClosePairAfter({
                   </span>
                 </span>
               ))}
+              {before !== null && (
+                <span className="flex justify-between gap-4">
+                  <span>{t('accounts.closePair.bookedBefore')}</span>
+                  <span className="num">
+                    <SignedNumber value={before.usd} format={(n) => fmtUsd(n)} />
+                  </span>
+                </span>
+              )}
             </span>
           </HoverCard>
         }
         sub={twapOn ? t('accounts.closePair.twap.headlineSub') : undefined}
-        value={totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
+        value={total !== null ? <SignedNumber value={total} format={(n) => fmtUsd(n)} /> : '—'}
         strong
       />
       {(rows.length > 0 || flat || borosUnhedged) && (
