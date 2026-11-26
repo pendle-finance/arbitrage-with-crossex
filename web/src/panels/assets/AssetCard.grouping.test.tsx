@@ -56,6 +56,35 @@ function previewSpy(): ActionInput[][] {
   );
   return seen;
 }
+function heldPreviewSpy(held: Record<string, number>): ActionInput[][] {
+  const seen: ActionInput[][] = [];
+  server.use(
+    http.post('/api/preview', async ({ request }) => {
+      const { actions } = (await request.clone().json()) as { actions: ActionInput[] };
+      seen.push(actions);
+      return HttpResponse.json(
+        env<PreviewResponse>({
+          previews: actions.map((a) => {
+            const symbol = a.kind === 'close-position' ? a.symbol : '';
+            const pos = held[symbol] ?? 0;
+            const qty = a.kind === 'close-position' && a.qty ? a.qty : String(Math.abs(pos));
+            return previewFor(a, {
+              side: pos > 0 ? 'SELL' : 'BUY',
+              type: 'LIMIT',
+              tif: 'IOC',
+              reduceOnly: true,
+              qty,
+              price: String(PX),
+              estNotional: Number(qty) * PX,
+              closing: { positionQty: String(pos), upnl: '0', mark: PX },
+            });
+          }),
+        }),
+      );
+    }),
+  );
+  return seen;
+}
 const deadOpens = (el: HTMLElement) => within(el).queryAllByRole('button', { name: 'Open position' }).filter((b) => b.getAttribute('aria-disabled') === 'true');
 async function openLegTexts(user: ReturnType<typeof userEvent.setup>, el: HTMLElement): Promise<string[]> {
   const opens = within(el).getAllByRole('button', { name: 'Open position' });
@@ -195,6 +224,7 @@ describe('the card, by the grouping DoD', () => {
 
   it('ED-6648 shared long closes once', async () => {
     const user = userEvent.setup();
+    const seen = heldPreviewSpy({ GATE_FUTURE_ETH_USDT: 2, HYPERLIQUID_FUTURE_ETH_USDT: -1 });
     renderCard(groupOf(['G L 2', 'H S 1', 'LI S 1', 'G LONG 2 N', 'H SHORT 1 N', 'LI SHORT 1 N']));
     await showPairs(user);
     const card = await waitFor(() => {
@@ -205,9 +235,12 @@ describe('the card, by the grouping DoD', () => {
     await expand(user, card);
     await user.click(within(card).getByRole('button', { name: 'Close perps' }));
     const dialog = await screen.findByRole('dialog');
-    const text = textOf(dialog);
-    expect(text).toMatch(/PerpGate.*?pair slice1 ETH.*?PerpHyperliquid.*?whole position1 ETH/);
-    expect(text).not.toMatch(/\b2 ETH/);
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
+    expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: '1', HYPERLIQUID_FUTURE_ETH_USDT: undefined });
+    const after = await within(dialog).findByRole('region', { name: 'After' });
+    await waitFor(() => expect(textOf(after)).toMatch(/Gate\s*not in this pair\s*1 ETH/));
+    expect(textOf(after)).not.toMatch(/Hyperliquid\s*(not in this pair|left)/);
+    expect(textOf(dialog)).not.toMatch(/\b2 ETH/);
   });
 
   it('ED-6648 spread on other venues', async () => {
@@ -230,7 +263,7 @@ describe('the card, by the grouping DoD', () => {
 
   it('close perps sends the row size', async () => {
     const user = userEvent.setup();
-    const seen = previewSpy();
+    const seen = heldPreviewSpy({ GATE_FUTURE_ETH_USDT: 0.949, HYPERLIQUID_FUTURE_ETH_USDT: -0.95 });
     renderCard(groupOf(['G L 0.949', 'H S 0.95', 'G LONG 0.949 N', 'H SHORT 0.949 N']));
     await showPairs(user);
     const [card] = await waitFor(() => {
@@ -240,10 +273,12 @@ describe('the card, by the grouping DoD', () => {
     });
     await expand(user, card);
     await user.click(within(card).getByRole('button', { name: 'Close perps' }));
-    const text = textOf(await screen.findByRole('dialog'));
-    expect(text).toMatch(/PerpGate.*?position0\.949 ETH.*?PerpHyperliquid.*?position0\.95 ETH/);
+    const dialog = await screen.findByRole('dialog');
+    expect(textOf(dialog)).toMatch(/Max\s*0\.949 ETH/);
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
     expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: undefined, HYPERLIQUID_FUTURE_ETH_USDT: undefined });
+    await waitFor(() => expect(textOf(within(dialog).getByRole('region', { name: 'Cost' }))).toMatch(/LONG\s*Gate.*SHORT\s*Hyperliquid/));
+    expect(textOf(within(dialog).getByRole('region', { name: 'After' }))).not.toMatch(/not in this pair|left/);
   });
 
   it.each(RUNGS)('S-CLOSE-02 a row short of its venue position sends its own size at every rung ($%i)', async (usd) => {

@@ -6,7 +6,7 @@
  * "respected" because it could not be expressed. The single-leg ClosePopover
  * always had the control; this is the two-leg surface catching up.
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -59,6 +59,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     expect(slipOf(seen.at(-1)!)).toEqual([0.5, 0.5]);
 
     await pickMarket();
+    await openSlippage();
     const slip = screen.getByLabelText('Market slippage');
     await userEvent.clear(slip);
     await userEvent.type(slip, '2');
@@ -106,6 +107,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
 
     await pickMarket();
+    await openSlippage();
     const slip = screen.getByLabelText('Market slippage');
     await userEvent.clear(slip);
     await userEvent.type(slip, '50');
@@ -186,6 +188,10 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
 /** The close defaults to Limit + hedge; market-mode cases pick it first. */
 async function pickMarket(): Promise<void> {
   await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
+}
+
+async function openSlippage(): Promise<void> {
+  await userEvent.click(await screen.findByRole('button', { name: '0.5%' }));
 }
 
 const qtysOf = (as: ActionInput[] | undefined) => as?.map((a) => (a.kind === 'close-position' ? a.qty : undefined));
@@ -316,6 +322,42 @@ describe('ClosePairForm — Limit + hedge close', () => {
     expect(dealCalls[1].execution).toBe('taker');
     expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
   }, 15_000);
+});
+
+describe('ClosePairForm: After card', () => {
+  it('names the open Boros side only when the caller says it stays unhedged', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const first = renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(within(after).queryByText('Open, not hedged')).toBeNull();
+    first.unmount();
+
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} borosUnhedged />);
+    const after2 = await screen.findByRole('region', { name: 'After' });
+    expect(within(after2).getByText('Open, not hedged')).toBeInTheDocument();
+  });
+
+  it('a partial size shows what stays open on each leg', async () => {
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const { actions } = (await request.json()) as { actions: ActionInput[] };
+        return HttpResponse.json(
+          env<PreviewResponse>({
+            makerLeg: { auto: 'a', why: 'fees' },
+            previews: actions.map((a) =>
+              previewFor(a, { side: 'SELL', reduceOnly: true, qty: ('qty' in a && a.qty) || '1.89', price: '80' }),
+            ),
+          }),
+        );
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    fireEvent.change(screen.getByLabelText('Close size, applied to both legs'), { target: { value: '1' } });
+    const after = await screen.findByRole('region', { name: 'After' });
+    await waitFor(() => expect(within(after).getAllByText('left')).toHaveLength(2), { timeout: 4000 });
+    expect(screen.queryByText(/rounds down to its lot size/)).toBeNull();
+  });
 });
 
 describe('ClosePairForm: the maker leg comes from the preview', () => {

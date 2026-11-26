@@ -68,6 +68,10 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   lists only dates that have a spread, and shows Slippage, Trade fee and Total cost rows. Size per
   leg shows only when it differs from the size box. The maker price stays steady for 10 seconds
   when one order book read fails.
+- **Close perps, Close Boros and Roll over show a Cost card, then an After card.** The After card
+  says which leg is only a slice of a larger venue position, and which legs stay open with floating
+  funding. A notice shows above the button only when it blocks. A roll the account cannot fund
+  says to top up first or roll a smaller size.
 - **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
   the sale adds up to the amount converted.
 - **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,
