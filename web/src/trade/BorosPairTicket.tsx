@@ -46,7 +46,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
-import { AffixedInput, EstimateAge, ShareSlider, SummaryCard } from './PairTicketBits';
+import { AffixedInput, EstimateAge, LegHeader, ShareSlider, SummaryCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SpreadIcon } from '../components/AssetIcon';
@@ -66,7 +66,6 @@ import {
   AvailableMarginLines,
   BlockerList,
   blockerButtonReason,
-  DirectionToggle,
   liqWarnOf,
   LiquidationLines,
   MarketCard,
@@ -79,6 +78,8 @@ import {
   SpreadReadout,
   SuggestedTopUpLines,
   TradeFeeRow,
+  aprCostUsd,
+  UsdNote,
 } from './BorosPairBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -810,6 +811,21 @@ export function BorosPairTicket({
     // slippage, not a negative one.
     return lone.estSlippageApr == null ? null : Math.max(0, lone.estSlippageApr);
   })();
+  const slipUsd = ((): { est: number | null; max: number | null } => {
+    if (!simulation) return { est: null, max: null };
+    const sizeOf = (i: number): number => Math.abs(simulation.legs[i]?.sizing.deltaSize ?? 0);
+    const est =
+      estSlippageApr === null
+        ? null
+        : aprCostUsd(simulation, [{ apr: estSlippageApr, size: loneLeg === null ? simulation.hedgedSize : sizeOf(loneLeg) }]);
+    const max = aprCostUsd(
+      simulation,
+      simulation.legs
+        .map((_, i) => ({ apr: i === 0 ? aprA : aprB, size: sizeOf(i), traded: loneLeg === null || i === loneLeg }))
+        .filter((part) => part.traded),
+    );
+    return { est, max };
+  })();
   const gate = sim.data?.gate ?? null;
   const liqWarn = liqWarnOf(gate?.funding);
   const fundingName = (marketId: number | null): string =>
@@ -1107,19 +1123,12 @@ export function BorosPairTicket({
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2">
-              <Chip sm tone={dirA === 'long' ? 'green' : 'red'} className="font-semibold">
-                {t(dirA === 'long' ? 'common.longUpper' : 'common.shortUpper')}
-              </Chip>
-              {/* The rates reading of the side, stated beside it: long pays
-                  the fixed rate, short receives it. */}
-              <span className="text-[12px] font-normal text-ink-300">
-                {t(dirA === 'long' ? 'pairTicket.boros.marketPayFixed' : 'pairTicket.boros.marketReceiveFixed')}
-              </span>
-            </span>
-            <DirectionToggle value={dirA} onChange={setDirA} idPrefix={t('pairTicket.borosBits.legLetter', { letter: 'A' })} compact />
-          </div>
+          <LegHeader
+            dir={dirA}
+            caption={t(dirA === 'long' ? 'pairTicket.boros.marketPayFixed' : 'pairTicket.boros.marketReceiveFixed')}
+            onDir={setDirA}
+            hints={{ long: t('pairTicket.borosBits.longRateHint'), short: t('pairTicket.borosBits.shortRateHint') }}
+          />
           <MarketSelect
             id="boros-leg-a"
             label=""
@@ -1308,6 +1317,7 @@ export function BorosPairTicket({
                   <span className="text-ink-50">
                     {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
                   </span>
+                  <UsdNote usd={slipUsd.est} />
                   {' / '}{t('pairTicket.bits.max')}{' '}
                   <button
                     type="button"
@@ -1322,6 +1332,7 @@ export function BorosPairTicket({
                     {fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
                   </button>
                   {' '}APR
+                  <UsdNote usd={slipUsd.max} />
                 </span>
               </div>
               {slipOpen && (
@@ -1383,7 +1394,7 @@ export function BorosPairTicket({
             </div>
         </SummaryCard>
         <SummaryCard title={t('accounts.moveCash.after')}>
-          <SpreadReadout sim={simulation} singleLeg={activeLeg} boxed />
+          <SpreadReadout sim={simulation} singleLeg={activeLeg} />
           <div className="flex flex-col gap-1.5">
             <LiquidationLines sim={simulation} singleLeg={activeLeg} warn={liqWarn} />
             <div className="mt-0.5 flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">

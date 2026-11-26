@@ -17,7 +17,6 @@ import { LimitPriceBox } from './LimitPriceBox';
 import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
 import { estimateMargin } from './previewBits';
 import { AffixedInput, PairEstimate, PairVenues, type ExecMode, storedExecMode } from './PairTicketBits';
-import { PairBookImpact } from './PriceImpactGraph';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
 import { TwapArea, twapControlOf, useTwapInput } from './TwapArea';
@@ -533,20 +532,6 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           leverage={leverageText}
           marginRequired={marginRequired}
           twapOn={twapOn}
-          book={
-            <PairBookImpact
-              longSym={longSym}
-              shortSym={shortSym}
-              notional={notionalStr}
-              legLong={legLong}
-              legShort={legShort}
-              estimating={estimating}
-              mode={mode}
-              makerLeg={makerIsLong ? 'long' : 'short'}
-              makerPriceStr={makerPriceStr}
-              embedded
-            />
-          }
         />
       )}
 
