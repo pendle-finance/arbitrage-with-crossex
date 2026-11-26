@@ -526,6 +526,19 @@ describe('RollOverModal — spread target', () => {
     await waitFor(() => expect(entries.at(-1)!.legs).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short' })]), { timeout: 4_000 });
   });
 
+  it('the Open only hover says the old positions stay open with no perps', async () => {
+    const user = userEvent.setup();
+    install({});
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
+    await within(dialog).findByText('Size to open');
+    await user.hover(within(dialog).getByText('Open only (keep old positions)'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent('Your perps hedge the new positions.');
+    expect(card).toHaveTextContent(/positions stay open with no perps until they mature/);
+  });
+
   it('a close-only single at the target maturity is no target: the window does not open on a market that takes no open', async () => {
     hlNewCloseOnly = true;
     const entries: PairSimBody[] = [];

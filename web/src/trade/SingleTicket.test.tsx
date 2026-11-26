@@ -360,6 +360,14 @@ describe('SingleTicket with TWAP', () => {
     renderWithClient(<SingleTicket />);
   }
 
+  it('before a coin is picked, the venue picker is off and asks for a coin', async () => {
+    setup();
+    expect(await screen.findByText('Pick a coin to see its venues')).toBeInTheDocument();
+    expect(screen.getByLabelText('Long venue')).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
+    await waitFor(() => expect(screen.getByLabelText('Long venue')).toBeEnabled());
+  });
+
   it('built from pair ticket parts', async () => {
     setup();
     await pickBinanceBtc();

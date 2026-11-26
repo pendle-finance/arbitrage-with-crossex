@@ -93,6 +93,8 @@
     "modeAria": "展期方式",
     "modeReopen": "平仓并重开",
     "modeOpenOnly": "仅开仓（保留旧仓位）",
+    "modeOpenOnlyHedge": "永续合约改为对冲新仓位。",
+    "modeOpenOnlyOld": "{{date}} 的仓位保持开仓，没有永续合约对冲，直到到期。其利率变动直接计入你的盈亏。",
     "sizeToOpen": "开仓规模",
     "sizeToRoll": "展期规模",
     "shareShortcuts": "比例快捷选项",
