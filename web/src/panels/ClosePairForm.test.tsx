@@ -10,7 +10,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
-import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
+import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse } from '../api/types';
 import { account, baseHandlers, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -310,16 +310,35 @@ describe('ClosePairForm — Limit + hedge close', () => {
 });
 
 describe('ClosePairForm: After card', () => {
-  it('names the open Boros side only when the caller says it stays unhedged', async () => {
+  it('names the open Boros side, with its size, only when the caller says it stays unhedged', async () => {
     server.use(...baseHandlers(), previewSpy([]));
     const first = renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
     const after = await screen.findByRole('region', { name: 'After' });
-    expect(within(after).queryByText('Open, not hedged')).toBeNull();
+    expect(within(after).queryByText(/not hedged/)).toBeNull();
     first.unmount();
 
-    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} borosUnhedged />);
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} borosUnhedged={{ qty: 1.89, coin: 'HYPE' }} />);
     const after2 = await screen.findByRole('region', { name: 'After' });
-    expect(within(after2).getByText('Open, not hedged')).toBeInTheDocument();
+    const boros = within(after2).getByText('1.89 HYPE fixed rate · not hedged');
+    expect(boros).toHaveClass('text-amber-300');
+  });
+
+  it('a full close shows Perps as Flat and the price PnL label lists each leg', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const live = new Map([
+      ['BYBIT_FUTURE_HYPE_USDT', { symbol: 'BYBIT_FUTURE_HYPE_USDT', positionQty: '1.89', upnl: '-5' }],
+      ['HYPERLIQUID_FUTURE_HYPE_USDC', { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', positionQty: '-1.89', upnl: '2' }],
+    ]) as unknown as Map<string, CrossexPosition>;
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} livePositions={live} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(within(after).getByText('Perps')).toBeInTheDocument();
+    expect(within(after).getByText('Flat')).toBeInTheDocument();
+    expect(within(after).queryByText('Both legs · before fees')).toBeNull();
+    await userEvent.setup().hover(await within(after).findByText('Price PnL booked'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent('The price gain or loss on each leg, booked when it closes. Before fees.');
+    expect(card).toHaveTextContent('Bybit LONG');
+    expect(card).toHaveTextContent('Hyperliquid SHORT');
   });
 
   it('a partial size shows what stays open on each leg', async () => {

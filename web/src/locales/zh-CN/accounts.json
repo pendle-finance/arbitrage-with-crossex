@@ -297,14 +297,15 @@
     "max": "最大",
     "sizeAria": "平仓规模，同时用于两条腿",
     "sizeInvalid": "规模须大于 0 且不超过 {{max}} {{base}}",
-    "pnlToRealise": "预计实现盈亏",
-    "pnlSub": "两条腿 · 未扣手续费",
+    "priceBooked": "已结算价差盈亏",
+    "priceBookedHover": "每条腿平仓时结算的价格盈亏，未扣手续费。",
     "after": {
       "left": "剩余",
       "notInPair": "不属于此组合",
       "boros": "Boros",
       "perps": "永续",
-      "openUnhedged": "仍持仓，未对冲",
+      "flat": "已清零",
+      "borosUnhedged": "{{qty}} {{coin}} 固定利率 · 未对冲",
       "openFloating": "仍持仓，资金费率浮动"
     },
     "head": {

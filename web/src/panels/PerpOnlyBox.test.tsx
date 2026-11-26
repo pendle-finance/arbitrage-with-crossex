@@ -215,7 +215,7 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
     server.use(heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '4.4', HYPERLIQUID_FUTURE_BTC_USDT: '4.03' }, bodies));
     renderWithClient(<ClosePairForm base="BTC" legs={btcLegs(4.4, 4.03)} allowTwap />);
-    expect(await screen.findByText('PnL to realize')).toBeInTheDocument();
+    expect(await screen.findByText('Price PnL booked')).toBeInTheDocument();
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions.every((a) => !('qty' in a))).toBe(true);
     expect(within(await afterCard()).queryByText('left')).toBeNull();
@@ -249,7 +249,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
     server.use(...baseHandlers(), previewHandler(bodies));
     renderPlain();
     await twapOn();
-    expect(await screen.findByText('PnL to realize')).toBeInTheDocument();
+    expect(await screen.findByText('Price PnL booked')).toBeInTheDocument();
     expect(await screen.findByText('Realized as each slice fills')).toBeInTheDocument();
     await waitFor(() => expect(bodies.some((b) => b.twap !== undefined)).toBe(true), { timeout: 4000 });
   });
@@ -276,7 +276,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
     renderPlain();
     await twapOn();
     await userEvent.click(await screen.findByRole('button', { name: /Maker settings/ }));
-    await screen.findByText('PnL to realize');
+    await screen.findByText('Price PnL booked');
     expect(screen.queryByText(/vs 2 taker orders/)).toBeNull();
   });
 
@@ -292,7 +292,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
     renderPlain();
     await userEvent.click(await screen.findByRole('button', { name: /Maker settings/ }));
     expect(screen.getByRole('radiogroup', { name: 'Market slippage' })).toBeInTheDocument();
-    expect(await screen.findByText('PnL to realize')).toBeInTheDocument();
+    expect(await screen.findByText('Price PnL booked')).toBeInTheDocument();
     expect(screen.queryByText(/Max slippage/)).toBeNull();
   });
 
@@ -348,7 +348,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
     expect(within(cost).getByText('Rests')).toBeInTheDocument();
     expect(within(cost).getByText('41.52')).toBeInTheDocument();
     expect(within(cost).getByText('51.9')).toBeInTheDocument();
-    expect(within(await afterCard()).getByText('PnL to realize')).toBeInTheDocument();
+    expect(within(await afterCard()).getByText('Price PnL booked')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
     expect(screen.queryByText('Limit price')).toBeNull();
     expect(screen.queryByText('SELL')).toBeNull();

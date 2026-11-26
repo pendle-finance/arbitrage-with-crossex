@@ -941,6 +941,23 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     expect(screen.queryByText('Perps')).toBeNull();
   });
 
+  it('under the pair picker the leg box drops the size and the coin and date line', async () => {
+    server.use(...ready());
+    const leg = { ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] as ['HYPERLIQUID', 'GATE'] };
+    const full = renderWithClient(<CloseBorosForm legs={[leg]} />);
+    await screen.findByText('ETH Spread HL-GATE');
+    const fullBox = screen.getByText('ETH Spread HL-GATE').closest('.card') as HTMLElement;
+    const fullText = fullBox.textContent ?? '';
+    expect(fullText).toContain(' · ');
+    full.unmount();
+    renderWithClient(<CloseBorosForm legs={[leg]} underPicker />);
+    await screen.findByText('ETH Spread HL-GATE');
+    const box = screen.getByText('ETH Spread HL-GATE').closest('.card') as HTMLElement;
+    expect((box.textContent ?? '').length).toBeLessThan(fullText.length);
+    expect(box).not.toHaveTextContent(/ETH · /);
+    expect(box).toHaveTextContent(/mark/);
+  });
+
   it('shows the perps left on floating funding in After when the pair keeps its perps', async () => {
     server.use(...ready());
     renderWithClient(

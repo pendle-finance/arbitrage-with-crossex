@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { PreviewResult } from '../api/types';
 import { VenueIcon } from '../components/AssetIcon';
 import { Chip } from '../components/Chip';
+import { HoverCard } from '../components/HoverCard';
 import { SignedNumber } from '../components/SignedNumber';
 import { fmtUsd, prettyVenue, qtyGrouped } from '../lib/fmt';
 import { decimalsOf, stripZeros } from '../lib/ticks';
@@ -103,30 +104,51 @@ function LegName({ side, venue }: { side: 'LONG' | 'SHORT'; venue: string }) {
   );
 }
 
+export type ClosePairLegPnl = { venue: string; side: 'LONG' | 'SHORT'; pnl: number | null };
+
 export function ClosePairAfter({
   base,
   twapOn,
   totalPnl,
+  legPnl,
   rows,
+  flat,
   borosUnhedged,
 }: {
   base: string;
   twapOn: boolean;
   totalPnl: number | null;
+  legPnl: ClosePairLegPnl[];
   rows: CloseAfterRow[];
-  borosUnhedged: boolean;
+  flat: boolean;
+  borosUnhedged: { qty: number; coin: string } | null;
 }) {
   const { t } = useTranslation();
   return (
     <SummaryCard title={t('accounts.moveCash.after')}>
       <EstimateRow
-        label={t('accounts.closePair.pnlToRealise')}
-        sub={t(twapOn ? 'accounts.closePair.twap.headlineSub' : 'accounts.closePair.pnlSub')}
+        label={
+          <HoverCard label={t('accounts.closePair.priceBooked')} widthPx={300}>
+            <span className="flex flex-col gap-1">
+              <span>{t('accounts.closePair.priceBookedHover')}</span>
+              {legPnl.map((l) => (
+                <span key={`${l.venue}-${l.side}`} className="flex justify-between gap-4">
+                  <span>{`${prettyVenue(l.venue)} ${t(l.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}`}</span>
+                  <span className="num">
+                    {l.pnl !== null ? <SignedNumber value={l.pnl} format={(n) => fmtUsd(n)} /> : '—'}
+                  </span>
+                </span>
+              ))}
+            </span>
+          </HoverCard>
+        }
+        sub={twapOn ? t('accounts.closePair.twap.headlineSub') : undefined}
         value={totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
         strong
       />
-      {(rows.length > 0 || borosUnhedged) && (
+      {(rows.length > 0 || flat || borosUnhedged) && (
         <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+          {flat && <EstimateRow label={t('accounts.closePair.after.perps')} value={t('accounts.closePair.after.flat')} />}
           {rows.map((r) => (
             <EstimateRow
               key={`${r.symbol}-${r.kind}`}
@@ -138,7 +160,11 @@ export function ClosePairAfter({
           {borosUnhedged && (
             <EstimateRow
               label={t('accounts.closePair.after.boros')}
-              value={<span className="text-rose-400">{t('accounts.closePair.after.openUnhedged')}</span>}
+              value={
+                <span className="text-amber-300">
+                  {t('accounts.closePair.after.borosUnhedged', { qty: qtyGrouped(borosUnhedged.qty), coin: borosUnhedged.coin })}
+                </span>
+              }
             />
           )}
         </div>
