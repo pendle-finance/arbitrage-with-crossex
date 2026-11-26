@@ -80,7 +80,6 @@
       "walletUsdc": "CrossEx 钱包。Hyperliquid 腿的保证金。",
       "walletLighter": "CrossEx 钱包。Lighter 腿的保证金。",
       "walletGate": "CrossEx 钱包。现货买入剩余的 USDC，仍计为保证金。再平衡会将其清空。",
-      "now": "权益 = 现金 + 未实现盈亏。",
       "interestNow": {
         "lead": "CrossEx 钱包有借款时，Gate 每小时收取利息。",
         "head": {
@@ -105,7 +104,6 @@
       "whyMoreThanOneBorrow": "Gate 为您的借款占用 {{amount}} 初始保证金。每轮会偿还部分借款，因此下一轮更大。",
       "frees": "已偿还借款不再占用的初始保证金。",
       "interestMonth": "按今日利率估算的 30 天借款利息：当前与本次再平衡后对比。",
-      "onTheWay": "正经 Gate 现货在途，不计为保证金。",
       "gateSpot": "不计为保证金。",
       "gateSpotAssets": "不计为保证金，无权益或盈亏。",
       "abandon": "彻底结束再平衡。资金保留在当前位置。",
@@ -139,8 +137,7 @@
     "gateSpot": "Gate 现货",
     "bar": {
       "cash": "现金",
-      "upnl": "未实现盈亏",
-      "target": "平衡目标"
+      "upnl": "未实现盈亏"
     },
     "modal": {
       "frees": "释放初始保证金",
@@ -177,9 +174,6 @@
     "steps": "步骤",
     "showSteps": "显示全部步骤",
     "hideSteps": "隐藏步骤",
-    "now": "当前",
-    "whereCaption": "资金所在位置",
-    "onTheWay": "在途",
     "waitsLine": "新交易任务和划转将等待其完成。",
     "refreshQuote": "刷新报价",
     "started": "{{age}} 前开始。可关闭此窗口，再平衡会继续。",

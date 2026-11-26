@@ -100,7 +100,7 @@ export const MOVE_TEXT = {
   },
 };
 
-const h = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.now');
+const h = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.walletUsdt');
 
 export const HOVER = {
   rebalanceTitle: {
@@ -113,7 +113,6 @@ export const HOVER = {
   get walletUsdc() { return h('walletUsdc'); },
   get walletLighter() { return h('walletLighter'); },
   get walletGate() { return h('walletGate'); },
-  get now() { return h('now'); },
   interestNow: {
     get lead() { return h('interestNow.lead'); },
     get head() {
@@ -141,7 +140,6 @@ export const HOVER = {
   get frees() { return h('frees'); },
   get priceImpact() { return h('priceImpact'); },
   get interestMonth() { return h('interestMonth'); },
-  get onTheWay() { return h('onTheWay'); },
   get gateSpot() { return h('gateSpot'); },
   get gateSpotAssets() { return h('gateSpotAssets'); },
   get abandon() { return h('abandon'); },
@@ -186,8 +184,6 @@ export const factInterestPaid = () => t('accounts.rebalance.fact.interestPaid');
 export const gateSpot = () => t('accounts.rebalance.gateSpot');
 
 export const hoverCash = () => t('accounts.rebalance.bar.cash');
-export const hoverUpnl = () => t('accounts.rebalance.bar.upnl');
-export const hoverTarget = () => t('accounts.rebalance.bar.target');
 
 export const modalFrees = () => t('accounts.rebalance.modal.frees');
 export const modalInterest = () => t('accounts.rebalance.modal.interest');
