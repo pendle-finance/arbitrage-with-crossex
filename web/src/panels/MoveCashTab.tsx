@@ -19,9 +19,9 @@ import { MoveCashWallets } from './MoveCashWallets';
 import { realizeText, StepsFold, stepsHoverOf, TotalCost, walletOf, type CostRow } from './RebalancePlanBits';
 import { planRows } from './rebalanceStepRows';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { HOLD_LABEL, HOVER, modalFeeLabel, nothingToMove, poolCoin, poolKey, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
+import { HOLD_LABEL, HOVER, modalFeeLabel, nothingToMove, PAYS_BACK, poolCoin, poolKey, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
 import { crossexImFull } from './rebalanceImStop';
-import { defaultGoal, DUST, fmtCoinOrUsd, isCashLimitedEven, keyOf, movesOf, paybackDays, pickedRoute } from './RebalanceHovers';
+import { daysText, defaultGoal, DUST, fmtCoinOrUsd, isCashLimitedEven, keyOf, movesOf, paybackDays, pickedRoute } from './RebalanceHovers';
 import { costPartsUsd, planSteps, receivingBorrow, receivingHeld, ROUTE_NAME_CELL, RouteRow, sharedCoin, SpotLines } from './RebalanceHovers';
 import { Term, worthLine } from './RebalanceHovers';
 import { acceptedOf, cashLimitedText, CUSTOM_DEBOUNCE_MS, initialGoal, isStale, parsedAmount, PLAN_CHANGED_LABEL, plainOf, presetOffText, shownOrder } from './rebalanceModalPlan';
@@ -113,8 +113,6 @@ export function MoveCashTab({
   const fromPools = goal === 'custom' ? [customFrom] : unique(moves.map((move) => move.from));
   const toPools = goal === 'custom' ? [customTo] : unique(moves.map((move) => move.to));
   const flow = flowOf(buckets, route, fromPools, toPools);
-  const sentUsd = flow.sent.reduce((total, part) => total + part.amount, 0);
-  const fromCoin = sharedCoin(fromPools.map((pool) => ({ coin: poolCoin(pool) })));
   const aboveMost = goal === 'custom' && plan.goal.kind === 'custom' && plan.customMaxUsd != null && plan.goal.amount > plan.customMaxUsd;
   const pricing = goal === 'custom' && !customPending && (acceptNext || !quotes(plan, typedMove));
   const stale = !pricing && isStale(accepted, plan, chosen);
@@ -160,7 +158,7 @@ export function MoveCashTab({
         {waits !== null ? (
           <p className="text-xs text-ink-400">{waits}</p>
         ) : (
-          <HoldToConfirmButton className="w-full" holdMs={holdMs} disabled onConfirm={() => undefined}>{HOLD_LABEL[goal]}</HoldToConfirmButton>
+          <HoldToConfirmButton className="w-full" holdMs={holdMs} disabled onConfirm={() => undefined}>{HOLD_LABEL.custom}</HoldToConfirmButton>
         )}
       </>
     );
@@ -174,21 +172,15 @@ export function MoveCashTab({
             { label: t('accounts.moveCash.priceImpact'), usd: parts.impactUsd, hover: HOVER.priceImpact },
             { label: t('accounts.moveCash.totalCost'), usd: parts.totalUsd, strong: true },
           ];
-    const clears = goal === 'repay' && flow.left < DUST;
-    const holdLabel =
-      fromCoin !== null && clears
-        ? t('accounts.moveCash.holdClear', { amount: num(sentUsd), coin: fromCoin })
-        : fromCoin !== null && flow.borrowCoin !== null && flow.repaid >= DUST
-          ? t('accounts.moveCash.holdMove', { amount: num(sentUsd), fromCoin, repaid: num(flow.repaid), toCoin: flow.borrowCoin })
-          : HOLD_LABEL[goal];
     body = (
       <>
         <div className="flex flex-col gap-2">
-          <div className={`flex items-center gap-3 px-3 ${microLabelClass}`}>
-            <span className="w-3.5 shrink-0" />
-            <span className={ROUTE_NAME_CELL}>
+          <div className={`relative flex items-center gap-3 px-3 ${microLabelClass}`}>
+            <span className="absolute left-0">
               <Term label={t('accounts.rebalanceModal.route')} text={HOVER.route} />
             </span>
+            <span className="w-3.5 shrink-0" />
+            <span className={ROUTE_NAME_CELL} />
             <span className="flex-1">{t('accounts.rebalanceModal.time')}</span>
             <span className="text-right">{t('accounts.moveCash.feeHead')}</span>
           </div>
@@ -207,7 +199,11 @@ export function MoveCashTab({
           )}
         </div>
         {costRows.length > 0 && <TotalCost rows={costRows} />}
-        <RebalanceBeforeAfter rows={walletChanges(view, plan, route)} mode="after" footer={paysBack} />
+        <RebalanceBeforeAfter
+          rows={walletChanges(view, plan, route)}
+          mode="after"
+          footer={days !== null && days > 0 ? { label: t('accounts.moveCash.paysBackLabel'), value: daysText(days), hover: PAYS_BACK(daysText(days)) } : null}
+        />
         {cashShort && (
           <VerdictAlert
             tone="info"
@@ -225,7 +221,7 @@ export function MoveCashTab({
         ) : (
           <RebalanceModalFooter
             rows={[]}
-            holdLabel={holdLabel}
+            holdLabel={HOLD_LABEL.custom}
             verdict={worth?.tone === 'warn' ? <VerdictAlert tone="warn" text={worth.text} sub={paysBack} /> : undefined}
             optional={worth !== null && worth.tone !== 'act'}
             stale={stale}

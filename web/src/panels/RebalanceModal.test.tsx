@@ -1368,7 +1368,7 @@ describe('RebalanceModal presets and custom amount', () => {
     const even = within(presets()).getByRole('radio', { name: 'Balance positions' });
     expect(even).toBeDisabled();
     expect(even).toHaveAttribute('title', 'No open positions');
-    expect(screen.getByRole('button', { name: /^Hold to clear debt/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to move' })).toBeInTheDocument();
     expect(within(dialog()).queryByText('Position share')).toBeNull();
   });
 
@@ -1489,7 +1489,7 @@ describe('RebalanceModal presets and custom amount', () => {
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
     await user.click(screen.getByRole('radio', { name: /^Clear debt/ }));
     expect(within(presets()).getByRole('radio', { name: /^Clear debt/ })).toBeChecked();
-    expect(screen.getByRole('button', { name: /^Hold to clear debt/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to move' })).toBeInTheDocument();
   });
 
   it('a running or finished job names its goal', async () => {
@@ -1522,10 +1522,15 @@ async function typeCustom(user: ReturnType<typeof userEvent.setup>, amount: stri
 
 describe('RebalanceModal close and reopen, before the hold', () => {
 
-  it('days line says how many days of interest it saves', () => {
+  it('days line is the After card last row: Pays back in, then the days in the After column', () => {
     show(rebalanceViews.ownerBook);
-    const afterCard = screen.getByRole('table');
-    expect(afterCard.lastElementChild?.textContent).toBe('Pays back in 21 days of interest');
+    const last = screen.getByRole('table').lastElementChild as HTMLElement;
+    expect(last.getAttribute('role')).toBe('row');
+    expect(last.className).toContain('border-t');
+    expect(within(last).getByRole('rowheader').textContent).toBe('Pays back in');
+    const cell = within(last).getByRole('cell');
+    expect(cell.dataset.column).toBe('after');
+    expect(cell.textContent).toBe('21 days');
   });
 
   it('above the most shows the amber line, and above the most disables the hold', async () => {

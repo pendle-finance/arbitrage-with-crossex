@@ -121,7 +121,13 @@ function Line({ row }: { row: ChangeRow }) {
   );
 }
 
-export function RebalanceBeforeAfter({ rows, mode, footer }: { rows: WalletChange[]; mode: 'after' | 'now'; footer?: string | null }) {
+export interface FooterRow {
+  label: string;
+  value: string;
+  hover: string;
+}
+
+export function RebalanceBeforeAfter({ rows, mode, footer }: { rows: WalletChange[]; mode: 'after' | 'now'; footer?: FooterRow | null }) {
   if (rows.length === 0) return null;
   const afterHead = mode === 'after' ? t('accounts.rebalanceRealize.after') : t('accounts.rebalanceRealize.now');
   return (
@@ -150,7 +156,18 @@ export function RebalanceBeforeAfter({ rows, mode, footer }: { rows: WalletChang
           ))}
         </div>
       ))}
-      {footer && <div className="num col-span-full text-ink-400">{footer}</div>}
+      {footer && (
+        <div role="row" className={`${ROW} mt-0.5 border-t border-ink-800 pt-2`}>
+          <span role="rowheader" className="min-w-0 font-semibold text-ink-50">
+            <Term label={footer.label} text={footer.hover} />
+          </span>
+          <span />
+          <span />
+          <span role="cell" data-column="after" className="num whitespace-nowrap text-right font-semibold text-ink-50">
+            {footer.value}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

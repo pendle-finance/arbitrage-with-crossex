@@ -80,7 +80,7 @@ export function MoveCashWallets({
     </WalletLine>
   ) : (
     flow.sent.map(({ pool, amount }, i) => (
-      <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={<span className="text-ink-300">{walletOf(pool)}</span>}>
+      <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={<span className="font-medium text-ink-50">{walletOf(pool)}</span>}>
         {amountText(amount, pool)}
       </WalletLine>
     ))
@@ -106,7 +106,7 @@ export function MoveCashWallets({
             </WalletLine>
           ) : (
             flow.arrives.map(({ pool, amount }, i) => (
-              <WalletLine key={pool} label={i === 0 ? toLabel : undefined} wallet={<span className="text-ink-300">{walletOf(pool)}</span>}>
+              <WalletLine key={pool} label={i === 0 ? toLabel : undefined} wallet={<span className="font-medium text-ink-50">{walletOf(pool)}</span>}>
                 {priced && amountText(amount, pool)}
                 {flow.hasBorrow && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
               </WalletLine>

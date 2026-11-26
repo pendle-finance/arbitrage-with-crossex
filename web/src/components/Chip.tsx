@@ -35,14 +35,15 @@ interface Props {
   tone?: ChipTone;
   /** Compact variant for dense table cells. */
   sm?: boolean;
+  tab?: boolean;
   title?: string;
   className?: string;
   children: ReactNode;
 }
 
-export function Chip({ tone = 'neutral', sm, title, className, children }: Props) {
+export function Chip({ tone = 'neutral', sm, tab, title, className, children }: Props) {
   return (
-    <span title={title} className={`chip ${sm ? 'chip-sm' : ''} ${TONES[tone]} ${className ?? ''}`}>
+    <span title={title} className={`chip ${sm ? 'chip-sm' : ''} ${tab ? 'chip-tab' : ''} ${TONES[tone]} ${className ?? ''}`}>
       {children}
     </span>
   );

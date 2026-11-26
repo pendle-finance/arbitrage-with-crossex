@@ -75,6 +75,11 @@
     @apply px-1 py-[2.5px] text-[11px];
   }
 
+  .chip-tab {
+    @apply h-5 rounded-full px-2 py-0 font-medium;
+    font-size: inherit;
+  }
+
   /* PpSegmentedControlV2 — the mock's control is a row of BUTTED cells, each
      with its own hairline overlapping its neighbour by 1px, not a padded pill
      holding loose buttons. The wrapper therefore carries no border of its own. */

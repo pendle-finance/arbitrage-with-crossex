@@ -92,7 +92,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
   const ordersBadge =
     orderCount > 0 ? (
       <Chip
-        sm
+        tab
         tone="info"
         className="num"
         title={t('app.openOrders', { count: orderCount })}
