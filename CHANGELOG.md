@@ -173,6 +173,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **The Close button is gone from result screens.** Resume and Hold to abandon (and Back and
   Retry) split the panel width.
 - **Roll over steps**: the Close and Open date titles line up with their values.
+- **TWAP: a pause in the last slice stays a pause.** It no longer shows a red "rest not
+  opened" alert. Resume sends the rest as one more slice. The strip says "rest not opened" for
+  an open and "rest not closed" for a close.
 
 ## 1.7.9 — 2026-11-10
 

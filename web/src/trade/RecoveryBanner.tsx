@@ -75,7 +75,7 @@ function TwapStrip({ job }: { job: RebalanceJob }) {
   const size = key === 'refused' ? (job.sizeRefusal ?? null) : null;
   const text = size
     ? t(`trade.twap.strip.${size.bound === 'min' ? 'underMin' : 'overMax'}`, { what, i: size.slice, venue: size.venue, limit: size.limit })
-    : t(`trade.twap.strip.${key}`, { what, i: twap.slice, n: twap.of, venue });
+    : t(`trade.twap.strip.${key === 'capped' && !runShapeOf(job).close ? 'cappedOpen' : key}`, { what, i: twap.slice, n: twap.of, venue });
   const icon =
     key === 'running' || key === 'pausing' ? (
       <Spinner className="h-3 w-3" />
