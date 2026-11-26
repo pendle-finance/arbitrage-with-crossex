@@ -558,6 +558,7 @@
     "steps": "Steps",
     "stepPerps": "Close {{pair}} · {{qty}} {{coin}} each",
     "stepBoros": "Close Boros · {{qty}} YU",
+    "stepBorosEach": "Close Boros · {{qty}} YU each",
     "hold": "Hold to delever {{qty}} {{coin}}",
     "noPairs": "No open pairs",
     "noPairsMatch": "No pairs match",

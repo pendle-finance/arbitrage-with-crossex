@@ -135,7 +135,8 @@ export function dealTitle(pair: DealPair): string {
   const coin = parseSymbol(pair.a.contract).base;
   const close = pair.a.reduceOnly === true;
   const key = pair.b ? (close ? 'titlePairClose' : 'titlePairOpen') : close ? 'titleSingleClose' : 'titleSingleOpen';
-  return t(`trade.deal.${key}`, { coin, side: sideWord(positionSide(pair.a)).toLowerCase() });
+  const market = pair.limitPrice === null ? 'Market' : '';
+  return t(`trade.deal.${key}${market}`, { coin, side: sideWord(positionSide(pair.a)).toLowerCase() });
 }
 
 export function dealRunProps(
