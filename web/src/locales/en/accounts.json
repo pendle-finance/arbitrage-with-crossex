@@ -569,12 +569,9 @@
     "yu": "YU",
     "imUsedLabel": "IM used · {{account}}",
     "afterBoros": "Boros {{a}} → {{b}} YU",
-    "borosGap": "Boros closes after the perps. Until then, the YU with no perp behind it grows to {{amount}} by the end ({{time}}).",
     "steps": "Steps",
     "stepPerps": "Close {{pair}} · {{qty}} {{coin}} each",
     "stepBoros": "Close Boros · {{qty}} YU",
-    "borosGapLabel": "Boros not hedged",
-    "borosGapValue": "up to {{amount}} YU · {{time}}",
     "hold": "Hold to delever {{qty}} {{coin}}",
     "noPairs": "No open pairs",
     "noPairsMatch": "No pairs match",
@@ -637,10 +634,7 @@
   },
   "delever": {
     "holdTwap": "Hold to delever {{qty}} {{coin}} · TWAP {{duration}}",
-    "borosGas": "Boros gas · {{n}} closes",
-    "borosPerSlice": "Boros close per slice",
-    "borosPerSliceValue": "{{amount}} YU",
-    "borosPerSliceHover": "A share of $10 or less waits and closes with the next slice."
+    "borosGas": "Boros gas · {{n}} closes"
   },
   "closeLeg": {
     "twap": {

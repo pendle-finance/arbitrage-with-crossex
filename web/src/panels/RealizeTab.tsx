@@ -329,6 +329,8 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
             />
           </div>
 
+          {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} />}
+
           {wholeOption && (
             <SplitArea
               on={splitOn}
@@ -339,8 +341,6 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
               table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, dedupe: active === pricedPlan }}
             />
           )}
-
-          {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} />}
 
           {rows.length > 0 && <TotalCost rows={rows} />}
 

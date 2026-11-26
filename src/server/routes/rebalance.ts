@@ -43,7 +43,7 @@ import {
   type RouteName,
 } from '../../core/rebalance/plan';
 import { touchOf } from '../../core/estimate/books';
-import { depthOf, makerLegOf, priceImpactOf, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
+import { depthOf, makerLegOf, priceImpactOf, TWAP_DEFAULT_INPUT, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
 import { planSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult } from '../../core/twap';
 import type { Store } from '../../engine/db';
 import { fx, FX_ZERO, type Fx } from '../../engine/fx';
@@ -816,10 +816,11 @@ export function rebalanceRoutes(deps: AppDeps) {
       const twapInput = twapInputOf((req.body as { twap?: unknown } | undefined)?.twap);
       const { input, plan: whole, perps } = await loadDelever(request, false);
       const twapped = await deleverTwapOf(whole, perps, twapInput, false);
+      const offImpact = twapInput === null ? (await deleverTwapOf(whole, perps, TWAP_DEFAULT_INPUT, false)).priceImpact : null;
       const plan = twapped.twap?.plan ? planDelever(input, twapQtysOf(twapped.twap.plan)) : whole;
       const borosCloses = twapped.twap?.plan ? twapped.twap.plan.slices * plan.boros.filter((row) => row.closeSize > 0).length : 0;
       const perCloseUsd = borosCloses > 0 ? await borosOrderGasUsd() : 0;
-      return reply.ok({ ...plan, ...twapped, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
+      return reply.ok({ ...plan, ...twapped, priceImpact: twapped.priceImpact ?? offImpact, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
     });
 
     interface StartBody {

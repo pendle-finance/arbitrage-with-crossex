@@ -468,6 +468,19 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
 
       {mode === 'maker' && (
         <>
+          <MakerSettings
+            legs={legs}
+            makerLeg={makerLeg}
+            autoPick={autoPick ?? null}
+            saving={makerSaving}
+            onMakerLeg={setMakerLeg}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            takerCapSec={twapOn ? (twapPreview?.plan?.takerAfterSec ?? null) : null}
+            repegBehindBp={repegBp}
+            repegLocked={pinned}
+            onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}
+          />
           {allowTwap && <TwapArea
             on={twap.on}
             onToggle={(on) => {
@@ -504,19 +517,6 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             )}
             </>
           )}
-          <MakerSettings
-            legs={legs}
-            makerLeg={makerLeg}
-            autoPick={autoPick ?? null}
-            saving={makerSaving}
-            onMakerLeg={setMakerLeg}
-            takerAfter={taker.takerAfter}
-            onTakerAfter={taker.pick}
-            takerCapSec={twapOn ? (twapPreview?.plan?.takerAfterSec ?? null) : null}
-            repegBehindBp={repegBp}
-            repegLocked={pinned}
-            onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}
-          />
         </>
       )}
 

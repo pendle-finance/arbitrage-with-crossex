@@ -200,19 +200,6 @@ export function ClosePairForm({
         labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
       />
 
-      {maker && allowTwap && (
-        <TwapArea
-          on={twap.on}
-          onToggle={twap.setOn}
-          input={twap.input}
-          onInput={twap.setInput}
-          preview={actions ? (preview.data?.twap ?? null) : null}
-          impact={preview.data?.priceImpact ?? null}
-          coin={base}
-        />
-      )}
-      <CloseRestNotes base={base} restLegs={restLegs} sideOf={sideOf} />
-
       {maker ? (
         <MakerSettings
           legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
@@ -232,6 +219,19 @@ export function ClosePairForm({
       ) : (
         <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />
       )}
+
+      {maker && allowTwap && (
+        <TwapArea
+          on={twap.on}
+          onToggle={twap.setOn}
+          input={twap.input}
+          onInput={twap.setInput}
+          preview={actions ? (preview.data?.twap ?? null) : null}
+          impact={preview.data?.priceImpact ?? null}
+          coin={base}
+        />
+      )}
+      <CloseRestNotes base={base} restLegs={restLegs} sideOf={sideOf} />
 
       <ClosePairEstimate
         previews={previews}

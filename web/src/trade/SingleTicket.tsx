@@ -340,6 +340,21 @@ export function SingleTicket() {
         />
       )}
 
+      {twapOn && (
+        <MakerSettings
+          legs={null}
+          makerLeg="auto"
+          autoPick={null}
+          onMakerLeg={() => undefined}
+          takerAfter={taker.takerAfter}
+          onTakerAfter={taker.pick}
+          takerCapSec={plan?.takerAfterSec ?? null}
+          repegBehindBp={repeg}
+          repegLocked={false}
+          onRepeg={(v) => setRepeg(v === 2 || v === 5 || v === 10 ? v : null)}
+        />
+      )}
+
       {type === 'LIMIT' && (
         <TwapArea
           on={twap.on}
@@ -366,21 +381,6 @@ export function SingleTicket() {
           />
           <span className="text-[10.5px] text-ink-400">{t('trade.single.postOnlyNote')}</span>
         </div>
-      )}
-
-      {twapOn && (
-        <MakerSettings
-          legs={null}
-          makerLeg="auto"
-          autoPick={null}
-          onMakerLeg={() => undefined}
-          takerAfter={taker.takerAfter}
-          onTakerAfter={taker.pick}
-          takerCapSec={plan?.takerAfterSec ?? null}
-          repegBehindBp={repeg}
-          repegLocked={false}
-          onRepeg={(v) => setRepeg(v === 2 || v === 5 || v === 10 ? v : null)}
-        />
       )}
 
       {type === 'LIMIT' && (

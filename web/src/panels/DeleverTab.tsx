@@ -278,6 +278,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
           />
         </Field>
+        {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
         <TwapArea
           on={twap.on}
           onToggle={twap.setOn}
@@ -287,7 +288,6 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           impact={twapBlocked ? null : (plan.priceImpact ?? null)}
           coin={pair.base}
         />
-        {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
         {costBox}
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {walletBlocked && !wallet.loginLabel && (

@@ -562,12 +562,9 @@
     "yu": "YU",
     "imUsedLabel": "初始保证金占用 · {{account}}",
     "afterBoros": "Boros {{a}} → {{b}} YU",
-    "borosGap": "Boros 在永续之后平仓。在此之前，没有永续对冲的 YU 会在结束时增至 {{amount}}（{{time}}）。",
     "steps": "步骤",
     "stepPerps": "平仓 {{pair}} · 各 {{qty}} {{coin}}",
     "stepBoros": "平仓 Boros · {{qty}} YU",
-    "borosGapLabel": "Boros 未对冲",
-    "borosGapValue": "最多 {{amount}} YU · {{time}}",
     "hold": "长按降规模 {{qty}} {{coin}}",
     "noPairs": "没有持仓组合",
     "noPairsMatch": "没有匹配的组合",
@@ -630,10 +627,7 @@
   },
   "delever": {
     "holdTwap": "长按降规模 {{qty}} {{coin}} · TWAP {{duration}}",
-    "borosGas": "Boros gas · {{n}} 笔平仓",
-    "borosPerSlice": "每片 Boros 平仓",
-    "borosPerSliceValue": "{{amount}} YU",
-    "borosPerSliceHover": "不超过 10 美元的部分会等待，并在下一片一起平仓。"
+    "borosGas": "Boros gas · {{n}} 笔平仓"
   },
   "closeLeg": {
     "twap": {
