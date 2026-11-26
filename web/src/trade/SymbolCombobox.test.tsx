@@ -59,13 +59,13 @@ describe('quick-pick coins', () => {
     expect(chips.map((chip) => chip.textContent)).toEqual(['ETH', 'BTC', 'HYPE']);
   });
 
-  it("single mode: clicking ETH shows ETH's venue chips", async () => {
+  it("single mode: clicking ETH lists ETH's venues in the leg's venue box", async () => {
     server.use(http.get('/api/symbols', () => HttpResponse.json(env([ETH_GATE]))));
     renderWithClient(<SingleTicket />);
 
     await userEvent.click(screen.getByRole('button', { name: 'ETH' }));
 
-    // Search opens on ETH → its venue chip is pickable.
-    expect(await screen.findByRole('button', { name: 'GATE' })).toBeInTheDocument();
+    const venueBox = await screen.findByLabelText('Long venue');
+    expect(await within(venueBox).findByRole('option', { name: 'Gate' })).toBeInTheDocument();
   });
 });

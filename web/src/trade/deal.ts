@@ -12,7 +12,7 @@
  *  - close pair with roles     → reduce-only maker deal (A rests, B hedges)
  * Returns null for shapes the engine does not model (confirm stays disabled).
  */
-import type { ActionInput, DealRequest, PreviewResult } from '../api/types';
+import type { ActionInput, DealRequest, PreviewResult, TwapPlanView, TwapStartBody } from '../api/types';
 import { parseSymbol } from '../lib/fmt';
 
 interface Zipped {
@@ -31,10 +31,37 @@ function levOf(action: ActionInput): number | undefined {
   return 'leverage' in action ? action.leverage : undefined;
 }
 
+export interface DealOpts {
+  makerLeg: 'auto' | 'a' | 'b';
+  repegBehindBp: Exclude<DealRequest['repegBehindBp'], undefined>;
+  timeoutSec: number | null;
+  clipBandPct?: number;
+}
+
+function makerLegOf(opts: DealOpts, restsOn: 'a' | 'b', pricePolicy: 'fixed' | 'touch'): 'auto' | 'a' | 'b' | null {
+  if (opts.makerLeg === 'auto') return pricePolicy === 'touch' ? 'auto' : restsOn;
+  return opts.makerLeg === restsOn ? restsOn : null;
+}
+
+function makerFieldsOf(opts: DealOpts, pricePolicy: 'fixed' | 'touch') {
+  return { timeoutSec: opts.timeoutSec, repegBehindBp: pricePolicy === 'touch' ? opts.repegBehindBp : null };
+}
+
+export function twapStartFrom(
+  deal: DealRequest,
+  plan: TwapPlanView,
+  clientId: string,
+): TwapStartBody {
+  const { id, ...body } = deal;
+  const { durationSec, slices, intervalSec, sliceQty } = plan;
+  return { kind: 'twap', clientId, deal: body, durationSec, slices, intervalSec, sliceQty };
+}
+
 export function dealFromActions(
   id: string,
   actions: ActionInput[],
   previews: PreviewResult[],
+  opts?: DealOpts,
 ): DealRequest | null {
   const legs = zip(actions, previews);
   if (!legs || legs.length === 0 || legs.length > 2) return null;
@@ -49,6 +76,24 @@ export function dealFromActions(
     if (hedge.action.kind !== 'close-position' || hedge.action.pairRole !== 'hedge') return null;
     if (!closeMaker.preview.qty || Number(hedge.preview.qty) !== Number(closeMaker.preview.qty)) return null;
     if (!m.makerPrice || !(Number(m.makerPrice) > 0)) return null;
+    if (opts) {
+      const makerLeg = makerLegOf(opts, legs[0] === closeMaker ? 'a' : 'b', 'touch');
+      if (!makerLeg) return null;
+      const [first, second] = legs;
+      return {
+        id,
+        a: { symbol: first.preview.symbol, side: first.preview.side, reduceOnly: true },
+        b: { symbol: second.preview.symbol, side: second.preview.side, reduceOnly: true },
+        qty: closeMaker.preview.qty,
+        execution: 'maker',
+        price: m.makerPrice,
+        pricePolicy: 'touch',
+        ...makerFieldsOf(opts, 'touch'),
+        makerLeg,
+        clipBandPct: opts.clipBandPct ?? m.slippagePct ?? 0.5,
+        ...(m.maxClip ? { maxClip: m.maxClip } : {}),
+      };
+    }
     return {
       id,
       a: { symbol: closeMaker.preview.symbol, side: closeMaker.preview.side, reduceOnly: true },
@@ -71,6 +116,25 @@ export function dealFromActions(
   if (maker || hedge) {
     if (!maker || !hedge || legs.length !== 2 || maker.action.kind !== 'open-limit') return null;
     if (!maker.preview.qty || !maker.preview.price) return null;
+    const pricePolicy = maker.action.pegToTouch ? 'touch' : 'fixed';
+    if (opts) {
+      const makerLeg = makerLegOf(opts, legs[0] === maker ? 'a' : 'b', pricePolicy);
+      if (!makerLeg) return null;
+      const [first, second] = legs;
+      return {
+        id,
+        a: { symbol: first.preview.symbol, side: first.preview.side },
+        b: { symbol: second.preview.symbol, side: second.preview.side },
+        qty: maker.preview.qty,
+        execution: 'maker',
+        price: maker.preview.price,
+        pricePolicy,
+        ...makerFieldsOf(opts, pricePolicy),
+        makerLeg,
+        ...(opts.clipBandPct !== undefined ? { clipBandPct: opts.clipBandPct } : {}),
+        leverage: { a: levOf(first.action), b: levOf(second.action) },
+      };
+    }
     return {
       id,
       a: { symbol: maker.preview.symbol, side: maker.preview.side },
@@ -78,7 +142,7 @@ export function dealFromActions(
       qty: maker.preview.qty,
       execution: 'maker',
       price: maker.preview.price,
-      pricePolicy: maker.action.pegToTouch ? 'touch' : 'fixed',
+      pricePolicy,
       timeoutSec: maker.action.makerTimeoutSec,
       leverage: { a: levOf(maker.action), b: levOf(hedge.action) },
     };
@@ -90,13 +154,28 @@ export function dealFromActions(
     if (!a.preview.qty) return null;
     if (b && (!b.preview.qty || Number(b.preview.qty) !== Number(a.preview.qty))) return null;
     const band = a.action.kind === 'close-position' ? (a.action.slippagePct ?? 0.5) : 0.5;
+    if (opts && !b) {
+      const close = a.action;
+      if (close.kind !== 'close-position' || !close.makerPrice || !(Number(close.makerPrice) > 0)) return null;
+      return {
+        id,
+        a: { symbol: a.preview.symbol, side: a.preview.side, reduceOnly: true },
+        qty: a.preview.qty,
+        execution: 'maker',
+        price: close.makerPrice,
+        pricePolicy: 'touch',
+        ...makerFieldsOf(opts, 'touch'),
+        clipBandPct: opts.clipBandPct ?? band,
+        ...(close.maxClip ? { maxClip: close.maxClip } : {}),
+      };
+    }
     return {
       id,
       a: { symbol: a.preview.symbol, side: a.preview.side, reduceOnly: true },
       b: b ? { symbol: b.preview.symbol, side: b.preview.side, reduceOnly: true } : null,
       qty: a.preview.qty,
       execution: 'taker',
-      clipBandPct: band,
+      clipBandPct: opts?.clipBandPct ?? band,
     };
   }
   if (legs.some((l) => l.action.kind === 'close-position')) return null; // mixed open+close
@@ -137,6 +216,7 @@ export function dealFromActions(
   }
   if (only.action.kind === 'open-limit') {
     if (!only.preview.price) return null;
+    const pricePolicy = opts && only.action.pegToTouch ? 'touch' : 'fixed';
     // maker legs are post-only BY DEFINITION (a crossing limit should be a
     // market order); a single maker deal rests with no deadline.
     return {
@@ -149,7 +229,8 @@ export function dealFromActions(
       qty: only.preview.qty,
       execution: 'maker',
       price: only.preview.price,
-      pricePolicy: 'fixed',
+      pricePolicy,
+      ...(opts ? makerFieldsOf(opts, pricePolicy) : {}),
       leverage: { a: levOf(only.action) },
     };
   }

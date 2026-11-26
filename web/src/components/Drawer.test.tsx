@@ -75,3 +75,18 @@ describe('Drawer with the guide open over it', () => {
     expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
   });
 });
+
+describe('Drawer header slot', () => {
+  it('renders the header in place of the title text, with the close button beside it', () => {
+    render(
+      <Drawer open title="Order ticket" header={<span>CrossEx perps</span>} onClose={() => {}}>
+        body
+      </Drawer>,
+    );
+    expect(screen.getByRole('dialog', { name: 'Order ticket' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Order ticket' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Order ticket')).not.toBeInTheDocument();
+    expect(screen.getByText('CrossEx perps')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
+  });
+});

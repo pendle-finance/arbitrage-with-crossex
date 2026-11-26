@@ -2,17 +2,26 @@
  * engine scenario tests: every lifecycle case from docs/MAKER-HEDGE.md, with the
  * prime invariants asserted against VENUE truth after every tick.
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
+import type { Clients } from '../../src/core/clients';
+import { REPEG_DEFAULT_BP, resolveDeal, type DealRequest } from '../../src/engine/create';
+import { OPEN_ORDER_CAP_REASON } from '../../src/engine/decide';
 import { fxStr, fx } from '../../src/engine/fx';
-import { commands, startLoop } from '../../src/engine/loop';
+import { commands, startLoop, tickPair } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
 import { TUNING } from '../../src/engine/types';
+import { gateVenue } from '../../src/engine/venueGate';
 import {
   A_CONTRACT,
   B_CONTRACT,
   assertHonestReport,
   assertInvariants,
   mkWorld,
+  type CreateDirective,
   type World,
 } from './engine-sim';
 
@@ -825,6 +834,10 @@ describe('cutover-review regressions', () => {
         haltReason: null,
         reportJson: null,
         createdAt: 0,
+        repegBehindBp: null,
+        repegAutoBp: null,
+        repegNotBefore: 0,
+        haltKind: null,
       });
     mkPair(store);
     const o = store.insertPendingOrder({
@@ -863,6 +876,7 @@ describe('cutover-review regressions', () => {
       targetQty: '0.2', limitPrice: '100', pricePolicy: 'fixed', deadlineAt: null,
       makerNotBefore: 0, hedgeNotBefore: 0, pocRejects: 0, hedgeRejectStreak: 0,
       maxClip: null, clipBandBp: null, haltReason: null, reportJson: null, createdAt: 0,
+      repegBehindBp: null, repegAutoBp: null, repegNotBefore: 0, haltKind: null,
     });
     const filled = (leg: 'A' | 'B', side: 'BUY' | 'SELL', cum: string, avg: string) => {
       const o = store.insertPendingOrder({ pairId: 'p1', leg, kind: 'maker', side, qty: cum, price: avg, tif: 'poc', now: 0 });
@@ -892,6 +906,7 @@ describe('cutover-review regressions', () => {
       targetQty: '1', limitPrice: null, pricePolicy: 'touch' as const, deadlineAt: null,
       makerNotBefore: 0, hedgeNotBefore: 0, pocRejects: 0, hedgeRejectStreak: 0,
       maxClip: null, clipBandBp: null, haltReason: null,
+      repegBehindBp: null, repegAutoBp: null, repegNotBefore: 0, haltKind: null,
     };
     const report = JSON.stringify({ aFilled: '1', bFilled: '1', unhedged: '0', reason: 'target reached', aAvgFill: '100.5', bAvgFill: '100.6' });
     // Usable, out of created_at order to pin the ORDER BY.
@@ -1239,17 +1254,611 @@ describe('maker + hedge close (both legs reduce-only)', () => {
     expect(w.store.listAlerts().some((a) => a.level === 'error' && /may already be closed/.test(a.message))).toBe(true);
   });
 
-  it('a resting close follows the book toward the market', async () => {
-    const w = closeWorld({ pricePolicy: 'touch' }); // leg A BUYs back a short
-    w.venue.touchA = '2499';
+  it('a resting close re-pegs to the best price once it is far enough behind', async () => {
+    const w = closeWorld({ pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 2 });
+    w.venue.bestA = '2499';
     await stepChecked(w);
     expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2499');
-    w.venue.touchA = '2499.5'; // bid rose: a BUY closer to the market
-    for (let i = 0; i < 8; i++) await stepChecked(w);
-    const live = w.venue.liveOrder(A_CONTRACT)!;
-    expect(live.price).toBe('2499.5');
-    w.venue.touchA = '2498'; // moved away: no chase
+    w.venue.bestA = '2499.5';
     for (let i = 0; i < 8; i++) await stepChecked(w);
     expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2499.5');
+    expect([...w.venue.orders.values()].some((o) => o.tif === 'ioc')).toBe(false);
+  });
+
+  it('with re-peg off, a resting close keeps its price', async () => {
+    const w = closeWorld({ pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: null });
+    w.venue.touchA = '2499';
+    await stepChecked(w);
+    w.venue.touchA = '2499.5';
+    for (let i = 0; i < 8; i++) await stepChecked(w);
+    expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2499');
+  });
+});
+
+const waitFor = (check: () => boolean, ms = 1_500): Promise<void> =>
+  new Promise<void>((resolve, reject) => {
+    const deadline = setTimeout(() => reject(new Error('condition not met in time')), ms);
+    const poll = setInterval(() => {
+      if (!check()) return;
+      clearTimeout(deadline);
+      clearInterval(poll);
+      resolve();
+    }, 5);
+  });
+
+describe('engine sleep flag', () => {
+  it('late timer flags a sleep', async () => {
+    const w = mkWorld({ deadlineInMs: 60_000 });
+    const abort = new AbortController();
+    const gaps: Array<{ fromMs: number; toMs: number }> = [];
+    const deps = {
+      ...w.deps,
+      tuning: { TICK_MS: 20, FAST_TICK_MS: 5 },
+      onSleep: (gap: { fromMs: number; toMs: number }) => {
+        gaps.push(gap);
+        commands.stop(w.store, w.pairId);
+      },
+    };
+    startLoop(deps, { signal: abort.signal });
+    try {
+      await waitFor(() => w.venue.liveOrder(A_CONTRACT) !== undefined);
+      expect(gaps).toEqual([]);
+      w.clock.advance(40 * 60_000);
+      await waitFor(() => gaps.length > 0);
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0].toMs - gaps[0].fromMs).toBeGreaterThanOrEqual(40 * 60_000 - 20);
+      await waitFor(() => w.store.getPair(w.pairId)!.mode === 'DONE');
+      expect([...w.venue.orders.values()].filter((o) => o.contract === A_CONTRACT && o.tif === 'ioc')).toEqual([]);
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('a 70 s pass of reads under a minute each, with an on-time timer, flags nothing', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    const abort = new AbortController();
+    const gaps: Array<{ fromMs: number; toMs: number }> = [];
+    let slowPasses = 0;
+    const read = w.venue.getOrder.bind(w.venue);
+    w.venue.getOrder = async (ref) => {
+      w.clock.advance(35_000);
+      return read(ref);
+    };
+    w.venue.best = async () => {
+      w.clock.advance(35_000);
+      slowPasses += 1;
+      return '2500';
+    };
+    startLoop({ ...w.deps, tuning: { TICK_MS: 20, FAST_TICK_MS: 5 }, onSleep: (gap) => gaps.push(gap) }, { signal: abort.signal });
+    try {
+      await waitFor(() => slowPasses >= 3);
+      expect(gaps).toEqual([]);
+    } finally {
+      abort.abort();
+    }
+  });
+});
+
+describe('a slow venue read is not a sleep', () => {
+  it('a single 65 s venue read with an on-time timer flags nothing', async () => {
+    const w = mkWorld({ deadlineInMs: null });
+    await stepChecked(w);
+    const abort = new AbortController();
+    const gaps: Array<{ fromMs: number; toMs: number }> = [];
+    let reads = 0;
+    const read = w.venue.getOrder.bind(w.venue);
+    w.venue.getOrder = async (ref) => {
+      if (reads === 0) w.clock.advance(65_000);
+      reads += 1;
+      return read(ref);
+    };
+    startLoop({ ...w.deps, tuning: { TICK_MS: 20, FAST_TICK_MS: 5 }, onSleep: (gap) => gaps.push(gap) }, { signal: abort.signal });
+    try {
+      await waitFor(() => reads >= 3);
+      expect(gaps).toEqual([]);
+      expect(w.store.getPair(w.pairId)!.mode).toBe('OPENING');
+    } finally {
+      abort.abort();
+    }
+  });
+
+  it('a 70 s timer gap flags a sleep', async () => {
+    const w = mkWorld({ deadlineInMs: null });
+    const abort = new AbortController();
+    const gaps: Array<{ fromMs: number; toMs: number }> = [];
+    startLoop({ ...w.deps, tuning: { TICK_MS: 20, FAST_TICK_MS: 5 }, onSleep: (gap) => gaps.push(gap) }, { signal: abort.signal });
+    try {
+      await waitFor(() => w.venue.liveOrder(A_CONTRACT) !== undefined);
+      expect(gaps).toEqual([]);
+      w.clock.advance(70_000);
+      await waitFor(() => gaps.length > 0);
+      expect(gaps).toHaveLength(1);
+      expect(gaps[0].toMs - gaps[0].fromMs).toBeGreaterThanOrEqual(70_000 - 20);
+    } finally {
+      abort.abort();
+    }
+  });
+});
+
+describe('refused re-peg', () => {
+  it('an order-allowance refusal keeps the price, never draws the budget, and waits a minute to re-peg', async () => {
+    const w = mkWorld();
+    const t0 = w.clock.now();
+    w.venue.nextCreate = ['reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR'];
+    await stepChecked(w);
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.limitPrice).toBe('2500');
+    expect(pair.pocRejects).toBe(0);
+    expect(pair.mode).toBe('OPENING');
+    expect(pair.repegNotBefore).toBe(t0 + TUNING.REPEG_REFUSED_WAIT_MS);
+    expect([...w.venue.orders.values()].some((o) => o.tif === 'ioc')).toBe(false);
+  });
+
+  it('a margin refusal still draws the maker budget', async () => {
+    const w = mkWorld();
+    w.venue.nextCreate = ['reject:INSUFFICIENT_MARGIN'];
+    await stepChecked(w);
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.pocRejects).toBe(1);
+    expect(pair.repegNotBefore).toBe(0);
+  });
+});
+
+const BASE_PAIR_TABLE = `CREATE TABLE pair (
+  id TEXT PRIMARY KEY, mode TEXT NOT NULL,
+  a_contract TEXT NOT NULL, a_side TEXT NOT NULL, a_lot TEXT NOT NULL,
+  a_min_size TEXT NOT NULL, a_min_notional TEXT NOT NULL,
+  a_tick TEXT NOT NULL DEFAULT '0.0001', a_reduce_only INTEGER NOT NULL DEFAULT 0,
+  b_contract TEXT, b_side TEXT, b_lot TEXT, b_min_size TEXT, b_min_notional TEXT,
+  b_tick TEXT, b_reduce_only INTEGER NOT NULL DEFAULT 0,
+  target_qty TEXT NOT NULL, limit_price TEXT,
+  price_policy TEXT NOT NULL DEFAULT 'touch', deadline_at INTEGER,
+  maker_not_before INTEGER NOT NULL DEFAULT 0, hedge_not_before INTEGER NOT NULL DEFAULT 0,
+  poc_rejects INTEGER NOT NULL DEFAULT 0, hedge_reject_streak INTEGER NOT NULL DEFAULT 0,
+  max_clip TEXT, clip_band_bp INTEGER, halt_reason TEXT, report_json TEXT,
+  created_at INTEGER NOT NULL)`;
+
+describe('store migration', () => {
+  it('old deal rows load with the new fields at their defaults', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'engine-migrate-'));
+    const file = join(dir, 'engine.sqlite');
+    try {
+      const old = new DatabaseSync(file);
+      old.exec(BASE_PAIR_TABLE);
+      old
+        .prepare(
+          `INSERT INTO pair (id, mode, a_contract, a_side, a_lot, a_min_size, a_min_notional, target_qty, limit_price, deadline_at, created_at)
+           VALUES ('old-deal', 'OPENING', ?, 'BUY', '0.001', '0', '0', '1.5', '2500', 1700000300000, 1700000000000)`,
+        )
+        .run(A_CONTRACT);
+      old.close();
+
+      const store = new Store(file);
+      const row = store.getPair('old-deal')!;
+      expect(row.targetQty).toBe('1.5');
+      expect(row.repegBehindBp).toBeNull();
+      expect(row.repegNotBefore).toBe(0);
+      expect(row.haltKind).toBeNull();
+      expect(row.repegAutoBp).toBeNull();
+      store.updatePair('old-deal', { repegBehindBp: 10, repegNotBefore: 42, haltKind: 'hedge-margin' });
+      const patched = store.getPair('old-deal')!;
+      expect(patched.repegBehindBp).toBe(10);
+      expect(patched.repegNotBefore).toBe(42);
+      expect(patched.haltKind).toBe('hedge-margin');
+      store.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a touch close in flight from before re-peg gets the default re-peg', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'engine-migrate-'));
+    const file = join(dir, 'engine.sqlite');
+    try {
+      const old = new DatabaseSync(file);
+      old.exec(BASE_PAIR_TABLE);
+      const insert = old.prepare(
+        `INSERT INTO pair (id, mode, a_contract, a_side, a_lot, a_min_size, a_min_notional, a_reduce_only, target_qty, limit_price, price_policy, deadline_at, created_at)
+         VALUES (?, ?, ?, 'SELL', '0.001', '0', '0', 1, '1.5', '2500', ?, 1700000300000, 1700000000000)`,
+      );
+      insert.run('close-touch', 'OPENING', A_CONTRACT, 'touch');
+      insert.run('close-typed', 'OPENING', A_CONTRACT, 'fixed');
+      insert.run('close-done', 'DONE', A_CONTRACT, 'touch');
+      old.close();
+
+      const store = new Store(file);
+      expect(store.getPair('close-touch')!.repegBehindBp).toBe(REPEG_DEFAULT_BP);
+      expect(store.getPair('close-touch')!.repegAutoBp).toBe(REPEG_DEFAULT_BP);
+      expect(store.getPair('close-typed')!.repegBehindBp).toBeNull();
+      expect(store.getPair('close-done')!.repegBehindBp).toBeNull();
+      store.updatePair('close-touch', { repegBehindBp: null });
+      store.close();
+      const reopened = new Store(file);
+      expect(reopened.getPair('close-touch')!.repegBehindBp).toBeNull();
+      reopened.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('a row from before repeg_auto_bp keeps its re-peg value as the auto value', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'engine-migrate-'));
+    const file = join(dir, 'engine.sqlite');
+    try {
+      const first = new Store(file);
+      first.close();
+      const old = new DatabaseSync(file);
+      old.exec(`ALTER TABLE pair DROP COLUMN repeg_auto_bp`);
+      old
+        .prepare(
+          `INSERT INTO pair (id, mode, a_contract, a_side, a_lot, a_min_size, a_min_notional, target_qty, limit_price, deadline_at, created_at, repeg_behind_bp)
+           VALUES ('ten-bp', 'OPENING', ?, 'BUY', '0.001', '0', '0', '1.5', '2500', 1700000300000, 1700000000000, 10)`,
+        )
+        .run(A_CONTRACT);
+      old.close();
+
+      const store = new Store(file);
+      store.updatePair('ten-bp', { repegBehindBp: null });
+      const row = store.getPair('ten-bp')!;
+      expect(row.repegBehindBp).toBeNull();
+      expect(row.repegAutoBp).toBe(10);
+      store.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+const GATE_ETH = 'GATE_FUTURE_ETH_USDT';
+const HL_ETH = 'HYPERLIQUID_FUTURE_ETH_USDC';
+
+function ruleOf(symbol: string): Record<string, unknown> {
+  return {
+    symbol,
+    state: 'live',
+    businessType: 'FUTURE',
+    lotSize: '0.001',
+    minSize: '0.001',
+    minNotional: '0',
+    tickSize: '0.01',
+    maxMarketSize: '100000',
+    maxLimitSize: '100000',
+  };
+}
+
+const dealClients = {
+  crossEx: {
+    listCrossexRuleSymbols: async () => ({ body: [ruleOf(GATE_ETH), ruleOf(HL_ETH)] }),
+    listCrossexPositions: async () => ({ body: [] }),
+  },
+} as unknown as Clients;
+
+const NOW = 1_700_000_000_000;
+const dealOpts = { preflight: { getReferencePrice: async () => null } };
+
+function makerDeal(over?: Partial<DealRequest>): DealRequest {
+  return {
+    id: 'twap-test-deal',
+    a: { symbol: GATE_ETH, side: 'BUY' },
+    b: { symbol: HL_ETH, side: 'SELL' },
+    qty: '1.000',
+    execution: 'maker',
+    price: '2500',
+    ...over,
+  };
+}
+
+describe('resolveDeal: taker after, re-peg and maker leg', () => {
+  it('a custom taker after sets the deadline with no clamp', async () => {
+    const row = await resolveDeal(dealClients, makerDeal({ timeoutSec: 1_800 }), NOW, dealOpts);
+    expect(row.deadlineAt).toBe(NOW + 1_800_000);
+    const day = await resolveDeal(dealClients, makerDeal({ timeoutSec: 86_400 }), NOW, dealOpts);
+    expect(day.deadlineAt).toBe(NOW + 86_400_000);
+  });
+
+  it('taker after out of range is refused', async () => {
+    for (const timeoutSec of [90_000, 20, 0, Number.NaN]) {
+      await expect(resolveDeal(dealClients, makerDeal({ timeoutSec }), NOW, dealOpts)).rejects.toThrow(
+        'Taker after must be 30s to 24h.',
+      );
+    }
+  });
+
+  it('never has no deadline', async () => {
+    const row = await resolveDeal(dealClients, makerDeal({ timeoutSec: null }), NOW, dealOpts);
+    expect(row.deadlineAt).toBeNull();
+  });
+
+  it('a pair with no taker after keeps the 5 minute default', async () => {
+    const row = await resolveDeal(dealClients, makerDeal(), NOW, dealOpts);
+    expect(row.deadlineAt).toBe(NOW + 300_000);
+  });
+
+  it('child deadline over its cap is refused', async () => {
+    await expect(
+      resolveDeal(dealClients, makerDeal({ timeoutSec: 600, deadlineCapSec: 576 }), NOW, dealOpts),
+    ).rejects.toThrow('Taker after must be 80% of the interval or less (576s).');
+    const row = await resolveDeal(dealClients, makerDeal({ timeoutSec: 576, deadlineCapSec: 576 }), NOW, dealOpts);
+    expect(row.deadlineAt).toBe(NOW + 576_000);
+  });
+
+  it('single leg child gets a deadline', async () => {
+    const row = await resolveDeal(dealClients, makerDeal({ b: null, timeoutSec: 240 }), NOW, dealOpts);
+    expect(row.b).toBeNull();
+    expect(row.deadlineAt).toBe(NOW + 240_000);
+    const resting = await resolveDeal(dealClients, makerDeal({ b: null }), NOW, dealOpts);
+    expect(resting.deadlineAt).toBeNull();
+  });
+
+  it('a taker deal carries no deadline', async () => {
+    const row = await resolveDeal(dealClients, makerDeal({ execution: 'taker', timeoutSec: 600 }), NOW, dealOpts);
+    expect(row.deadlineAt).toBeNull();
+    expect(row.mode).toBe('CONVERTING');
+  });
+
+  it('re-peg defaults to 5 bp, stores a choice, and refuses other values', async () => {
+    expect((await resolveDeal(dealClients, makerDeal(), NOW, dealOpts)).repegBehindBp).toBe(5);
+    expect((await resolveDeal(dealClients, makerDeal({ repegBehindBp: 10 }), NOW, dealOpts)).repegBehindBp).toBe(10);
+    expect((await resolveDeal(dealClients, makerDeal({ repegBehindBp: null }), NOW, dealOpts)).repegBehindBp).toBeNull();
+    await expect(
+      resolveDeal(dealClients, makerDeal({ repegBehindBp: 7 as unknown as 5 }), NOW, dealOpts),
+    ).rejects.toThrow('Re-peg if behind must be 0.02%, 0.05%, 0.1% or Off.');
+  });
+
+  it('maker leg b rests on the second venue and hedges on the first', async () => {
+    const row = await resolveDeal(
+      dealClients,
+      makerDeal({ makerLeg: 'b', price: '2500.005', leverage: { a: 20, b: 25 } }),
+      NOW,
+      dealOpts,
+    );
+    expect(row.a.contract).toBe(HL_ETH);
+    expect(row.a.side).toBe('SELL');
+    expect(row.b?.contract).toBe(GATE_ETH);
+    expect(row.b?.side).toBe('BUY');
+    expect(row.limitPrice).toBe('2500.1');
+  });
+
+  it('maker leg b on a single leg deal is refused', async () => {
+    await expect(resolveDeal(dealClients, makerDeal({ b: null, makerLeg: 'b' }), NOW, dealOpts)).rejects.toThrow(
+      'makerLeg b needs a second leg',
+    );
+  });
+});
+
+describe('resolveDeal: close and reopen on one contract', () => {
+  const heldClients = {
+    crossEx: {
+      listCrossexRuleSymbols: async () => ({ body: [ruleOf(GATE_ETH), ruleOf(HL_ETH)] }),
+      listCrossexPositions: async () => ({ body: [{ symbol: GATE_ETH, positionQty: '10' }] }),
+    },
+  } as unknown as Clients;
+  const marginDeps = {
+    getAccount: async () => ({ availableMargin: '50', positionMode: 'SINGLE' }) as never,
+    getReferencePrice: async () => 2500,
+    getPositions: async () => [{ symbol: GATE_ETH, positionQty: '10' }],
+  };
+  const realizeChild = (over?: Partial<DealRequest>): DealRequest =>
+    makerDeal({
+      execution: 'taker',
+      a: { symbol: GATE_ETH, side: 'SELL', reduceOnly: true },
+      b: { symbol: GATE_ETH, side: 'BUY' },
+      leverage: { a: 25, b: 25 },
+      ...over,
+    });
+
+  it('passes preflight only because the close frees margin for the reopen', async () => {
+    const row = await resolveDeal(heldClients, realizeChild(), NOW, { preflight: marginDeps });
+    expect(row.a.contract).toBe(GATE_ETH);
+    expect(row.a.reduceOnly).toBe(true);
+    expect(row.b?.contract).toBe(GATE_ETH);
+    expect(row.b?.reduceOnly).toBeUndefined();
+    await expect(
+      resolveDeal(
+        heldClients,
+        makerDeal({ execution: 'taker', a: { symbol: GATE_ETH, side: 'BUY' }, b: null, leverage: { a: 25 } }),
+        NOW,
+        { preflight: marginDeps },
+      ),
+    ).rejects.toThrow('Not enough free margin');
+  });
+
+  it('every other same-contract pair is still refused', async () => {
+    const shapes: Array<Pick<DealRequest, 'a' | 'b'>> = [
+      { a: { symbol: GATE_ETH, side: 'SELL' }, b: { symbol: GATE_ETH, side: 'BUY' } },
+      { a: { symbol: GATE_ETH, side: 'BUY' }, b: { symbol: GATE_ETH, side: 'SELL', reduceOnly: true } },
+      { a: { symbol: GATE_ETH, side: 'SELL', reduceOnly: true }, b: { symbol: GATE_ETH, side: 'BUY', reduceOnly: true } },
+      { a: { symbol: GATE_ETH, side: 'SELL', reduceOnly: true }, b: { symbol: GATE_ETH, side: 'SELL' } },
+    ];
+    for (const shape of shapes) {
+      await expect(resolveDeal(heldClients, realizeChild(shape), NOW, { preflight: marginDeps })).rejects.toThrow(
+        'Deal legs must be different contracts',
+      );
+    }
+  });
+});
+
+describe('an order-count refusal on a re-peg', () => {
+  it('leaves no order resting once refused, and the next accepted order rests alone', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    await stepChecked(w);
+    w.venue.nextCreate = ['reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR'];
+    w.venue.bestA = '2501.5';
+    const liveOnVenue = () => [...w.venue.orders.values()].filter((o) => o.rawStatus === 'NEW' || o.rawStatus === 'OPEN');
+    const refusedRow = () =>
+      w.store.listOrders(w.pairId).find((o) => o.closeReason === 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR');
+    for (let i = 0; i < 90 && !refusedRow(); i++) await stepChecked(w);
+    const refused = refusedRow()!;
+    expect(refused).toBeDefined();
+    expect(liveOnVenue()).toHaveLength(0);
+    expect(w.store.listOrders(w.pairId).filter((o) => o.state === 'OPEN' || o.state === 'PENDING')).toHaveLength(0);
+    for (let i = 0; i < 90 && liveOnVenue().length === 0; i++) await stepChecked(w);
+    expect(liveOnVenue()).toHaveLength(1);
+    const open = w.store.listOrders(w.pairId).filter((o) => o.leg === 'A' && o.kind === 'maker' && o.state === 'OPEN');
+    expect(open).toHaveLength(1);
+    expect(open[0].seq).toBeGreaterThan(refused.seq);
+  });
+
+  it('keeps the old price, sends no storm and keeps one live order', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    await stepChecked(w);
+    const first = w.venue.liveOrder(A_CONTRACT)!;
+    expect(first.price).toBe('2500');
+    w.venue.nextCreate = ['reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR'];
+    w.venue.bestA = '2501.5';
+    const sentBefore = w.venue.createCalls.length;
+    const sendTimes: number[] = [];
+    let seen = sentBefore;
+    for (let i = 0; i < 90; i++) {
+      await stepChecked(w);
+      if (w.venue.createCalls.length > seen) {
+        sendTimes.push(w.clock.now());
+        seen = w.venue.createCalls.length;
+      }
+      const live = [...w.venue.orders.values()].filter((o) => o.rawStatus === 'NEW' || o.rawStatus === 'OPEN');
+      expect(live.length).toBeLessThanOrEqual(1);
+      const pair = w.store.getPair(w.pairId)!;
+      expect(pair.mode).toBe('OPENING');
+      expect(pair.pocRejects).toBe(0);
+      const known = new Set(
+        w.store
+          .listOrders(w.pairId)
+          .filter((o) => o.state !== 'DEAD')
+          .map((o) => o.clientId),
+      );
+      for (const o of live) expect(known.has(o.clientText)).toBe(true);
+    }
+    for (let i = 1; i < sendTimes.length; i++) {
+      expect(sendTimes[i] - sendTimes[i - 1]).toBeGreaterThanOrEqual(TUNING.POC_BACKOFF_MS);
+    }
+    expect(sendTimes.length).toBeLessThanOrEqual(4);
+    const refused = w.store
+      .listOrders(w.pairId)
+      .find((o) => o.closeReason === 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR')!;
+    expect(refused).toBeDefined();
+    const oldPriceRepost = w.store.listOrders(w.pairId).find((o) => o.seq > refused.seq && o.price === '2500');
+    expect(oldPriceRepost).toBeDefined();
+    expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2501.5');
+  });
+});
+
+describe('an order-count refusal on a re-peg keeps the deal and does not loop', () => {
+  const ORDER_COUNT = 'TRADE_MAX_ORDERS_ERROR';
+  const RUN_TICKS = 300;
+
+  const gateAnswerFor = async (label: string): Promise<CreateDirective> => {
+    const clients = {
+      crossEx: {
+        createCrossexOrder: async () => {
+          throw { response: { status: 400, data: { label, message: 'The open order num exceeds the limit' } } };
+        },
+      },
+    } as unknown as Clients;
+    const out = await gateVenue(() => clients).create({
+      contract: A_CONTRACT,
+      side: 'BUY',
+      qty: '0.102',
+      price: '2501.5',
+      tif: 'poc',
+      clientText: 't-p1.A9',
+    });
+    return out.kind === 'reject' ? `reject:${out.label}` : 'unknown-lost';
+  };
+
+  const liveOnVenue = (w: World) =>
+    [...w.venue.orders.values()].filter((o) => o.rawStatus === 'NEW' || o.rawStatus === 'OPEN');
+
+  const expectNoOrphan = (w: World) => {
+    const known = new Set(
+      w.store
+        .listOrders(w.pairId)
+        .filter((o) => o.state !== 'DEAD')
+        .map((o) => o.clientId),
+    );
+    for (const o of liveOnVenue(w)) expect(known.has(o.clientText)).toBe(true);
+  };
+
+  const sendTimes = (w: World, leg: 'A' | 'B', from: number) =>
+    w.store
+      .listOrders(w.pairId)
+      .filter((o) => o.leg === leg && o.createdAt >= from)
+      .map((o) => o.createdAt)
+      .sort((x, y) => x - y);
+
+  const gaps = (times: number[]) => times.slice(1).map((t, i) => t - times[i]);
+
+  it('maker leg: a few paced sends, then the deal stops with what filled, hedged', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    await stepChecked(w);
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, '0.05');
+    await stepChecked(w, 3);
+    expect(fxStr(w.venue.truth().bTrue)).toBe('0.05');
+    w.venue.nextCreate = Array(400).fill(await gateAnswerFor(ORDER_COUNT));
+    w.venue.bestA = '2501.5';
+    const from = w.clock.now();
+    for (let i = 0; i < RUN_TICKS; i++) {
+      await stepChecked(w);
+      expectNoOrphan(w);
+      expect(liveOnVenue(w).length).toBeLessThanOrEqual(1);
+    }
+    const sends = sendTimes(w, 'A', from);
+    const pair = w.store.getPair(w.pairId)!;
+    const where = `mode ${pair.mode}, ${sends.length} sends on leg A at ${sends.map((t) => (t - from) / 1000).join(', ')} s`;
+    expect(sends.length, where).toBeGreaterThan(0);
+    expect(sends.length, where).toBeLessThanOrEqual(TUNING.MAX_POC_REJECTS);
+    for (const gap of gaps(sends)) expect(gap, where).toBeGreaterThanOrEqual(TUNING.POC_BACKOFF_MS);
+    expect(sends.every((t) => t < from + 60_000), where).toBe(true);
+    expect(liveOnVenue(w)).toHaveLength(0);
+    expect(w.store.listAlerts().some((a) => /Orders on the first leg keep failing/.test(a.message))).toBe(true);
+    assertHonestReport(w);
+    expect(JSON.parse(pair.reportJson!).aFilled).toBe('0.05');
+    const reason = JSON.parse(pair.reportJson!).reason as string;
+    expect(reason.startsWith(OPEN_ORDER_CAP_REASON)).toBe(true);
+    expect(reason).not.toMatch(/crossing the market/);
+  });
+
+  it('maker leg: one open-order refusal, then margin refusals, stops with the crossing text, not the cap', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.venue.nextCreate = [await gateAnswerFor(ORDER_COUNT), ...Array(400).fill('reject:INSUFFICIENT_MARGIN')];
+    for (let i = 0; i < RUN_TICKS; i++) await stepChecked(w);
+    const pair = w.store.getPair(w.pairId)!;
+    const reason = JSON.parse(pair.reportJson!).reason as string;
+    expect(reason).toMatch(/crossing the market/);
+    expect(reason.startsWith(OPEN_ORDER_CAP_REASON)).toBe(false);
+  });
+
+  it('hedge leg: the hedge wall halts the deal, the maker is cancelled, retries stay paced', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    await stepChecked(w);
+    w.venue.nextCreate = Array(400).fill(await gateAnswerFor(ORDER_COUNT));
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, '0.05');
+    const from = w.clock.now();
+    for (let i = 0; i < RUN_TICKS; i++) {
+      await stepChecked(w);
+      expectNoOrphan(w);
+    }
+    const sends = sendTimes(w, 'B', from);
+    const pair = w.store.getPair(w.pairId)!;
+    const where = `mode ${pair.mode}, ${sends.length} sends on leg B at ${sends.map((t) => (t - from) / 1000).join(', ')} s`;
+    expect(pair.mode, where).toBe('HALTED');
+    expect(pair.haltReason).toContain('hedge failed');
+    expect(w.store.listAlerts().some((a) => /Hedge orders keep failing/.test(a.message))).toBe(true);
+    expect(w.venue.liveOrder(A_CONTRACT)).toBeUndefined();
+    for (const gap of gaps(sends)) expect(gap, where).toBeGreaterThanOrEqual(TUNING.HEDGE_BACKOFF_MS);
+    expect(sends.length, where).toBeLessThanOrEqual(RUN_TICKS * TUNING.TICK_MS / TUNING.HEDGE_BACKOFF_MS + 1);
+    expect(fxStr(w.venue.truth().aTrue)).toBe('0.05');
+
+    w.venue.nextCreate = [];
+    commands.resumeAfterHalt(w.store, w.pairId);
+    await stepChecked(w, 6);
+    assertHonestReport(w);
+    expect(JSON.parse(w.store.getPair(w.pairId)!.reportJson!).bFilled).toBe('0.05');
   });
 });

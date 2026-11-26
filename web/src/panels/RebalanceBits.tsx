@@ -1,4 +1,4 @@
-import { Check, Info, TriangleAlert } from 'lucide-react';
+import { ArrowRight, Check, Info, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { RouteName } from '../api/types';
 import { Spinner } from '../components/Spinner';
@@ -8,6 +8,7 @@ import { num, parseSymbol } from '../lib/fmt';
 /** Severity of a rebalance verdict — see `VerdictTone` in RebalanceHovers. */
 const VERDICT_STYLE = {
   info: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Info size={14} aria-hidden className="block" />, sr: null },
+  recommend: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Check size={14} aria-hidden className="block" />, sr: null },
   // The glyph is decorative (aria-hidden), so the level reaches a screen
   // reader as a word instead. `info` needs none: a neutral note reads fine
   // without a prefix, and "Note:" on every quiet line is just noise.
@@ -27,10 +28,12 @@ export function VerdictAlert({
   tone,
   text,
   sub,
+  action,
 }: {
-  tone: 'info' | 'warn' | 'act' | 'good';
+  tone: 'info' | 'warn' | 'act' | 'good' | 'recommend';
   text: ReactNode;
   sub?: string | null;
+  action?: { label: string; onClick: () => void };
 }) {
   const style = VERDICT_STYLE[tone];
   return (
@@ -54,6 +57,12 @@ export function VerdictAlert({
         </span>
         {sub && <span className="num text-[11px] leading-4 text-ink-400">{sub}</span>}
       </span>
+      {action && (
+        <button type="button" className="btn-link ml-auto inline-flex shrink-0 items-center gap-1 text-xs leading-5" onClick={action.onClick}>
+          {action.label}
+          <ArrowRight size={12} aria-hidden />
+        </button>
+      )}
     </div>
   );
 }

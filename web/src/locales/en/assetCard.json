@@ -141,7 +141,9 @@
     "closeBorosTitle": "Close this pair's Boros positions. The perps stay open. A shared position closes only this pair's share.",
     "closeBoros": "Close Boros",
     "rollOverTitle": "Move the Boros positions to a later maturity.",
-    "rollOver": "Roll over"
+    "rollOver": "Roll over",
+    "delever": "Delever",
+    "deleverTitle": "Make this pair smaller: both perps by the same coin size, then Boros."
   },
   "legLetterLabel": "Market {{letter}}",
   "batch": {

@@ -194,6 +194,67 @@ describe('preflightMargin', () => {
     });
   });
 
+  describe('realize: a same-contract close frees margin for the reopen', () => {
+    const SYM = 'GATE_FUTURE_ETH_USDT';
+    const PX = 2500;
+    const realize = (notional: number, closeQty = notional / PX) => [
+      leg({ index: 0, symbol: SYM, side: 'SELL', reduceOnly: true, type: 'LIMIT', tif: 'GTC', qty: String(closeQty), estNotional: closeQty * PX }),
+      leg({ index: 1, symbol: SYM, side: 'BUY', qty: String(notional / PX), estNotional: notional, leverage: { requested: 25, max: 25 } }),
+    ];
+    const long = (qty: number) => async () => [{ symbol: SYM, positionQty: String(qty) }];
+
+    it.each([50, 100_000, 6_000_000])('realize reopen credits the close, %d dollar slice', async (notional) => {
+      const free = String((notional / 25) * 0.75);
+      await expect(
+        preflightMargin(clients, realize(notional), { getAccount: async () => acct(free), getPositions: long(notional / PX) }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('charges an open with no close as today', async () => {
+      const reopen = realize(100_000).slice(1);
+      await expect(
+        preflightMargin(clients, reopen, { getAccount: async () => acct('3000'), getPositions: long(40) }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+    });
+
+    it('credits no more than the live position', async () => {
+      const need = requiredFor(100_000, 25) - (25_000 / 25 - 25_000 * TAKER_FEE_RESERVE);
+      await expect(
+        preflightMargin(clients, realize(100_000), { getAccount: async () => acct(String(need - 1)), getPositions: long(10) }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+      await expect(
+        preflightMargin(clients, realize(100_000), { getAccount: async () => acct(String(need + 1)), getPositions: long(10) }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('credits nothing for a close on another contract or on the same side', async () => {
+      const [close, reopen] = realize(100_000);
+      for (const other of [{ ...close, symbol: 'OKX_FUTURE_ETH_USDT' }, { ...close, side: 'BUY' as const }]) {
+        await expect(
+          preflightMargin(clients, [other, reopen], { getAccount: async () => acct('3000'), getPositions: long(40) }),
+        ).rejects.toMatchObject({ category: 'insufficient-margin' });
+      }
+    });
+
+    it('credits one close once when two opens share it', async () => {
+      const [close, reopen] = realize(100_000);
+      await expect(
+        preflightMargin(clients, [close, reopen, { ...reopen, index: 2 }], { getAccount: async () => acct('3000'), getPositions: long(80) }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+    });
+
+    it('credits nothing when the positions read fails', async () => {
+      await expect(
+        preflightMargin(clients, realize(100_000), {
+          getAccount: async () => acct('3000'),
+          getPositions: async () => {
+            throw new Error('boom');
+          },
+        }),
+      ).rejects.toMatchObject({ category: 'insufficient-margin' });
+    });
+  });
+
   it('mixed open+close basket sizes only the open leg', async () => {
     const legs = [
       leg({ index: 0, symbol: 'GATE_FUTURE_ETH_USDT', type: 'LIMIT', estNotional: 2000, leverage: { requested: 10, max: 50 } }),

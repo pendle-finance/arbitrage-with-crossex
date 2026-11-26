@@ -8,6 +8,7 @@ vi.mock('axios', () => ({ default: { get: vi.fn(), post: vi.fn() } }));
 
 const MID = 2800;
 const LADDER = [50, 5_000, 100_000, 1_000_000, 6_000_000];
+const ONE_SLICE_USD = 1e12;
 
 const range = <T,>(count: number, at: (i: number) => T): T[] => Array.from({ length: count }, (_, i) => at(i));
 
@@ -37,7 +38,6 @@ const shortInput = (need: number, book: NormalizedBook | null): RealizeInput => 
     moveUsd: need + 100,
     cashUsd: 100,
     borrowUsd: need * 2,
-    convertCounts: true,
     availableMargin: 1e9,
     perps: [
       {
@@ -88,7 +88,7 @@ describe('deep book reads', () => {
       asks: fine.levels[1].map((l) => [Number(l.px), Number(l.sz)]),
       ts: 0,
     };
-    expect(planRealize(shortInput(100_000, top))?.refused?.reason).toBe('past-book');
+    expect(planRealize({ ...shortInput(100_000, top), sliceUsd: ONE_SLICE_USD })?.refused?.reason).toBe('past-book');
     const plan = planRealize(shortInput(100_000, deep));
     expect(plan?.refused).toBeNull();
     expect(plan?.legs[0].impactBp).toBeGreaterThan(5);
@@ -96,7 +96,7 @@ describe('deep book reads', () => {
     const held = Math.min(...[deep?.asks ?? [], deep?.bids ?? []].map((side) => side.reduce((t, [, q]) => t + q, 0)));
     let priced = 0;
     for (const need of LADDER) {
-      const rung = planRealize(shortInput(need, deep));
+      const rung = planRealize({ ...shortInput(need, deep), sliceUsd: ONE_SLICE_USD });
       if ((rung?.legs[0].qty ?? 0) > held) expect(rung?.refused?.reason).toBe('past-book');
       else {
         priced += 1;

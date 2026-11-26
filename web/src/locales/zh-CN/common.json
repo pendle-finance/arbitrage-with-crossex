@@ -51,6 +51,7 @@
   "apr": "APR",
   "running": "运行中",
   "stopped": "已停止",
+  "paused": "已暂停",
   "sending": "发送中…",
   "recommended": "推荐",
   "none": "无",

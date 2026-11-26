@@ -5,7 +5,7 @@ import type { EvenPlan, GoalKind, RebalanceBucket, RebalanceView } from '../api/
 import { rebalanceViews, rebased } from '../test/fixtures';
 import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, paybackDays, pickedRoute, realizeFeeUsd, realizeImpactUsd } from './RebalanceHovers';
 import { FeeCell } from './RebalanceRealizeBits';
-import { roundOf, RouteRow, shownKeys, stopsPerDayOf, targetsOf, totalCostUsd, worthChip, worthLine } from './RebalanceHovers';
+import { RebalanceInfo, roundOf, RouteRow, shownKeys, stopsPerDayOf, targetsOf, totalCostUsd, worthChip, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {
   return render(<Facts items={borrowFacts(buckets)} />);
@@ -480,5 +480,21 @@ describe('defaultGoal — the card leads with whatever is worth doing', () => {
     expect(defaultGoal({ ...view, plans: { ...view.plans, even: busy, repay: idle } })).toBe('even');
     // Nothing to do anywhere keeps the feature's own name.
     expect(defaultGoal({ ...view, plans: { ...view.plans, even: idle, repay: idle } })).toBe('even');
+  });
+});
+
+describe('Borrow info hover', () => {
+  it('shows the three canvas lines in order, and no wallet or route table', async () => {
+    const user = userEvent.setup();
+    render(<RebalanceInfo />);
+    const trigger = screen.getByRole('button', { name: 'Borrow' });
+    await user.hover(trigger);
+    const card = await screen.findByRole('tooltip');
+    expect([...card.querySelectorAll('p')].map((p) => p.textContent)).toEqual([
+      'A wallet below zero borrows from CrossEx and pays interest.',
+      'Reduce borrow opens Move cash. If cash is not enough, it opens Realize uPnL first.',
+      'Realize uPnL closes and reopens a leg in profit. Its uPnL becomes cash. Size and pair PnL unchanged, except fees.',
+    ]);
+    expect(card.querySelector('table')).toBeNull();
   });
 });

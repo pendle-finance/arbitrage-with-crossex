@@ -17,6 +17,8 @@ import {
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { BalancesPanel } from './BalancesPanel';
+import { RebalanceModalHost } from './RebalanceModal';
+import { RebalanceOpenerProvider } from './rebalanceOpener';
 
 const GATE_ERROR = { ok: false, error: { category: 'network', message: 'Gate did not answer.', retryable: true } };
 
@@ -94,18 +96,9 @@ const ACCOUNT_OF: Record<keyof typeof rebalanceViews, CrossexAccount> = {
   ownerConvertSplit: accountBodies.accountA,
   ethUp: accountBodies.accountA,
   notWorthIt: accountBodies.accountA,
-  refusedThin: accountBodies.accountA,
   refusedMargin: accountBodies.accountA,
   refusedBook: accountBodies.accountA,
   threeWallets: accountBodies.accountA,
-  realizeRunning: accountBodies.accountA,
-  realizeLegClosed: accountBodies.accountA,
-  realizeRetrying: accountBodies.accountA,
-  realizePartFill: accountBodies.accountA,
-  realizeRoute: accountBodies.accountA,
-  realizeHaltedBeforeClose: accountBodies.accountA,
-  realizeHaltedLegOpen: accountBodies.accountA,
-  realizeDone: accountBodies.accountA,
   lighterAcrossAbandoned: accountBodies.lighter,
   lighterConvertDone: accountBodies.lighter,
   noLegs: accountBodies.lighter,
@@ -117,6 +110,29 @@ const ACCOUNT_OF: Record<keyof typeof rebalanceViews, CrossexAccount> = {
   interestPaidSplit: accountBodies.interestPaidSplit,
   oneRouteOnly: accountBodies.oneRouteOnly,
   hiddenRoute: accountBodies.hiddenRoute,
+  ownerAccount: accountBodies.accountA,
+  recommendedRealize: accountBodies.accountA,
+  recommendedCashOnly: accountBodies.accountA,
+  notRecommended: accountBodies.accountA,
+  realizeRefused: accountBodies.accountA,
+  imFull: accountBodies.accountA,
+  cashShort: accountBodies.accountA,
+  interestFree: accountBodies.accountA,
+  noBorrow: accountBodies.accountA,
+  moveRunning: accountBodies.accountA,
+  moveStopped: accountBodies.accountA,
+  moveDone: accountBodies.accountA,
+  ownerRealizeRunning: accountBodies.accountA,
+  realizePausing: accountBodies.accountA,
+  realizePaused: accountBodies.accountA,
+  realizeFollowMissed: accountBodies.accountA,
+  realizeStoppedNotHedged: accountBodies.accountA,
+  realizeStoppedMargin: accountBodies.accountA,
+  ownerRealizeDone: accountBodies.accountA,
+  deleverRunning: accountBodies.accountA,
+  deleverPausedGap: accountBodies.accountA,
+  deleverStoppedBoros: accountBodies.accountA,
+  deleverDone: accountBodies.accountA,
 };
 
 const isRebalanceName = (name: string): name is keyof typeof rebalanceViews => name in rebalanceViews;
@@ -131,26 +147,26 @@ const EVERY_STATE: TabState[] = [
 
 const region = (name: string) => screen.getByRole('region', { name });
 
-async function show(state: TabState) {
+async function show(state: TabState, withDialog = false) {
   server.use(
     rebalanceHandler(state.rebalance),
     transferHandler(state.transfer),
     accountHandler(state.account),
     http.get('/api/positions', () => HttpResponse.json(env(NO_POSITIONS))),
   );
-  const shown = renderWithClient(<BalancesPanel />);
-  await screen.findByRole('region', { name: 'Rebalance' });
+  const shown = renderWithClient(
+    withDialog ? (
+      <RebalanceOpenerProvider>
+        <BalancesPanel />
+        <RebalanceModalHost />
+      </RebalanceOpenerProvider>
+    ) : (
+      <BalancesPanel />
+    ),
+  );
+  await screen.findByRole('region', { name: 'Borrow' });
   await screen.findByRole('group', { name: 'Transfer' });
   return shown;
-}
-
-async function openRebalanceDialog(user: ReturnType<typeof userEvent.setup>) {
-  const cta = within(region('Rebalance'))
-    .getAllByRole('button', { name: /^Rebalance/ })
-    .find((el): el is HTMLButtonElement => el.tagName === 'BUTTON');
-  if (!cta) throw new Error('Rebalance CTA button not found');
-  await user.click(cta);
-  return screen.findByRole('dialog');
 }
 
 function assetRows(): Record<string, string>[] {
@@ -171,6 +187,11 @@ function blockTexts(root: ParentNode): string[] {
   const texts: string[] = [];
   for (const el of root.querySelectorAll('p, div, li')) {
     if (!isLeafBlock(el)) continue;
+    const stacked = el.querySelector('span.flex-col');
+    if (stacked) {
+      for (const line of stacked.children) if (line.textContent?.trim()) texts.push(line.textContent.trim());
+      continue;
+    }
     const value = el.textContent?.trim();
     if (value) texts.push(value);
   }
@@ -209,28 +230,28 @@ function sentencesOf(text: string): string[] {
 }
 
 describe('BalancesPanel layout', () => {
-  it('cards in order: every account first, then one CrossEx assets card that holds Rebalance', async () => {
+  it('cards in order: every account first, then one CrossEx assets card that holds Borrow', async () => {
     await show(ACCOUNT_A);
     expect(screen.getAllByRole('region').map((section) => section.getAttribute('aria-label'))).toEqual([
       'Accounts',
       'CrossEx assets',
-      'Rebalance',
+      'Borrow',
     ]);
     expect(
       region('Accounts').compareDocumentPosition(region('CrossEx assets')) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(region('CrossEx assets')).toContainElement(region('Rebalance'));
+    expect(region('CrossEx assets')).toContainElement(region('Borrow'));
     expect(region('CrossEx assets')).toHaveClass('card');
   });
 
-  it('the Assets card shows the table first, then the borrow facts, then Rebalance and Manual Transfer side by side', async () => {
+  it('the Assets card shows the table first, then the borrow facts, then Reduce borrow and Manual Transfer side by side', async () => {
     await show(ACCOUNT_A);
     const assets = region('CrossEx assets');
     const table = within(assets).getByRole('table');
-    const facts = region('Rebalance').querySelector('dl') as HTMLElement;
-    const transfer = within(region('Rebalance')).getByRole('group', { name: 'Transfer' });
-    const rebalance = within(region('Rebalance'))
-      .getAllByRole('button', { name: 'Rebalance' })
+    const facts = region('Borrow').querySelector('dl') as HTMLElement;
+    const transfer = within(region('Borrow')).getByRole('group', { name: 'Transfer' });
+    const rebalance = within(region('Borrow'))
+      .getAllByRole('button', { name: 'Reduce borrow' })
       .find((el) => el.className.includes('btn')) as HTMLElement;
     expect(table.compareDocumentPosition(facts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(facts.compareDocumentPosition(rebalance) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -294,7 +315,7 @@ describe('BalancesPanel layout', () => {
     answer = 'ok';
     fireEvent.click(screen.getByRole('button', { name: 'read rebalance again' }));
     await waitFor(() =>
-      expect(within(region('Rebalance')).getAllByRole('button', { name: 'Rebalance' }).some((el) => el.className.includes('btn'))).toBe(true),
+      expect(within(region('Borrow')).getAllByRole('button', { name: 'Reduce borrow' }).some((el) => el.className.includes('btn'))).toBe(true),
     );
     expect(window).toBeInTheDocument();
     expect(screen.getAllByRole('dialog')).toEqual([window]);
@@ -313,7 +334,7 @@ describe('BalancesPanel layout', () => {
         (mark) => mark.textContent === 'i',
       );
       expect(marks.map((mark) => mark.closest('[role="button"]')?.firstChild?.textContent), state.name).toEqual([
-        'Rebalance',
+        'Borrow',
       ]);
       shown.unmount();
     }
@@ -345,7 +366,7 @@ describe('BalancesPanel copy in every state', () => {
         <ReadRebalanceAgain />
       </>,
     );
-    await screen.findByRole('region', { name: 'Rebalance' });
+    await screen.findByRole('region', { name: 'Borrow' });
     server.use(http.get('/api/rebalance', () => HttpResponse.json(GATE_ERROR, { status: 500 })));
     await user.click(screen.getByRole('button', { name: 'read rebalance again' }));
     const staleChip = await screen.findByText(/^Stale \d+s · retrying$/);
@@ -457,6 +478,11 @@ describe('BalancesPanel assets', () => {
   });
 });
 
+async function openRebalanceDialog(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(within(region('Borrow')).getByRole('button', { name: /^(Reduce borrow|Move cash)$/ }));
+  return screen.findByRole('dialog');
+}
+
 describe('BalancesPanel transfer pick', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -465,7 +491,7 @@ describe('BalancesPanel transfer pick', () => {
   it('spot link picks USDT wallet and scrolls to Assets', async () => {
     const user = userEvent.setup();
     const scroll = vi.spyOn(Element.prototype, 'scrollIntoView');
-    await show(ACCOUNT_B);
+    await show(ACCOUNT_B, true);
     const assets = region('CrossEx assets');
     const rebalanceDialog = await openRebalanceDialog(user);
     await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer' }));
@@ -478,7 +504,7 @@ describe('BalancesPanel transfer pick', () => {
 
   it('leftover link picks target wallet', async () => {
     const user = userEvent.setup();
-    await show(LEFTOVER);
+    await show(LEFTOVER, true);
     const rebalanceDialog = await openRebalanceDialog(user);
     await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer' }));
 
@@ -489,9 +515,9 @@ describe('BalancesPanel transfer pick', () => {
 
   it('a USDC line picks the Hyperliquid wallet', async () => {
     const user = userEvent.setup();
-    await show({ ...ACCOUNT_B, transfer: transferViews.spotBoth });
+    await show({ ...ACCOUNT_B, transfer: transferViews.spotBoth }, true);
     const rebalanceDialog = await openRebalanceDialog(user);
-    const links = within(rebalanceDialog).getAllByRole('button', { name: 'Transfer' });
+    const links = await within(rebalanceDialog).findAllByRole('button', { name: 'Transfer' });
     expect(links).toHaveLength(2);
 
     await user.click(links[1]);
@@ -507,7 +533,7 @@ describe('BalancesPanel transfer pick', () => {
       rebalance: rebalanceViews.exampleEAbandoned,
       transfer: transferViews.noSpot,
       account: accountBodies.exampleE,
-    });
+    }, true);
     const rebalanceDialog = await openRebalanceDialog(user);
     await user.click(await within(rebalanceDialog).findByRole('button', { name: 'Transfer' }));
 

@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { decimalsOf, floorCents, formatLimitPrice, formatRestPrice, roundToStep } from './ticks';
+import { decimalsOf, floorCents, formatLimitPrice, formatRestPrice, roundToStep, sigFigsDirectional } from './ticks';
+
+describe('the Boros slippage seed rounds half the cap down to one figure', () => {
+  it.each([
+    [0.003, 0.1],
+    [0.006, 0.3],
+    [0.01, 0.5],
+    [0.02, 1],
+  ])('cap %s seeds %s%%', (cap, pct) => {
+    expect(sigFigsDirectional((cap / 2) * 100, 1, 'down')).toBe(pct);
+  });
+});
 
 const RUNGS = [
   { usd: '$50', x: 50 },

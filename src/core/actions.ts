@@ -191,7 +191,10 @@ export interface PreviewResult extends ResolvedAction {
 interface ResolveOpts {
   /** Preview allows `notional` sizing; execute requires resolved qty/price strings. */
   mode: 'preview' | 'execute';
+  sliced?: boolean;
 }
+
+const ORDER_SIZE_CAPS: ReadonlySet<Violation['code']> = new Set(['exceeds-max-market-size', 'exceeds-max-limit-size']);
 
 const DEFAULT_SLIPPAGE = 0.5;
 
@@ -387,6 +390,9 @@ export async function resolveActions(
 
   applySharedPairSizing(resolved);
   applyPairGroupChecks(resolved);
+  if (opts.sliced) {
+    for (const r of resolved) r.violations = r.violations.filter((v) => !ORDER_SIZE_CAPS.has(v.code));
+  }
   return resolved;
 }
 

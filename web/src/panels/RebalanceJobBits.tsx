@@ -5,6 +5,7 @@ import { localizeServerText } from '../i18n/serverMessages';
 import { num } from '../lib/fmt';
 import { HOVER, modalResume } from './rebalanceCopy';
 import { roundCountOf, roundOf } from './RebalanceHovers';
+import type { RebalanceTab } from './rebalanceOpener';
 import { realizeText } from './RebalancePlanBits';
 
 export interface Pressed {
@@ -26,6 +27,7 @@ export interface JobViewProps {
   transfer?: TransferView;
   onClose?: () => void;
   onTransfer?: (coin: TransferCoin, wallet: GateAccount) => void;
+  onTab?: (tab: RebalanceTab) => void;
 }
 
 export function abandonNote(job: RebalanceJob, transfer: TransferView | undefined): string {
@@ -65,16 +67,18 @@ export function StopBox({ title, lines }: { title: string; lines: string[] }) {
   );
 }
 
-export function Actions({ onResume, onAbandon, holdMs, busy, resuming, note }: JobViewProps & { note: string }) {
+export function Actions({
+  onResume, onAbandon, holdMs, busy, resuming, note, resumeLabel, abandonLabel, quietResume,
+}: JobViewProps & { note: string; resumeLabel?: string; abandonLabel?: string; quietResume?: boolean }) {
   return (
     <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
       <span className="num text-xs text-ink-400">{note}</span>
       <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className="btn btn-primary px-4 py-2 text-sm" disabled={busy} onClick={onResume}>
-          {resuming ? t('accounts.rebalanceModal.resuming') : modalResume()}
+        <button type="button" className={`btn ${quietResume ? '' : 'btn-primary'} px-4 py-2 text-sm`} disabled={busy} onClick={onResume}>
+          {resuming ? t('accounts.rebalanceModal.resuming') : (resumeLabel ?? modalResume())}
         </button>
         <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={busy} onConfirm={onAbandon}>
-          {realizeText('holdAbandon')}
+          {abandonLabel ?? realizeText('holdAbandon')}
         </HoldToConfirmButton>
       </div>
     </div>

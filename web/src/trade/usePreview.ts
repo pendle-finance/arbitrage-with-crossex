@@ -5,6 +5,7 @@ import { canFetch } from '../api/queries';
 import type { ActionInput, PreviewResponse } from '../api/types';
 import { useTabActive } from '../components/TabBar';
 import { useDebounced } from '../lib/useDebounced';
+import type { TwapInput } from './TwapArea';
 
 /**
  * Debounced live preview: POST /api/preview once the actions have been stable
@@ -32,15 +33,22 @@ export function usePreviewDebounced(
      * does NOT count as estimating; the new preview still loads behind it.
      */
     tolerate?: (shown: ActionInput[], current: ActionInput[]) => boolean;
+    twap?: TwapInput;
   } = {},
 ) {
   const active = useTabActive();
   const json = actions && actions.length > 0 ? JSON.stringify(actions) : '';
   const debounced = useDebounced(json, opts.debounceMs ?? 400);
+  const twapJson = opts.twap ? JSON.stringify(opts.twap) : '';
+  const debouncedTwap = useDebounced(twapJson, opts.debounceMs ?? 400);
 
   const query = useQuery({
-    queryKey: ['preview', scope, debounced],
-    queryFn: () => postJson<PreviewResponse>('/preview', { actions: JSON.parse(debounced) as ActionInput[] }),
+    queryKey: debouncedTwap ? ['preview', scope, debounced, debouncedTwap] : ['preview', scope, debounced],
+    queryFn: () =>
+      postJson<PreviewResponse>('/preview', {
+        actions: JSON.parse(debounced) as ActionInput[],
+        ...(debouncedTwap ? { twap: JSON.parse(debouncedTwap) as TwapInput } : {}),
+      }),
     enabled: (q) => debounced !== '' && canFetch(active, q),
     refetchInterval: active ? (opts.refetchInterval ?? false) : false,
     refetchIntervalInBackground: true,
@@ -58,7 +66,7 @@ export function usePreviewDebounced(
 
   // A pending edit (json not yet debounced) or placeholder data from the prior
   // key means the shown previews describe a DIFFERENT input than the current one.
-  const changed = json !== '' && (debounced !== json || query.isPlaceholderData);
+  const changed = json !== '' && (debounced !== json || debouncedTwap !== twapJson || query.isPlaceholderData);
   const tolerated =
     changed &&
     opts.tolerate !== undefined &&

@@ -51,6 +51,7 @@
   "apr": "APR",
   "running": "Running",
   "stopped": "Stopped",
+  "paused": "Paused",
   "sending": "Sending…",
   "recommended": "Recommended",
   "none": "None",

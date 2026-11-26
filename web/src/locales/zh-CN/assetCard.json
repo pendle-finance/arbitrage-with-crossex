@@ -141,7 +141,9 @@
     "closeBorosTitle": "平掉本组合的 Boros 仓位，永续保持持仓。共用的仓位只平本组合的份额。",
     "closeBoros": "平 Boros 仓位",
     "rollOverTitle": "将 Boros 仓位移至更晚的到期日。",
-    "rollOver": "展期"
+    "rollOver": "展期",
+    "delever": "降规模",
+    "deleverTitle": "缩小本组合：两条永续按相同币数量减少，然后减少 Boros。"
   },
   "legLetterLabel": "市场 {{letter}}",
   "batch": {

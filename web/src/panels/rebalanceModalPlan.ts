@@ -1,5 +1,6 @@
 import type { EvenPlan, GoalKind, Goal, RebalanceView, RouteName } from '../api/types';
 import { amountError } from '../lib/amount';
+import { borrowingBuckets } from '../lib/borrow';
 import { fmtUsd } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { ROUTE_ORDER, routeScore } from './RebalanceBits';
@@ -7,12 +8,15 @@ import { defaultGoal, isCashLimitedEven, movesKey, totalCostUsd } from './Rebala
 import { refusalOf } from './RebalancePlanBits';
 import { PRESET_OFF, shortOfCash, verdictBalanced, verdictNoCashToMove } from './rebalanceCopy';
 
+export const CUSTOM_DEBOUNCE_MS = 300;
+
 export type Preset = 'even' | 'repay';
 export type PresetPick = Preset | 'none';
 
 export const goalKey = (goal: Goal): string => (goal.kind === 'custom' ? `custom:${goal.from}>${goal.to}@${goal.amount}` : goal.kind);
 
 export function initialGoal(view: RebalanceView): GoalKind {
+  if (borrowingBuckets(view.buckets).length > 0 && !view.plans.repay.balanced) return 'repay';
   const lead = defaultGoal(view);
   const other: Preset = lead === 'even' ? 'repay' : 'even';
   if (!view.plans[lead].balanced) return lead;

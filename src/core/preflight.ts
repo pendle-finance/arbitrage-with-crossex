@@ -132,8 +132,8 @@ export async function preflightMargin(
 
   // Net off the share of each leg that only unwinds. Symbols uppercased both sides (as
   // create.ts/actions.ts do): a casing miss silently charges in full, i.e. the bug back.
+  const posQty = new Map<string, number>();
   if (isOneWayMode(account.positionMode)) {
-    const posQty = new Map<string, number>();
     try {
       const rows = deps.getPositions
         ? await deps.getPositions()
@@ -173,14 +173,20 @@ export async function preflightMargin(
     }
   }
 
-  const legs: LegRequirement[] = opening
-    .filter((p) => !!p.leverage && p.leverage > 0)
-    .map((p) => ({ index: p.index, symbol: p.symbol, notional: p.notional, leverage: p.leverage as number }));
+  const sized = opening.filter((p) => !!p.leverage && p.leverage > 0);
+  const legs: LegRequirement[] = sized.map((p) => ({ index: p.index, symbol: p.symbol, notional: p.notional, leverage: p.leverage as number }));
   if (legs.length === 0) return; // nothing we can size confidently → fail-open
+
+  const closing = closeQtyBySymbolSide(resolved, posQty);
+  const freed = sized.reduce((s, p) => {
+    const closed = creditedNotional(p.leg, p.notional, closing);
+    return s + closed / (p.leverage as number) - closed * TAKER_FEE_RESERVE;
+  }, 0);
 
   const required =
     legs.reduce((s, l) => s + l.notional / l.leverage, 0) * PREFLIGHT_MARGIN_BUFFER +
-    legs.reduce((s, l) => s + l.notional, 0) * TAKER_FEE_RESERVE;
+    legs.reduce((s, l) => s + l.notional, 0) * TAKER_FEE_RESERVE -
+    freed;
 
   if (required > available) {
     throw new CoreError(
@@ -200,6 +206,40 @@ function offsetFraction(leg: ResolvedAction, positionQty: number | undefined): n
   const opposes = leg.side === 'BUY' ? positionQty < 0 : positionQty > 0;
   if (!opposes) return 0;
   return Math.min(qty, Math.abs(positionQty)) / qty;
+}
+
+function closeKey(symbol: string, side: ResolvedAction['side']): string {
+  return `${symbol.toUpperCase()}|${side}`;
+}
+
+function closeQtyBySymbolSide(
+  resolved: ResolvedAction[],
+  posQty: Map<string, number>,
+): Map<string, number> {
+  const closing = new Map<string, number>();
+  for (const c of resolved) {
+    const qty = Number(c.qty);
+    if (!c.reduceOnly || !Number.isFinite(qty) || qty <= 0) continue;
+    const key = closeKey(c.symbol, c.side);
+    closing.set(key, (closing.get(key) ?? 0) + qty);
+  }
+  for (const [key, qty] of closing) {
+    const [symbol, side] = key.split('|');
+    const position = posQty.get(symbol) ?? 0;
+    const reduces = side === 'SELL' ? position > 0 : position < 0;
+    closing.set(key, reduces ? Math.min(qty, Math.abs(position)) : 0);
+  }
+  return closing;
+}
+
+function creditedNotional(open: ResolvedAction, notional: number, closing: Map<string, number>): number {
+  const qty = Number(open.qty);
+  if (!Number.isFinite(qty) || qty <= 0 || !(notional > 0)) return 0;
+  const key = closeKey(open.symbol, open.side === 'BUY' ? 'SELL' : 'BUY');
+  const credited = Math.min(qty, closing.get(key) ?? 0);
+  if (!(credited > 0)) return 0;
+  closing.set(key, (closing.get(key) ?? 0) - credited);
+  return Math.min(notional, (notional * credited) / qty);
 }
 
 /** One-way (netting) mode? Gate reports 'SINGLE'. Anything else — hedge mode, or an

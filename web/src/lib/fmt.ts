@@ -39,6 +39,25 @@ export function sigGrouped(value: number | string, maxDp = 8): string {
   return frac === undefined ? grouped : `${grouped}.${frac}`;
 }
 
+export function qtyGrouped(value: number | string, maxDp = 8): string {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || Math.abs(n) < 1000) return sigGrouped(value, maxDp);
+  const [whole = '', frac] = n.toFixed(3).replace(/\.?0+$/, '').split('.');
+  const grouped = Number(whole).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  return frac === undefined ? grouped : `${grouped}.${frac}`;
+}
+
+export function groupedExact(text: string): string {
+  const m = /^(-?)(\d+)(\.\d+)?$/.exec(text);
+  if (!m) return text;
+  return `${m[1]}${m[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${m[3] ?? ''}`;
+}
+
+export function padTwo(text: string): string {
+  const [whole = '', frac = ''] = text.split('.');
+  return frac.length >= 2 ? text : `${whole}.${frac.padEnd(2, '0')}`;
+}
+
 export const FIELD_SIG_FIGS = 8;
 
 export function fieldValue(value: number, sigFigs: number = FIELD_SIG_FIGS): string {
@@ -118,8 +137,9 @@ export function fmtNotionalShort(n: number): string {
   if (!Number.isFinite(n)) return '—';
   const sign = n < 0 ? '-' : '';
   const abs = Math.abs(n);
-  if (abs >= 1e6) return `${sign}$${+(abs / 1e6).toFixed(abs >= 1e7 ? 0 : 1)}M`;
-  if (abs >= 1e3) return `${sign}$${+(abs / 1e3).toFixed(abs >= 1e5 ? 0 : 1)}k`;
+  const k = +(abs / 1e3).toFixed(abs >= 1e5 ? 0 : 1);
+  if (abs >= 1e6 || k >= 1000) return `${sign}$${+(abs / 1e6).toFixed(abs >= 1e7 ? 0 : 1)}M`;
+  if (abs >= 1e3) return `${sign}$${k}k`;
   return fmtUsd(n, 0);
 }
 

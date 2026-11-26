@@ -11,6 +11,7 @@ import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
 import type {
   CrossexPosition,
+  RebalanceJob,
   AssetBorosHistory,
   AssetBorosOpen,
   AssetGroup,
@@ -56,6 +57,7 @@ import {
   useExecuteBorosPair,
   useExecuteBorosRoll,
   usePositions,
+  useRebalance,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
 import { AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, SuggestedTopUpLines } from '../../trade/BorosPairBits';
@@ -116,6 +118,11 @@ import {
   sizeIn,
 } from './assetModel';
 import { DUST_USD, sameSize } from './grouping';
+import { daysLeftText, openPairKey, pairKey } from './pairs';
+import { sigFigsDirectional } from '../../lib/ticks';
+import { useRebalanceOpener } from '../rebalanceOpener';
+import { sliceStateLabel } from '../RebalanceSliceJobView';
+import { PairTitle } from '../../components/PairTitle';
 import { DropdownMenu } from '../../components/DropdownMenu';
 import { exclusionAfter, legVenueName } from './excludeLeg';
 import { daysToMaturity, knownRate } from '../../lib/boros';
@@ -346,12 +353,6 @@ const exactUsd = (usd: number): string => fmtUsd(usd);
  * "20k SOL" for a $20k position. */
 const exactSize = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? exactQty(size, base) : exactUsd(size);
-
-/** "16d left" / "matured" — the term in the unit a trader thinks in. */
-const daysLeftText = (maturitySec: number, nowSec: number): string => {
-  const days = daysToMaturity(maturitySec, nowSec);
-  return days > 0 ? t('assetCard.daysLeft', { days }) : t('assetCard.matured');
-};
 
 /** The pair's term as one bar on the asset's shared time axis: it starts when
  * the pair was hedged and ends at maturity, the filled part is the time that
@@ -704,6 +705,20 @@ function MenuCell({ show, cell, children }: { show: boolean; cell: string; child
   return show ? <td className={`${cell} ${MENU_CELL}`}>{children}</td> : null;
 }
 
+function deleverJobOf(job: RebalanceJob | null, pair: PairEstimate): RebalanceJob | null {
+  if (!job?.delever || job.kind !== 'delever' || (job.status !== 'running' && job.status !== 'halted')) return null;
+  const perps = new Set(pairPerpCloseLegs(pair).map((l) => l.symbol));
+  const markets = new Set(pair.legs.flatMap((l) => (l.kind === 'yu' && l.marketId !== undefined ? [l.marketId] : [])));
+  const sameSet = <T,>(set: Set<T>, items: T[]) => items.length === set.size && items.every((x) => set.has(x));
+  return sameSet(perps, job.delever.legs.map((l) => l.symbol)) && sameSet(markets, job.delever.boros.map((b) => b.marketId)) ? job : null;
+}
+
+function deleverPillLabel(job: RebalanceJob | null): string {
+  if (!job) return t('assetCard.actions.delever');
+  if (job.status === 'halted') return job.paused && job.slice ? sliceStateLabel(job) : t('common.stopped');
+  return job.slice ? sliceStateLabel(job) : t('common.running');
+}
+
 function PairCard({
   pair,
   base,
@@ -712,6 +727,8 @@ function PairCard({
   borosOpen,
   defaultOpen,
   showRollNonce = 0,
+  onDelever,
+  deleverJob = null,
   onClosePerps,
   onCloseBoros,
   onRollOver,
@@ -733,6 +750,8 @@ function PairCard({
   /** This card is the one "Show me" scrolls to — the first that can roll,
    * with `scroll-mt-36` clearing the sticky header and the column band. */
   focusOnShow?: boolean;
+  onDelever: () => void;
+  deleverJob?: RebalanceJob | null;
   onClosePerps: () => void;
   onCloseBoros: () => void;
   /** Opens the roll-over popup for this pair (offered until it matures). */
@@ -744,6 +763,9 @@ function PairCard({
   excludeMenu: ExcludeMenu;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const wallet = useActiveWallet();
+  const deleverBlocked =
+    deleverJob === null && pair.legs.some((l) => l.kind === 'yu') && wallet.state !== null && !wallet.canTrade;
   // The roll is OFFERED on any live pair; everything that reminds — the
   // chips, the probes, "Show me", the button's colour — waits for the window.
   const canRoll = pairCanRoll(pair, nowSec);
@@ -946,18 +968,7 @@ function PairCard({
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.longVenue} size={18} />
-                  {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
-                </span>
-                <span className="text-ink-600">/</span>
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.shortVenue} size={18} />
-                  {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
-                </span>
+                <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue}>
                 {rollDue && opportunity !== null && (
                   <Chip
                     sm
@@ -989,7 +1000,7 @@ function PairCard({
                   sm
                   legs={borosOpen.filter((b) => pair.legs.some((l) => l.kind === 'yu' && l.marketId === b.marketId))}
                 />
-                </span>
+                </PairTitle>
                 {/* One maturity per pair, by construction: a 4-leg unit settles
                     on a single day, and a laddered book is several rows. It
                     rides under the venues as the pair's own sub-line (the
@@ -1154,6 +1165,21 @@ function PairCard({
               )}
             </span>
             <span className="inline-flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className={pill}
+                disabled={pair.unit !== 'base' || deleverBlocked}
+                title={
+                  pair.unit !== 'base'
+                    ? t('assetCard.actions.closePerpsUsdTitle')
+                    : deleverBlocked
+                      ? (wallet.loginLabel ?? t('pairTicket.closeBoros.agentReason'))
+                      : t('assetCard.actions.deleverTitle')
+                }
+                onClick={onDelever}
+              >
+                {deleverPillLabel(deleverJob)}
+              </button>
               <button
                 type="button"
                 className={`${pill} hover:!border-guava/60 hover:!text-guava`}
@@ -1324,19 +1350,6 @@ const ROLL_MAX_SLIP_PCT = 10;
 const ROLL_FALLBACK_SLIP_PCT = 1;
 /** The slider's shortcuts, as shares of the position. */
 const ROLL_SHARE_STEPS = [0.25, 0.5, 0.75, 1] as const;
-/** One key per pair, for the cards and the roll signals alike. */
-const pairKey = (p: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec' | 'kind'>): string =>
-  `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}:${p.kind}`;
-
-/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8) — the
- * ticket's and the close form's own rounding, so the three seed alike. Down
- * rather than to-nearest: a seeded bound must stay inside the venue's cap. */
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  // toPrecision trims the binary noise `Math.floor(x / step) * step` leaves.
-  return Number((Math.floor(x / step) * step).toPrecision(12));
-}
 
 /**
  * The tolerance a batch is seeded with, in % APR: half each market's own
@@ -1355,7 +1368,7 @@ function seedSlipPctFor(markets: ReadonlyArray<BorosPairMarketRow>, ids: number[
     .filter((c): c is number => typeof c === 'number' && c > 0);
   if (caps.length === 0) return ROLL_FALLBACK_SLIP_PCT;
   const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-  const pctVal = floorTo1Sf(meanHalf * 100);
+  const pctVal = sigFigsDirectional(meanHalf * 100, 1, 'down');
   return pctVal > 0 ? pctVal : ROLL_FALLBACK_SLIP_PCT;
 }
 
@@ -3621,18 +3634,7 @@ function PerpOnlyPairCard({
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.longVenue} size={18} />
-                  {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
-                </span>
-                <span className="text-ink-600">/</span>
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.shortVenue} size={18} />
-                  {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
-                </span>
+                <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue}>
                 <Chip
                   sm
                   tone="amber"
@@ -3641,7 +3643,7 @@ function PerpOnlyPairCard({
                 >
                   {!spread && rowMissing(pair.longYu, pair.missingLong) && rowMissing(pair.shortYu, pair.missingShort) ? t('assetCard.perpOnly.legsMissing') : t('assetCard.perpOnly.legMissing')}
                 </Chip>
-                </span>
+                </PairTitle>
                 {/* The maturity rides under the venues, as on a full pair. */}
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
                   {held ? (
@@ -3898,18 +3900,7 @@ function BorosOnlyPairCard({
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.longVenue} size={18} />
-                  {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
-                </span>
-                <span className="text-ink-600">/</span>
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.shortVenue} size={18} />
-                  {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
-                </span>
+                <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue}>
                 <Chip
                   sm
                   tone="amber"
@@ -3919,7 +3910,7 @@ function BorosOnlyPairCard({
                   {both ? t('assetCard.borosOnly.perpsMissing') : t('assetCard.borosOnly.perpMissing')}
                 </Chip>
                 <AddMarginChip sm legs={borosOpen.filter((b) => pair.borosLegs.some((y) => y.marketId === b.marketId))} />
-                </span>
+                </PairTitle>
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
                   <span title={t('assetCard.borosOnly.maturityTitle')}>
                     {t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturity), left: daysLeftText(pair.maturity, nowSec) })}
@@ -5610,6 +5601,8 @@ export function AssetCard({
   }, [appShowNonce]);
   const [closedOpen, setClosedOpen] = useState(false);
   const [closePerps, setClosePerps] = useState<PairEstimate | null>(null);
+  const openRebalance = useRebalanceOpener();
+  const rebalanceJob = useRebalance().data?.job ?? null;
   const [closePerpOnly, setClosePerpOnly] = useState<PerpOnlyPair | null>(null);
   const [closeBoros, setCloseBoros] = useState<PairEstimate | null>(null);
   const [closeBorosOnly, setCloseBorosOnly] = useState<BorosOnlyPair | null>(null);
@@ -5709,12 +5702,12 @@ export function AssetCard({
    * asset + pair so two assets never collide, and cleared on unmount — a
    * card that stops rendering must not leave a stale line in the banner.
    */
-  const rollKeys = rollable.map((p) => `${group.base}:${pairKey(p)}`).join('|');
+  const rollKeys = rollable.map((p) => openPairKey(group.base, p)).join('|');
   const rollJson = JSON.stringify(rollable.map((p) => rollSignals[pairKey(p)] ?? []));
   useEffect(() => {
     const live = new Set<string>();
     for (const p of rollable) {
-      const key = `${group.base}:${pairKey(p)}`;
+      const key = openPairKey(group.base, p);
       live.add(key);
       publishRoll(key, {
         key,
@@ -6447,6 +6440,8 @@ export function AssetCard({
                 defaultOpen={pairRollDue(p, nowSec)}
                 showRollNonce={showRollNonce}
                 focusOnShow={p === showTarget}
+                onDelever={() => openRebalance({ tab: 'delever', pairKey: openPairKey(group.base, p) })}
+                deleverJob={deleverJobOf(rebalanceJob, p)}
                 onClosePerps={() => setClosePerps(p)}
                 onCloseBoros={() => setCloseBoros(p)}
                 onRollOver={() => setRollOver(p)}
@@ -6625,7 +6620,7 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
-            <ClosePairForm base={group.base} legs={perpOnlyCloseLegs(closePerpOnly)} livePositions={livePositions} />
+            <ClosePairForm base={group.base} legs={perpOnlyCloseLegs(closePerpOnly)} livePositions={livePositions} allowTwap />
           </div>
         </Modal>
       )}

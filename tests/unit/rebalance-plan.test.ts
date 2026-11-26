@@ -1,11 +1,8 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { touchOf } from '../../src/core/estimate/books';
-import { walkBook } from '../../src/core/estimate/fill';
 import { roundToStep } from '../../src/core/numbers';
-import { marginPerConvertUsdc, realizedNetUsd } from '../../src/core/rebalance/realize';
-import { newJob } from '../../src/server/rebalanceJob';
+import { type RealizeLeg, realizedNetUsd } from '../../src/core/rebalance/realize';
 import {
   BTC_MARK,
   ETH_MARK,
@@ -30,11 +27,14 @@ import {
   CONVERT_RATE,
   fit,
   floorCents,
+  fullPlanOf,
+  imUsedOf,
   HYPERLIQUID_DEPOSIT_FEE_USD,
   HYPERLIQUID_WITHDRAW_FEE_USD,
   nearestCents,
   notionalByWallet,
   planFor,
+  realizeTabOf,
   roundSeconds,
   sellProceedsUsdt,
   SPOT_ORDER_MAX_USDC,
@@ -1698,98 +1698,151 @@ describe('planFor custom', () => {
   });
 });
 
-describe('planFor with a realize step', () => {
+const movedFrom = (plan: EvenPlan, from: Pool): number => {
+  const route = plan.routes[plan.recommended ?? 'convert'] ?? plan.routes.convert;
+  return route.steps.filter((step) => step.from === from).reduce((total, step) => total + step.move, 0);
+};
+
+describe('planFor plans cash only', () => {
   const owner = ownerBook();
   const ownerPlan = (goal: Goal = EVEN_GOAL) => planFor(owner.buckets, owner.account, owner.inputs, goal);
-  const pickedOf = (plan: EvenPlan): RoutePlan => {
-    const route = plan.routes[plan.recommended ?? 'convert'];
-    if (!route) throw new Error('no route');
-    return route;
-  };
-  const stepOneCosts = (plan: EvenPlan): number =>
-    (plan.realize?.legs ?? []).reduce(
-      (total, leg) => total + leg.closeFeeUsd + leg.reopenFeeUsd + leg.closeImpactUsd + leg.reopenImpactUsd,
-      0,
-    );
 
-  it('clear debt lands at zero after the realize fees', () => {
-    const plan = ownerPlan(REPAY_GOAL);
-    expect(plan.realize?.refused).toBeNull();
-    expect(stepOneCosts(plan)).toBeGreaterThan(0);
-    expect(walletIn(pickedOf(plan).after, 'USDT', 'CROSSEX').cash).toBeGreaterThanOrEqual(-1);
+  it('move plan sends cash only', () => {
+    for (const goal of [REPAY_GOAL, EVEN_GOAL, { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 20_000 } as const]) {
+      const plan = ownerPlan(goal);
+      expect(plan.realize, goal.kind).toBeNull();
+      expect(plan.moves, goal.kind).toBeLessThanOrEqual(3_140);
+      expect(movedFrom(plan, 'HYPERLIQUID'), goal.kind).toBeLessThanOrEqual(3_140);
+      expect(plan.shortOfEven, goal.kind).toBeGreaterThan(1);
+    }
   });
 
-  it('custom max counts the profit', () => {
-    const plan = ownerPlan({ kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 50_000 });
-    const mid = touchOf(OWNER_HL_ETH)?.mid ?? 0;
-    const close = walkBook(OWNER_HL_ETH.asks, 66);
-    const reopen = walkBook(OWNER_HL_ETH.bids, 66);
-    const impact = ((close?.avgPrice ?? 0) - mid) * 66 + (mid - (reopen?.avgPrice ?? 0)) * 66;
-    const fees = 2 * 66 * 1_821 * 0.00042;
-    const convert = Math.ceil(((0.15 * 66 * 1_821 * 0.05 + 20 + 1_284) / marginPerConvertUsdc) * 100) / 100;
-    const expected = 3_140 + 66 * (2_460 - 1_821) - fees - impact - convert * CONVERT_RATE;
-    expect(Math.abs((plan.customMaxUsd ?? 0) - expected)).toBeLessThanOrEqual(1);
+  it('custom max is the From wallet cash', () => {
+    expect(ownerPlan({ kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 50_000 }).customMaxUsd).toBe(3_140);
     expect(ownerPlan().customMaxUsd).toBeNull();
   });
 
-  it('the route moves the rest after step 1\'s convert', () => {
-    const plan = ownerPlan();
-    const converted = (plan.realize?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
-    const move = 45_314 - (45_314 - 29_812) / 2;
-    const rest = move - converted - stepOneCosts(plan) / 2 + (converted * CONVERT_RATE) / 2;
-    expect(converted).toBeGreaterThan(0);
-    expect(Math.abs(plan.moves - (rest + pickedOf(plan).costUsd / 2))).toBeLessThanOrEqual(0.05);
-    const custom = ownerPlan({ kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 20_000 });
-    const customConverted = (custom.realize?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
-    expect(customConverted).toBeGreaterThan(0);
-    expect(custom.moves).toBeCloseTo(Math.floor((20_000 - customConverted) * 100) / 100, 2);
-  });
-
-  it('step 1 alone covers the move', () => {
-    const rules = { ...owner.inputs.perpRules, HYPERLIQUID_FUTURE_ETH_USDC: { lotSize: '0.0001', minSize: '20', minNotional: '10' } };
-    const goal: Goal = { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 5_000 };
-    const plan = planFor(owner.buckets, owner.account, { ...owner.inputs, perpRules: rules }, goal);
-    const converted = (plan.realize?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
-    expect(plan.realize?.refused).toBeNull();
-    expect(converted).toBeGreaterThanOrEqual(5_000);
-    expect(plan.balanced).toBe(false);
-    expect(plan.recommended).not.toBeNull();
-    for (const route of [plan.routes.loop, plan.routes.convert]) {
-      expect(route).toMatchObject({ available: true, costUsd: 0, steps: [] });
-      expect(walletIn(route?.after ?? [], 'USDT', 'CROSSEX').cash).toBeCloseTo(-29_812 + converted * (1 - CONVERT_RATE), 1);
-    }
-  });
-});
-
-describe('planFor realize at $6,000,000', () => {
-  const qty = 3_312.6294;
-  const whale = (availableMargin: number) =>
-    realizeBook({
-      usdt: { cash: -4_500_000, upnl: 0 },
-      usdc: { cash: 4_800_000, upnl: 2_114_451.35 },
-      availableMargin,
+  it.each([
+    [50, 5_000],
+    [4_800_000, 2_114_451.35],
+  ])('with %d USDC of cash and %d of uPnL, Clear debt moves no more than the cash', (cash, upnl) => {
+    const qty = upnl / (2_460 - ETH_MARK);
+    const book = realizeBook({
+      usdt: { cash: -(cash + upnl / 2), upnl: 0 },
+      usdc: { cash, upnl },
+      availableMargin: 0,
       perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 2_460, ETH_MARK), perp('GATE_FUTURE_ETH_USDT', qty, ETH_MARK, ETH_MARK)],
       books: { HYPERLIQUID_FUTURE_ETH_USDC: HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
       notionalUsd: qty * ETH_MARK,
     });
-
-  it.each([
-    [910_989.65, 0],
-    [-400_000, 5],
-  ])('a $6,000,000 book with a realize ends even within 4 passes, available margin %d, %d Converts', (available, converts) => {
-    const book = whale(available);
-    const plan = planFor(book.buckets, book.account, book.inputs);
-    const legs = plan.realize?.legs ?? [];
-    expect(plan.realize?.refused).toBeNull();
-    expect(legs.map((leg) => leg.symbol)).toEqual(['HYPERLIQUID_FUTURE_ETH_USDC']);
-    expect(legs[0].convert?.count ?? 0).toBe(converts);
-    expect(legs.reduce((total, leg) => total + realizedNetUsd(leg), 0)).toBeGreaterThanOrEqual(907_225.67);
-    expect(plan.balanced).toBe(false);
-    expect(plan.shortOfEven).toBeLessThan(1);
+    const plan = planFor(book.buckets, book.account, book.inputs, REPAY_GOAL);
+    expect(plan.realize).toBeNull();
+    expect(movedFrom(plan, 'HYPERLIQUID')).toBeLessThanOrEqual(cash);
   });
 });
 
-describe('planFor credits a realize Convert to the wallet the job sends it to', () => {
+describe('fullPlanOf', () => {
+  const owner = ownerBook();
+  const usdtPerDay = (buckets: ReturnType<typeof bucketsFrom>): number =>
+    buckets.find((bucket) => bucket.coin === 'USDT' && bucket.venue === 'CROSSEX')?.interestPerDayUsd ?? 0;
+
+  it('prices the folded realize at Limit + hedge and adds the move after it', () => {
+    const full = fullPlanOf(owner.buckets, owner.account, owner.inputs);
+    const tab = realizeTabOf(owner.buckets, owner.account, owner.inputs, null);
+    expect(full).not.toBeNull();
+    expect(full?.needsRealize).toBe(true);
+    expect(full?.refused).toBeNull();
+    expect(full?.clearsBorrow).toBe(true);
+    expect(full?.realizeCostUsd).toBeCloseTo(tab?.clearDebt?.estimates.maker.totalUsd ?? 0, 2);
+    expect(full?.realizeCostUsd ?? 0).toBeLessThan(tab?.clearDebt?.estimates.market.totalUsd ?? 0);
+    expect(full?.costUsd).toBeCloseTo((full?.moveCostUsd ?? 0) + (full?.realizeCostUsd ?? 0), 2);
+    expect(full?.days).toBe(Math.ceil((full?.costUsd ?? 0) / usdtPerDay(owner.buckets)));
+    expect(full?.interestPerMonthUsd).toBeCloseTo(usdtPerDay(owner.buckets) * 30, 2);
+  });
+
+  it('owner shape: 7,169.33 USDT borrow with 55.98 USDC cash needs a realize and clears the borrow', () => {
+    const qty = 20;
+    const book = realizeBook({
+      usdt: { cash: -7_169.33, upnl: 0 },
+      usdc: { cash: 55.98, upnl: qty * (2_250 - 1_821) },
+      availableMargin: 2_000,
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 2_250, 1_821), perp('GATE_FUTURE_ETH_USDT', qty, 1_821, 1_821)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: OWNER_HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: qty * 1_821,
+    });
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    expect(full).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
+    expect(full?.realizeCostUsd ?? 0).toBeGreaterThan(0);
+    expect(full?.moveCostUsd ?? 0).toBeGreaterThan(0);
+    expect(full?.interestPerMonthUsd).toBeCloseTo(((7_169.33 * 0.0596) / 365) * 30, 1);
+    expect(full?.days).toBe(Math.ceil((full?.costUsd ?? 0) / usdtPerDay(book.buckets)));
+  });
+
+  it('cash alone clears the borrow at $6,000,000 with no realize', () => {
+    const qty = 3_312.6294;
+    const book = realizeBook({
+      usdt: { cash: -4_500_000, upnl: 0 },
+      usdc: { cash: 4_800_000, upnl: 2_114_451.35 },
+      availableMargin: 910_989.65,
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 2_460, ETH_MARK), perp('GATE_FUTURE_ETH_USDT', qty, ETH_MARK, ETH_MARK)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: qty * ETH_MARK,
+    });
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    expect(full).toMatchObject({ needsRealize: false, clearsBorrow: true, realizeCostUsd: 0, refused: null });
+    expect(full?.costUsd).toBe(full?.moveCostUsd);
+  });
+
+  const ownerShapeAt = (borrow: number, usdcCash = 55.98 * (borrow / 7_169.33)) => {
+    const scale = borrow / 7_169.33;
+    const qty = Number(roundToStep(20 * scale, '0.0001', 'down'));
+    return realizeBook({
+      usdt: { cash: -borrow, upnl: 0 },
+      usdc: { cash: usdcCash, upnl: qty * (2_250 - 1_821) },
+      availableMargin: 2_000 * scale,
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, 2_250, 1_821), perp('GATE_FUTURE_ETH_USDT', qty, 1_821, 1_821)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: qty * 1_821,
+    });
+  };
+
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('full plan at every rung of the size ladder (%d USD borrow)', (borrow) => {
+    const book = ownerShapeAt(borrow);
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    const perDay = usdtPerDay(book.buckets);
+    expect(full).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
+    expect(full?.costUsd).toBe(Math.round(((full?.moveCostUsd ?? 0) + (full?.realizeCostUsd ?? 0)) * 100) / 100);
+    expect(full?.days).toBe(Math.ceil(Math.round(((full?.costUsd ?? 0) / perDay) * 1e6) / 1e6));
+    expect(full?.interestPerMonthUsd).toBe(Math.round(perDay * 30 * 100) / 100);
+    expect(full?.interestPerMonthUsd ?? 0).toBeCloseTo(((borrow * 0.0596) / 365) * 30, 1);
+  });
+
+  it.each([0.99, 1.01])('a borrow of %d USD next to the 1 USD dust line', (borrow) => {
+    const book = ownerShapeAt(borrow, 100);
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    expect(full).toMatchObject({ costUsd: 0, days: 0, clearsBorrow: true, needsRealize: false, refused: null });
+  });
+
+  it('a refused realize leaves the borrow open and names the refusal', () => {
+    const full = fullPlanOf(owner.buckets, owner.account, { ...owner.inputs, feeRows: [] });
+    expect(full).toMatchObject({ needsRealize: true, clearsBorrow: false, realizeCostUsd: 0 });
+    expect(full?.refused?.reason).toBe('no-fee-rate');
+  });
+
+  it('a borrow that pays no interest has no full plan', () => {
+    const book = realizeBook({
+      usdt: { cash: 0, upnl: 0 },
+      usdc: { cash: -5_000, upnl: 20_000 },
+      availableMargin: 0,
+      perps: [],
+      books: {},
+      notionalUsd: 0,
+    });
+    expect(fullPlanOf(book.buckets, book.account, book.inputs)).toBeNull();
+  });
+});
+
+describe('fullPlanOf with three wallets', () => {
   const POOL_LIST: Pool[] = ['CROSSEX', 'HYPERLIQUID', 'LIGHTER'];
   const WALLETS: Record<Pool, { coin: string; venue: string }> = {
     CROSSEX: USDT_WALLET,
@@ -1801,23 +1854,13 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
     exchangeType: WALLETS[pool].venue,
     hourInterestRate: String(0.05 / 8760),
   }));
-  const isPool = (pool: Pool) => (w: { coin: string; venue: string }) =>
-    w.coin === WALLETS[pool].coin && w.venue === WALLETS[pool].venue;
 
-  // Three pool wallets and a BTC perp in profit on the paying venue. By default
-  // 1 BTC is $10,000 up and available margin is 0, so the reopen needs a
-  // Convert of about $2,000.
-  function threeWallets(
-    cash: Record<Pool, number>,
-    payer: 'HYPERLIQUID' | 'CROSSEX',
-    lighterNotional = 0,
-    { qty = 1, profit = 10_000, available = 0 }: { qty?: number; profit?: number; available?: number } = {},
-  ) {
-    const perCoin = profit / qty;
+  function threeWallets(cash: Record<Pool, number>, payer: 'HYPERLIQUID' | 'CROSSEX') {
+    const profit = 10_000;
     const perps =
       payer === 'HYPERLIQUID'
-        ? [perp('HYPERLIQUID_FUTURE_BTC_USDC', -qty, BTC_MARK + perCoin, BTC_MARK), perp('GATE_FUTURE_BTC_USDT', qty, BTC_MARK, BTC_MARK)]
-        : [perp('GATE_FUTURE_BTC_USDT', qty, BTC_MARK - perCoin, BTC_MARK), perp('HYPERLIQUID_FUTURE_BTC_USDC', -qty, BTC_MARK, BTC_MARK)];
+        ? [perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK + profit, BTC_MARK), perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK, BTC_MARK)]
+        : [perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK - profit, BTC_MARK), perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK, BTC_MARK)];
     const upnl = (pool: Pool): number => (pool === payer ? profit : 0);
     const walletAsset = (coin: string, venue: string, balance: number, unrealized: number): AssetLike => {
       const borrow = Math.max(0, -balance);
@@ -1833,11 +1876,11 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
         borrowingMaintenanceMargin: String(borrow * 0.1),
       };
     };
-    const marginBalance = sumOf(POOL_LIST.map((pool) => cash[pool] + upnl(pool)));
+    const marginBalance = POOL_LIST.reduce((total, pool) => total + cash[pool] + upnl(pool), 0);
     const account: AccountLike = {
-      availableMargin: String(available),
+      availableMargin: '0',
       marginBalance: String(marginBalance),
-      initialMargin: String(marginBalance - available),
+      initialMargin: String(marginBalance),
       assets: [
         ...POOL_LIST.map((pool) => walletAsset(WALLETS[pool].coin, WALLETS[pool].venue, cash[pool], upnl(pool))),
         walletAsset('USDC', 'GATE', 0, 0),
@@ -1849,174 +1892,68 @@ describe('planFor credits a realize Convert to the wallet the job sends it to', 
       spotTakerRate: 0,
       ask: 1.0001,
       bid: 0.9999,
-      notional: { 'USDT/CROSSEX': qty * BTC_MARK, 'USDC/HYPERLIQUID': qty * BTC_MARK, 'USDC/LIGHTER': lighterNotional },
+      notional: { 'USDT/CROSSEX': BTC_MARK, 'USDC/HYPERLIQUID': BTC_MARK, 'USDC/LIGHTER': 0 },
       perps,
       books: { HYPERLIQUID_FUTURE_BTC_USDC: HL_BTC, GATE_FUTURE_BTC_USDT: GATE_BTC },
       feeRows: FEE_ROWS,
       perpRules: PERP_RULES,
-      availableMargin: available,
+      availableMargin: 0,
     };
     return { account, buckets: bucketsFrom(account, RATES, {}), inputs };
-  }
-  const sumOf = (values: number[]): number => values.reduce((total, value) => total + value, 0);
-
-  // Runs the job built from the plan on the starting cash: each leg's close,
-  // its realize Converts where the job sends them, then the Convert route.
-  function replay(buckets: ReturnType<typeof bucketsFrom>, plan: EvenPlan): Record<Pool, number> {
-    const route = plan.routes.convert;
-    const cash = Object.fromEntries(
-      POOL_LIST.map((pool) => [pool, buckets.find(isPool(pool))?.cash ?? 0]),
-    ) as Record<Pool, number>;
-    const job = newJob(
-      { route: 'convert', steps: route.steps, amount: 0, costUsd: 0, target: route.after, userId: null, realize: plan.realize },
-      0,
-    );
-    for (const leg of plan.realize?.legs ?? []) {
-      cash[leg.pool] += leg.realizedUsd - leg.closeFeeUsd - leg.reopenFeeUsd - leg.closeImpactUsd;
-    }
-    const realizeConverts = job.steps.filter((step) => step.phase === 'realize' && step.name.startsWith('Convert'));
-    expect(realizeConverts.length).toBeGreaterThan(0);
-    for (const step of realizeConverts) {
-      expect(step.name).toBe('Convert');
-      cash[step.from] -= step.planned ?? 0;
-      cash[step.to] += (step.planned ?? 0) * (1 - CONVERT_RATE);
-    }
-    for (const step of route.steps) {
-      cash[step.from] -= step.move;
-      cash[step.to] += step.arrives;
-    }
-    return cash;
-  }
-
-  function expectReplayMatches(buckets: ReturnType<typeof bucketsFrom>, plan: EvenPlan): void {
-    const ran = replay(buckets, plan);
-    for (const pool of POOL_LIST) {
-      const after = plan.routes.convert.after.find(isPool(pool));
-      expect(Math.abs((after?.cash ?? 0) - ran[pool]), pool).toBeLessThanOrEqual(1);
-    }
   }
 
   it.each([
     ['HYPERLIQUID', { CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: -5_000 }],
     ['CROSSEX', { CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: -5_000 }],
-  ] as const)('clear borrow with %s paying and two borrowing wallets clears both in the job', (payer, cash) => {
+  ] as const)('clear borrow with %s paying clears both borrowing wallets', (payer, cash) => {
     const book = threeWallets(cash, payer);
-    const plan = planFor(book.buckets, book.account, book.inputs, REPAY_GOAL);
-    expect(plan.realize?.refused).toBeNull();
-    expect(sumOf((plan.realize?.legs ?? []).map((leg) => leg.convert?.amount ?? 0))).toBeGreaterThan(1_500);
-    expectReplayMatches(book.buckets, plan);
-    // The Convert route pays a fee the recommended route does not, so only the
-    // recommended route is held to clearing every borrow.
-    for (const wallet of plan.routes[plan.recommended ?? 'convert']?.after ?? []) {
-      expect(wallet.cash, wallet.venue).toBeGreaterThanOrEqual(-1);
-    }
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    expect(full).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
+    const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    expect(tab?.pool).toBe(payer);
+    const converted = (tab?.clearDebt?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
+    expect(converted).toBeGreaterThan(1_500);
+  });
+});
+
+describe('realizeTabOf', () => {
+  const owner = ownerBook();
+  const netOf = (legs: RealizeLeg[] = []): number => legs.reduce((total, leg) => total + realizedNetUsd(leg), 0);
+  const qtyOf = (legs: RealizeLeg[] = []): number => legs.reduce((total, leg) => total + leg.qty, 0);
+
+  it('gives Clear debt, All and the slices of the lead leg', () => {
+    const tab = realizeTabOf(owner.buckets, owner.account, owner.inputs, null);
+    expect(tab?.pool).toBe('HYPERLIQUID');
+    expect(tab?.clearDebt?.refused).toBeNull();
+    expect(tab?.clearDebt?.legs.map((leg) => leg.symbol)).toEqual(['HYPERLIQUID_FUTURE_ETH_USDC']);
+    expect(tab?.all?.refused).toBeNull();
+    expect(qtyOf(tab?.all?.legs)).toBeGreaterThanOrEqual(qtyOf(tab?.clearDebt?.legs));
+    expect(netOf(tab?.all?.legs)).toBeGreaterThanOrEqual(netOf(tab?.clearDebt?.legs));
+    expect(tab?.custom).toBeNull();
+    expect((tab?.sliceOptions ?? []).length).toBeGreaterThan(0);
+    expect(tab?.sliceOptions.every((option) => option.notHedgedMaxQty <= qtyOf(tab.clearDebt?.legs) + 1e-9)).toBe(true);
+    expect(tab?.defaultSliceUsd ?? 0).toBeGreaterThan(0);
   });
 
-  // What the job sends into the move's receiver: route steps plus realize
-  // Converts that land there. With the short the plan names, it is the ask.
-  const sentTo = (plan: EvenPlan, to: Pool): number => {
-    const route = plan.routes.convert;
-    const job = newJob(
-      { route: 'convert', steps: route.steps, amount: 0, costUsd: 0, target: route.after, userId: null, realize: plan.realize },
-      0,
-    );
-    const converts = job.steps.filter((step) => step.phase === 'realize' && step.name === 'Convert' && step.to === to);
-    return sumOf(route.steps.filter((step) => step.to === to).map((step) => step.move)) + sumOf(converts.map((step) => step.planned ?? 0));
-  };
-
-  it.each([
-    ['CROSSEX', { CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: 0 }],
-    ['HYPERLIQUID', { CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: 0 }],
-  ] as const)('a custom move from %s to Lighter does not count the Convert the job sends elsewhere', (payer, cash) => {
-    const book = threeWallets(cash, payer);
-    const goal: Goal = { kind: 'custom', from: payer, to: 'LIGHTER', amount: 5_000 };
-    const plan = planFor(book.buckets, book.account, book.inputs, goal);
-    expect(plan.realize?.refused).toBeNull();
-    expect(sumOf((plan.realize?.legs ?? []).map((leg) => leg.convert?.amount ?? 0))).toBeGreaterThan(1_500);
-    expectReplayMatches(book.buckets, plan);
-    expect(sentTo(plan, 'LIGHTER') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
-
-    // The maximum closes the whole perp and sends it all; $10 more is short.
-    const max = plan.customMaxUsd ?? 0;
-    const atMax = planFor(book.buckets, book.account, book.inputs, { ...goal, amount: max });
-    expect(sumOf((atMax.realize?.legs ?? []).map((leg) => leg.qty))).toBeCloseTo(1, 6);
-    expect(atMax.shortOfEven).toBeLessThan(1);
-    expect(sentTo(atMax, 'LIGHTER')).toBeGreaterThanOrEqual(max - 1);
-    const over = planFor(book.buckets, book.account, book.inputs, { ...goal, amount: max + 10 });
-    expect(over.shortOfEven).toBeGreaterThanOrEqual(9);
+  it('Custom realizes the asked USDC, and no more than All', () => {
+    const tab = realizeTabOf(owner.buckets, owner.account, owner.inputs, 5_000);
+    expect(tab?.custom?.refused).toBeNull();
+    expect(netOf(tab?.custom?.legs)).toBeGreaterThanOrEqual(5_000);
+    expect(netOf(tab?.custom?.legs)).toBeLessThan(netOf(tab?.all?.legs));
+    const over = realizeTabOf(owner.buckets, owner.account, owner.inputs, 10_000_000);
+    expect(qtyOf(over?.custom?.legs)).toBeCloseTo(qtyOf(over?.all?.legs), 6);
   });
 
-  it('a custom move to Lighter skips a realize whose Convert costs more than the profit it frees', () => {
-    // 1 BTC at 1% profit: the reopen's Convert (about 3.75% of the price at
-    // Gate's 20x) costs more than closing frees, so only the cash moves.
-    const book = threeWallets({ CROSSEX: 3_000, HYPERLIQUID: -5_000, LIGHTER: 0 }, 'CROSSEX', 0, { profit: BTC_MARK * 0.01 });
-    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'LIGHTER', amount: 5_000 };
-    const plan = planFor(book.buckets, book.account, book.inputs, goal);
-    expect(plan.realize?.refused?.reason).toBe('no-margin');
-    expect(sentTo(plan, 'LIGHTER')).toBeGreaterThanOrEqual(3_000 - 0.01);
-    expect(sentTo(plan, 'LIGHTER') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
-    expect(plan.customMaxUsd).toBeGreaterThanOrEqual(3_000 - 0.01);
+  it('with no perp in profit there is no tab', () => {
+    expect(realizeTabOf(owner.buckets, owner.account, { ...owner.inputs, perps: [] }, null)).toBeNull();
   });
+});
 
-  it('a custom move to Lighter stops the close at the size whose reopen needs no Convert', () => {
-    // 3 BTC at 1% profit with $1,000 free margin: about 2 BTC reopen without a
-    // Convert; closing more would pay a Convert worth more than it frees.
-    const book = threeWallets({ CROSSEX: 3_000, HYPERLIQUID: -5_000, LIGHTER: 0 }, 'CROSSEX', 0, {
-      qty: 3,
-      profit: 3 * BTC_MARK * 0.01,
-      available: 1_000,
-    });
-    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'LIGHTER', amount: 5_000 };
-    const plan = planFor(book.buckets, book.account, book.inputs, goal);
-    const legs = plan.realize?.legs ?? [];
-    expect(plan.realize?.refused).toBeNull();
-    expect(legs).toHaveLength(1);
-    expect(legs[0].convert).toBeNull();
-    expect(legs[0].qty).toBeGreaterThan(1.5);
-    expect(legs[0].qty).toBeLessThan(3);
-    expect(sentTo(plan, 'LIGHTER')).toBeGreaterThan(3_000 + 1_000);
-    expect(sentTo(plan, 'LIGHTER') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
-  });
-
-  it('a custom move to the Convert target still counts the Convert', () => {
-    const book = threeWallets({ CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: 0 }, 'CROSSEX');
-    const goal: Goal = { kind: 'custom', from: 'CROSSEX', to: 'HYPERLIQUID', amount: 5_000 };
-    const plan = planFor(book.buckets, book.account, book.inputs, goal);
-    expect(plan.realize?.refused).toBeNull();
-    expectReplayMatches(book.buckets, plan);
-    expect(sentTo(plan, 'HYPERLIQUID') + plan.shortOfEven).toBeGreaterThanOrEqual(5_000 - 0.01);
-    expect(sentTo(plan, 'HYPERLIQUID')).toBeLessThanOrEqual(5_000 + 0.01);
-  });
-
-  it('balance where the Convert target is a sender closes no more of the perp than the move needs', () => {
-    // CrossEx borrows 3,000 USDT but its Gate perp is $5,000 in profit, so its
-    // equity is over its share and it is not a receiver of Hyperliquid.
-    const base = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: 0 }, 'HYPERLIQUID', 300_000);
-    const assets = (base.account.assets ?? []).map((asset) =>
-      asset.coin === 'USDT' ? { ...asset, upnl: '5000', equity: String(-3_000 + 5_000) } : asset,
-    );
-    const account: AccountLike = {
-      ...base.account,
-      marginBalance: String(Number(base.account.marginBalance) + 5_000),
-      initialMargin: String(Number(base.account.marginBalance) + 5_000),
-      assets,
-    };
-    const perps = [perp('HYPERLIQUID_FUTURE_BTC_USDC', -1, BTC_MARK + 10_000, BTC_MARK), perp('GATE_FUTURE_BTC_USDT', 1, BTC_MARK - 5_000, BTC_MARK)];
-    const buckets = bucketsFrom(account, RATES, {});
-    const plan = planFor(buckets, account, { ...base.inputs, perps }, EVEN_GOAL);
-    expect(plan.realize?.refused).toBeNull();
-    expect(plan.realize?.legs.find((leg) => leg.pool === 'HYPERLIQUID')?.convert).not.toBeNull();
-    expectReplayMatches(buckets, plan);
-    expect(plan.shortOfEven).toBeLessThan(1);
-    // Closing more than the move needs would leave the extra as idle Hyperliquid cash.
-    const after = plan.routes[plan.recommended ?? 'convert']?.after ?? [];
-    expect(after.find(isPool('HYPERLIQUID'))?.cash ?? Infinity).toBeLessThan(100);
-  });
-
-  it('balance with Lighter as the widest receiver and no Lighter borrow funds the reopen from the CrossEx borrow', () => {
-    const book = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: 500 }, 'HYPERLIQUID', 300_000);
-    const plan = planFor(book.buckets, book.account, book.inputs, EVEN_GOAL);
-    expect(plan.realize?.refused).toBeNull();
-    expectReplayMatches(book.buckets, plan);
+describe('imUsedOf', () => {
+  it('reads initial margin over margin balance for the CrossEx account', () => {
+    expect(imUsedOf({ availableMargin: '107', marginBalance: '1000', initialMargin: '893' })).toEqual([
+      { account: 'CROSSEX', pct: 0.893 },
+    ]);
+    expect(imUsedOf({ availableMargin: '-5', marginBalance: '0', initialMargin: '5' })).toEqual([{ account: 'CROSSEX', pct: 1 }]);
   });
 });
