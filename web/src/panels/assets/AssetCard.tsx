@@ -61,6 +61,7 @@ import {
   usePositions,
   useRebalance,
 } from '../../api/queries';
+import { ApiError } from '../../api/client';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
 import { aprCost, AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, MarginUsageRow, marketName, OpposingAcknowledgement, SpreadReadout, SuggestedTopUpLines, usdOf as simUsdOf } from '../../trade/BorosPairBits';
 import { EstimateAge, EstimateRow, SlippageLine, SummaryCard } from '../../trade/PairTicketBits';
@@ -2599,7 +2600,7 @@ function RollReview({
   };
   // The report page reads the execute response, not the quote — so once the
   // roll has been sent the poll stops rather than re-pricing a closed pair.
-  const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string } | null>(null);
+  const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string; refused: boolean } | null>(null);
   useEffect(() => onResult(out !== null), [out, onResult]);
   const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null, ROLL_POLL_MS);
   const exitSim = roll.data?.exit.simulation ?? null;
@@ -2690,18 +2691,15 @@ function RollReview({
     );
   const canConfirm = rollReq !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
-  const sentRoll = useRef<BorosRollRequest | null>(null);
   const run = async () => {
-    const req = sentRoll.current ?? rollReq;
-    if (!req) return;
-    sentRoll.current = req;
+    if (!rollReq) return;
     setBusy(true);
     setOut(null);
     try {
-      const payload = await executeRoll.mutateAsync({ ...req, clientOrderIds: rollIds(req) });
+      const payload = await executeRoll.mutateAsync({ ...rollReq, clientOrderIds: rollIds(rollReq) });
       setOut({ payload });
     } catch (e) {
-      setOut({ error: e instanceof Error ? e.message : String(e) });
+      setOut({ error: e instanceof Error ? e.message : String(e), refused: e instanceof ApiError && e.httpStatus === 409 });
     } finally {
       setBusy(false);
     }
@@ -2725,6 +2723,7 @@ function RollReview({
     const namedMarket = reason?.leg != null ? legMarketName(reason.leg) : null;
     const refusedText = reason ? (namedMarket ? `${namedMarket}: ${localizeServerText(reason.message)}` : localizeServerText(reason.message)) : '';
     const canRetry = 'error' in out || status === 'refused';
+    const canEdit = status === 'refused' || ('error' in out && out.refused);
     return (
       <div className="flex flex-col gap-2">
         {result && (
@@ -2763,6 +2762,11 @@ function RollReview({
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             {t('common.close')}
           </button>
+          {canEdit && (
+            <button type="button" className="btn" onClick={() => setOut(null)} disabled={busy}>
+              {t('common.back')}
+            </button>
+          )}
           {canRetry && (
             <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
               {t('common.retry')}
@@ -2994,7 +2998,7 @@ function OpenOnlyReview({
   const execute = useExecuteBorosPair();
   // One tolerance for the two entry legs — seeded as the pick page settled it,
   // editable here. Invalid (empty, zero, over the cap) blocks the confirm.
-  const seedPct = entrySeedPct ?? ROLL_MAX_SLIP_PCT / 10;
+  const seedPct = entrySeedPct ?? seedSlipPctFor(markets, targetMarketIds(target));
   const [slipEdited, setSlipEdited] = useState<string | null>(null);
   const [slipOpen, setSlipOpen] = useState(false);
   const slipStr = slipEdited ?? String(seedPct);
@@ -3058,15 +3062,12 @@ function OpenOnlyReview({
   const ids = useRef<string[]>([]);
   const canConfirm = req !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
-  const sentReq = useRef<typeof req>(null);
   const run = async () => {
-    const body = sentReq.current ?? req;
-    if (!body) return;
-    sentReq.current = body;
+    if (!req) return;
     setBusy(true);
     setOut(null);
     try {
-      const payload = await execute.mutateAsync({ ...body, legs: body.legs.map((l, i) => ({ ...l, clientOrderId: (ids.current[i] ??= `o${i}-${uuid()}`) })) });
+      const payload = await execute.mutateAsync({ ...req, legs: req.legs.map((l, i) => ({ ...l, clientOrderId: (ids.current[i] ??= `o${i}-${uuid()}`) })) });
       setOut({ payload });
     } catch (e) {
       setOut({ error: e instanceof Error ? e.message : String(e) });
@@ -3113,6 +3114,11 @@ function OpenOnlyReview({
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             {t('common.close')}
           </button>
+          {result?.filledNothing && (
+            <button type="button" className="btn" onClick={() => setOut(null)} disabled={busy}>
+              {t('common.back')}
+            </button>
+          )}
           {retryable && (
             <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
               {t('common.retry')}
