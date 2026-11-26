@@ -25,7 +25,7 @@ const LOOK = {
   },
   glow: {
     group: 'items-stretch',
-    tab: `${GLOW_TAB} px-5 py-[15px] text-[13px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-info/60`,
+    tab: `${GLOW_TAB} flex-1 px-2 py-4 text-pp-md font-medium outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-info/60`,
     active: GLOW_ACTIVE,
     idle: GLOW_IDLE,
   },
