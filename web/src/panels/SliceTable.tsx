@@ -110,7 +110,7 @@ export function SliceTable({ options, value, exec, onPick, customText, onCustom,
       </div>
       <div className="flex items-center gap-3 px-3 text-pp-sm2 text-ink-400">
         <span className="w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1">{t('accounts.slices.title')}</span>
+        <span className="min-w-0 flex-1" />
         {[t('accounts.slices.count'), t('accounts.slices.estTime'), t('accounts.slices.priceImpact')].map(
           (head, i) => (
             <span key={head} className={`${COLS[i]} shrink-0 text-right`}>

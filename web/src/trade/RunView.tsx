@@ -103,7 +103,14 @@ export function RunView({ title, chip, progress, firstLine, rows, graph, priceBo
       ))}
       {orders.length > 0 && (
         <FoldRow
-          label={tr('trade.twap.run.orders', { n: orders.length })}
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              {tr('trade.twap.run.orders')}
+              <Chip sm className="num">
+                {orders.length}
+              </Chip>
+            </span>
+          }
           summary=""
           open={ordersOpen}
           onToggle={() => setOrdersOpen((v) => !v)}
@@ -111,13 +118,12 @@ export function RunView({ title, chip, progress, firstLine, rows, graph, priceBo
           <OrdersTable orders={orders} />
         </FoldRow>
       )}
-      {acts}
       {footer && (
-        <div className="flex flex-col gap-0.5 text-[11px] text-ink-500">
-          <span>{tr('trade.twap.footer.runsInApp')}</span>
-          <span>{tr(isMac() ? 'trade.twap.footer.awake' : 'trade.twap.run.awakeOther')}</span>
+        <div className="text-[11px] text-ink-400">
+          {tr(isMac() ? 'trade.twap.footer.awake' : 'trade.twap.run.awakeOther')}
         </div>
       )}
+      {acts}
     </div>
   );
 }

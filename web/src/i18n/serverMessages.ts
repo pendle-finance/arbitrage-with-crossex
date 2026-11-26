@@ -428,7 +428,6 @@ const RULES: readonly Rule[] = [
   [/^Maker leg is post-only \(was (\S+)\)$/, 'makerTifForced', ['tif']],
   [/^Price rounded to the venue's price step: (\S+) → (\S+)$/, 'priceAdjusted', ['from', 'to']],
   [/^No reference price, so no estimates$/, 'noRefPriceEstimates'],
-  [/^Size set to (\S+) \(was (.*)\) so both legs trade the same amount$/, 'sizeSetShared', ['size', 'was']],
   [/^Close size rounded down to the lot (\S+): (\S+) → (\S+)$/, 'closeQtyFloored', ['lot', 'from', 'to']],
   [/^looks like a delta-neutral pair with action #(\d+) — link them \(pairGroupId\) to arm the unhedged guard$/, 'looksLikePair', ['index']],
   [/^No fill estimate \(no book, no reference price\)$/, 'noFillEstimate'],

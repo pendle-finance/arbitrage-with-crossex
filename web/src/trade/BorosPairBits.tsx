@@ -300,6 +300,10 @@ export function aprCost(sim: BorosPairSimulation, parts: { apr: number; size: nu
 export const usdOf = (sim: BorosPairSimulation, n: number | null): number | null =>
   n === null || sim.collateralPriceUsd === null ? null : n * sim.collateralPriceUsd;
 
+export const amountText = (sim: BorosPairSimulation, n: number | null): string | null =>
+  n === null ? null : sim.collateralPriceUsd === null ? `${size(n)} ${sim.collateral}` : usdAt(n * sim.collateralPriceUsd);
+
+
 export function TotalCostRow({ sim, slippage }: { sim: BorosPairSimulation; slippage: number | null }) {
   const { t } = useTranslation();
   return (

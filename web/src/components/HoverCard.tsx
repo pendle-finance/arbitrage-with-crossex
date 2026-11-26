@@ -294,7 +294,7 @@ export function HoverCard({
       }`}
     >
       {label}
-      {icon && <InfoMark />}
+      {icon && !underline && <InfoMark />}
       {portal}
     </span>
   );

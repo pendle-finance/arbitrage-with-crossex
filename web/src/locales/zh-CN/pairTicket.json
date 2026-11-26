@@ -48,8 +48,6 @@
     "bookHint": "显示或隐藏实时订单簿和冲击成本图",
     "book": "订单簿",
     "tradeCost": "交易成本",
-    "openMakerTaker": "开仓：挂单 + 吃单",
-    "openTakerTwice": "开仓：2 × 吃单",
     "colLeg": "腿",
     "colPrice": "预估价格",
     "colSlip": "滑点",
