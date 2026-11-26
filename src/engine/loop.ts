@@ -208,7 +208,8 @@ function bumpClipWall(deps: LoopDeps, pair: PairRow, now: number): void {
     pocRejects: n,
     makerNotBefore: now + tuning(deps).POC_BACKOFF_MS,
   });
-  if (n >= tuning(deps).MAX_POC_REJECTS) {
+  const turnsToMarket = pair.mode === 'OPENING' && pair.a.reduceOnly === true && pair.deadlineAt !== null;
+  if (n >= tuning(deps).MAX_POC_REJECTS && !turnsToMarket) {
     deps.store.alert(
       'error',
       pair.id,

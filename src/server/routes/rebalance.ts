@@ -58,7 +58,7 @@ import { TTL } from '../cache';
 import { accountFeeRowsOf, cachedTradesOf, feeReadWithin, feeRowsWithin } from '../dealFees';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { catchRateLimit, refuse, sendError } from '../errorReply';
-import { isSlicedTwap, loadTwapChildren, markOpenGap, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
+import { isSlicedTwap, loadTwapChildren, markOpenGap, sliceStepBehind, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
 import { createDeal, type DealBody } from './deals';
 import { INTEREST_OVERFLOW, INTEREST_PAGE_SIZE, InterestFile, syncInterest } from '../interestLedger';
 import {
@@ -582,7 +582,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         jobs.write(halted);
         onHalt(halted);
       }
-    } else if (jobs && bootJob && bootStep?.name === SLICE_STEP) {
+    } else if (jobs && bootJob && bootStep && (bootStep.name === SLICE_STEP || (!resumesAtBoot && sliceStepBehind(bootJob) !== null))) {
       inflight = cancelRestingLead(runnerDeps(jobs), bootJob)
         .then(() => {
           if (!bootJob.paused) onHalt(bootJob);
@@ -876,11 +876,11 @@ export function rebalanceRoutes(deps: AppDeps) {
         const fix = { label: `Use ${legs.length} slices`, patch: { ...input, slices: legs.length } };
         return { plan: null, refusal: { field: 'sliceSize', text: `Use at least ${legs.length} slices, one for each perp.`, fix }, price: whole.price, legs: [], estimates: null };
       }
-      const counts = splitSlices(shape.slices, usd);
+      const counts = splitSlices(shape.slices, usd).map((count) => Math.max(2, count));
       const split: SplitLeg[] = [];
       for (const [index, leg] of legs.entries()) {
         const reopen: OrderLeg = { symbol: leg.symbol, side: orderLeg(leg).side === 'BUY' ? 'SELL' : 'BUY' };
-        const planned = await twapPlanFor([orderLeg(leg), reopen], qtyText(leg.qty), { intervalSec: shape.intervalSec, slices: Math.max(2, counts[index]) }, fresh, markOf(leg.symbol));
+        const planned = await twapPlanFor([orderLeg(leg), reopen], qtyText(leg.qty), { intervalSec: shape.intervalSec, slices: counts[index] }, fresh, markOf(leg.symbol));
         split.push({ qty: qtyText(leg.qty), rules: planned.rules, mark: planned.price, bookQty: planned.bookQty });
       }
       const planned = splitPlans(shape.intervalSec, counts, split);
@@ -1317,6 +1317,8 @@ export function rebalanceRoutes(deps: AppDeps) {
       }
       current.steps[current.stepIndex].startedAt = now();
       current.retryConverts = 0;
+      current.topUps = 0;
+      current.topUpPending = false;
       store.write(current);
       start(store);
       return reply.ok(current);

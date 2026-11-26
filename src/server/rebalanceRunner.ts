@@ -9,9 +9,9 @@ import { PREFLIGHT_MARGIN_BUFFER, TAKER_FEE_RESERVE } from '../core/preflight';
 import { takerAfterCapSec } from '../core/twap';
 import type { DealRequest } from '../engine/create';
 import type { Store } from '../engine/db';
-import { hasMarginRefusalLabel, project } from '../engine/decide';
+import { project } from '../engine/decide';
 import { commands, decodeStatus } from '../engine/loop';
-import { TUNING, type PairMode, type PairRow } from '../engine/types';
+import { type PairMode, type PairRow } from '../engine/types';
 import { BOROS_CLOSE_FALLBACK_SLIPPAGE_PCT, closeBorosLegs, type BorosCloseDeps } from './borosClose';
 import {
   arrivesFor,
@@ -47,6 +47,7 @@ import {
 } from '../core/rebalance/plan';
 import { marginPerConvertUsdc, minQtyOf, positiveOf, type PerpRule } from '../core/rebalance/realize';
 import { TTL, type TtlCache } from './cache';
+import { haltWalled, isWalledStop } from './walledStop';
 import { borosShareOf, MAKER_FEE_BP, markOpenGap, runTwap, sliceStepBehind, TAKER_FEE_BP, type TwapRunDeps, unwindTargetOf } from './twapRun';
 import {
   ADD_BACK_FIRST,
@@ -82,6 +83,7 @@ import {
   type JobFile,
   type RealizeJobLeg,
   type JobFollow,
+  type JobTwap,
   type Step,
   type StepName,
   type StepPerp,
@@ -410,8 +412,7 @@ async function closeBorosRest(deps: RunnerDeps, job: Job, usdPerYu: Map<number, 
 }
 
 export async function cancelRestingLead(deps: RunnerDeps, job: Job): Promise<void> {
-  const step = job.steps[job.stepIndex];
-  const id = step?.name === SLICE_STEP ? (step.lead?.text ?? null) : null;
+  const id = sliceStepBehind(job)?.lead?.text ?? null;
   const child = id !== null && deps.twap ? deps.twap.store.getPair(id) : null;
   if (deps.twap && child && isLive(child) && child.mode !== 'HALTED') {
     commands.stop(deps.twap.store, child.id);
@@ -424,6 +425,7 @@ export async function cancelRestingLead(deps: RunnerDeps, job: Job): Promise<voi
   job.haltReason = job.paused ? null : HALT_TEXT.restart;
   job.haltKind = job.paused ? null : 'restart';
   if (deps.twap) markOpenGap(deps.twap.store, job);
+  if (!job.paused && job.notHedgedQty > 0) job.haltReason = HALT_TEXT.restartGap;
   setBorosGap(job);
   deps.jobs.write(job);
 }
@@ -541,21 +543,6 @@ function skipRetryConverts(deps: RunnerDeps, job: Job): void {
   job.stepIndex = job.steps.indexOf(step);
 }
 
-const isWalledStop = (store: Store, pair: PairRow): boolean =>
-  pair.mode === 'STOPPING' &&
-  pair.b !== null &&
-  pair.b.reduceOnly !== true &&
-  pair.hedgeRejectStreak >= TUNING.HEDGE_REJECT_HALT &&
-  !project(pair, store.listOrders(pair.id)).anyPending;
-
-function haltWalled(store: Store, pair: PairRow): void {
-  const lastHedge = store.listOrders(pair.id).filter((order) => order.leg === 'B').at(-1);
-  store.updatePair(pair.id, {
-    mode: 'HALTED',
-    haltKind: lastHedge && hasMarginRefusalLabel(lastHedge) ? 'hedge-margin' : null,
-  });
-}
-
 
 function creditSliceChild(job: Job, store: Store, pair: PairRow): void {
   const step = job.steps[job.stepIndex];
@@ -645,6 +632,10 @@ async function unwindGap(deps: RunnerDeps, job: Job, halted: PairRow | null): Pr
   const { done, lot } = await closeGap(deps, job, target, gap);
   if (job.kind === 'realize') step.qty = addQty(step.qty ?? 0, done);
   else leg.filledQty = Math.max(0, addQty(leg.filledQty, -done));
+  return holdOrPause(deps, job, gap, done, lot);
+}
+
+function holdOrPause(deps: RunnerDeps, job: Job, gap: number, done: number, lot: number): Job {
   if (settleGap(job, gap, done, lot)) {
     job.paused = true;
     job.pauseRequested = false;
@@ -667,7 +658,7 @@ async function followGap(deps: RunnerDeps, job: Job): Promise<Job> {
   return job;
 }
 
-async function unwindChild(deps: RunnerDeps, job: Job, halted: PairRow): Promise<PairRow> {
+async function unwindChild(deps: RunnerDeps, job: Job, halted: PairRow): Promise<Job> {
   const engine = engineOf(deps);
   const start = deps.now();
   let settled = halted;
@@ -683,16 +674,33 @@ async function unwindChild(deps: RunnerDeps, job: Job, halted: PairRow): Promise
   }
   const filled = filledOf(engine.store, settled);
   const rule = await sliceRule(deps, halted.a.contract);
-  const lots = lotsDownOf(Math.max(0, addQty(filled.a, -filled.b)), rule.lot);
+  const gap = Math.max(0, addQty(filled.a, -filled.b));
+  const lots = lotsDownOf(gap, rule.lot);
+  const target: JobFollow = { symbol: halted.a.contract, exchange: parseSymbol(halted.a.contract).exchange, side: opposite(halted.a.side), qty: gap, reduceOnly: halted.a.reduceOnly !== true };
+  let done = 0;
   if (lots > 0) {
     const step = job.steps[job.stepIndex];
     const id = job.kind === 'twap' && job.twap ? `${job.id}-f${job.twap.sliceIndex}` : nextChildId(engine.store, job.id, job.slice?.index ?? 1);
-    const ended = await sendOneLeg(deps, id, { symbol: halted.a.contract, side: opposite(halted.a.side), reduceOnly: halted.a.reduceOnly !== true }, qtyText(lots, rule.lot));
+    const ended = await sendOneLeg(deps, id, target, qtyText(lots, rule.lot));
+    done = filledOf(engine.store, ended).a;
     const leg = legFor(job, step);
-    if (step?.name === SLICE_STEP && leg) leg.filledQty = Math.max(0, addQty(leg.filledQty, -filledOf(engine.store, ended).a));
+    if (step?.name === SLICE_STEP && leg) leg.filledQty = Math.max(0, addQty(leg.filledQty, -done));
   }
   engine.store.updatePair(halted.id, { mode: 'DONE' });
-  return engine.store.getPair(halted.id) ?? settled;
+  creditSliceChild(job, engine.store, engine.store.getPair(halted.id) ?? settled);
+  job.unwindTarget = target;
+  return holdOrPause(deps, job, gap, done, Number(rule.lot));
+}
+
+async function unwindRest(deps: RunnerDeps, job: Job, twap: JobTwap, target: JobFollow): Promise<Job> {
+  const engine = engineOf(deps);
+  const rule = await sliceRule(deps, target.symbol);
+  const lots = lotsDownOf(job.notHedgedQty, rule.lot);
+  const base = `${job.id}-f${twap.sliceIndex}`;
+  let k = 2;
+  for (let pair = engine.store.getPair(`${base}-${k}`); pair && !isLive(pair); pair = engine.store.getPair(`${base}-${k}`)) k += 1;
+  const done = lots > 0 ? filledOf(engine.store, await sendOneLeg(deps, `${base}-${k}`, target, qtyText(lots, rule.lot))).a : 0;
+  return holdOrPause(deps, job, job.notHedgedQty, done, Number(rule.lot));
 }
 
 export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction | 'unwind'): Promise<Job> {
@@ -763,19 +771,12 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction | '
     if (job.steps[job.stepIndex]?.name !== SLICE_STEP) throw new CoreError(FIX_UNCONFIRMED, 'validation');
     if (action === 'unwind') return unwindGap(deps, job, halted);
     if (!halted) return followGap(deps, job);
-  } else if (!halted) return job;
-  const engine = engineOf(deps);
-  if (action === 'unwind') {
-    creditSliceChild(job, engine.store, await unwindChild(deps, job, halted));
-    job.paused = true;
-    job.pauseRequested = false;
-    job.haltReason = null;
-    job.haltKind = null;
-    job.notHedgedQty = 0;
-    job.follow = null;
-    deps.jobs.write(job);
-    return job;
+  } else if (!halted) {
+    const rest = job.unwindTarget;
+    return action === 'unwind' && job.twap && rest && job.notHedgedQty > 0 ? unwindRest(deps, job, job.twap, rest) : job;
   }
+  const engine = engineOf(deps);
+  if (action === 'unwind') return unwindChild(deps, job, halted);
   commands.resumeAfterHalt(engine.store, halted.id);
   engine.engineWake();
   const ended = await waitEnded(deps, engine.store, halted.id);
@@ -908,10 +909,10 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     setBorosGap(job);
     const reopen = reopenOf(job.stepIndex);
     const leg = reopen ? legOf(reopen) : undefined;
-    const quotesGone = reason === HALT_TEXT.quotesUsed;
+    const open = reopen && leg ? openOf(leg, reopen) : 0;
     job.status = 'halted';
     job.haltKind = kind ?? (hedgeOpen() ? 'not-hedged' : 'other');
-    job.haltReason = reopen && leg && quotesGone ? REOPEN_HALT.quotesUsedLegOpen(leg, openOf(leg, reopen)) : reason;
+    job.haltReason = leg && open > 0 && reason === HALT_TEXT.quotesUsed ? REOPEN_HALT.quotesUsedLegOpen(leg, open) : reason;
     if (deps.twap) markOpenGap(deps.twap.store, job);
     deps.jobs.write(job);
     deps.onHalt(job);
@@ -1416,6 +1417,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     });
     if (!body.orderId) throw new Error('convert order response has no orderId');
     step.venueId = String(body.orderId);
+    if (job.slice) job.totalCostUsd = nearestCents((job.totalCostUsd ?? 0) + Math.max(0, amount - toAmount));
     await trimAfterRetry(step, amount);
     finish(step, toAmount, spec.dest);
   };
@@ -1505,7 +1507,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const retryConvertCapped = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
-    if (job.retryConverts >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.noCash, 'margin');
+    if (job.retryConverts >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.convertCap, 'margin');
     const account = await readAccount(crossEx());
     if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noCash, 'margin');
     job.retryConverts += 1;
@@ -1518,7 +1520,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const topUp = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
     if (job.topUpPending) return halt(REOPEN_HALT.marginLow, 'margin');
-    if (triedQty === null || (job.topUps ?? 0) >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.noCash, 'margin');
+    if ((job.topUps ?? 0) >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.convertCap, 'margin');
+    if (triedQty === null) return halt(REOPEN_HALT.noCash, 'margin');
     const account = await readAccount(crossEx());
     if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noCash, 'margin');
     const cash = floorCents(Math.max(0, account.cash(poolWallet(leg.pool))));
@@ -1860,6 +1863,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       const queued = deps.takeFix?.();
       if (queued) return await applyFix(deps, job, queued.action).then(queued.done, queued.fail);
       if (job.pauseRequested) return pauseNow();
+      if (deps.pollOnly) return halt(HALT_TEXT.restart, 'restart');
       const rule = await sliceRule(deps, perp.symbol);
       const followRule = follow.symbol === perp.symbol ? rule : await sliceRule(deps, follow.symbol);
       const lot = Number(followRule.lot) > Number(rule.lot) ? followRule.lot : rule.lot;

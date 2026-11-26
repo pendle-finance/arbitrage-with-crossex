@@ -196,6 +196,7 @@ export interface Projection {
   /** Newest leg-A maker order, if any. */
   makerOrder: OrderRow | null;
   lastHedge: OrderRow | null;
+  hedgeReduceOnlyRefusals: number;
   anyPending: boolean;
   anyQuarantined: boolean;
   /** The first order stuck on a status the decoder cannot classify (any leg).
@@ -254,7 +255,7 @@ export interface Tuning {
   MAX_CLIP: string;
   REPEG_MIN_GAP_MS: number;
   REPEG_REFUSED_WAIT_MS: number;
-  /** Zero-fill hedges in a row after which a STOPPING close gives up on its
+  /** Reduce-only refusals on the hedge in a row after which a STOPPING close gives up on its
    * reduce-only hedge leg. That leg's position is most likely already gone
    * (closed by hand, liquidated, ADL), and every retry is refused; without a
    * limit the deal never ends and blocks rebalance, key changes and updates. */

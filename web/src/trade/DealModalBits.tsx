@@ -257,7 +257,12 @@ export function dealRunProps(
 
   if (done) {
     const usd = usdOf(aFilled);
-    const doneTitle = t(`trade.twap.run.${close ? 'doneClosed' : 'doneOpened'}${b ? '' : 'One'}${usd ? '' : 'NoUsd'}`, { qty: qtyText(aFilled), coin, usd });
+    const legFill = (leg: (typeof legs)[number]) =>
+      `${t(close ? 'trade.twap.run.closedVenue' : 'trade.twap.run.filledVenue', { venue: leg.name })} ${t(usdOf(leg.filled) ? 'trade.twap.run.openedValue' : 'trade.twap.run.openedValueNoUsd', { qty: qtyText(leg.filled), coin, usd: usdOf(leg.filled) })}`;
+    const doneTitle =
+      b && aFilled !== bFilled
+        ? legs.map(legFill).join(' / ')
+        : t(`trade.twap.run.${close ? 'doneClosed' : 'doneOpened'}${b ? '' : 'One'}${usd ? '' : 'NoUsd'}`, { qty: qtyText(aFilled), coin, usd });
     const rows: RunRow[] = [
       ...avgRows(),
       ...slippageRow(t('trade.deal.slippage')),
@@ -265,7 +270,8 @@ export function dealRunProps(
       { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
       { label: t('trade.twap.run.took'), value: clockSpan(Math.max(0, (view.endedAt ?? pair.createdAt) - pair.createdAt) / 1000) },
     ];
-    const firstLine = <ResultBox tone={unhedged > 0 ? 'part' : 'done'} title={doneTitle} rows={toResultRows(rows)} />;
+    const doneTone = aFilled <= 0 ? 'stop' : unhedged > 0 || aFilled < total ? 'part' : 'done';
+    const firstLine = <ResultBox tone={doneTone} title={doneTitle} rows={toResultRows(rows)} />;
     return { ...base, chip: null, progress: null, firstLine, rows: [], graph: null, priceBox: null, acts: null, footer: false };
   }
 

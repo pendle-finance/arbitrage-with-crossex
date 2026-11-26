@@ -294,7 +294,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
         {t('trade.twap.run.pausing', { i: slice })}
       </div>
     );
-    return { ...base, firstLine, rows: [{ label: sliceLabel, value: '' }, ...filledRows(), ...borosRow(), ...notHedgedRow()], acts: null };
+    return { ...base, firstLine, rows: [{ label: sliceLabel, value: '' }, ...filledRows(), ...borosRow(), ...notHedgedRow()], acts: <TwapActs jobId={job.id} state="pausing" holds={null} borosHold={null} /> };
   }
 
   if (halted) {

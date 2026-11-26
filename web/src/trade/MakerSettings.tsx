@@ -4,7 +4,7 @@ import type { MakerLegPreview } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { num, sig } from '../lib/fmt';
+import { num, sigGrouped } from '../lib/fmt';
 import { parseSpan, spanText } from '../lib/span';
 import { stripZeros } from '../lib/ticks';
 import { FoldRow } from './FoldRow';
@@ -173,7 +173,7 @@ export function MakerSettings({
               <span className="ml-auto text-[11px] text-ink-400" title={savingHint ?? t('pairTicket.makerSettings.savingHint')}>
                 <Trans
                   i18nKey="pairTicket.makerSettings.saving"
-                  values={{ amount: sig(saving) }}
+                  values={{ amount: sigGrouped(saving) }}
                   components={{ g: <span className="num text-emerald-400" /> }}
                 />
               </span>

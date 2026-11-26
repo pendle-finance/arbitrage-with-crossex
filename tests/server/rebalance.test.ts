@@ -18,7 +18,7 @@ import { borosStub } from '../helpers/boros-stub';
 import { gateVenue } from '../../src/engine/venueGate';
 import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
 import { InterestFile } from '../../src/server/interestLedger';
-import { gapsLeftBy, JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
+import { asRealize, convertSteps, gapsLeftBy, HALT_TEXT, JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
 import { LOOKUP_WINDOW_MS } from '../../src/server/rebalanceRunner';
 import { isShownRealize } from '../../src/server/routes/rebalance';
 import { gate, HOST, makeTestApp, mockGateGet, orderBody, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
@@ -957,6 +957,19 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(twap.estimates.market.totalUsd).toBeGreaterThan(0);
   });
 
+  it('GET /rebalance gives every perp of a two-leg realize TWAP at least 2 book-checked slices', async () => {
+    mockTwoLegs();
+    const h = boot();
+
+    const res = await h.get('/api/rebalance?twapDurationSec=3600&twapSlices=2');
+
+    expect(res.statusCode, res.body).toBe(200);
+    const twap = res.json().data.realizeTwap.all;
+    expect(twap.legs).toHaveLength(2);
+    for (const leg of twap.legs) expect(leg.slices).toBeGreaterThanOrEqual(2);
+    expect(twap.plan.slices).toBe(twap.legs.reduce((sum: number, leg: { slices: number }) => sum + leg.slices, 0));
+  });
+
   it('GET /rebalance returns the TWAP refusal and refuses a bad TWAP query', async () => {
     mockAccount(ownerAccount());
     const h = boot();
@@ -1044,20 +1057,70 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(h.store.getPair(id)?.mode).not.toBe('OPENING');
   });
 
-  it('Resume resets the retry Convert count', async () => {
+  it('a realize stopped on an unsent retry Convert at boot marks the open reopen gap and says the perps differ', async () => {
+    mockView();
+    const base = slicedJob({ status: 'running' });
+    const id = `${base.id}-s1-1`;
+    const retry = { reason: 'margin' as const, convertAmount: 100 };
+    const converts = asRealize(convertSteps('HYPERLIQUID', 'CROSSEX', 100)).map((step) => ({ ...step, retry }));
+    const job: Job = { ...base, kind: 'realize', delever: null, deleverTwap: null, steps: [...converts, ...base.steps], stepIndex: 0 };
+    const slice = job.steps[converts.length];
+    Object.assign(slice, {
+      status: 'running',
+      startedAt: t,
+      retry,
+      lead: { text: id, venueId: null, sentAt: t, credited: 0, poc: false, price: null, side: 'BUY', mid: 2500, entry: null },
+      cut: { qty: 1, from: 0, at: t, ioc: true, n: 1 },
+    });
+    const h = boot({ job });
+    const leg = (contract: string, side: 'BUY' | 'SELL', reduceOnly: boolean) => ({ contract, side, lot: '0.0001', minSize: '0', minNotional: '0', tick: '0.1', reduceOnly });
+    h.store.createPair({
+      id,
+      mode: 'HALTED',
+      a: leg(HL_ETH, 'BUY', true),
+      b: leg(HL_ETH, 'SELL', false),
+      targetQty: '1',
+      limitPrice: '2500',
+      pricePolicy: 'touch',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: 'hedge-margin',
+      haltReason: null,
+      reportJson: null,
+      createdAt: t,
+    });
+    const order = h.store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'taker', side: 'BUY', qty: '1', price: null, tif: 'ioc', now: t });
+    h.store.updateOrder(id, 'A', order.seq, { state: 'CLOSED', cumQty: '1', avgFillPrice: '2500', resolvedAt: t });
+
+    await h.ready();
+
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    expect(h.file()).toMatchObject({ status: 'halted', haltKind: 'restart', haltReason: HALT_TEXT.restartGap, notHedgedQty: 1, stepIndex: 0 });
+    expect(h.store.getPair(id)?.mode).toBe('HALTED');
+  });
+
+  it('Resume resets the retry Convert count and the top-up count', async () => {
     mockView();
     refuseQuotes();
     const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 12, arrives: 11.97, borrowLeft: 0, seconds: 0, from: 'CROSSEX', to: 'HYPERLIQUID' };
     const job = newJob({ route: 'convert', steps: [convert], amount: 12, costUsd: 0, target: [], userId: '1' }, t);
-    Object.assign(job, { status: 'halted', haltReason: 'Gate took too long on this step.', retryConverts: 3 });
+    Object.assign(job, { status: 'halted', haltReason: 'Gate took too long on this step.', retryConverts: 3, topUps: 3, topUpPending: true });
     const h = boot({ job });
 
     const res = await h.post(`/api/rebalance/${job.id}/resume`);
 
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json().data.retryConverts).toBe(0);
+    expect(res.json().data).toMatchObject({ retryConverts: 0, topUps: 0, topUpPending: false });
     await waitFor(() => h.file().status === 'halted', 'the halt');
-    expect(h.file().retryConverts).toBe(0);
+    expect(h.file()).toMatchObject({ retryConverts: 0, topUps: 0, topUpPending: false });
   });
 
   it('full plan priced at limit + hedge', async () => {

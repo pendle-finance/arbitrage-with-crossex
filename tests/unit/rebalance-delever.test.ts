@@ -468,3 +468,21 @@ describe('planDelever: a 100% Delever closes the whole position', () => {
     expect(plan.imUsed[0].after).toBeCloseTo(Math.max(0, Number(account.initialMargin) - freed) / Number(account.marginBalance), 12);
   });
 });
+
+describe('planDelever: the lead book in Market mode', () => {
+  const bookOf = (size: number): NormalizedBook => ({ bids: [[BTC_MARK - 1, size]], asks: [[BTC_MARK + 1, size]], ts: 0 });
+  const planFor = (exec: DeleverRequest['exec']) => {
+    const input = inputOf({ books: { [HL]: bookOf(10_000), [GATE]: bookOf(0.01) } });
+    return planDelever({ ...input, request: { ...input.request, exec } });
+  };
+
+  it('marks every slice past the book when the lead book is thinner than the slice', () => {
+    const maker = planFor('maker');
+    expect(maker.legs[maker.makerLeg].symbol).toBe(GATE);
+    expect(maker.sliceOptions.length).toBeGreaterThan(0);
+    expect(maker.sliceOptions.some((option) => option.pastBook)).toBe(false);
+    const market = planFor('market');
+    expect(market.sliceOptions.length).toBe(maker.sliceOptions.length);
+    expect(market.sliceOptions.every((option) => option.pastBook)).toBe(true);
+  });
+});

@@ -192,7 +192,7 @@ export function PairPicker({
               <div className={`${grid} bg-ink-900/40 px-3 py-1.5 text-pp-sm2 text-ink-400`}>
                 <span className="w-3.5 shrink-0" />
                 <span className="min-w-0 flex-1">{columns.pair}</span>
-                <span className="w-20 shrink-0 text-right">{columns.size}</span>
+                <span className="w-28 shrink-0 whitespace-nowrap text-right">{columns.size}</span>
                 <span className="w-24 shrink-0 text-right">{columns.im}</span>
               </div>
               <div id={listId} role="listbox" aria-label={label} className="flex max-h-64 flex-col overflow-y-auto">
@@ -213,7 +213,7 @@ export function PairPicker({
                   >
                     <span className="flex w-3.5 shrink-0 text-info">{row.key === value && <Check size={14} aria-hidden />}</span>
                     <PairCell row={row} />
-                    <span className="num w-20 shrink-0 text-right text-pp-base text-ink-50">{row.sizeText}</span>
+                    <span className="num w-28 shrink-0 whitespace-nowrap text-right text-pp-base text-ink-50">{row.sizeText}</span>
                     <span className="num w-24 shrink-0 text-right text-pp-base text-ink-50">{row.imText}</span>
                   </button>
                 ))}

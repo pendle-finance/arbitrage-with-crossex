@@ -79,6 +79,7 @@
     "sizeInvalid": "必须大于 0 且不超过 {{max}} {{unit}}",
     "sharedLabel": "此组合的份额",
     "sharedOpen": "共用部分继续持有",
+    "perpsUnhedged": "{{qty}} {{coin}} · 未对冲，资金费率浮动",
     "quoteFailed": "无法为此平仓报价",
     "estPnl": "预估盈亏",
     "beforeFee": "未扣手续费",

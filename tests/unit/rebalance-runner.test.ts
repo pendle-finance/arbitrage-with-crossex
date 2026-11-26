@@ -5358,10 +5358,18 @@ describe('slices: the follow', () => {
     expect(h.jobs.read()?.retryConverts).toBe(3);
   });
 
+  it('counts each retry Convert in the cost so far', async () => {
+    const { h } = marginRefusals();
+    await h.run();
+    const lost = h.sent('createCrossexConvertQuote').reduce((total, arg) => total + Number(arg.crossexConvertQuoteRequest.fromAmount) * 0.002, 0);
+    expect(lost).toBeGreaterThan(0);
+    expect(h.jobs.read()?.totalCostUsd).toBeCloseTo(lost, 1);
+  });
+
   it('fourth margin refusal halts', async () => {
     const { h, engine } = marginRefusals();
     await h.run();
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.noCash, haltKind: 'margin' });
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.convertCap, haltKind: 'margin' });
     expect(engine.requests).toHaveLength(4);
   });
 
@@ -5425,7 +5433,7 @@ describe('slices: retry Convert at size', () => {
     const expected = ceilCents(((OPEN_QTY * (marginUsd / OPEN_QTY)) / marginPerConvertUsdc) * 1.05);
     const h = sized(marginUsd, usd * 2, Number.POSITIVE_INFINITY);
     await h.run();
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.noCash, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP });
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.convertCap, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP });
     expect(h.count('createCrossexConvertOrder')).toBe(RETRY_CONVERT_CAP * chunkCount(expected));
   });
 
@@ -5599,6 +5607,19 @@ describe('slices: pause, boot and fix', () => {
     expect(engine.store.getPair(id)?.mode).toBe('DONE');
     expect(job).toMatchObject({ status: 'running', haltReason: null, haltKind: null });
     expect(job.steps[0].qty).toBeCloseTo(2, 9);
+  });
+
+  it('a boot pass finishes the reopen after a retry Convert, then halts as a restart and starts no new slice', async () => {
+    const { h, engine, id } = await childAtBoot(false, { a: '5', b: '0', mode: 'HALTED', haltKind: 'hedge-margin' });
+    const job = h.jobs.read()!;
+    Object.assign(job, { status: 'running', haltKind: null, haltReason: null });
+    job.steps[0].retry = { reason: 'margin', convertAmount: 100 };
+    h.jobs.write(job);
+    await runJob({ ...h.deps, pollOnly: true });
+    expect(engine.store.getPair(id)?.mode).toBe('DONE');
+    expect(engine.requests).toHaveLength(1);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restart, haltKind: 'restart' });
+    expect(h.jobs.read()?.realize?.legs[0].filledQty).toBeCloseTo(5, 9);
   });
 
   it('Abandon ends a halted reopen child, so it never retries the hedge after the trader closes the gap', async () => {
@@ -6706,7 +6727,7 @@ describe('slices: a reopen Gate keeps refusing after a retry Convert', () => {
     await h.run();
     const job = h.jobs.read()!;
     expect(h.count('createCrossexConvertOrder')).toBe(RETRY_CONVERT_CAP);
-    expect(job).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.noCash, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP, notHedgedQty: 1 });
+    expect(job).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.convertCap, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP, notHedgedQty: 1 });
     expect(job.follow).toEqual({ symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SELL', qty: 1, reduceOnly: false });
     expect(engine.requests).toHaveLength(1);
     expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
@@ -6767,6 +6788,17 @@ describe('slices: margin top-up before a slice', () => {
     expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.marginLow, haltKind: 'margin', retryConverts: 0, notHedgedQty: 0, topUps: 1 });
     expect(engine.requests).toHaveLength(2);
     expect(h.jobs.read()?.slice?.index).toBe(1);
+  });
+
+  it('a margin refusal at the top-up cap halts with the cap text and converts nothing', async () => {
+    const { h, engine } = toppedUp(50, 1);
+    const job = h.jobs.read()!;
+    job.topUps = RETRY_CONVERT_CAP;
+    h.jobs.write(job);
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.convertCap, haltKind: 'margin', topUps: RETRY_CONVERT_CAP });
+    expect(h.count('createCrossexConvertQuote')).toBe(0);
+    expect(engine.requests).toHaveLength(1);
   });
 
   it('a refused reopen after a top-up gets its own retry Convert', async () => {
@@ -6910,12 +6942,88 @@ describe('slices: Convert quotes used up inside a slice', () => {
     expect(job.steps[job.stepIndex].name).toBe('Slices');
     expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
   });
+
+  it('a top-up Convert with nothing open halts with the plain quotes text, not a 0 ETH gap', async () => {
+    const venue = sliceVenue(filled, account({ hyperliquid: 1_000 }));
+    venue.handlers.createCrossexConvertQuote = gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests');
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 3_000, leg: { qty: 1 } });
+    const engine = childEngine(h, (_req, index) => (index === 0 ? { refuse: marginRefusal() } : {}));
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.quotesUsed, notHedgedQty: 0 });
+    expect(engine.requests).toHaveLength(1);
+  });
 });
 
 const withHedge = (job: Job): void => {
   job.before = { buckets: [], perps: [{ symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', qty: 12.2 }] };
   if (job.realize) job.realize.legs[0].hedge = 'GATE';
 };
+
+describe('TWAP Close filled that fills part', () => {
+  const twapAt = (unwindFills: string[]) => {
+    const h = sliceRun(sliceVenue(), {
+      exec: 'market',
+      edit: (job) => {
+        const leg = { contract: HL_ETH, side: 'BUY' as const, lot: '0.0001', minSize: '0.0001', minNotional: '0', tick: '0.1' };
+        Object.assign(job, {
+          kind: 'twap',
+          steps: [],
+          stepIndex: 0,
+          realize: null,
+          status: 'halted',
+          haltKind: 'hedge-margin',
+          haltReason: 'Hyperliquid refused the hedge in slice 1',
+          twap: {
+            deal: { a: { symbol: HL_ETH, side: 'BUY' }, b: { symbol: GATE_ETH, side: 'SELL' }, execution: 'taker', totalQty: '2', coin: 'ETH', rules: [leg, { ...leg, contract: GATE_ETH }] },
+            durationSec: 600,
+            intervalSec: 300,
+            slices: 2,
+            sliceQty: '1',
+            sliceIndex: 1,
+            nextAt: null,
+            carryQty: '0',
+            behindQty: '0',
+            replan: false,
+            makerLeg: 'a',
+            repegBehindBp: null,
+            takerAfterSec: null,
+            clientId: 'c1',
+            startedAt: 0,
+          },
+        });
+      },
+    });
+    const engine = childEngine(h, (_req, index) => (index === 0 ? { a: '1', b: '0', mode: 'HALTED', haltKind: 'hedge-margin' } : { a: unwindFills[index - 1] }));
+    return { h, engine };
+  };
+  const haltChild = async (h: ReturnType<typeof sliceRun>) => {
+    const job = h.jobs.read()!;
+    const id = `${job.id}-s1-1`;
+    await (h.deps as unknown as { twap: TwapRunDeps }).twap.createChild({ id, a: { symbol: HL_ETH, side: 'BUY' }, b: { symbol: GATE_ETH, side: 'SELL' }, qty: '1', execution: 'taker' } as DealRequest);
+    return job;
+  };
+
+  it('stays halted on the rest when the unwind fills part, and a second hold closes the rest', async () => {
+    const { h, engine } = twapAt(['0.6', '0.4']);
+    const job = await haltChild(h);
+    const part = await applyFix(h.deps, job, 'unwind');
+    expect(part).toMatchObject({ status: 'halted', paused: false, haltKind: 'hedge-margin', notHedgedQty: 0.4 });
+    expect(part.unwindTarget).toMatchObject({ symbol: HL_ETH, side: 'SELL', qty: 0.4, reduceOnly: true });
+    const rest = await applyFix(h.deps, part, 'unwind');
+    expect(engine.requests.map((req) => [req.id, req.qty])).toEqual([
+      [`${job.id}-s1-1`, '1'],
+      [`${job.id}-f1`, '1'],
+      [`${job.id}-f1-2`, '0.4'],
+    ]);
+    expect(rest).toMatchObject({ status: 'halted', paused: true, haltKind: null, notHedgedQty: 0, unwindTarget: null });
+  });
+
+  it('pauses when the unwind fills the whole gap', async () => {
+    const { h } = twapAt(['1']);
+    const job = await haltChild(h);
+    expect(await applyFix(h.deps, job, 'unwind')).toMatchObject({ status: 'halted', paused: true, haltKind: null, notHedgedQty: 0 });
+  });
+});
 
 describe('slices: holds on a not-hedged realize', () => {
   const gapRun = (script: (req: DealRequest, index: number) => ChildOutcome = (req, index) => (index === 0 ? hedgeRefused(req) : {})) => {

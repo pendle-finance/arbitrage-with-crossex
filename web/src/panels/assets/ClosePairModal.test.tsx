@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useState, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
+import { fmtDateLocal } from '../../lib/fmt';
 import { renderWithClient } from '../../test/utils';
 import { ClosePairModal, RollPairModal } from './ClosePairModal';
 import { pairEntriesOf, type PairEntry } from './pairs';
@@ -12,6 +13,7 @@ const NOW = Math.floor(Date.now() / 1000);
 
 const openState = vi.hoisted(() => ({ entries: [] as PairEntry[] }));
 const mounts = vi.hoisted(() => ({ n: 0 }));
+const sends = vi.hoisted(() => [] as string[][]);
 
 vi.mock('./pairs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./pairs')>()),
@@ -24,7 +26,7 @@ function useMount() {
 }
 
 vi.mock('../PerpOnlyBox', () => ({
-  ClosePairForm: ({ legs, borosUnhedged, allowTwap, onSent }: { legs: { symbol: string; qty: number }[]; allowTwap?: boolean; borosUnhedged?: { qty: number; coin: string } | null; onSent?: () => void }) => {
+  ClosePairForm: ({ legs, borosUnhedged, allowTwap, onSent }: { legs: { symbol: string; qty: number; partial?: boolean }[]; allowTwap?: boolean; borosUnhedged?: { qty: number; coin: string } | null; onSent?: () => void }) => {
     const id = useMount();
     const max = String(Math.min(...legs.map((l) => l.qty)));
     const [size, setSize] = useState(max);
@@ -34,7 +36,13 @@ vi.mock('../PerpOnlyBox', () => ({
         <span>{allowTwap ? 'twap allowed' : 'no twap'}</span>
         <span>{borosUnhedged ? `unhedged ${borosUnhedged.qty} ${borosUnhedged.coin}` : 'hedged'}</span>
         <input aria-label="Close size" value={size} onChange={(e) => setSize(e.target.value)} />
-        <button type="button" onClick={onSent}>
+        <button
+          type="button"
+          onClick={() => {
+            sends.push(legs.map((l) => `${l.symbol}:${l.qty}${l.partial ? ':partial' : ''}`));
+            onSent?.();
+          }}
+        >
           Close both
         </button>
       </div>
@@ -246,6 +254,57 @@ describe('ClosePairModal', () => {
     expect(form).toHaveTextContent('market 11 market 12');
     expect(form).toHaveTextContent('Closed');
     expect(screen.getByRole('button', { name: 'Pair' })).toHaveTextContent(/BTC/);
+  });
+
+  describe('two pairs share one perp: a part close of one, then 100% sends the new size', () => {
+    const shared = (perps: number, near: number, far: number): AssetGroup => ({
+      ...ETH,
+      perpOpen: [perp('ETH', 'GATE', 'LONG', perps, 2500), perp('ETH', 'HYPERLIQUID', 'SHORT', perps, 2500)],
+      borosOpen: [
+        yu('ETH', 1, 'GATE', 'LONG', near, NOW + 8 * DAY, 2500),
+        yu('ETH', 2, 'HYPERLIQUID', 'SHORT', near, NOW + 8 * DAY, 2500),
+        yu('ETH', 3, 'GATE', 'LONG', far, NOW + 60 * DAY, 2500),
+        yu('ETH', 4, 'HYPERLIQUID', 'SHORT', far, NOW + 60 * DAY, 2500),
+      ],
+    });
+    const before = shared(10, 5, 5);
+    const after = shared(7.5, 5, 2.5);
+    const [near, far] = entriesOf(before);
+    const legsAt = (qty: number) => [`GATE_FUTURE_ETH_USDT:${qty}:partial`, `HYPERLIQUID_FUTURE_ETH_USDT:${qty}:partial`];
+
+    beforeEach(() => {
+      sends.length = 0;
+      openState.entries = entriesOf(before);
+    });
+
+    it('the clicked pair', async () => {
+      const user = userEvent.setup();
+      renderWithClient(
+        <Refetchable next={() => entriesOf(after)}>
+          {() => <ClosePairModal kind="perps" pair={far.pair} group={before} livePositions={new Map()} onClose={() => {}} />}
+        </Refetchable>,
+      );
+      await user.click(screen.getByRole('button', { name: 'Close both' }));
+      await user.click(screen.getByRole('button', { name: 'Refetch' }));
+      await user.click(screen.getByRole('button', { name: 'Close both' }));
+      expect(sends).toEqual([legsAt(5), legsAt(2.5)]);
+    });
+
+    it('a pair picked in the picker', async () => {
+      const user = userEvent.setup();
+      renderWithClient(
+        <Refetchable next={() => entriesOf(after)}>
+          {() => <ClosePairModal kind="perps" pair={near.pair} group={before} livePositions={new Map()} onClose={() => {}} />}
+        </Refetchable>,
+      );
+      await user.click(screen.getByRole('button', { name: 'Pair' }));
+      await user.click(within(screen.getByRole('listbox')).getAllByRole('option')[1]);
+      expect(screen.getByRole('button', { name: 'Pair' })).toHaveTextContent(new RegExp(fmtDateLocal(far.open.maturitySec)));
+      await user.click(screen.getByRole('button', { name: 'Close both' }));
+      await user.click(screen.getByRole('button', { name: 'Refetch' }));
+      await user.click(screen.getByRole('button', { name: 'Close both' }));
+      expect(sends).toEqual([legsAt(5), legsAt(2.5)]);
+    });
   });
 
   it('the picker locks once an order is sent', async () => {
