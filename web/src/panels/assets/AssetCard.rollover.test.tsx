@@ -144,8 +144,6 @@ describe('AssetCard — roll over', () => {
     expect(within(panel).getByText('Ready to roll')).toBeInTheDocument();
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
 
-    // The popup names the pair; with nothing to roll into there is no target,
-    // so the pick page's "Roll over →" stays disabled.
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Roll over Boros position' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Pair' })).toHaveTextContent(/Gate.*LONG.*Hyperliquid.*SHORT/);
