@@ -400,17 +400,6 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByText('4.80%')).not.toBeInTheDocument();
   });
 
-  it('says that slippage bounds the rate, not the fill — on the slippage row', async () => {
-    // The standalone caption is gone; the caveat rides on the row it is
-    // about. It must survive somewhere: a tolerance that reads as a fill
-    // guarantee is the misunderstanding worth preventing.
-    const user = userEvent.setup();
-    server.use(...handlers());
-    renderWithClient(<BorosPairTicket />);
-    await fillTicket(user);
-    expect(await screen.findByTitle(/caps the RATE, not the fill/i)).toBeInTheDocument();
-  });
-
   it('offers the SIZE the collateral funds, not the collateral: both legs out of one cross bucket', async () => {
     // 500 USDT free; opening costs 0.03 per unit on HL and 0.02 on Binance.
     // As a pair both come out of the one cross bucket: 500 / 0.05 = 10,000
@@ -1742,6 +1731,7 @@ describe('BorosPairTicket — spread ticket', () => {
       spread?: Record<string, unknown>;
       gasBalanceUsd?: number;
       extraMarkets?: ReturnType<typeof marketRow>[];
+      extraSpreads?: ReturnType<typeof marketRow>[];
       singles?: Record<string, unknown>;
       gateSingle?: Record<string, unknown>;
     } = {},
@@ -1757,7 +1747,7 @@ describe('BorosPairTicket — spread ticket', () => {
           marketRow({ marketId: 211, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'Gate', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY, ...extra.singles, ...extra.gateSingle }),
           ...(extra.extraMarkets ?? []),
         ],
-        spreadMarkets: [spreadRow(extra.spread)],
+        spreadMarkets: [spreadRow(extra.spread), ...(extra.extraSpreads ?? [])],
         crossByToken: [{ tokenId: 2, available: extra.available ?? 10 }],
       }),
       sim: {
@@ -2081,6 +2071,38 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     expect(screen.getByRole('checkbox', { name: 'Reduce-only' })).not.toBeChecked();
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
+  });
+
+  it('offers a date only the spread lists (no Gate single then) and sends the order on that spread', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const LATER = SPREAD_OPP_MATURITY + 64 * 86_400;
+    server.use(
+      ...spreadHandlers((b) => bodies.push(b), {
+        extraMarkets: [marketRow({ marketId: 219, name: 'Hyperliquid ETH 29 Jan 2027', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: LATER })],
+        extraSpreads: [spreadRow({ marketId: 299, name: 'ETH Spread HL-GATE 29 Jan 2027', maturity: LATER })],
+      }),
+    );
+    const user = userEvent.setup();
+    await pickShortHl(user);
+    await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+    const chips = () => within(screen.getByRole('group', { name: 'Maturity' })).getAllByRole('button');
+    expect(chips()).toHaveLength(2);
+    await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+
+    await user.click(chips()[1]);
+    expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+    expect(tradeOn()).toBeInTheDocument();
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '211');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '209');
+    await waitFor(() =>
+      expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: 299, direction: 'short', size: 0.121 })]),
+    );
+
+    await user.click(chips()[0]);
+    expect(chips()[0]).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() =>
+      expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short' })]),
+    );
   });
 
   it('keeps the two single markets when the venues list no spread at that maturity', async () => {

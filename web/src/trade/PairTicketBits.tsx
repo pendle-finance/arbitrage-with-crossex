@@ -2,9 +2,9 @@
  * controls, the estimate card (per-leg table, costs, leverage, margin) and
  * the shared row/affix primitives the single ticket reuses. Pure/prop-driven —
  * PairTicket owns all state and the preview query. */
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PreviewResult, SymbolRule } from '../api/types';
+import type { BorosLegDirection, PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
 import { ListPicker } from '../components/ListPicker';
 import { SwapButton } from '../components/SwapButton';
@@ -13,7 +13,7 @@ import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
-import { BookToggle, fmtTradeCost, PlanLine } from './TicketEstimateBits';
+import { fmtTradeCost } from './TicketEstimateBits';
 import { RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
@@ -342,15 +342,62 @@ export function LeverageValue({ text }: { text: string | null }) {
 // ---------------------------------------------------------------------------
 
 /** LONG or SHORT venue as a dropdown — the other leg's venue is disabled. */
+export function LegHeader({
+  dir,
+  caption,
+  onDir,
+  hints,
+}: {
+  dir: BorosLegDirection;
+  caption: string;
+  onDir?: (d: BorosLegDirection) => void;
+  hints?: Record<BorosLegDirection, string>;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="flex items-center gap-2">
+        <Chip sm tone={dir === 'long' ? 'green' : 'red'} className="font-semibold">
+          {t(dir === 'long' ? 'common.longUpper' : 'common.shortUpper')}
+        </Chip>
+        <span className="text-[12px] font-normal text-ink-300">{caption}</span>
+      </span>
+      {onDir && (
+        <div className="seg seg-xs inline-flex" role="radiogroup" aria-label={t('common.side')}>
+          {(['long', 'short'] as const).map((d) => {
+            const active = dir === d;
+            return (
+              <button
+                key={d}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-active={active}
+                className={`seg-btn text-center ${active ? (d === 'long' ? '!bg-emerald-500/15 !text-emerald-300' : '!bg-rose-500/15 !text-rose-300') : ''}`}
+                title={hints?.[d]}
+                onClick={() => onDir(d)}
+              >
+                {t(d === 'long' ? 'common.longAction' : 'common.shortAction')}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function VenueSelect({
   tone,
+  onTone,
   value,
   otherValue,
   onPick,
   venues,
   loading,
 }: {
-  tone: 'long' | 'short';
+  tone: BorosLegDirection;
+  onTone?: (tone: BorosLegDirection) => void;
   value: string | null;
   otherValue: string | null;
   onPick: (s: string) => void;
@@ -362,14 +409,11 @@ export function VenueSelect({
   const { t } = useTranslation();
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <Chip sm tone={long ? 'green' : 'red'} className="font-semibold">
-          {t(long ? 'common.longUpper' : 'common.shortUpper')}
-        </Chip>
-        <span className="text-[12px] font-normal text-ink-300">
-          {t(long ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
-        </span>
-      </div>
+      <LegHeader
+        dir={tone}
+        caption={t(long ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
+        onDir={onTone}
+      />
       <ListPicker
         label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
         value={value ?? ''}
@@ -419,25 +463,26 @@ function isMakerLeg(p: PreviewResult): boolean {
   return 'pairRole' in p.input && p.input.pairRole === 'maker';
 }
 
-function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: PreviewResult | undefined }) {
+function LegRow({ side, p, rests }: { side: 'LONG' | 'SHORT'; p: PreviewResult | undefined; rests?: boolean }) {
   const { t } = useTranslation();
   if (!p) return null;
-  const isMaker = isMakerLeg(p);
+  const isMaker = rests ?? isMakerLeg(p);
+  const venue = parseSymbol(p.symbol).exchange;
   return (
     <>
       <tr className="border-t border-ink-800/80">
         <td className="py-1.5">
-          <span className="inline-flex items-center gap-1.5">
-            <VenueIcon venue={parseSymbol(p.symbol).exchange} size={16} />
-            <Chip sm tone={tone} className="font-semibold">
-              {parseSymbol(p.symbol).exchange}
+          <span className="inline-flex items-center gap-1.5 text-[12.5px] text-ink-50">
+            <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
+              {t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
             </Chip>
+            <VenueIcon venue={venue} size={16} />
+            {prettyVenue(venue)}
             {isMaker && (
               <Chip sm tone="cyan" title={t('pairTicket.bits.makerChipHint')}>
                 {t('pairTicket.bits.maker')}
               </Chip>
             )}
-            <span className="text-[11px] text-ink-400">{label}</span>
           </span>
         </td>
         <td className="num py-1.5 text-right text-[12.5px] text-ink-50">
@@ -470,6 +515,27 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
   );
 }
 
+export function LegTable({ rows }: { rows: { side: 'LONG' | 'SHORT'; p: PreviewResult | undefined; rests?: boolean }[] }) {
+  const { t } = useTranslation();
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-[12px] font-normal text-ink-300">
+          <th className="pb-1 text-left font-normal">{t('pairTicket.bits.colLeg')}</th>
+          <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colPrice')}</th>
+          <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colSlip')}</th>
+          <th className="pb-1 text-right font-normal">{t('pairTicket.preview.estFee')}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <LegRow key={row.side} side={row.side} p={row.p} rests={row.rests} />
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 /** The pair's estimate card: trade cost headline, the book graph (toggled),
  * the per-leg table, shared qty + lot binding, net entry spread, leverage,
  * margin, and violations/warnings. Derives its summary numbers from the two
@@ -485,8 +551,8 @@ export function PairEstimate({
   mode,
   leverage,
   marginRequired,
-  book,
   twapOn = false,
+  typedQty = null,
 }: {
   previews: PreviewResult[] | undefined;
   isError: boolean;
@@ -500,13 +566,13 @@ export function PairEstimate({
   leverage: string | null;
   /** Total initial margin the two legs post, in USD; null while unknown. */
   marginRequired: number | null;
-  /** The book + market-impact graph (already sized to this ticket). */
-  book: ReactNode;
   twapOn?: boolean;
+  typedQty?: string | null;
 }) {
   const { t } = useTranslation();
-  const [showBook, setShowBook] = useState(true);
   const sharedQty = legLong?.qty || legShort?.qty || '';
+  const rounded = typedQty !== null && Number(typedQty) !== Number(sharedQty);
+  const showQty = sharedQty !== '' && (typedQty === null || rounded);
   const base = legLong ? parseSymbol(legLong.symbol).base : legShort ? parseSymbol(legShort.symbol).base : '';
   const binding = useMemo(() => {
     if (!legLong?.rule || !legShort?.rule) return null;
@@ -521,7 +587,6 @@ export function PairEstimate({
   // at taker, or both taker. Closing is a separate trade with its own ticket.
   const tradeCost = legLong?.fees && legShort?.fees ? estFeeOf(legLong) + estFeeOf(legShort) : null;
   const refPx = legLong?.refPrice?.value ?? legShort?.refPrice?.value;
-  const showRoles = mode === 'maker' && [legLong, legShort].some((p) => p !== undefined && isMakerLeg(p));
   const spreadBps =
     legLong?.fillEstimate && legShort?.fillEstimate && refPx
       ? bpsOf((legLong.fillEstimate.avgPrice - legShort.fillEstimate.avgPrice) / refPx)
@@ -538,42 +603,16 @@ export function PairEstimate({
       <SummaryCard
         title={t('accounts.moveCash.cost')}
         sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
-        aside={
-          <>
-            <EstimateAge dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={isError} />
-            <BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} />
-          </>
-        }
+        aside={<EstimateAge dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={isError} />}
       >
         {previews ? (
           <>
-            {showRoles && (
-              <div className="flex flex-col gap-1.5">
-                {legLong && (
-                  <PlanLine side="LONG" symbol={legLong.symbol} role={isMakerLeg(legLong) ? 'rests' : 'hedges'} qty={legLong.qty} />
-                )}
-                {legShort && (
-                  <PlanLine side="SHORT" symbol={legShort.symbol} role={isMakerLeg(legShort) ? 'rests' : 'hedges'} qty={legShort.qty} />
-                )}
-              </div>
-            )}
-
-            {showBook && <div className="pt-1">{book}</div>}
-
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-[12px] font-normal text-ink-300">
-                  <th className="pb-1 text-left font-normal">{t('pairTicket.bits.colLeg')}</th>
-                  <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colPrice')}</th>
-                  <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colSlip')}</th>
-                  <th className="pb-1 text-right font-normal">{t('pairTicket.preview.estFee')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <LegRow label={t('common.long')} tone="green" p={legLong} />
-                <LegRow label={t('common.short')} tone="red" p={legShort} />
-              </tbody>
-            </table>
+            <LegTable
+              rows={[
+                { side: 'LONG', p: legLong },
+                { side: 'SHORT', p: legShort },
+              ]}
+            />
 
             {spreadBps !== null && (
               <EstimateRow
@@ -600,10 +639,10 @@ export function PairEstimate({
 
       {previews && (
         <SummaryCard title={t('accounts.moveCash.after')}>
-          {sharedQty && (
+          {showQty && (
             <EstimateRow
               label={t('pairTicket.bits.sharedQty')}
-              sub={binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
+              sub={rounded && binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
               value={`${qtyGrouped(sharedQty)}${base ? ` ${base}` : ''}`}
             />
           )}

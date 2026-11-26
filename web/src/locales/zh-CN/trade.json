@@ -78,10 +78,7 @@
     "marginTitle": "该腿需缴纳的初始保证金：名义规模除以交易所最大杠杆",
     "executeNow": "立即执行",
     "levDetail": "杠杆 {{lev}}x（交易所上限）",
-    "notHedged": "该腿未对冲。",
-    "side": "方向",
-    "long": "做多",
-    "short": "做空"
+    "notHedged": "该腿未对冲。"
   },
   "ticketEstimate": {
     "taker": "吃单",

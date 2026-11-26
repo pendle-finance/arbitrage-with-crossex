@@ -46,7 +46,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
-import { AffixedInput, EstimateAge, ShareSlider, SummaryCard } from './PairTicketBits';
+import { AffixedInput, EstimateAge, LegHeader, ShareSlider, SummaryCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SpreadIcon } from '../components/AssetIcon';
@@ -66,7 +66,6 @@ import {
   AvailableMarginLines,
   BlockerList,
   blockerButtonReason,
-  DirectionToggle,
   liqWarnOf,
   LiquidationLines,
   MarketCard,
@@ -79,6 +78,10 @@ import {
   SpreadReadout,
   SuggestedTopUpLines,
   TradeFeeRow,
+  aprCost,
+  TotalCostRow,
+  usdOf,
+  UsdNote,
 } from './BorosPairBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -553,6 +556,17 @@ export function BorosPairTicket({
   /** Change the maturity: every picked leg moves to its own market at that date
    * (the chips only offer dates all of them list). */
   const pickMaturity = (next: number) => {
+    const only = spreadOnly.find((m) => m.maturity === next);
+    if (only) {
+      const [a, b] = isSpread && behind ? [byId.get(behind.a), byId.get(behind.b)] : [rowA, rowB];
+      const dir = isSpread && behind ? behind.dirA : dirA;
+      if (!a || !b) return;
+      setBehind({ a: a.marketId, b: b.marketId, dirA: dir });
+      setMarketA(only.marketId);
+      setMarketB(null);
+      setDirA(sameCoin(a.venue, only.spreadVenues?.[0] ?? '') ? dir : dir === 'short' ? 'long' : 'short');
+      return;
+    }
     // On a spread that stands in for two singles, move the singles: the
     // default below puts the spread back when that date lists one too.
     if (isSpread && behind) {
@@ -591,25 +605,29 @@ export function BorosPairTicket({
    * maturity, and its two venues are the two legs' venues. One order on it
    * replaces the two single orders.
    */
-  const spreadFor = (a: BorosPairMarketRow | null, b: BorosPairMarketRow | null): BorosPairMarketRow | null => {
-    if (!a || !b || a.spreadVenues || b.spreadVenues) return null;
-    if (a.maturity !== b.maturity || a.tokenId !== b.tokenId || sameCoin(a.venue, b.venue)) return null;
-    return (
-      spreadMarkets.find(
-        (m) =>
-          m.spreadVenues !== null &&
-          sameCoin(m.base, a.base) &&
-          m.maturity === a.maturity &&
-          m.tokenId === a.tokenId &&
-          [a.venue, b.venue].every((v) => (m.spreadVenues ?? []).some((k) => sameCoin(k, v))),
-      ) ?? null
+  const spreadsOver = (a: BorosPairMarketRow | null, b: BorosPairMarketRow | null): BorosPairMarketRow[] => {
+    if (!a || !b || a.spreadVenues || b.spreadVenues) return [];
+    if (a.tokenId !== b.tokenId || sameCoin(a.venue, b.venue)) return [];
+    return spreadMarkets.filter(
+      (m) =>
+        m.spreadVenues !== null &&
+        sameCoin(m.base, a.base) &&
+        m.tokenId === a.tokenId &&
+        [a.venue, b.venue].every((v) => (m.spreadVenues ?? []).some((k) => sameCoin(k, v))),
     );
   };
+  const spreadFor = (a: BorosPairMarketRow | null, b: BorosPairMarketRow | null): BorosPairMarketRow | null =>
+    a && b && a.maturity === b.maturity ? (spreadsOver(a, b).find((m) => m.maturity === a.maturity) ?? null) : null;
   /** An open goes to the spread while it takes opens. A close goes to it while
    * it holds a position, held singles or not (owner 2026-10-16): one held
    * single left the spread with a max of 0. Singles close in Single mode. */
   const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
   const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
+  const spreadOnly =
+    mode === 'pair' && onlyLeg === null
+      ? spreadsOver(slotA, slotB).filter((m) => wantSpread(m) && !maturities.includes(m.maturity))
+      : [];
+  const chipDates = [...maturities, ...spreadOnly.map((m) => m.maturity)].sort((x, y) => x - y);
   /** Slot A's side: on a spread, the side the singles had when it took over. */
   const slotDirA: BorosLegDirection = isSpread && behind ? behind.dirA : dirA;
   /** Swap sides on a spread: the singles behind it swap slots with it. */
@@ -809,6 +827,21 @@ export function BorosPairTicket({
     // with the blocker the server words from this one. Better than mid is no
     // slippage, not a negative one.
     return lone.estSlippageApr == null ? null : Math.max(0, lone.estSlippageApr);
+  })();
+  const slip = ((): { est: number | null; max: number } | null => {
+    if (!simulation) return null;
+    const sizeOf = (i: number): number => Math.abs(simulation.legs[i]?.sizing.deltaSize ?? 0);
+    const est =
+      estSlippageApr === null
+        ? null
+        : aprCost(simulation, [{ apr: estSlippageApr, size: loneLeg === null ? simulation.hedgedSize : sizeOf(loneLeg) }]);
+    const max = aprCost(
+      simulation,
+      simulation.legs
+        .map((_, i) => ({ apr: i === 0 ? aprA : aprB, size: sizeOf(i), traded: loneLeg === null || i === loneLeg }))
+        .filter((part) => part.traded),
+    );
+    return { est, max };
   })();
   const gate = sim.data?.gate ?? null;
   const liqWarn = liqWarnOf(gate?.funding);
@@ -1107,19 +1140,12 @@ export function BorosPairTicket({
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2">
-              <Chip sm tone={dirA === 'long' ? 'green' : 'red'} className="font-semibold">
-                {t(dirA === 'long' ? 'common.longUpper' : 'common.shortUpper')}
-              </Chip>
-              {/* The rates reading of the side, stated beside it: long pays
-                  the fixed rate, short receives it. */}
-              <span className="text-[12px] font-normal text-ink-300">
-                {t(dirA === 'long' ? 'pairTicket.boros.marketPayFixed' : 'pairTicket.boros.marketReceiveFixed')}
-              </span>
-            </span>
-            <DirectionToggle value={dirA} onChange={setDirA} idPrefix={t('pairTicket.borosBits.legLetter', { letter: 'A' })} compact />
-          </div>
+          <LegHeader
+            dir={dirA}
+            caption={t(dirA === 'long' ? 'pairTicket.boros.marketPayFixed' : 'pairTicket.boros.marketReceiveFixed')}
+            onDir={setDirA}
+            hints={{ long: t('pairTicket.borosBits.longRateHint'), short: t('pairTicket.borosBits.shortRateHint') }}
+          />
           <MarketSelect
             id="boros-leg-a"
             label=""
@@ -1139,13 +1165,13 @@ export function BorosPairTicket({
       {!guided && (!isSpread || behind) && chipLegs.length > 0 && (
         <div className="flex flex-col gap-2">
           <FieldLabel>{t('common.maturity')}</FieldLabel>
-          {noSharedMaturity && rowA && rowB ? (
+          {noSharedMaturity && chipDates.length === 0 && rowA && rowB ? (
             <p className="text-[11.5px] text-amber-300" role="status">
               {t('pairTicket.boros.noSharedMaturity', { a: marketLabel(rowA), b: marketLabel(rowB) })}
             </p>
           ) : (
             <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.maturity')}>
-              {maturities.map((m) => (
+              {chipDates.map((m) => (
                 <PickChip key={m} active={m === maturity} onClick={() => pickMaturity(m)}>
                   {fmtDateLocal(m)} · {t('pairTicket.closeBoros.daysShort', { n: daysToMaturity(m, Math.floor(now / 1000)) })}
                 </PickChip>
@@ -1297,17 +1323,13 @@ export function BorosPairTicket({
         >
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-3">
-                <span
-                  className="text-[12px] text-ink-200"
-                  title={t('pairTicket.boros.slippageHint')}
-                >
-                  {t('pairTicket.bits.slippage')}
-                </span>
+                <span className="text-[12px] text-ink-200">{t('pairTicket.bits.slippage')}</span>
                 <span className="num text-[12px] text-ink-400">
                   {t('pairTicket.bits.est')}{' '}
                   <span className="text-ink-50">
                     {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
                   </span>
+                  <UsdNote usd={usdOf(simulation, slip?.est ?? null)} />
                   {' / '}{t('pairTicket.bits.max')}{' '}
                   <button
                     type="button"
@@ -1322,6 +1344,7 @@ export function BorosPairTicket({
                     {fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
                   </button>
                   {' '}APR
+                  <UsdNote usd={usdOf(simulation, slip?.max ?? null)} />
                 </span>
               </div>
               {slipOpen && (
@@ -1378,12 +1401,15 @@ export function BorosPairTicket({
                 </div>
               )}
             </div>
-            <div className="mt-0.5 border-t border-ink-800 pt-1.5">
-              <TradeFeeRow sim={simulation} singleLeg={activeLeg} weight="strong" />
-            </div>
+            <TradeFeeRow sim={simulation} singleLeg={activeLeg} />
+            {slip && (
+              <div className="mt-0.5 border-t border-ink-800 pt-1.5">
+                <TotalCostRow sim={simulation} slippage={slip.est} />
+              </div>
+            )}
         </SummaryCard>
         <SummaryCard title={t('accounts.moveCash.after')}>
-          <SpreadReadout sim={simulation} singleLeg={activeLeg} boxed />
+          <SpreadReadout sim={simulation} singleLeg={activeLeg} />
           <div className="flex flex-col gap-1.5">
             <LiquidationLines sim={simulation} singleLeg={activeLeg} warn={liqWarn} />
             <div className="mt-0.5 flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
