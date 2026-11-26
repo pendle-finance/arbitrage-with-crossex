@@ -614,12 +614,11 @@ export function CloseBorosForm({
   const toneClass = { amber: 'text-amber-400/90', rose: 'text-rose-400', dim: 'text-ink-400' } as const;
 
   const beforeAfter = (before: number, after: number) => `${sigGrouped(before)} ${unit0} → ${sigGrouped(after)} ${unit0}`;
-  const positionAfter = flatAfter
-    ? beforeAfter(maxCloseSize, 0)
-    : atMax
+  const positionAfter =
+    atMax && !flatAfter
       ? t('pairTicket.closeBoros.sharedOpen')
       : closable.length === 1
-        ? beforeAfter(heldOf(closable[0]), leftOf(closable[0]))
+        ? beforeAfter(heldOf(closable[0]), flatAfter ? 0 : leftOf(closable[0]))
         : null;
 
   return (

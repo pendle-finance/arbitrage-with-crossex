@@ -145,7 +145,7 @@ describe('AssetCard — roll over', () => {
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
 
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'Roll over' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Roll over Boros position' })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Pair' })).toHaveTextContent(/Gate.*LONG.*Hyperliquid.*SHORT/);
     expect(within(dialog).queryByRole('button', { name: 'Roll over' })).toBeNull();
     // No maturity lists a market at BOTH venues, so there is nothing to roll
