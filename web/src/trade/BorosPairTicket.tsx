@@ -22,7 +22,7 @@
  * distance on the book; "0.25% of the rate" would be a different number of
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
-import { ChevronRight } from 'lucide-react';
+import { ArrowLeftRight, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sigFigsDirectional } from '../lib/ticks';
@@ -1046,9 +1046,9 @@ export function BorosPairTicket({
                 aria-label={t('pairTicket.boros.swapSides')}
                 title={t('pairTicket.boros.swapSidesHint')}
                 onClick={swapSpread}
-                className="mb-[2px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50"
+                className="mb-[2px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50"
               >
-                ⇄
+                <ArrowLeftRight size={12} aria-hidden />
               </button>
             )}
           </div>
@@ -1095,9 +1095,9 @@ export function BorosPairTicket({
               setMarketA(marketB);
               setMarketB(marketA);
             }}
-            className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            ⇄
+            <ArrowLeftRight size={12} aria-hidden />
           </button>
           )}
           <div className="relative min-w-0">

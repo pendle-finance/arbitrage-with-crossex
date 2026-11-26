@@ -7,6 +7,7 @@ import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
 import { ExecModeLabel } from '../components/Approx';
 import { ExecModeToggle } from '../components/ExecModeToggle';
+import { TokenIcon } from '../components/AssetIcon';
 import { ListPicker } from '../components/ListPicker';
 import { SignedNumber } from '../components/SignedNumber';
 import { Skeleton } from '../components/Skeleton';
@@ -78,7 +79,7 @@ function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; poo
         onChange={onPick}
         rows={shown.map((p) => ({
           key: p,
-          icon: poolCoin(p),
+          icon: <TokenIcon symbol={poolCoin(p)} size={16} />,
           name: walletOf(p),
           value: (
             <>
