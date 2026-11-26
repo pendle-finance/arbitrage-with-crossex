@@ -453,21 +453,21 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         )}
       </div>
 
-      <ExecModeToggle
-        ariaLabel={t('pairTicket.orderType.aria')}
-        fill
-        value={mode}
-        onChange={(m) => {
-          setMode(m);
-          if (m === 'market') twap.setOn(false);
-          setPricePinned(false);
-        }}
-        order={['maker', 'market']}
-        labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
-      />
-
-      {mode === 'maker' && (
-        <>
+      <div className="flex flex-col">
+        <ExecModeToggle
+          ariaLabel={t('pairTicket.orderType.aria')}
+          fill
+          className={mode === 'maker' ? 'seg-attached' : undefined}
+          value={mode}
+          onChange={(m) => {
+            setMode(m);
+            if (m === 'market') twap.setOn(false);
+            setPricePinned(false);
+          }}
+          order={['maker', 'market']}
+          labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
+        />
+        {mode === 'maker' && (
           <MakerSettings
             legs={legs}
             makerLeg={makerLeg}
@@ -480,7 +480,13 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             repegBehindBp={repegBp}
             repegLocked={pinned}
             onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}
+            attached
           />
+        )}
+      </div>
+
+      {mode === 'maker' && (
+        <>
           {allowTwap && <TwapArea
             on={twap.on}
             onToggle={(on) => {

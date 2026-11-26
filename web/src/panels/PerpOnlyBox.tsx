@@ -191,34 +191,36 @@ export function ClosePairForm({
         onChange={setQtyEdited}
       />
 
-      <ExecModeToggle
-        ariaLabel={t('accounts.closePair.executionAria')}
-        fill
-        value={mode}
-        onChange={setMode}
-        order={['maker', 'market']}
-        labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
-      />
-
-      {maker ? (
-        <MakerSettings
-          legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
-          makerLeg={makerLeg}
-          autoPick={autoPick}
-          saving={maker ? makerSaving : null}
-          savingHint={t('accounts.closePair.savingHint')}
-          onMakerLeg={setMakerLeg}
-          takerAfter={taker.takerAfter}
-          onTakerAfter={taker.pick}
-          takerCapSec={twapOn ? (plan?.takerAfterSec ?? null) : null}
-          repegBehindBp={repeg}
-          repegLocked={false}
-          onRepeg={(v) => setRepeg(v as RepegBp)}
-          marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
+      <div className="flex flex-col">
+        <ExecModeToggle
+          ariaLabel={t('accounts.closePair.executionAria')}
+          fill
+          className={maker ? 'seg-attached' : undefined}
+          value={mode}
+          onChange={setMode}
+          order={['maker', 'market']}
+          labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
         />
-      ) : (
-        <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />
-      )}
+        {maker && (
+          <MakerSettings
+            attached
+            legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
+            makerLeg={makerLeg}
+            autoPick={autoPick}
+            saving={maker ? makerSaving : null}
+            savingHint={t('accounts.closePair.savingHint')}
+            onMakerLeg={setMakerLeg}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            takerCapSec={twapOn ? (plan?.takerAfterSec ?? null) : null}
+            repegBehindBp={repeg}
+            repegLocked={false}
+            onRepeg={(v) => setRepeg(v as RepegBp)}
+            marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
+          />
+        )}
+      </div>
+      {!maker && <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />}
 
       {maker && allowTwap && (
         <TwapArea
