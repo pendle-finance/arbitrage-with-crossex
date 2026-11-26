@@ -823,17 +823,6 @@ export function CloseBorosForm({
           )}
         </HoldToConfirmButton>
         )}
-        {!loginLabel && (
-          <p className="text-[11px] leading-relaxed text-ink-400">
-            {closable.length === 1
-              ? t('pairTicket.closeBoros.footOne')
-              : pending.length < closable.length
-                ? t('pairTicket.closeBoros.footLeft', { count: pending.length })
-                : closable.length > 2
-                  ? t('pairTicket.closeBoros.footAll', { n: closable.length })
-                  : t('pairTicket.closeBoros.footBoth')}
-          </p>
-        )}
       </div>
     </div>
   );
