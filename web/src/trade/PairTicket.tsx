@@ -375,6 +375,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           // coin; it does not survive the switch.
           setUnitPinned(false);
           setNotionalStr('');
+          setPricePinned(false);
           setMakerLeg('auto');
         }}
       />

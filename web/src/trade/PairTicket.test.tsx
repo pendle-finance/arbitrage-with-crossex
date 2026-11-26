@@ -502,6 +502,24 @@ describe('PairTicket execution modes', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Use the book price again' }));
     await waitFor(() => expect(priceInput).toHaveValue('2,499.00'), { timeout: 4000 });
   });
+
+  it('a typed price does not follow the trader to another coin: the new coin tracks its own book', async () => {
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [] }));
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+
+    await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
+    await userEvent.clear(limitPrice());
+    await userEvent.type(limitPrice(), '2450');
+    expect(screen.getByRole('button', { name: 'Use the book price again' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
+    await fillTwoVenuePair();
+
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
+    expect(screen.queryByRole('button', { name: 'Use the book price again' })).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
