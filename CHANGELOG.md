@@ -73,6 +73,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Realize uPnL and Delever steps** show a token icon and the cost of each step. The Realize
   wallet picker shows the wallet on the left and its uPnL on the right. A stale quote turns the
   hold button into "Refresh quote". HYPE shows the Hyperliquid mark.
+- **Maker settings with re-peg Off survive a restart,** so a resumed Realize or Delever keeps the
+  wait and re-peg you picked. On the pair ticket, a typed limit price no longer carries over to
+  another coin.
 
 ## 1.7.9 — 2026-11-10
 
