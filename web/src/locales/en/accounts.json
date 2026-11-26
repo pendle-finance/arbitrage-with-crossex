@@ -181,7 +181,7 @@
     "whereCaption": "Where your money is",
     "onTheWay": "On the way",
     "waitsLine": "New deals and transfers wait until it ends.",
-    "staleQuote": "The quote is out of date. Waiting for a fresh one.",
+    "refreshQuote": "Refresh quote",
     "started": "Started {{age}} ago. You can close this. The rebalance keeps going.",
     "finishedLead": "Done. This is what each wallet holds now.",
     "abandonTransit": "Abandon leaves {{qty}} {{coin}} in transit. It is not margin until it lands.",
