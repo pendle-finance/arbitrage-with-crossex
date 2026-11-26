@@ -70,6 +70,7 @@ import {
   type BorosPairSimulation,
   type PairBlocker,
   type PairIntent,
+  type RestingOrderMargin,
 } from '../../core/boros/pair';
 import { CoreError } from '../../core/errors';
 import { PLAN_NOTE, PLAN_SHARE } from '../../core/positionLimit';
@@ -320,6 +321,7 @@ export interface AccountView {
   isolatedByMarket: Map<number, BorosMarginBucket>;
   /** Markets with a resting order in the cross account — what a close or roll cancels. */
   restingOrderMarkets: Set<number>;
+  orderMarginByMarket: Map<number, RestingOrderMargin>;
 }
 
 function holdsPositionOrOrders(p: {
@@ -347,6 +349,7 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
     isolatedByMarket: new Map(),
     restingOrderMarkets: new Set(),
     crossFreeWithOrdersByToken: new Map(),
+    orderMarginByMarket: new Map(),
   };
   for (const zone of zones) {
     // Cross only: that is the account a close's cancel is sent to.
@@ -366,8 +369,13 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
           0,
         );
         view.crossFreeWithOrdersByToken.set(zone.tokenId, norm18(zone.cross.netBalance) - usedWithOrders);
+        const bucket = view.crossByToken.get(zone.tokenId);
+        if (bucket) bucket.availableWithOrders = norm18(zone.cross.netBalance) - usedWithOrders;
       }
       for (const p of zone.cross.marketPositions) {
+        if (p.restingOrderMargin) {
+          view.orderMarginByMarket.set(p.marketId, { long: norm18(p.restingOrderMargin.long), short: norm18(p.restingOrderMargin.short) });
+        }
         view.positionByMarket.set(p.marketId, norm18(p.notionalSize));
         view.positionRawByMarket.set(p.marketId, String(p.notionalSize ?? '0'));
         view.committedMarginByMarket.set(
@@ -604,6 +612,7 @@ export function createPairPricer(deps: AppDeps) {
       slippageApr: parsed[i].slippageApr,
       currentSize: account.positionByMarket.get(market.marketId) ?? 0,
       committedMargin: account.committedMarginByMarket.get(market.marketId) ?? 0,
+      restingOrderMargin: account.orderMarginByMarket.get(market.marketId),
       isolatedOnly: market.isolatedOnly,
       onIsolatedMargin: account.isolatedMarkets.has(market.marketId),
       isolatedHasPositionOrOrders: account.isolatedOccupied.has(market.marketId),
