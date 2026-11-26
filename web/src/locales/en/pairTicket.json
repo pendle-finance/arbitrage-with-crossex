@@ -100,12 +100,7 @@
     "closing": "Closing…",
     "closeLegs_one": "Close position",
     "closeLegs_other": "Close {{count}} positions",
-    "unquoted": "No quote for this market. The close still goes out, within {{slip}}% of mid.",
-    "footOne": "Cancels resting orders, then sends 1 market order.",
-    "footLeft_one": "Cancels resting orders, then closes the position left in one batch, all or none.",
-    "footLeft_other": "Cancels resting orders, then closes the {{count}} positions left in one batch, all or none.",
-    "footAll": "Cancels resting orders, then closes all {{n}} positions in one batch, all or none.",
-    "footBoth": "Cancels resting orders, then closes both positions in one batch, all or none."
+    "unquoted": "No quote for this market. The close still goes out, within {{slip}}% of mid."
   },
   "pair": {
     "leverage": "{{long}}x Long / {{short}}x Short",
