@@ -110,6 +110,13 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Close perps: Price PnL booked counts what earlier closes on the pair's perps booked,** so a
   re-opened leg no longer shows a false loss.
 - **Delever from a pair opens over Positions** instead of jumping to Accounts.
+- **An open counts the margin your resting Boros orders hold,** with the same rule Boros uses, so
+  Open only says when Boros would refuse it for margin. The pair ticket's Available is the free
+  cash after your orders.
+- **Roll over:** the steps sit inside the mode box and the hold button spans the panel. After
+  shows the Fixed APR, and Available now on a refused roll. Close perps After shows each leg
+  before → after and says "Realized price PnL". Every window keeps its header padding and draws
+  a line under the header once the body scrolls.
 
 ## 1.7.9 — 2026-11-10
 
