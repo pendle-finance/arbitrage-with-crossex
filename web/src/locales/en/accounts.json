@@ -81,7 +81,6 @@
       "walletUsdc": "CrossEx wallet. Margin for Hyperliquid legs.",
       "walletLighter": "CrossEx wallet. Margin for Lighter legs.",
       "walletGate": "CrossEx wallet. USDC left from a spot buy. Still margin. Rebalance empties it.",
-      "now": "Equity = cash + unrealized PnL.",
       "interestNow": {
         "lead": "Gate charges interest every hour on a CrossEx wallet's borrow.",
         "head": {
@@ -106,7 +105,6 @@
       "whyMoreThanOneBorrow": "Gate locks {{amount}} of initial margin for your borrow. Each round repays some borrow, so the next round is bigger.",
       "frees": "Initial margin the repaid borrow no longer locks.",
       "interestMonth": "Borrow interest for 30 days at today's rates, now and after this rebalance.",
-      "onTheWay": "In transit through Gate spot. Not margin.",
       "gateSpot": "Not margin.",
       "gateSpotAssets": "Not margin. No equity or PnL.",
       "abandon": "End the rebalance for good. Funds stay where they are.",
@@ -140,8 +138,7 @@
     "gateSpot": "Gate spot",
     "bar": {
       "cash": "Cash",
-      "upnl": "Unrealized PnL",
-      "target": "Balanced target"
+      "upnl": "Unrealized PnL"
     },
     "modal": {
       "frees": "Frees initial margin",
@@ -178,9 +175,6 @@
     "steps": "Steps",
     "showSteps": "Show all steps",
     "hideSteps": "Hide steps",
-    "now": "Now",
-    "whereCaption": "Where your money is",
-    "onTheWay": "On the way",
     "waitsLine": "New deals and transfers wait until it ends.",
     "refreshQuote": "Refresh quote",
     "started": "Started {{age}} ago. You can close this. The rebalance keeps going.",

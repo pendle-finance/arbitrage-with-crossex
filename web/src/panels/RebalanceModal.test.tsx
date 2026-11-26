@@ -67,9 +67,6 @@ const subs = (label: string): string[] => {
   return [...(dt?.parentElement?.querySelectorAll('dd') ?? [])].slice(1).map((dd) => dd.textContent ?? '');
 };
 
-const barRows = (name: string): string[] =>
-  [...screen.getByRole('group', { name }).querySelectorAll('[data-bar-row]')].map((row) => row.textContent ?? '');
-
 const rowOf = (name: string) => screen.getByRole('radio', { name }).closest('label') as HTMLElement;
 
 // The preset toggle is a radiogroup too, so route radios are read inside theirs.
@@ -302,26 +299,6 @@ describe('RebalanceModal plan state', () => {
     expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(1);
   });
 
-  it('the On the way bar keeps its gold mark, not a cash color', async () => {
-    const running = rebalanceViews.exampleERunning;
-    show({ ...running, job: { ...running.job, inTransit: { coin: 'USDC', qty: 745.44, at: 'MOVING' } } });
-    const row = screen.getByRole('group', { name: 'Now' }).querySelector('[data-bar-row="spot"]') as HTMLElement;
-    expect(row.querySelector('[data-bar-cash]')?.className).toContain('bg-gold');
-    expect(row.querySelector('[data-zero-line]')?.className).toContain('bg-ink-200');
-  });
-
-  it('gives a wallet with no position share three numbers and a gold mark at zero', async () => {
-    show(rebalanceViews.accountARunning);
-    const row = screen.getByRole('group', { name: 'Now' }).querySelector('[data-bar-row="USDC/GATE"]') as HTMLElement;
-    expect(row.querySelector('[data-bar-target]')).not.toBeNull();
-    fireEvent.mouseMove(row.querySelector('[data-bar-hit]') as HTMLElement, { clientX: 100, clientY: 40 });
-    const tip = screen.getByRole('tooltip');
-    expect(tip.textContent).toMatch(/Cash.*Unrealized PnL.*Balanced target/);
-    const numbers = [...tip.querySelectorAll('.num')].map((el) => el.textContent);
-    expect(numbers).toHaveLength(3);
-    expect(numbers[2]).toBe('0.00');
-  });
-
   it('shows one or two steps with no fold, over one hold to confirm button', async () => {
     show(rebalanceViews.twoBorrows);
     expect(innerItems()).toHaveLength(2);
@@ -451,12 +428,8 @@ describe('RebalanceModal run states', () => {
     expect(facts()).toEqual({ Route: 'Spot loop', Round: '3 of 5', 'Time left': 'about 6 min' });
     expect(subs('Time left')).toEqual(['4m 58s passed']);
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
-    expect(barRows('Now')).toEqual([
-      'USDT · CrossEx92.54',
-      'USDC · Hyperliquid-92.71',
-      'USDC · Gate20.94',
-      'On the way36.58',
-    ]);
+    expect(screen.queryByRole('group', { name: 'Now' })).toBeNull();
+    expect(dialog().textContent).toContain('Move 36.58 USDC to the CrossEx Hyperliquid wallet');
   });
 
   it('says the running job keeps going after the modal closes', async () => {
@@ -477,7 +450,7 @@ describe('RebalanceModal run states', () => {
     expect(screen.getByRole('alert').textContent).toBe(
       'Stopped in round 3 of 5.Gate paused transfers into the CrossEx Hyperliquid wallet.',
     );
-    expect(barRows('Where your money is')).toContain('Gate spot36.58');
+    expect(screen.queryByRole('group', { name: 'Where your money is' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeEnabled();
     expect(within(dialog()).getByText('Abandon leaves the 36.58 USDC in Gate spot.')).toBeInTheDocument();
@@ -512,7 +485,7 @@ describe('RebalanceModal run states', () => {
     await next();
     expect(screen.getAllByText('Done')[0]).toBeInTheDocument();
     expect(facts()).toEqual({ Route: 'Spot loop', Moved: '$175.63', Took: '4m 18s', 'Total cost': '$0.26' });
-    expect(barRows('Now')).toContain('USDT · CrossEx92.54');
+    expect(screen.queryByRole('group', { name: 'Now' })).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
     // Close is the one way out once the run has finished under the dialog.
     await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
@@ -887,18 +860,8 @@ describe('RebalanceModal where the money is', () => {
     expect(screen.getByRole('alert').textContent).toBe(
       'Stopped in round 3 of 5.The app restarted during the run. Nothing failed. Press Resume.',
     );
-    expect(barRows('Where your money is')).toEqual([
-      'USDT · CrossEx92.54',
-      'USDC · Hyperliquid-92.71',
-      'USDC · Gate57.52',
-    ]);
+    expect(screen.queryByRole('group', { name: 'Where your money is' })).toBeNull();
     expect(within(dialog()).getByText('End the rebalance for good. Funds stay where they are.')).toBeInTheDocument();
-  });
-
-  it('running toward USDT shows on the way', async () => {
-    const running = rebalanceViews.exampleERunning;
-    show({ ...running, job: { ...running.job, inTransit: { coin: 'USDC', qty: 745.44, at: 'MOVING' } } });
-    expect(barRows('Now')).toContain('On the way745.44');
   });
 
   it('halted toward USDT on the way', async () => {
@@ -912,9 +875,6 @@ describe('RebalanceModal where the money is', () => {
         inTransit: { coin: 'USDC', qty: 745.44, at: 'MOVING' },
       },
     });
-    const rows = barRows('Where your money is');
-    expect(rows).toContain('On the way745.44');
-    expect(rows.filter((row) => row.startsWith('Gate spot'))).toEqual([]);
     expect(within(dialog()).getByText('Abandon leaves 745.44 USDC in transit. It is not margin until it lands.')).toBeInTheDocument();
   });
 
@@ -1165,7 +1125,6 @@ describe('RebalanceModal route and step content', () => {
         '6m 40s of about 10 min',
       ],
     ]);
-    expect(barRows('Now')).toEqual(expect.arrayContaining(['USDC · Lighter0.00', 'On the way499.00']));
   });
 });
 
@@ -1234,17 +1193,6 @@ describe('RebalanceModal hovers and facts', () => {
     await check([
       ['Spot loop, then Convert', 'Spot loop for up to 6 rounds, then Convert the rest.'],
     ]);
-    cleanup();
-
-    show(rebalanceViews.accountARunning);
-    await check([
-      ['Now', 'Equity = cash + unrealized PnL.'],
-      ['On the way', 'In transit through Gate spot. Not margin.'],
-    ]);
-    cleanup();
-
-    show(rebalanceViews.accountAHalted);
-    await check([['Gate spot', 'Not margin.']]);
   }, 60_000);
 
   it('hovers for a move into two wallets', async () => {

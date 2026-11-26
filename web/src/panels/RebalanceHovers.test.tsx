@@ -6,7 +6,7 @@ import { rebalanceViews, rebased } from '../test/fixtures';
 import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, paybackDays, pickedRoute, realizeFeeUsd, realizeImpactUsd } from './RebalanceHovers';
 import { fmtUsd } from '../lib/fmt';
 import { costPartsUsd } from './RebalanceHovers';
-import { RebalanceInfo, roundOf, RouteRow, shownKeys, stopsPerDayOf, targetsOf, totalCostUsd, worthChip, worthLine } from './RebalanceHovers';
+import { RebalanceInfo, roundOf, RouteRow, stopsPerDayOf, totalCostUsd, worthChip, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {
   return render(<Facts items={borrowFacts(buckets)} />);
@@ -216,35 +216,12 @@ describe('the current round', () => {
   });
 });
 
-describe('balanced targets', () => {
-  it('targets hold still during a run', () => {
-    const before = rebalanceViews.twoBorrows;
-    const running = rebalanceViews.accountARunning.job!;
-    const during = {
-      ...before,
-      job: { ...running, status: 'running' as const, inTransit: { coin: 'USDC' as const, qty: 300, at: 'MOVING' as const } },
-      buckets: rebased(before.buckets, { 'USDT/CROSSEX': { cash: 1087.45, equity: 1191.92 } }),
-    };
-    const cents = (targets: Map<string, number>) => [...targets].map(([key, value]) => [key, Math.round(value * 100)]);
-
-    expect(cents(targetsOf(during))).toEqual(cents(targetsOf(before)));
-    expect(cents(targetsOf({ ...during, job: { ...during.job, status: 'abandoned' } }))).not.toEqual(cents(targetsOf(before)));
-  });
-});
-
 describe('route and wallet rules the card and the modal share', () => {
   it('picks the first open route, starting from the pick', () => {
     const plan = rebalanceViews.twoBorrows.plans.even;
     expect(pickedRoute(plan, null).name).toBe('mix');
     expect(pickedRoute(plan, 'convert').route).toBe(plan.routes.convert);
     expect(pickedRoute(rebalanceViews.hiddenRoute.plans.even, 'loop').name).not.toBe('loop');
-  });
-
-  it('shows the Gate wallet only while it holds a dollar of cash', () => {
-    const view = rebalanceViews.accountA;
-    expect(shownKeys(view, [])).toContain('USDC/GATE');
-    const dust = { ...view, buckets: rebased(view.buckets, { 'USDC/GATE': { cash: 0.99, equity: 0.99 } }) };
-    expect(shownKeys(dust, [])).not.toContain('USDC/GATE');
   });
 });
 

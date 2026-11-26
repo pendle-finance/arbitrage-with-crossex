@@ -11,7 +11,6 @@ import { t } from '../i18n';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
-import { ALWAYS_SHOWN, WALLET_TONE, type BarRow } from './RebalanceBars';
 import { ROUTE_ORDER } from './RebalanceBits';
 import {
   factBorrowing,
@@ -41,14 +40,13 @@ import { localizeServerText } from '../i18n/serverMessages';
 export const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
 export const DUST = 1;
 
-const sliceHover = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.now');
+const sliceHover = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.walletUsdt');
 
 export const SLICE_HOVER = {
   get priceImpact() { return sliceHover('slicePriceImpact'); },
   get tradingFeePerps() { return sliceHover('tradingFeePerps'); },
   get imUsed() { return sliceHover('imUsed'); },
 };
-const TRANSIT_WALLET = 'USDC/GATE';
 
 export const ROUTE_LABEL: Readonly<Record<RouteName, string>> = {
   get mix() { return t('accounts.rebalanceHovers.routeMix'); },
@@ -477,45 +475,6 @@ export function defaultGoal(view: RebalanceView): 'even' | 'repay' {
 
 /** The equity each wallet is heading for. The even goal re-derives it from
  * the live equity (money in transit counts), the others aim at fixed figures. */
-export function targetsOf(view: RebalanceView, plan: EvenPlan = view.plans.even): Map<string, number> {
-  if (plan.goal.kind !== 'even') return new Map(plan.targets.map((target) => [keyOf(target), target.equity]));
-  if (plan.noLegs) return new Map();
-  const job = view.job;
-  const transit = job && (job.status === 'running' || job.status === 'halted') ? (job.inTransit?.qty ?? 0) : 0;
-  const equity = view.buckets.reduce((total, b) => total + b.equity, transit);
-  return new Map(plan.split.map((share) => [keyOf(share), share.share * equity]));
-}
-
-export function barRowsOf(wallets: (WalletAfter | RebalanceBucket)[], keys: string[], target: Map<string, number>): BarRow[] {
-  return keys.flatMap((key): BarRow[] => {
-    const wallet = wallets.find((w) => keyOf(w) === key);
-    if (!wallet) return [];
-    return [
-      {
-        key,
-        label: <WalletTerm wallet={key} />,
-        name: WALLET_LABEL[key],
-        cash: wallet.cash,
-        upnl: 'upnl' in wallet ? wallet.upnl : wallet.equity - wallet.cash,
-        target: target.size === 0 ? null : (target.get(key) ?? 0),
-        tone: WALLET_TONE[key],
-      },
-    ];
-  });
-}
-
-export function shownKeys(view: RebalanceView, steps: readonly Move[], plan: EvenPlan = view.plans.even): string[] {
-  const touched = new Set(steps.flatMap((step) => [poolKey(step.from), poolKey(step.to)]));
-  const target = targetsOf(view, plan);
-  return Object.keys(WALLET_TONE).filter((key) => {
-    const bucket = view.buckets.find((b) => keyOf(b) === key);
-    if (!bucket) return false;
-    if (key === TRANSIT_WALLET) return Math.abs(bucket.cash) >= DUST;
-    if (ALWAYS_SHOWN.includes(key) || touched.has(key) || target.has(key)) return true;
-    return Math.abs(bucket.cash) >= DUST || Math.abs(bucket.equity) >= DUST;
-  });
-}
-
 export function pickedRoute(plan: EvenPlan, pick: RouteName | null): { name: RouteName | null; route: RoutePlan } {
   const isOpen = (name: RouteName | null): name is RouteName => name !== null && plan.routes[name]?.available === true;
   const name = [pick, plan.recommended, ...ROUTE_ORDER].find(isOpen) ?? null;
