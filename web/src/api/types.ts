@@ -217,6 +217,7 @@ export interface RoutePlan {
   savesPerDayUsd: number;
   after: WalletAfter[];
   steps: PlannedStep[];
+  idleSale?: { usdc: number; at: number } | null;
 }
 
 export type PerpSide = 'LONG' | 'SHORT';

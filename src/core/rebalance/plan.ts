@@ -219,6 +219,12 @@ export interface RoutePlan {
   savesPerDayUsd: number;
   after: WalletAfter[];
   steps: PlannedStep[];
+  idleSale: IdleSale | null;
+}
+
+export interface IdleSale {
+  usdc: number;
+  at: number;
 }
 
 export interface EvenPlan {
@@ -525,6 +531,7 @@ interface Run extends Wallets {
   /** The share of costUsd that is price impact, not fee. */
   impactUsd: number;
   steps: PlannedStep[];
+  idleSale: IdleSale | null;
   cashLimited: boolean;
   usdtShort: boolean;
   beyondBook: boolean;
@@ -646,6 +653,7 @@ function roundInto(book: Book, run: Run, move: Move, size: number): void {
 
 function sellUsdc(book: Book, run: Run, move: Move, arrived: number): void {
   const sold = arrived + run.gateMovable;
+  if (run.gateMovable > 0 && run.idleSale === null) run.idleSale = { usdc: floorCents(run.gateMovable), at: run.steps.length + (arrived > 0 ? 1 : 0) };
   const sale = priced(book.bids, sold, book.bid);
   const gained = sale.usdt * (1 - book.takerRate);
   run.usdt = shifted(run.usdt, gained);
@@ -729,6 +737,7 @@ function startRun(book: Book): Run {
     costUsd: 0,
     impactUsd: 0,
     steps: [],
+    idleSale: null,
     cashLimited: false,
     usdtShort: false,
     beyondBook: false,
@@ -835,6 +844,7 @@ function routePlan(book: Book, run: Run, reason: string | null): RoutePlan {
     savesPerDayUsd: nearestCents(freed.savesPerDayUsd),
     after: afterOf(book, run),
     steps: run.steps,
+    idleSale: run.idleSale,
   };
 }
 
@@ -1132,7 +1142,7 @@ function planAfterRealize(
   );
   const nested = plan.realize?.refused === null ? plan.realize.legs : [];
   const restOf = (route: RoutePlan): RoutePlan =>
-    restated(plan.balanced ? { ...route, available: true, reason: null, costUsd: 0, steps: [] } : route, buckets);
+    restated(plan.balanced ? { ...route, available: true, reason: null, costUsd: 0, steps: [], idleSale: null } : route, buckets);
   const routes = {
     mix: plan.routes.mix && restOf(plan.routes.mix),
     loop: plan.routes.loop && restOf(plan.routes.loop),

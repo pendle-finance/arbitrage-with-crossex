@@ -218,6 +218,7 @@
     "moveTo": "Move {{move}} USDC to {{wallet}}",
     "buyMoveIt": "Buy {{buy}} USDC, move it to {{wallet}}",
     "buyMove": "Buy {{buy}} USDC, move {{move}} USDC to {{wallet}}",
+    "sellIdle": "Sell {{amount}} idle USDC in the CrossEx Gate wallet for USDT",
     "stopped": "Stopped",
     "elapsedOf": "{{elapsed}} of {{expected}}"
   },

@@ -57,12 +57,16 @@ interface StepGroup {
   steps: RebalanceStep[];
 }
 
+const IDLE_SALE = 'Sell USDC';
+
+const idleSale = (step: RebalanceStep): boolean => step.round === null && step.name === IDLE_SALE;
+
 function groupSteps(steps: RebalanceStep[]): StepGroup[] {
   const groups: StepGroup[] = [];
   for (const step of steps) {
     const last = groups.at(-1);
     const head = last?.steps[0];
-    if (last && head && last.round === step.round && head.from === step.from && head.to === step.to) last.steps.push(step);
+    if (last && head && last.round === step.round && head.from === step.from && head.to === step.to && idleSale(head) === idleSale(step)) last.steps.push(step);
     else groups.push({ round: step.round, steps: [step] });
   }
   return groups;
@@ -70,8 +74,12 @@ function groupSteps(steps: RebalanceStep[]): StepGroup[] {
 
 const stepCoin = (convert: boolean, from: Pool): string => (convert && from === 'CROSSEX' ? 'USDT' : 'USDC');
 
+const sellIdleText = (usdc: number): string => t('accounts.rebalanceBits.sellIdle', { amount: num(usdc) });
+
 function groupBase({ round, steps }: StepGroup, index: number) {
-  return { key: `${round ?? 'convert'}:${index}`, coin: stepCoin(round === null, steps[0].from), text: jobStepText(steps, round), sub: '' };
+  const key = `${round ?? 'convert'}:${index}`;
+  if (idleSale(steps[0])) return { key, coin: 'USDC', text: sellIdleText(steps[0].planned ?? 0), sub: '' };
+  return { key, coin: stepCoin(round === null, steps[0].from), text: jobStepText(steps, round), sub: '' };
 }
 
 export function jobRows(job: RebalanceJob, now: number): StepRow[] {
@@ -100,8 +108,14 @@ export function jobRows(job: RebalanceJob, now: number): StepRow[] {
 }
 
 export function planRows(route: RoutePlan): StepRow[] {
-  return route.steps.map((step, index): StepRow => {
-    const right = step.kind === 'convert' ? t('accounts.rebalance.hover.title.time.instant') : fmtAbout(step.seconds);
+  const instant = t('accounts.rebalance.hover.title.time.instant');
+  const rows = route.steps.map((step, index): StepRow => {
+    const right = step.kind === 'convert' ? instant : fmtAbout(step.seconds);
     return { key: String(index), coin: stepCoin(step.kind === 'convert', step.from), text: stepText(step), sub: '', right, state: 'pending', progress: 0 };
   });
+  const sale = route.idleSale;
+  if (!sale || sale.usdc <= 0) return rows;
+  const row: StepRow = { key: 'idle-sale', coin: 'USDC', text: sellIdleText(sale.usdc), sub: '', right: instant, state: 'pending', progress: 0 };
+  const at = Math.min(Math.max(0, sale.at), rows.length);
+  return [...rows.slice(0, at), row, ...rows.slice(at)];
 }
