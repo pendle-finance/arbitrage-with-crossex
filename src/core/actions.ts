@@ -446,9 +446,6 @@ function applySharedPairSizing(resolved: ResolvedAction[]): void {
         })),
       });
       for (const l of legs) {
-        if (Number(l.qty) !== shared.qty) {
-          l.warnings.push(`Size set to ${shared.qtyStr} (was ${l.qty || '—'}) so both legs trade the same amount`);
-        }
         l.qty = shared.qtyStr;
         if (ref) {
           const own = Number(l.price);

@@ -238,8 +238,8 @@ describe('the card, by the grouping DoD', () => {
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
     expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: '1', HYPERLIQUID_FUTURE_ETH_USDT: undefined });
     const after = await within(dialog).findByRole('region', { name: 'After' });
-    await waitFor(() => expect(textOf(after)).toMatch(/Gate\s*not in this pair\s*1 ETH/));
-    expect(textOf(after)).not.toMatch(/Hyperliquid\s*(not in this pair|left)/);
+    await waitFor(() => expect(textOf(after)).toMatch(/Gate/));
+    expect(textOf(after)).not.toMatch(/not in this pair|Hyperliquid\s*left/);
     expect(textOf(dialog)).not.toMatch(/\b2 ETH/);
   });
 

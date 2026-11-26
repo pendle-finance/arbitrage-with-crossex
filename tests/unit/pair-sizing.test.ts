@@ -38,7 +38,7 @@ const messages = (r: ResolvedAction[]): string[] => r.flatMap((l) => l.violation
 const warnings = (r: ResolvedAction[]): string[] => r.flatMap((l) => l.warnings);
 
 describe('shared pair sizing', () => {
-  it('coin-sized pair: both legs take the coarser lot, and the warning names both sizes', async () => {
+  it('coin-sized pair: both legs take the coarser lot, with no warning about the rounding', async () => {
     const clients = fakeClients([rule(GATE, '0.001'), rule(OKX, '0.0001')], 65_000);
     const r = await resolveActions(
       clients,
@@ -48,7 +48,7 @@ describe('shared pair sizing', () => {
 
     expect(r.map((l) => l.qty)).toEqual(['2.529', '2.529']);
     expect(codes(r)).not.toContain('pair-qty-mismatch');
-    expect(warnings(r)).toContain('Size set to 2.529 (was 2.5296) so both legs trade the same amount');
+    expect(warnings(r).some((w) => w.startsWith('Size set to'))).toBe(false);
   });
 
   it('coin-sized pair sizes with no reference price, and skips the min-notional check', async () => {
