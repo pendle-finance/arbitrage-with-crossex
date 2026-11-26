@@ -554,13 +554,14 @@ export function CloseBorosForm({
     ].filter((s) => s !== null);
     const facts = underPicker
       ? ''
-      : ` · ${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`;
+      : `${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`;
     return {
       key: String(l.marketId),
       coin: l.base,
       text: (
         <span className="inline-flex max-w-full items-center gap-1.5">
           <span className="font-semibold text-ink-50">{t('common.close')}</span>
+          <span className="num shrink-0 text-ink-50">{anySizeInvalid ? '—' : `${sigGrouped(sizeOf(l))} ${l.collateral ?? ''}`}</span>
           {venues ? <SpreadIcon venues={venues} size={14} /> : <VenueIcon venue={l.venue} size={14} />}
           <span className="truncate">{venueLabel(l)}</span>
           <Chip sm tone={l.side === 'LONG' ? 'green' : 'red'} className="font-semibold">
@@ -624,11 +625,6 @@ export function CloseBorosForm({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1.5">
-        <span className={microLabelClass}>{t('accounts.rebalanceModal.steps')}</span>
-        <StepList rows={stepRows} />
-      </div>
-
       <CloseSizePresets
         label={closable.length > 2 ? t('pairTicket.closeBoros.closeSizeAll') : closable.length > 1 ? t('pairTicket.closeBoros.closeSizeBoth') : t('pairTicket.closeBoros.closeSize')}
         inputLabel={t('pairTicket.closeBoros.sizeAria')}
@@ -646,6 +642,11 @@ export function CloseBorosForm({
           atMax && sharedLeg && <span className="text-[11px] text-ink-400">{t('pairTicket.closeBoros.sharedLabel')}</span>
         )}
       </CloseSizePresets>
+
+      <div className="flex flex-col gap-1.5">
+        <span className={microLabelClass}>{t('accounts.rebalanceModal.steps')}</span>
+        <StepList rows={stepRows} />
+      </div>
 
       <SummaryCard
         title={t('accounts.moveCash.cost')}

@@ -395,8 +395,42 @@ describe('evaluateRollGate', () => {
       marginRequired: 1_000,
     });
     const g = evaluateRollGate({ ...rollInput(), venue });
-    expect(g.blockers[0].message).toBe('The venue refuses this roll:\n• Not enough margin.\nFix: Add margin or roll a smaller size.');
-    expect(g.margin).toEqual({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700, shortfall: 300, suggestedTopUp: null });
+    expect(g.blockers[0].message).toMatch(/^Cross margin is short 300 \w+ to roll this position\.$/);
+    expect(g.margin).toMatchObject({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700, shortfall: 300 });
+    expect(g.margin.suggestedTopUp).toBeGreaterThanOrEqual(300);
+  });
+
+  it('a re-entry leg the venue refused for margin reads as the cross shortfall, with the top-up that covers it', () => {
+    const base = venueOk();
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MM_INSUFFICIENT_IM', message: 'Not enough margin' },
+      orders: base.orders.map((o) => (o.marketId === 156 ? { ...o, filled: false, error: 'Not enough margin' } : o)),
+      availableAfter: null,
+      availableAfterExit: 0.251,
+      marginRequired: 0.268,
+    });
+    const g = evaluateRollGate({ ...rollInput(), venue });
+    expect(g.blockers.filter((b) => b.code === 'venue-refused').map((b) => b.message)).toEqual([
+      expect.stringMatching(/^Cross margin is short 0\.017 \w+ to roll this position\.$/),
+    ]);
+    expect(g.margin.shortfall).toBeCloseTo(0.017, 12);
+    expect(g.margin.suggestedTopUp).toBeGreaterThanOrEqual(0.017 - 1e-12);
+  });
+
+  it('a margin refusal beside a refusal for another cause keeps the per-leg list', () => {
+    const base = venueOk();
+    const venue = venueOk({
+      status: 'Refused',
+      reason: { code: 'MM_INSUFFICIENT_IM', message: 'Not enough margin' },
+      orders: base.orders.map((o) =>
+        o.marketId === 156 ? { ...o, error: 'Not enough margin' } : o.marketId === 102 ? { ...o, error: 'MMMarketLimitExceeded()' } : o,
+      ),
+      availableAfter: null,
+      availableAfterExit: 700,
+      marginRequired: 1_000,
+    });
+    expect(evaluateRollGate({ ...rollInput(), venue }).blockers.find((b) => b.code === 'venue-refused')?.message).toMatch(/^The venue refuses this roll:/);
   });
 
   it('has no shortfall figure for a refusal that is not about margin, or from a venue that reports no exit state', () => {

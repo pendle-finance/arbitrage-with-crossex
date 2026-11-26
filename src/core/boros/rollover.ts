@@ -207,6 +207,10 @@ function refusalCause(error: string, sim: SimulatedLeg | null, collateral: strin
   }
 }
 
+function crossShortMessage(short: number, collateral: string): string {
+  return `Cross margin is short ${fmtSize(short)} ${collateral} to roll this position.`;
+}
+
 interface Refusal {
   cause: string;
   /** The cause's own remedy, said once per message however many legs share it. */
@@ -371,6 +375,16 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     const m = markets.find((x) => x.marketId === marketId);
     return m ? m.name : `market ${marketId}`;
   };
+  const marginRefused =
+    venue !== null &&
+    venue.status === 'Refused' &&
+    (venue.orders.some((o) => o.error !== null)
+      ? venue.orders.every((o) => o.error === null || classifyLegFailure(o.error) === 'insufficient-margin')
+      : VENUE_MARGIN_CODE.test(venue.reason?.code ?? ''));
+  const shortAfterExit =
+    venue !== null && venue.availableAfter === null && marginRefused && venue.availableAfterExit !== null
+      ? venue.availableAfterExit - venue.marginRequired
+      : null;
   if (venue === null) {
     // A leg with no rate to send at never reaches the preview (`rollPlanFor`
     // returns null), so no quote is coming; that leg's own book blocker says why.
@@ -425,7 +439,15 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
         seen.add(`${key}:${b.code}`);
         folded.push(b.message.replace(/^(Exit|Re-entry): /, '$1 · '));
       }
-      blockers.push({ code: 'venue-refused', message: refusalMessage(items, folded) });
+      blockers.push({
+        code: 'venue-refused',
+        message:
+          shortAfterExit !== null && shortAfterExit < 0 && folded.length === 0
+            ? crossShortMessage(-shortAfterExit, entry.simulation.collateral)
+            : refusalMessage(items, folded),
+      });
+    } else if (shortAfterExit !== null && shortAfterExit < 0) {
+      blockers.push({ code: 'venue-refused', message: crossShortMessage(-shortAfterExit, entry.simulation.collateral) });
     } else {
       const why = venue.reason?.message ?? 'refused';
       const cause = classifyLegFailure(why);
@@ -446,8 +468,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     if (venue.availableAfter !== null) return venue.availableAfter < 0 ? -venue.availableAfter : 0;
     // The batch reverted, so there is no after; the opens were judged on
     // the margin left once the closes ran, which the venue does report.
-    const forMargin = venue.status === 'Refused' && VENUE_MARGIN_CODE.test(venue.reason?.code ?? '');
-    return forMargin && venue.availableAfterExit !== null ? Math.max(0, venue.marginRequired - venue.availableAfterExit) : 0;
+    return shortAfterExit !== null ? Math.max(0, -shortAfterExit) : 0;
   };
   const margin: RollMargin = {
     need: venue?.marginRequired ?? null,
@@ -457,7 +478,7 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
     shortfall: shortfall(),
     suggestedTopUp: borosSuggestedTopUp(
       newLegs.map((l) => l.sim),
-      venue?.availableAfter ?? null,
+      venue?.availableAfter ?? shortAfterExit,
     ),
   };
   // Account-level notices (gas) come from both steps' gates; say them once.
