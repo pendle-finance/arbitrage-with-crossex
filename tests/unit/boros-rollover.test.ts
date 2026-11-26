@@ -394,10 +394,14 @@ describe('evaluateRollGate', () => {
       availableAfterExit: 700,
       marginRequired: 1_000,
     });
-    const g = evaluateRollGate({ ...rollInput(), venue });
-    expect(g.blockers[0].message).toMatch(/^Cross margin is short 300 \w+ to roll this position\.$/);
-    expect(g.margin).toMatchObject({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700, shortfall: 300 });
-    expect(g.margin.suggestedTopUp).toBeGreaterThanOrEqual(300);
+    const input = rollInput();
+    const openCost = input.entry.simulation.legs.reduce((s, l) => s + l.takerFeeCost + l.fillVsMarkCost, 0);
+    expect(openCost).toBeGreaterThan(0);
+    const g = evaluateRollGate({ ...input, venue });
+    expect(g.blockers[0].message).toMatch(/^Cross margin is short [\d.,]+ \w+ to roll this position\.$/);
+    expect(g.margin).toMatchObject({ need: 1_000, availableBefore: 5_000, availableAfter: null, availableAfterExit: 700 });
+    expect(g.margin.shortfall).toBeCloseTo(300 + openCost, 9);
+    expect(g.margin.suggestedTopUp).toBeGreaterThanOrEqual(300 + openCost - 1e-9);
   });
 
   it('a re-entry leg the venue refused for margin reads as the cross shortfall, with the top-up that covers it', () => {
@@ -410,12 +414,14 @@ describe('evaluateRollGate', () => {
       availableAfterExit: 0.251,
       marginRequired: 0.268,
     });
-    const g = evaluateRollGate({ ...rollInput(), venue });
+    const input = rollInput();
+    const openCost = input.entry.simulation.legs.reduce((s, l) => s + l.takerFeeCost + l.fillVsMarkCost, 0);
+    const g = evaluateRollGate({ ...input, venue });
     expect(g.blockers.filter((b) => b.code === 'venue-refused').map((b) => b.message)).toEqual([
-      expect.stringMatching(/^Cross margin is short 0\.017 \w+ to roll this position\.$/),
+      expect.stringMatching(/^Cross margin is short [\d.,]+ \w+ to roll this position\.$/),
     ]);
-    expect(g.margin.shortfall).toBeCloseTo(0.017, 12);
-    expect(g.margin.suggestedTopUp).toBeGreaterThanOrEqual(0.017 - 1e-12);
+    expect(g.margin.shortfall).toBeCloseTo(0.017 + openCost, 12);
+    expect(g.margin.suggestedTopUp).toBeGreaterThanOrEqual(0.017 + openCost - 1e-12);
   });
 
   it('a margin refusal beside a refusal for another cause keeps the per-leg list', () => {
