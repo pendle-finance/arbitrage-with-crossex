@@ -1866,7 +1866,17 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         if (job.kind === 'realize' && (await noProfitLeft(step, leg, follow, mid))) return;
         if (job.kind === 'realize' && !(await mayStartSlice(step, leg))) return;
         const capOf = (size: string | undefined): number => (positiveOf(size) > 0 ? positiveOf(size) : Infinity);
-        const capQty = Math.min(capOf(rule.limits.maxMarketSize), capOf(followRule.limits.maxMarketSize), job.exec === 'maker' ? capOf(rule.limits.maxLimitSize) : Infinity);
+        const venueCapOf = (symbol: string): number => {
+          const capUsd = job.slice?.capsUsd?.[symbol] ?? 0;
+          return capUsd > 0 ? capUsd / mid : Infinity;
+        };
+        const capQty = Math.min(
+          capOf(rule.limits.maxMarketSize),
+          capOf(followRule.limits.maxMarketSize),
+          job.exec === 'maker' ? capOf(rule.limits.maxLimitSize) : Infinity,
+          venueCapOf(perp.symbol),
+          venueCapOf(follow.symbol),
+        );
         return await startSlice(step, perp, follow, leg, pairLeft, lot, rule, mid, capQty);
       }
       const excessLead = followWhole !== null && wholeLegOf(job, leg.symbol) !== null && leadLive > 0;

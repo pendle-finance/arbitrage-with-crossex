@@ -105,15 +105,19 @@ export interface TwapInputState {
   setInput: (input: TwapInput) => void;
   startBlocked: boolean;
   blockedBy: (preview: TwapPlanPreview | null | undefined) => boolean;
-  suggest: (suggested: Suggested) => void;
+  suggest: (suggested: Suggested | null) => void;
 }
 
 export function useTwapInput(): TwapInputState {
   const [picked, setOn] = useState<boolean | null>(null);
-  const [typed, setInput] = useState<TwapInput | null>(null);
+  const [typed, setTyped] = useState<TwapInput | null>(null);
   const [suggested, suggest] = useState<Suggested | null>(null);
   const on = picked ?? suggested?.on ?? false;
   const input = typed ?? suggested?.input ?? DEFAULT_INPUT;
+  const setInput = (next: TwapInput) => {
+    setTyped(next);
+    setOn((current) => current ?? true);
+  };
   const startBlocked = on && !isComplete(input);
   const blockedBy = (preview: TwapPlanPreview | null | undefined): boolean =>
     on && (startBlocked || !preview?.plan || preview.refusal !== null);
@@ -121,15 +125,16 @@ export function useTwapInput(): TwapInputState {
 }
 
 export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null | undefined, exec: ExecMode): void {
+  const none = value === null;
   const on = value?.on;
   const span = value?.[exec];
   const durationSec = span?.durationSec;
   const intervalSec = span?.intervalSec;
   const { suggest } = twap;
   useEffect(() => {
-    if (on === undefined || durationSec === undefined || intervalSec === undefined) return;
-    suggest({ on, input: { durationSec, intervalSec } });
-  }, [suggest, on, durationSec, intervalSec]);
+    if (none) suggest(null);
+    else if (on !== undefined && durationSec !== undefined && intervalSec !== undefined) suggest({ on, input: { durationSec, intervalSec } });
+  }, [suggest, none, on, durationSec, intervalSec]);
 }
 
 export function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {

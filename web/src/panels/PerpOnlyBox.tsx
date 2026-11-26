@@ -132,7 +132,7 @@ export function ClosePairForm({
     twap: twapOn ? twap.input : undefined,
   });
   const plan = preview.data?.twap?.plan ?? null;
-  useTwapDefault(twap, preview.data?.priceImpact?.twapDefault, mode);
+  useTwapDefault(twap, preview.data && (preview.data.priceImpact?.twapDefault ?? null), mode);
   const takerBlocked = useTwapTakerAfter(taker, twapOn, plan?.takerAfterSec ?? null);
   if (!flow || legs.length !== 2) return null;
 

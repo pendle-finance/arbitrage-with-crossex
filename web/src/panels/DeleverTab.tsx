@@ -126,7 +126,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const twapSent = twap.on && !twap.startBlocked ? { ...twap.input, ...(exec === 'maker' ? makerOpts : {}) } : undefined;
   const request = pair !== null && close !== null ? requestOf(pair, close, exec, twapSent) : null;
   const query = useDeleverPlan(request);
-  useTwapDefault(twap, query.data?.priceImpact?.twapDefault, exec);
+  useTwapDefault(twap, query.data && (query.data.priceImpact?.twapDefault ?? null), exec);
   const takerOff = useTwapTakerAfter(maker.taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
   const takerBad = exec === 'maker' && takerOff;
 

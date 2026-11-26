@@ -6829,6 +6829,32 @@ describe('slices: realize TWAP', () => {
     await min.h.run();
     expect(min.engine.requests.map((req) => req.qty)).toEqual(['0.5']);
   });
+
+  it('a one order job is held to the venue cap the start stored, which Gate rules do not carry', async () => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: '3003.1', markPrice: '3000' }] });
+    const h = sliceRun(venue, {
+      exec: 'market',
+      sliceUsd: 0,
+      leg: { qty: 3 },
+      edit: (job) => {
+        job.slice = { ...job.slice!, capsUsd: { [HL_ETH]: 3_000 } };
+      },
+    });
+    const engine = childEngine(h);
+    await h.run();
+    expect(engine.requests.map((req) => Number(req.qty))).toEqual([1, 1, 1].map((qty) => expect.closeTo(qty, 2)));
+    expect(h.jobs.read()).toMatchObject({ status: 'done' });
+  });
+
+  it('a one order job with no stored cap sends the whole size at once', async () => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: '3003.1', markPrice: '3000' }] });
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 0, leg: { qty: 3 } });
+    const engine = childEngine(h);
+    await h.run();
+    expect(engine.requests.map((req) => req.qty)).toEqual(['3']);
+  });
 });
 
 describe('slices: profit check before each slice', () => {

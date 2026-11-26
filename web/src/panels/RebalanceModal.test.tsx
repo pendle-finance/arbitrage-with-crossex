@@ -1832,12 +1832,34 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.getByRole('button', { name: /Refreshing…/ })).toBeDisabled();
   });
 
-  it('one order past the book points at TWAP in place of the hold', async () => {
+  it('a slice row marked past the book does not block a plan the server priced as fine', () => {
     const marked = { ...owner, realize: { ...owner.realize!, sliceOptions: ownerSlices.map((o) => (o.whole ? { ...o, pastBook: true } : o)) } };
     showOn(marked);
-    expect(await screen.findByText('Turn on TWAP to close it in parts.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
-    expect(screen.getByRole('switch', { name: 'TWAP' })).toBeInTheDocument();
+    expect(screen.queryByText('Turn on TWAP to close it in parts.')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
+  });
+
+  it('a small Custom amount behind a preset past the book can start', async () => {
+    const refused = rebalanceViews.realizeRefused;
+    const priced = { ...refused, realize: { ...refused.realize!, custom: owner.realize!.clearDebt } };
+    serve({});
+    server.use(http.get('/api/rebalance', () => HttpResponse.json(env(priced))));
+    renderWithClient(<RebalanceModal view={refused} onClose={vi.fn()} />);
+    expect(screen.getByText('Turn on TWAP to close it in parts.')).toBeInTheDocument();
+    const box = screen.getByRole('textbox', { name: 'Amount to realize' });
+    await userEvent.clear(box);
+    await userEvent.type(box, '500');
+    expect(await screen.findByRole('button', { name: 'Hold to realize' }, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText('Turn on TWAP to close it in parts.')).toBeNull();
+  });
+
+  it('with TWAP on and its plan still pricing, the one order refusal does not show', async () => {
+    serve({});
+    server.use(http.get('/api/rebalance', () => new Promise(() => {})));
+    renderWithClient(<RebalanceModal view={rebalanceViews.realizeRefused} onClose={vi.fn()} />);
+    expect(screen.getByText('Turn on TWAP to close it in parts.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+    expect(screen.queryByText('Turn on TWAP to close it in parts.')).toBeNull();
   });
 
   it('a realize past the book shows why in place of the hold and keeps the TWAP switch', () => {

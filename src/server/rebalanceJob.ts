@@ -147,6 +147,7 @@ export interface JobSlice {
   count: number;
   sizeUsd: number;
   qty?: number;
+  capsUsd?: Record<string, number>;
 }
 
 export interface JobFollow {
@@ -697,6 +698,7 @@ export function newJob(
     exec?: RealizeExec;
     sliceUsd?: number;
     sliceCount?: number;
+    capsUsd?: Record<string, number>;
     estimate?: RealizeEstimate | null;
     delever?: DeleverJobInput | null;
     imUsedStart?: ImUsedRow[] | null;
@@ -714,7 +716,14 @@ export function newJob(
   const fields = {
     kind,
     exec: input.exec ?? (sliced ? 'maker' : 'market'),
-    slice: sliced ? { index: 1, count: Math.max(1, input.sliceCount ?? 1), sizeUsd: Math.max(0, input.sliceUsd ?? 0) } : null,
+    slice: sliced
+      ? {
+          index: 1,
+          count: Math.max(1, input.sliceCount ?? 1),
+          sizeUsd: Math.max(0, input.sliceUsd ?? 0),
+          ...(input.capsUsd && Object.keys(input.capsUsd).length > 0 ? { capsUsd: input.capsUsd } : {}),
+        }
+      : null,
     notHedgedQty: 0,
     followMisses: 0,
     follow: null,
