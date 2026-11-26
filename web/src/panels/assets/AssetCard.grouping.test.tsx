@@ -274,7 +274,8 @@ describe('the card, by the grouping DoD', () => {
     await expand(user, card);
     await user.click(within(card).getByRole('button', { name: 'Close perps' }));
     const dialog = await screen.findByRole('dialog');
-    expect(textOf(dialog)).toMatch(/Max\s*0\.949 ETH/);
+    expect(within(dialog).getByLabelText('Close size, applied to both legs')).toHaveValue('0.949');
+    expect(within(dialog).getByRole('radio', { name: '100%' })).toHaveAttribute('aria-checked', 'true');
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
     expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: undefined, HYPERLIQUID_FUTURE_ETH_USDT: undefined });
     await waitFor(() => expect(textOf(within(dialog).getByRole('region', { name: 'Cost' }))).toMatch(/LONG\s*Gate.*SHORT\s*Hyperliquid/));

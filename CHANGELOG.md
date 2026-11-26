@@ -100,6 +100,16 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Maker settings with re-peg Off survive a restart,** so a resumed Realize or Delever keeps the
   wait and re-peg you picked. On the pair ticket, a typed limit price no longer carries over to
   another coin.
+- **Roll over Boros position in one panel:** the pick, then steps 1 Close and 2 Open, each with
+  its legs, sizes and cost, then one Cost card and one After card. The slippage bound stays fixed
+  while you hold, and Retry sends the bound on screen. A roll refused before anything traded
+  offers Back, so you can raise the max slippage or change the size.
+- **Close perps and Close Boros** take 25, 50, 75 and 100% presets with Custom %, like Delever,
+  and Close perps offers TWAP. Close Boros shows each leg as a step row with its size before and
+  after.
+- **Close perps: Price PnL booked counts what earlier closes on the pair's perps booked,** so a
+  re-opened leg no longer shows a false loss.
+- **Delever from a pair opens over Positions** instead of jumping to Accounts.
 
 ## 1.7.9 — 2026-11-10
 

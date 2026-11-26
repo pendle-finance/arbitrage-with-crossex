@@ -24,13 +24,14 @@ function useMount() {
 }
 
 vi.mock('../PerpOnlyBox', () => ({
-  ClosePairForm: ({ legs, borosUnhedged, onSent }: { legs: { symbol: string; qty: number }[]; borosUnhedged?: { qty: number; coin: string } | null; onSent?: () => void }) => {
+  ClosePairForm: ({ legs, borosUnhedged, allowTwap, onSent }: { legs: { symbol: string; qty: number }[]; allowTwap?: boolean; borosUnhedged?: { qty: number; coin: string } | null; onSent?: () => void }) => {
     const id = useMount();
     const max = String(Math.min(...legs.map((l) => l.qty)));
     const [size, setSize] = useState(max);
     return (
       <div data-testid="perp-form" data-mount={id}>
         <span>{legs.map((l) => l.symbol).join(' ')}</span>
+        <span>{allowTwap ? 'twap allowed' : 'no twap'}</span>
         <span>{borosUnhedged ? `unhedged ${borosUnhedged.qty} ${borosUnhedged.coin}` : 'hedged'}</span>
         <input aria-label="Close size" value={size} onChange={(e) => setSize(e.target.value)} />
         <button type="button" onClick={onSent}>
@@ -193,6 +194,7 @@ describe('ClosePairModal', () => {
   it('Close perps passes the pair\'s Boros size, Close Boros trims its box under the picker', () => {
     const perps = closeModal('perps');
     expect(screen.getByTestId('perp-form')).toHaveTextContent(`unhedged ${ethEntry.pair.size} ETH`);
+    expect(screen.getByTestId('perp-form')).toHaveTextContent('twap allowed');
     perps.unmount();
     closeModal('boros');
     expect(screen.getByTestId('boros-form')).toHaveTextContent('under picker');
