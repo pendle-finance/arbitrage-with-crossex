@@ -147,7 +147,6 @@
       "interest": "利息",
       "fee": "费用",
       "perMonth": "每月 {{now}} → {{after}}",
-      "steps": "显示步骤",
       "refreshRoute": "刷新路线",
       "resume": "恢复",
       "abandon": "放弃",
@@ -175,7 +174,10 @@
     "preset": "预设",
     "typeAmount": "请输入划转金额。",
     "pricing": "正在计算报价。",
-    "hideSteps": "隐藏步骤",
+    "steps": "步骤",
+    "moreSteps_one": "还有 {{n}} 步",
+    "moreSteps_other": "还有 {{n}} 步",
+    "fewerSteps": "收起",
     "now": "当前",
     "whereCaption": "资金所在位置",
     "onTheWay": "在途",
@@ -211,13 +213,9 @@
     "transfer": "划转"
   },
   "rebalanceBits": {
-    "arrives": "到账 {{arrives}}",
-    "arrivesBorrowPaid": "到账 {{arrives}} · 借款已还清",
-    "arrivesBorrowLeft": "到账 {{arrives}} · 剩余借款 {{left}}",
     "moveTo": "划转 {{move}} USDC 至 {{wallet}}",
     "buyMoveIt": "买入 {{buy}} USDC，划转至 {{wallet}}",
     "buyMove": "买入 {{buy}} USDC，划转 {{move}} USDC 至 {{wallet}}",
-    "round": "第 {{n}} 轮",
     "stopped": "已停止",
     "elapsedOf": "{{elapsed}} / {{expected}}"
   },

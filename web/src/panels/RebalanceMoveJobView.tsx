@@ -6,7 +6,7 @@ import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { ProgressBar } from './RebalanceBits';
 import { BalanceBars, scaleOf, type BarRow } from './RebalanceBars';
 import { gateSpot, HOVER } from './rebalanceCopy';
-import { barRowsOf, DUST, Facts, receivingBorrow, receivingHeld, roundCountOf, roundOf, ROUTE_LABEL, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import { barRowsOf, DUST, Facts, receivingHeld, roundCountOf, roundOf, ROUTE_LABEL, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
 import { abandonNote, Actions, CloseButton, haltLine, StopBox, stopTitle, type JobViewProps } from './RebalanceJobBits';
 import { landedOf } from './rebalanceJobSteps';
 import { StepsFold, stepsHoverOf } from './RebalancePlanBits';
@@ -25,11 +25,10 @@ export function MoveJobView(props: JobViewProps) {
   const plan = view.plans[job.goal] ?? view.plans.even;
   const keys = shownKeys(view, job.steps, plan);
   const nowRows = barRowsOf(view.buckets, keys, targetsOf(view, plan));
-  const borrow = receivingBorrow(view.buckets, job.steps);
   const held = receivingHeld(view.buckets, job.steps);
   const rounds = roundCountOf(job);
   const fold = (
-    <StepsFold open={stepsOpen} onToggle={() => setStepsOpen(!stepsOpen)} hover={stepsHoverOf(rounds, held)} rows={jobRows(job, now, borrow)} />
+    <StepsFold open={stepsOpen} onToggle={() => setStepsOpen(!stepsOpen)} hover={stepsHoverOf(rounds, held)} rows={jobRows(job, now)} />
   );
   const header = (
     <p className="text-sm font-semibold text-ink-100">{t('accounts.sliceRun.moveHeader', { goal: t(GOAL_WORD[job.goal]) })}</p>

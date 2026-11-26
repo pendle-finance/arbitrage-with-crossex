@@ -194,7 +194,7 @@ export function MoveCashTab({
               open={stepsOpen}
               onToggle={() => setStepsOpen(!stepsOpen)}
               hover={stepsHoverOf(route.rounds, receivingHeld(buckets, planSteps(plan)))}
-              rows={planRows(route, receivingBorrow(buckets, planSteps(plan)))}
+              rows={planRows(route)}
             />
           )}
         </div>
