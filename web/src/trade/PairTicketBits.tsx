@@ -323,7 +323,9 @@ export function SlippageLine({
       )}
       {open && (
         <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
-          <span className="text-[10.5px] leading-relaxed text-ink-400">{hint}</span>
+          <span className="text-[10.5px] leading-relaxed text-ink-400">
+            <span className="text-ink-200">{t('pairTicket.bits.thisTradeOnly')}</span> {hint}
+          </span>
           <div className="flex items-center gap-1.5">
             {quick.map((q) => (
               <button

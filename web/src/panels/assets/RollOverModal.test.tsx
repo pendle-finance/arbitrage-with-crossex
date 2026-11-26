@@ -634,7 +634,7 @@ describe('RollOverModal — the atomic roll', () => {
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(within(dialog).getByLabelText('Size to roll (ETH)')).toHaveValue('95'), { timeout: 4_000 });
-    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
+    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' }, { timeout: 4_000 });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     await user.pointer({ keys: '[MouseLeft>]', target: confirm });
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
@@ -942,11 +942,12 @@ describe('RollOverModal — the review page', () => {
     install({ rollSimGate: gate });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
-    // No quote yet → the "Waiting for a quote" blocker holds it shut.
-    expect(confirm).toBeDisabled();
-    expect(within(dialog).getByText('Waiting for a quote.')).toBeInTheDocument();
+    const waiting = await within(dialog).findByRole('button', { name: 'Refreshing quote…' });
+    expect(waiting).toBeDisabled();
+    expect(within(dialog).queryByText('Waiting for a quote.')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
     release();
+    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' }, { timeout: 4_000 });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
   });
 

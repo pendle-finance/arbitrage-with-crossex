@@ -162,6 +162,7 @@
   "review": {
     "slipOutOfRange": "最大滑点必须大于 0 且不超过 {{max}}% APR。",
     "quoteFailed": "无法为此展期报价。",
+    "refreshingQuote": "正在刷新报价…",
     "noQuote": "正在等待报价。",
     "stale": "报价已过期，正在等待新报价。",
     "agentExpired": "Boros 登录已过期。",
