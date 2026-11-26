@@ -942,7 +942,7 @@ describe('RollOverModal — the review page', () => {
     install({ rollSimGate: gate });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const waiting = await within(dialog).findByRole('button', { name: 'Refreshing quote…' });
+    const waiting = await within(dialog).findByRole('button', { name: 'Refreshing…' });
     expect(waiting).toBeDisabled();
     expect(within(dialog).queryByText('Waiting for a quote.')).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();

@@ -162,7 +162,6 @@
   "review": {
     "slipOutOfRange": "Max slippage must be above 0 and at most {{max}}% APR.",
     "quoteFailed": "Could not price this roll.",
-    "refreshingQuote": "Refreshing quote…",
     "noQuote": "Waiting for a quote.",
     "stale": "The quote is out of date — waiting for a fresh one.",
     "agentExpired": "Boros login expired.",

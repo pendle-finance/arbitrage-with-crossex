@@ -89,7 +89,6 @@
     "bookShort": "{{prefix}}The book fills only {{amount}} {{unit}} of this size.",
     "bookUnavailable": "{{prefix}}No order book. No rate to quote.",
     "partFilled": "{{prefix}}Filled {{filled}} {{unit}}. {{left}} {{unit}} of what you asked for is still open. Size is set to the rest.",
-    "quoting": "Quoting…",
     "estRate": "Est. rate",
     "closedTag": "Closed",
     "slipInvalid": "Must be above 0 and at most {{max}}%",

@@ -574,7 +574,7 @@ export function CloseBorosForm({
   });
 
   const rateOf = (q: BorosSimulatedLeg | null) =>
-    q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? t('pairTicket.closeBoros.quoting') : '—';
+    q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? t('common.refreshing') : '—';
   const feeOf = (q: BorosSimulatedLeg | null, unit: string) =>
     q?.takerFeeCost === undefined ? '—' : inUsd ? fmtUsd(q.takerFeeCost * (px as number)) : fmtTokenQty(q.takerFeeCost, unit);
 

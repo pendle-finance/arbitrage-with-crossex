@@ -343,7 +343,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       ) : (
         <RebalanceModalFooter
           rows={[]}
-          holdLabel={pricing ? t('accounts.rebalanceModal.pricing') : t('accounts.realizeTab.holdRealize')}
+          holdLabel={pricing ? t('common.refreshing') : t('accounts.realizeTab.holdRealize')}
           optional={false}
           stale={false}
           quoteStale={amount === 'custom' && customQuery.isError}

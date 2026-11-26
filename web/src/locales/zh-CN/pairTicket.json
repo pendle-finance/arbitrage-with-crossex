@@ -88,7 +88,6 @@
     "bookShort": "{{prefix}}订单簿只能承接此规模中的 {{amount}} {{unit}}。",
     "bookUnavailable": "{{prefix}}无订单簿，无法报价利率。",
     "partFilled": "{{prefix}}已成交 {{filled}} {{unit}}。请求的规模中仍有 {{left}} {{unit}} 未平。规模已设为剩余部分。",
-    "quoting": "报价中…",
     "estRate": "预估利率",
     "closedTag": "已平仓",
     "slipInvalid": "必须大于 0 且不超过 {{max}}%",

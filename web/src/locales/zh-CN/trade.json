@@ -169,7 +169,6 @@
     "lmtAt": "限价 {{price}}{{tif}}",
     "sumFees": "手续费 <n>≈ {{fees}}</n>",
     "marginOf": "保证金 <m>{{required}}</m><d> / {{available}}</d>",
-    "pricing": "计算价格中…",
     "pressHold": "长按确认"
   },
   "wizard": {
