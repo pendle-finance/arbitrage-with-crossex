@@ -46,7 +46,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
-import { AffixedInput, EstimateCard, ShareSlider } from './PairTicketBits';
+import { AffixedInput, EstimateAge, ShareSlider, SummaryCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SpreadIcon } from '../components/AssetIcon';
@@ -73,11 +73,12 @@ import {
   MarketSelect,
   marketLabel,
   marketName,
-  PairCosts,
+  MarginUsageRow,
   PairResultReport,
   PositionArithmetic,
   SpreadReadout,
   SuggestedTopUpLines,
+  TradeFeeRow,
 } from './BorosPairBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -1289,134 +1290,107 @@ export function BorosPairTicket({
       <div className={twoColumn ? 'flex flex-col gap-3' : 'contents'}>
       {sim.isError && <QueryError title={t('pairTicket.boros.priceFailed')} error={sim.error} onRetry={() => sim.refetch()} />}
       {simulation && (
-        <EstimateCard
-          dataUpdatedAt={sim.dataUpdatedAt}
-          estimating={sim.isPlaceholderData}
-          isError={sim.isError}
+        <>
+        <SummaryCard
+          title={t('accounts.moveCash.cost')}
+          aside={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />}
         >
-          {/* Renders in BOTH modes now that it carries the per-leg rates: on
-              one leg it is that leg's Est. APR, and the spread lines above it
-              are suppressed, since a "spread" against a borrowed partner
-              would be a number about a trade nobody is making. */}
-          {/* `singleLeg` (not `mode`): a one-leg completion after a half fill
-              is single-leg too, and reading it as a pair printed dashes for
-              the spread beside an enabled Confirm. */}
-          {/* In the order a trader reads it: what the
-              trade locks; where it liquidates; what it takes from the
-              account and what the account keeps, with any suggested top-up;
-              then the slippage. What it leaves held is under the size. */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between gap-3">
+                <span
+                  className="text-[12px] text-ink-200"
+                  title={t('pairTicket.boros.slippageHint')}
+                >
+                  {t('pairTicket.bits.slippage')}
+                </span>
+                <span className="num text-[12px] text-ink-400">
+                  {t('pairTicket.bits.est')}{' '}
+                  <span className="text-ink-50">
+                    {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
+                  </span>
+                  {' / '}{t('pairTicket.bits.max')}{' '}
+                  <button
+                    type="button"
+                    className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+                    title={
+                      loneLeg === null
+                        ? t('pairTicket.boros.changeTolerancePair', { slip: slipStrShared })
+                        : t('pairTicket.bits.changeTolerance')
+                    }
+                    onClick={() => setSlipOpen((v) => !v)}
+                  >
+                    {fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
+                  </button>
+                  {' '}APR
+                </span>
+              </div>
+              {slipOpen && (
+                <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
+                  <span className="text-[10.5px] leading-relaxed text-ink-400">
+                    {t('trade.close.bandHint')}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {['0.2', '0.4', '1', '2'].map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        className={`btn-ghost-xs ${slipStrShared === q ? '!border-info/60 !text-pastel-blue' : ''}`}
+                        onClick={() => setSharedSlip(q)}
+                      >
+                        {q}%
+                      </button>
+                    ))}
+                    <input
+                      className="input num h-7 flex-1 px-2 py-0.5 text-[12px]"
+                      inputMode="decimal"
+                      aria-label={t('pairTicket.boros.slipAria')}
+                      value={slipStrShared}
+                      onChange={(e) => setSharedSlip(e.target.value)}
+                    />
+                    <span className="text-[11px] text-ink-400">%</span>
+                  </div>
+                  {slipInvalid && (
+                    <span className="text-[11px] text-rose-300">
+                      {t('pairTicket.boros.slipInvalid', { max: MAX_SLIP_PCT })}
+                    </span>
+                  )}
+                  {!guided && mode === 'pair' && onlyLeg === null && !isSpread && (
+                    <>
+                      <button
+                        type="button"
+                        className="self-start text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
+                        onClick={() => {
+                          setPerLeg((v) => !v);
+                          setSlipA(slipStrShared);
+                          setSlipB(slipStrShared);
+                        }}
+                      >
+                        {perLeg ? t('pairTicket.boros.oneValue') : t('pairTicket.boros.eachLeg')}
+                      </button>
+                      {perLeg && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <SlipInput id="boros-slip-a" label={t('pairTicket.boros.legPct', { letter: 'A' })} value={slipStrA} onChange={setSlipA} />
+                          <SlipInput id="boros-slip-b" label={t('pairTicket.boros.legPct', { letter: 'B' })} value={slipStrB} onChange={setSlipB} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="mt-0.5 border-t border-ink-800 pt-1.5">
+              <TradeFeeRow sim={simulation} singleLeg={activeLeg} weight="strong" />
+            </div>
+        </SummaryCard>
+        <SummaryCard title={t('accounts.moveCash.after')}>
           <SpreadReadout sim={simulation} singleLeg={activeLeg} boxed />
-          {/* One flat list under the box, no section rules: the Boros app's
-              own ticket reads cleaner for it. */}
           <div className="flex flex-col gap-1.5">
             <LiquidationLines sim={simulation} singleLeg={activeLeg} warn={liqWarn} />
-            <PairCosts
-              sim={simulation}
-              singleLeg={activeLeg}
-              afterMargin={gate?.funding && <SuggestedTopUpLines sim={simulation} funding={gate.funding} nameOf={fundingName} />}
-            />
-              {/* --- Slippage (§2) ------------------------------------------
-                  One line, the way the Boros app states it — what the book is
-                  expected to give up, against the bound that caps it. The bound
-                  is the automatic seed (half each market's max rate deviation);
-                  the editor behind "Max" is for a large size or a thin book. */}
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-baseline justify-between gap-3">
-                  <span
-                    className="text-[12px] text-ink-200"
-                    title={t('pairTicket.boros.slippageHint')}
-                  >
-                    {t('pairTicket.bits.slippage')}
-                  </span>
-                  <span className="num text-[12px] text-ink-400">
-                    {t('pairTicket.bits.est')}{' '}
-                    <span className="text-ink-50">
-                      {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
-                    </span>
-                    {' / '}{t('pairTicket.bits.max')}{' '}
-                    <button
-                      type="button"
-                      className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
-                      title={
-                        loneLeg === null
-                          ? t('pairTicket.boros.changeTolerancePair', { slip: slipStrShared })
-                          : t('pairTicket.bits.changeTolerance')
-                      }
-                      onClick={() => setSlipOpen((v) => !v)}
-                    >
-                      {/* The estimate beside this is BOTH legs, so the bound has to
-                          be both legs too: a per-leg number here read as though the
-                          pair could only give up half what it can. Built from the
-                          per-leg tolerances actually sent (aprA/aprB), so a per-leg
-                          override moves it, and a single-leg ticket — Single mode
-                          or a one-leg completion — shows that leg's bound alone. */}
-                      {fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
-                    </button>
-                    {' '}APR
-                  </span>
-                </div>
-                {/* Adjustable, but out of the way until asked for: the seeded bound
-                    is right for almost every trade, and a wider one is a deliberate
-                    act for a large size or a thin book. */}
-                {slipOpen && (
-                  <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
-                    <span className="text-[10.5px] leading-relaxed text-ink-400">
-                      {t('trade.close.bandHint')}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      {['0.2', '0.4', '1', '2'].map((q) => (
-                        <button
-                          key={q}
-                          type="button"
-                          className={`btn-ghost-xs ${slipStrShared === q ? '!border-info/60 !text-pastel-blue' : ''}`}
-                          onClick={() => setSharedSlip(q)}
-                        >
-                          {q}%
-                        </button>
-                      ))}
-                      <input
-                        className="input num h-7 flex-1 px-2 py-0.5 text-[12px]"
-                        inputMode="decimal"
-                        aria-label={t('pairTicket.boros.slipAria')}
-                        value={slipStrShared}
-                        onChange={(e) => setSharedSlip(e.target.value)}
-                      />
-                      <span className="text-[11px] text-ink-400">%</span>
-                    </div>
-                    {slipInvalid && (
-                      <span className="text-[11px] text-rose-300">
-                        {t('pairTicket.boros.slipInvalid', { max: MAX_SLIP_PCT })}
-                      </span>
-                    )}
-                    {/* Per-leg tolerances: a thin book on one venue can need more
-                        room than the other. Only meaningful with two legs, and
-                        only in the free-form ticket. */}
-                    {!guided && mode === 'pair' && onlyLeg === null && !isSpread && (
-                      <>
-                        <button
-                          type="button"
-                          className="self-start text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
-                          onClick={() => {
-                            setPerLeg((v) => !v);
-                            setSlipA(slipStrShared);
-                            setSlipB(slipStrShared);
-                          }}
-                        >
-                          {perLeg ? t('pairTicket.boros.oneValue') : t('pairTicket.boros.eachLeg')}
-                        </button>
-                        {perLeg && (
-                          <div className="grid grid-cols-2 gap-2">
-                            <SlipInput id="boros-slip-a" label={t('pairTicket.boros.legPct', { letter: 'A' })} value={slipStrA} onChange={setSlipA} />
-                            <SlipInput id="boros-slip-b" label={t('pairTicket.boros.legPct', { letter: 'B' })} value={slipStrB} onChange={setSlipB} />
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+            <div className="mt-0.5 flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+              <MarginUsageRow sim={simulation} singleLeg={activeLeg} />
+              {gate?.funding && <SuggestedTopUpLines sim={simulation} funding={gate.funding} nameOf={fundingName} />}
+            </div>
           </div>
-
           {simulation.reasons.length ? (
             <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
               {simulation.reasons.map((r) => (
@@ -1424,7 +1398,8 @@ export function BorosPairTicket({
               ))}
             </ul>
           ) : null}
-        </EstimateCard>
+        </SummaryCard>
+        </>
       )}
       {/* --- §4 acknowledgement ------------------------------------------- */}
       {gate?.requiresAcknowledgement && simulation && (

@@ -611,34 +611,55 @@ export function PairCosts({
       </div>
     );
   }
-  // Margin leads, the fee sits under it quieter, as in the
-  // Boros app; which leg posts what is the margin's hover.
-  const required = sim.marginRequiredTotal;
   return (
     <div className="flex flex-col gap-1.5">
-      <Row
-        label={t('pairTicket.borosBits.marginUsage')}
-        title={
-          oneLeg
-            ? t('pairTicket.borosBits.marginLegHint')
-            : [
-                t('pairTicket.borosBits.totalMarginHint'),
-                ...sim.legs.map(
-                  (leg) => `${leg.venue} ${leg.marginRequired === null ? '—' : `${size(leg.marginRequired)} ${sim.collateral}`}`,
-                ),
-              ].join('\n')
-        }
-        value={<CollateralAmount n={required} sim={sim} />}
-        weight="strong"
-      />
+      <MarginUsageRow sim={sim} singleLeg={singleLeg} />
       {afterMargin}
-      <Row
-        label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
-        title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
-        value={fee}
-        weight="quiet"
-      />
+      <TradeFeeRow sim={sim} singleLeg={singleLeg} weight="quiet" />
     </div>
+  );
+}
+
+export function MarginUsageRow({ sim, singleLeg }: { sim: BorosPairSimulation; singleLeg?: SoloLeg }) {
+  const { t } = useTranslation();
+  const oneLeg = loneOf(sim, singleLeg) !== null;
+  return (
+    <Row
+      label={t('pairTicket.borosBits.marginUsage')}
+      title={
+        oneLeg
+          ? t('pairTicket.borosBits.marginLegHint')
+          : [
+              t('pairTicket.borosBits.totalMarginHint'),
+              ...sim.legs.map(
+                (leg) => `${leg.venue} ${leg.marginRequired === null ? '—' : `${size(leg.marginRequired)} ${sim.collateral}`}`,
+              ),
+            ].join('\n')
+      }
+      value={<CollateralAmount n={sim.marginRequiredTotal} sim={sim} />}
+      weight="strong"
+    />
+  );
+}
+
+export function TradeFeeRow({
+  sim,
+  singleLeg,
+  weight,
+}: {
+  sim: BorosPairSimulation;
+  singleLeg?: SoloLeg;
+  weight?: 'strong' | 'quiet';
+}) {
+  const { t } = useTranslation();
+  const oneLeg = loneOf(sim, singleLeg) !== null;
+  return (
+    <Row
+      label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
+      title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
+      value={`${size(sim.costToCrossSize)} ${sim.collateral}`}
+      weight={weight}
+    />
   );
 }
 
