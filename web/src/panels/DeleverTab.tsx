@@ -24,7 +24,7 @@ import { spanText } from '../lib/span';
 import { execModeLabel, poolKey } from './rebalanceCopy';
 import { SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { ExecFacts, realizeText, TotalCost, type CostRow, type ExecFact } from './RebalancePlanBits';
+import { PlanSteps, realizeText, TotalCost, type CostRow, type PlanStep } from './RebalancePlanBits';
 import { useActiveWallet } from './trackedAddress';
 
 type Share = '10' | '20' | '30';
@@ -160,8 +160,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const pct = close === null ? 0 : (close / pair.size) * 100;
   const option = plan ? (withMakerWait(plan.sliceOptions, maker.taker.sec).find((o) => o.whole) ?? null) : null;
   const estimate = plan?.estimates[exec] ?? null;
-  const borosGapYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
-  const leadClose = plan?.legs[plan.makerLeg]?.closeQty ?? 0;
+  const borosYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
   const needsBoros = pair.boros.length > 0;
   const walletBlocked = needsBoros && wallet.state !== null && !wallet.canTrade;
   const walletReady = !needsBoros || wallet.canTrade;
@@ -248,23 +247,27 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     if (plan === null) return <Skeleton className="h-48 w-full" />;
     const costBox = costRows.length > 0 && !twapBlocked && !plan.refused && !slicePastBook ? <TotalCost rows={costRows} /> : null;
     const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
-    const borosGapValues = { amount: qtyText(borosGapYu), time: fmtAbout(twapPlan ? twapPlan.durationSec : (option?.seconds[exec] ?? 0)) };
-    const facts: ExecFact[] = [
-      ...(borosGapYu > 0
-        ? [{ label: t('accounts.deleverTab.borosGapLabel'), hover: t('accounts.deleverTab.borosGap', borosGapValues), value: t('accounts.deleverTab.borosGapValue', borosGapValues) }]
-        : []),
-      ...(twapPlan && borosGapYu > 0 && leadClose > 0
-        ? [
+    const lead = plan.legs[0];
+    const borosUsd = estimate ? estimate.feeBorosUsd + (gasRow[0]?.usd ?? 0) : null;
+    const steps: PlanStep[] =
+      plan.refused || !lead
+        ? []
+        : [
             {
-              label: t('accounts.delever.borosPerSlice'),
-              hover: t('accounts.delever.borosPerSliceHover'),
-              value: t('accounts.delever.borosPerSliceValue', { amount: qtyText((borosGapYu * Number(twapPlan.sliceQty)) / leadClose) }),
+              key: 'perps',
+              icon: pair.base,
+              text: t('accounts.deleverTab.stepPerps', {
+                pair: t('accounts.deleverTab.perpsLabel', { longVenue: prettyVenue(pair.longVenue), shortVenue: prettyVenue(pair.shortVenue) }),
+                qty: qtyText(lead.closeQty),
+                coin: pair.base,
+              }),
+              usd: estimate && borosUsd !== null ? estimate.totalUsd - (borosYu > 0 ? borosUsd : 0) : null,
             },
-          ]
-        : []),
-    ];
+            ...(borosYu > 0 ? [{ key: 'boros', icon: pair.base, text: t('accounts.deleverTab.stepBoros', { qty: qtyText(borosYu) }), usd: borosUsd }] : []),
+          ];
     return (
       <>
+        <PlanSteps label={t('accounts.deleverTab.steps')} rows={steps} />
         <Field label={t('accounts.realizeTab.orders')}>
           <ExecModeToggle
             ariaLabel={t('accounts.realizeTab.orders')}
@@ -283,7 +286,6 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           preview={plan.twap ?? null}
           impact={twapBlocked ? null : (plan.priceImpact ?? null)}
           coin={pair.base}
-          facts={<ExecFacts rows={facts} />}
         />
         {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
         {costBox}

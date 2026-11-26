@@ -1,5 +1,5 @@
 import { ArrowRight } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PriceImpactPreview, TwapPlanPreview, TwapPlanView, TwapRefusalView } from '../api/types';
 import { HoverCard } from '../components/HoverCard';
@@ -164,7 +164,6 @@ export function TwapArea({
   impact,
   coin,
   lot,
-  facts,
 }: {
   on: boolean;
   onToggle: (on: boolean) => void;
@@ -174,7 +173,6 @@ export function TwapArea({
   impact: PriceImpactPreview | null;
   coin: string;
   lot?: string;
-  facts?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [drafts, setDrafts] = useState<Partial<Record<Box, string>>>({});
@@ -276,7 +274,6 @@ export function TwapArea({
           )}
         </>
       )}
-      {facts}
     </div>
   );
 }

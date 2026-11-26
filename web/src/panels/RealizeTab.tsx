@@ -18,11 +18,11 @@ import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './Rebalance
 import { VerdictAlert } from './RebalanceBits';
 import { keyOf, SLICE_HOVER, Term } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { realizeText, refusalOf, TotalCost, type CostRow } from './RebalancePlanBits';
+import { PlanSteps, realizeText, refusalOf, TotalCost, type CostRow, type PlanStep } from './RebalancePlanBits';
 import { CONVERT_TO, execModeLabel, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
-import { costOf, hasPlan, netOf, sliceOf, type Cost, type Slice } from './realizeTabCost';
+import { costOf, hasPlan, legCostsOf, netOf, sliceOf, type Cost, type Slice } from './realizeTabCost';
 import { SplitArea } from './SliceTable';
 import { CloseMakerSettings, useCloseMaker, withMakerWait } from './closeMaker';
 import { useTwapTakerAfter } from '../trade/useTwapTakerAfter';
@@ -60,6 +60,8 @@ export function RealizeTab(props: TabProps) {
     </>
   );
 }
+
+const cents = (value: number): number => Math.round(value * 100) / 100;
 
 function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; pools: Pool[]; pool: Pool; onPick: (pool: Pool) => void }) {
   const { t } = useTranslation();
@@ -157,6 +159,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const pricing = slicePricing || (amount === 'custom' && customUsd !== null && (customUsd !== debouncedUsd || customQuery.isFetching));
   const slice = active ? sliceFor(active) : null;
   const cost = active ? costFor(active, exec) : null;
+  const legCosts = active && cost && !pricing ? legCostsOf(active, exec, cost) : null;
   const net = active && cost ? netOf(active, cost) : 0;
   const slicePastBook = options.find((o) => o.sizeUsd === shownSliceUsd)?.pastBook === true;
   const otherRefusal = active?.refused && active.refused.reason !== 'past-book' ? active.refused : null;
@@ -215,7 +218,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
           label: wallet,
           rows: [
             { label: t('accounts.realizeTab.realizedAfterCost'), before: null, after: net, unit: 'coin' },
-            { label: hoverCash(), before: cashNow, after: cashNow + net - landed, unit: 'coin' },
+            { label: hoverCash(), before: cents(cashNow), after: cents(cashNow + net - landed), unit: 'coin' },
           ],
         },
         ...(target ? [{ key: targetKey, label: WALLET_LABEL[targetKey] ?? targetKey, rows: borrowRows(target, Math.max(0, target.borrow - landed), null) }] : []),
@@ -281,31 +284,35 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       </div>
 
       {active && active.legs.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <span className={microLabelClass}>{t('accounts.realizeTab.closeReopen')}</span>
-          <ol className="flex flex-col gap-1">
-            {active.legs.flatMap((leg) => {
-              const close = (
+        <PlanSteps
+          label={t('accounts.realizeTab.closeReopen')}
+          rows={active.legs.flatMap((leg, at) => {
+            const close: PlanStep = {
+              key: leg.symbol,
+              icon: leg.base,
+              text: (
                 <span className="num">
                   {t('accounts.realizeTab.legPart', { coin: leg.base, side: t(leg.side === 'LONG' ? 'common.long' : 'common.short'), size: sizeText(leg.qty), held: sizeText(leg.positionQty) })}
                 </span>
-              );
-              const convert = leg.convert && leg.convert.feeUsd > 0 ? (
+              ),
+              usd: legCosts ? (legCosts[at] ?? null) : null,
+            };
+            if (!leg.convert || !(leg.convert.feeUsd > 0)) return [close];
+            const convert: PlanStep = {
+              key: `${leg.symbol}:convert`,
+              icon: poolCoin(leg.pool),
+              text: (
                 <span className="num inline-flex items-center gap-1.5">
                   <Term label={t('accounts.rebalanceRealize.convertAction', { amount: num(leg.convert.amount, 0), coin: poolCoin(leg.pool) })} text={HOVER.convert} />
                   <ArrowRight size={12} aria-hidden className="shrink-0 text-ink-500" />
                   {WALLET_LABEL[poolKey(CONVERT_TO[leg.pool])]}
                 </span>
-              ) : null;
-              return convert ? [{ key: `${leg.symbol}:convert`, text: convert }, { key: leg.symbol, text: close }] : [{ key: leg.symbol, text: close }];
-            }).map((line, index) => (
-              <li key={line.key} className="flex items-center gap-3 rounded border border-ink-800 px-3 py-1.5 text-xs text-ink-100">
-                <span className="num w-4 shrink-0 text-ink-400">{index + 1}</span>
-                {line.text}
-              </li>
-            ))}
-          </ol>
-        </div>
+              ),
+              usd: legCosts ? leg.convert.feeUsd : null,
+            };
+            return [convert, close];
+          })}
+        />
       )}
 
       {active && (!refusal || sliceRefused) && active.legs.length > 0 && (

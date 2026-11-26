@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
 import type { EvenPlan, Pool, RebalanceBucket, RoutePlan } from '../api/types';
 import { Chip } from '../components/Chip';
-import { HoverCard } from '../components/HoverCard';
+import { TokenIcon } from '../components/AssetIcon';
+import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { fmtUsd, num } from '../lib/fmt';
 import { StepList, type StepRow } from './RebalanceBits';
@@ -75,20 +76,23 @@ export function NotHedgedLine({ text }: { text: string }) {
   );
 }
 
-export type ExecFact = { label: string; hover: string; value: string };
+export type PlanStep = { key: string; icon: string | null; text: ReactNode; usd: number | null };
 
-export function ExecFacts({ rows }: { rows: ExecFact[] }) {
+export function PlanSteps({ label, rows }: { label: string; rows: PlanStep[] }) {
   if (rows.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-2.5 text-xs">
-      {rows.map((row) => (
-        <div key={row.label} className="flex items-center justify-between gap-3 text-ink-300">
-          <HoverCard label={row.label} widthPx={260}>
-            {row.hover}
-          </HoverCard>
-          <span className="num text-ink-100">{row.value}</span>
-        </div>
-      ))}
+    <div className="flex flex-col gap-1.5">
+      <span className={microLabelClass}>{label}</span>
+      <ol className="flex flex-col gap-1">
+        {rows.map((row, index) => (
+          <li key={row.key} className="flex items-center gap-3 rounded border border-ink-800 px-3 py-1.5 text-xs text-ink-100">
+            <span className="num w-4 shrink-0 text-ink-400">{index + 1}</span>
+            {row.icon && <TokenIcon symbol={row.icon} size={16} />}
+            <span className="min-w-0 flex-1">{row.text}</span>
+            {row.usd !== null && <span className="num shrink-0 text-ink-300">{fmtUsd(row.usd)}</span>}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }

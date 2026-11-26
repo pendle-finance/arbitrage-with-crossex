@@ -238,6 +238,7 @@ export interface RealizeLeg {
   realizedUsd: number;
   convert: RealizeConvert | null;
   closeFeeUsd: number;
+  closeMakerFeeUsd?: number;
   reopenFeeUsd: number;
   closeImpactUsd: number;
   reopenImpactUsd: number;
