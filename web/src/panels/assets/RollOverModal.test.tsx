@@ -437,6 +437,17 @@ describe('RollOverModal — the pick page', () => {
     );
   });
 
+  it('a cleared size keeps the hold on screen, disabled', async () => {
+    const user = userEvent.setup();
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const box = within(dialog).getByLabelText('Size to roll (ETH)');
+    await waitFor(() => expect(box).toHaveValue('100'), { timeout: 4_000 });
+    await user.clear(box);
+    expect(await within(dialog).findByRole('button', { name: 'Roll over' })).toBeDisabled();
+  });
+
   it('with no ladder reported, or one that holds the position many times over, the whole position is the default', async () => {
     fitSize = 500;
     install();

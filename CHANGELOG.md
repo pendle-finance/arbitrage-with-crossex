@@ -134,6 +134,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   25% Close perps rounds both legs to the same lot, so it no longer blocks as "not one deal".
 - **Run views show no empty "()"** before the first fill. A paused TWAP with one slice left
   says "1 slice". The Move cash done view says "Done." above its facts.
+- **Roll over keeps its hold on screen** when the size box is empty. The hold is disabled
+  until a size is typed.
 
 ## 1.7.9 — 2026-11-10
 
