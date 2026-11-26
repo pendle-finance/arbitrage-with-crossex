@@ -47,6 +47,7 @@ import { useActiveWallet } from '../panels/trackedAddress';
 import { StepList, type StepRow } from '../panels/RebalanceBits';
 import { BorosLogInButton } from './BorosAgentSetup';
 import { localizeServerText } from '../i18n/serverMessages';
+import { microLabelClass } from '../components/Th';
 
 const newOrderIds = (count: number): string[] => Array.from({ length: count }, (_, i) => `${i}-${uuid()}`);
 
@@ -560,6 +561,7 @@ export function CloseBorosForm({
       coin: l.base,
       text: (
         <span className="inline-flex max-w-full items-center gap-1.5">
+          <span className="font-semibold text-ink-50">{t('common.close')}</span>
           {venues ? <SpreadIcon venues={venues} size={14} /> : <VenueIcon venue={l.venue} size={14} />}
           <span className="truncate">{venueLabel(l)}</span>
           <Chip sm tone={l.side === 'LONG' ? 'green' : 'red'} className="font-semibold">
@@ -623,7 +625,10 @@ export function CloseBorosForm({
 
   return (
     <div className="flex flex-col gap-4">
-      <StepList rows={stepRows} />
+      <div className="flex flex-col gap-1.5">
+        <span className={microLabelClass}>{t('accounts.rebalanceModal.steps')}</span>
+        <StepList rows={stepRows} />
+      </div>
 
       <CloseSizePresets
         label={closable.length > 2 ? t('pairTicket.closeBoros.closeSizeAll') : closable.length > 1 ? t('pairTicket.closeBoros.closeSizeBoth') : t('pairTicket.closeBoros.closeSize')}

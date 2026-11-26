@@ -181,6 +181,7 @@
     "availableMargin": "可用保证金",
     "availTitleAfter": "展期前后的可用保证金。旧仓位先平仓，其释放的保证金计入。",
     "availTitleExit": "旧仓位平仓后、新仓位开仓前的可用保证金。新仓位所需多于此数，因此交易所拒绝此次展期。",
+    "availNow": "当前可用",
     "availAfterClose": "平仓后可用保证金",
     "holdTitle": "长按以平掉 Boros 仓位并在新到期日重新开仓，全部成交或全部取消。",
     "rolling": "展期中…",

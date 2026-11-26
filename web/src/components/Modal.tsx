@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { claimEscape, useFocusTrap } from '../lib/focusTrap';
@@ -22,6 +22,7 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
   const { t } = useTranslation();
   const panel = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const [scrolled, setScrolled] = useState(false);
   useFocusTrap(panel, true);
   useEffect(() => {
     heading.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus({ preventScroll: true });
@@ -55,7 +56,7 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
         onClick={locked ? undefined : onClose}
       />
       <div ref={panel} className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-950 ${widthClass}`}>
-        <div className={`flex items-center justify-between gap-3 ${tabbed ? 'border-b border-ink-800' : 'px-5 pt-5'}`}>
+        <div className={`flex items-center justify-between gap-3 ${tabbed ? 'border-b border-ink-800' : `border-b px-5 pb-4 pt-5 ${scrolled ? 'border-ink-800' : 'border-transparent'}`}`}>
           <h2 ref={heading} className={`text-[20px] font-bold leading-[24.2px] text-ink-50 ${tabbed ? 'min-w-0 flex-1 self-stretch' : ''}`}>{title}</h2>
           {!locked && !tabbed && (
             <button
@@ -68,7 +69,12 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
             </button>
           )}
         </div>
-        <div className={`max-h-[78vh] overflow-y-auto ${tabbed ? 'px-5 pb-5 pt-4' : 'p-5'}`}>{children}</div>
+        <div
+          className={`max-h-[78vh] overflow-y-auto ${tabbed ? 'px-5 pb-5 pt-4' : 'px-5 pb-5 pt-1'}`}
+          onScroll={tabbed ? undefined : (e) => setScrolled(e.currentTarget.scrollTop > 0)}
+        >
+          {children}
+        </div>
       </div>
     </div>,
     document.body,
