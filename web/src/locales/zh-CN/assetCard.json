@@ -90,8 +90,6 @@
     "oppChip": "展期机会",
     "readyTitle": "{{date}} 到期，已进入 {{days}} 天展期窗口。",
     "readyChip": "可展期",
-    "openOnly2": "在此之前：{{old}} 仓位的利率变动会计入您的盈亏，Boros 保证金约为 2 倍。",
-    "openOnly3": "如需提前结束重叠：平掉 {{old}} 的仓位。",
     "modeAria": "展期方式",
     "modeReopen": "平仓并重开",
     "modeOpenOnly": "仅开仓（保留旧仓位）",
@@ -120,12 +118,9 @@
     "stepOpen": "开仓 {{date}}",
     "slipClose": "平仓滑点",
     "slipOpen": "开仓滑点",
-    "matures": "到期",
     "openOrders": "挂单 · {{date}}",
     "cancelled": "已取消",
-    "cancelledPart": "已取消，保留部分的挂单也会取消",
-    "oldPositions": "{{date}} 仓位",
-    "oldStayOpen": "仍会持有，无永续"
+    "cancelledPart": "已取消，保留部分的挂单也会取消"
   },
   "pair": {
     "maturityTitle": "本组合的每个仓位都在此日到期",

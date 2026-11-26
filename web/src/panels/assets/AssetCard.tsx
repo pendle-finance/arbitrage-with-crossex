@@ -11,6 +11,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
 import type {
+  ActionInput,
   CrossexPosition,
   RebalanceJob,
   AssetBorosHistory,
@@ -60,7 +61,12 @@ import {
   useExecuteBorosRoll,
   usePositions,
   useRebalance,
+  useRebate,
 } from '../../api/queries';
+import { loadControls } from '../OpportunitiesPanel';
+import { closeCosts } from '../ClosePairParts';
+import { legNotional } from '../../trade/previewBits';
+import { usePreviewDebounced } from '../../trade/usePreview';
 import { ApiError } from '../../api/client';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
 import { aprCost, AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, MarginUsageRow, marketName, OpposingAcknowledgement, SpreadReadout, SuggestedTopUpLines, usdOf as simUsdOf } from '../../trade/BorosPairBits';
@@ -85,6 +91,7 @@ import {
   sigGrouped,
   parseDateLocal,
   prettyVenue,
+  fieldValue,
 } from '../../lib/fmt';
 import { lineDetail, lineLabel, unknownLabel, type LiquidationLine } from '../../lib/liquidation';
 import {
@@ -930,6 +937,7 @@ function PairCard({
   // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
   // on every button, and reserves colour for what the action does.
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
+  const rollRates = useRollRateInputs(pair, rollMarkets, rollHeldSize, ROLL_PROBE_POLL_MS, probeTargets.length > 0, 'hold');
 
   return (
     <div ref={rootRef} className="scroll-mt-36 overflow-x-auto rounded border border-wash/[0.16] bg-wash/[0.03]">
@@ -946,6 +954,7 @@ function PairCard({
           exitSlippageApr={seedSlipPctFor(rollMarkets ?? [], rollYuLegs.map((l) => l.marketId).filter((id): id is number => id !== undefined)) / 100}
           entrySlippageApr={seedSlipPctFor(rollMarkets ?? [], targetMarketIds(tg)) / 100}
           nowSec={nowSec}
+          rates={rollRates}
           onResult={(r) =>
             setProbes((prev) => {
               const cur = prev[tg.maturity];
@@ -1341,6 +1350,7 @@ function PairCard({
  * fell back to "waiting for a quote".
  */
 const ROLL_POLL_MS = 10_000;
+const QUOTE_WAIT_CODES: ReadonlySet<string> = new Set(['no-quote', 'stale-simulation']);
 /**
  * Longer than the ticket's 12 s (SIMULATION_MAX_AGE_MS): the roll polls every
  * 10 s, so 12 s would flag a slow poll as out of date. The send re-fetches
@@ -1505,7 +1515,7 @@ function rollOpportunities(
 }
 
 /**
- * One maturity, priced for the banner EXACTLY as the modal will price it.
+ * One maturity, priced for the banner as the modal prices it at the default settings.
  * Renders nothing; slow poll — it is a signal, the modal re-prices live.
  *
  * Two stages. First a quote at a FIFTH of the position: its ladders say how
@@ -1514,7 +1524,7 @@ function rollOpportunities(
  * to — the smaller of that and the position. A default under a fifth is no opportunity: the market cannot
  * take a meaningful slice. Then a quote AT that default size, both batches,
  * through the same `rollFigures` the option card uses, so the banner's rate
- * is the modal's opening headline to the decimal.
+ * is the modal's opening headline at the default settings.
  */
 function RollProbe({
   target,
@@ -1526,6 +1536,7 @@ function RollProbe({
   exitSlippageApr,
   entrySlippageApr,
   nowSec,
+  rates,
   onResult,
 }: {
   target: RollTarget;
@@ -1537,6 +1548,7 @@ function RollProbe({
   exitSlippageApr: number;
   entrySlippageApr: number;
   nowSec: number;
+  rates: RollRateInputs;
   onResult: (r: RollProbeResult) => void;
 }) {
   const reqs = (
@@ -1602,6 +1614,7 @@ function RollProbe({
     maturity: target.maturity,
     heldLegs: yuLegs,
     nowSec,
+    rates,
   });
   const cb = useRef(onResult);
   cb.current = onResult;
@@ -1635,7 +1648,7 @@ const sumUsd = (parts: Array<number | null>): number | null =>
 const usdOrDash = (usd: number | null): string => (usd === null ? '—' : fmtUsd(usd));
 
 const ROLL_SHARES = ['25', '50', '75', '100'] as const;
-const ROLL_OPTION_GRID = 'grid grid-cols-[minmax(0,1fr)_6.5rem_8rem_8rem] items-center gap-x-3';
+const ROLL_OPTION_GRID = 'grid grid-cols-[minmax(0,1fr)_6rem_7rem_5.5rem] items-center gap-x-3';
 type RollShare = (typeof ROLL_SHARES)[number];
 
 interface RollLeg {
@@ -1780,7 +1793,8 @@ function RollCostCard({ batches, age }: { batches: RollBatch[]; age: ReactNode }
           <div key={b.key} className="flex flex-col gap-1.5">
             <SlippageLine
               label={b.slipLabel}
-              est={b.sim?.slippageApr != null ? `${fmtPct(b.sim.slippageApr)}${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null}
+              est={b.sim?.slippageApr != null ? `${fmtPct(b.sim.slippageApr)} APR${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null}
+              cost={cost.estSlipUsd === null ? null : fmtUsd(cost.estSlipUsd)}
               max={fmtPct(b.slip.apr * Math.max(1, b.legs.length))}
               unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
               open={b.slip.open}
@@ -1822,6 +1836,58 @@ function useAcknowledgement(legs: BorosPairLegBody[]): { checked: boolean; set: 
 /** The probe's poll: a signal for a banner, not a quote for an order. */
 const ROLL_PROBE_POLL_MS = 60_000;
 
+interface RollRateInputs {
+  perpExitUsd: number | null;
+  shareOf: (size: number) => number;
+  rebateApr: (marketIds: number[]) => number;
+}
+
+const NO_ROLL_RATE_INPUTS: RollRateInputs = { perpExitUsd: 0, shareOf: () => 0, rebateApr: () => 0 };
+
+function useRollRateInputs(
+  pair: PairEstimate,
+  markets: ReadonlyArray<BorosPairMarketRow> | undefined,
+  heldSize: number,
+  pollMs: number,
+  enabled: boolean,
+  basis: 'hold' | 'settings',
+): RollRateInputs {
+  const settings = loadControls();
+  const holdBasis = basis === 'hold';
+  const viewOnly = useActiveWallet().viewOnly;
+  const ownRebate = useRebate().data ?? null;
+  const rebate = viewOnly ? null : ownRebate;
+  const closing = enabled && !holdBasis && settings.exitMode === 'close';
+  const legs = closing ? pairPerpCloseLegs(pair) : [];
+  const actions: ActionInput[] | null =
+    legs.length === 2
+      ? legs.map((l) => ({ kind: 'close-position' as const, symbol: l.symbol, ...(l.partial ? { qty: fieldValue(l.qty) } : {}) }))
+      : null;
+  const preview = usePreviewDebounced(`roll-exit-${legs.map((l) => l.symbol).join('-')}`, actions, { refetchInterval: pollMs });
+  const previews = preview.previews;
+  const maker = settings.entryMode === 'maker-hedge';
+  const auto = preview.data?.makerLeg?.auto;
+  const makerIdx = maker && auto ? (auto === 'a' ? 0 : 1) : null;
+  const fees = closeCosts(previews, maker, makerIdx, false).tradeCost;
+  const slippage =
+    previews?.length === 2
+      ? previews.reduce<number | null>((sum, p, i) => {
+          if (sum === null || i === makerIdx) return sum;
+          const notional = legNotional(p);
+          const pct = p.fillEstimate?.slippagePct;
+          return notional === null || pct === undefined ? null : sum + (Math.max(0, pct) / 100) * notional;
+        }, 0)
+      : null;
+  const perpExitUsd = !closing || legs.length === 0 ? 0 : fees !== null && slippage !== null ? fees + slippage : null;
+  const settleOf = (id: number) => markets?.find((m) => m.marketId === id)?.settleFeeApr ?? 0;
+  return {
+    perpExitUsd,
+    shareOf: (size) => (heldSize > 0 ? size / heldSize : 0),
+    rebateApr: (ids) =>
+      (holdBasis || settings.includeRebate) && rebate ? ids.reduce((sum, id) => sum + settleOf(id) - rebatedSettleApr(settleOf(id), rebate, id), 0) : 0,
+  };
+}
+
 /** Everything one roll option states, from its two quotes. */
 interface RollFigures {
   /** The APR the roll would earn on the capital it ties up, NET of the
@@ -1853,7 +1919,9 @@ function rollFigures({
   heldLegs,
   nowSec,
   keepOld = false,
+  rates = NO_ROLL_RATE_INPUTS,
 }: {
+  rates?: RollRateInputs;
   entrySim: BorosPairSimulation | undefined;
   exitSim: BorosPairSimulation | undefined;
   /** The size being rolled, in the collateral token. */
@@ -1895,9 +1963,11 @@ function rollFigures({
   const exitPnlUsd = keepOld ? 0 : usdOf(exitPnlOf(exitSim, heldLegs, nowSec).total);
   const totalCostUsd =
     exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
+  const perpExitUsd = rates.perpExitUsd === null ? null : rates.perpExitUsd * rates.shareOf(size);
+  const allCostUsd = totalCostUsd !== null && perpExitUsd !== null ? totalCostUsd + perpExitUsd : null;
   const dragApr =
-    totalCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
-      ? totalCostUsd / capitalUsd / termYears
+    allCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
+      ? allCostUsd / capitalUsd / termYears
       : null;
 
   /**
@@ -1913,7 +1983,8 @@ function rollFigures({
    * then less the round-trip drag so the headline is a figure actually earned.
    */
   const rolledNotionalUsd = usdOf(size) ?? 0;
-  const spreadApr = entrySim?.estSpreadApr ?? null;
+  const spreadApr =
+    entrySim?.estSpreadApr != null ? entrySim.estSpreadApr + rates.rebateApr(entrySim.legs.map((l) => l.marketId)) : null;
   const carryPerYearUsd =
     spreadApr !== null && rolledNotionalUsd > 0 ? spreadApr * rolledNotionalUsd : null;
   const rateOnCapital =
@@ -1923,7 +1994,11 @@ function rollFigures({
   const exitPnlApr =
     exitPnlUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0 ? exitPnlUsd / capitalUsd / termYears : null;
   const netRate =
-    rateOnCapital !== null && dragApr !== null && exitPnlApr !== null ? rateOnCapital - dragApr + exitPnlApr : rateOnCapital;
+    perpExitUsd === null
+      ? null
+      : rateOnCapital !== null && dragApr !== null && exitPnlApr !== null
+        ? rateOnCapital - dragApr + exitPnlApr
+        : rateOnCapital;
   /**
    * What the roll is worth in dollars by the new maturity: the carry it earns
    * over the term, less the fees paid to get into it. The percentage is the
@@ -1931,8 +2006,8 @@ function rollFigures({
    */
   const grossByMaturityUsd = carryPerYearUsd !== null ? carryPerYearUsd * termYears : null;
   const netByMaturityUsd =
-    grossByMaturityUsd !== null && totalCostUsd !== null && exitPnlUsd !== null
-      ? grossByMaturityUsd - totalCostUsd + exitPnlUsd
+    grossByMaturityUsd !== null && allCostUsd !== null && exitPnlUsd !== null
+      ? grossByMaturityUsd - allCostUsd + exitPnlUsd
       : null;
 
   return {
@@ -2135,6 +2210,7 @@ export function RollOverModal({
   const { yuLegs, heldSize, pairPerpImUsd } = pairRollGeometry(pair);
 
   const targets = useMemo(() => rollTargetsFor(markets ?? [], pair, base, soonest), [markets, soonest, base, pair]);
+  const rollRates = useRollRateInputs(pair, markets, heldSize, ROLL_POLL_MS, true, 'settings');
 
   const [picked, setPicked] = useState<number | null>(null);
   const selected = picked ?? targets[0]?.maturity ?? null;
@@ -2368,6 +2444,7 @@ export function RollOverModal({
                       exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
                       entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
                       nowSec={nowSec}
+                      rates={rollRates}
                       openOnly={openOnly}
                       selected={selected === tg.maturity}
                       onSelect={() => setPicked(tg.maturity)}
@@ -2404,6 +2481,7 @@ export function RollOverModal({
               address={address}
               nowSec={nowSec}
               perpImUsd={perpImUsd}
+              rates={rollRates}
               markets={markets ?? []}
               entrySeedPct={seeds?.entry}
               settling={size !== simSize || seeds === null}
@@ -2424,6 +2502,7 @@ export function RollOverModal({
               oldMaturity={soonest}
               nowSec={nowSec}
               perpImUsd={perpImUsd}
+              rates={rollRates}
               exitSeedPct={seeds?.exit}
               entrySeedPct={seeds?.entry}
               settling={size !== simSize || seeds === null}
@@ -2514,6 +2593,7 @@ function RollReview({
   oldMaturity,
   nowSec,
   perpImUsd,
+  rates,
   exitSeedPct,
   entrySeedPct,
   settling,
@@ -2532,6 +2612,7 @@ function RollReview({
   oldMaturity: number;
   nowSec: number;
   perpImUsd: number;
+  rates: RollRateInputs;
   /** The tolerance the pick page settled on for each batch at this size, in
    * % APR — wider than the per-market seed when the size needed it. Absent
    * (no ladder quoted yet) falls back to the seed. */
@@ -2613,6 +2694,7 @@ function RollReview({
     maturity: target.maturity,
     heldLegs: yuLegs,
     nowSec,
+    rates,
   }).netRate;
   const ackShown = roll.data?.entry.gate.requiresAcknowledgement === true;
   const pending = roll.isPending;
@@ -2929,7 +3011,11 @@ function RollReview({
       )}
       <BlockerList
         blockers={blockers.filter(
-          (b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged') && !(roll.isError && b.code === 'quote-failed'),
+          (b) =>
+            b.code !== 'slippage-exceeds-max' &&
+            !QUOTE_WAIT_CODES.has(b.code) &&
+            !(ackShown && b.code === 'flip-unacknowledged') &&
+            !(roll.isError && b.code === 'quote-failed'),
         )}
       />
 
@@ -2938,7 +3024,11 @@ function RollReview({
           <BorosLogInButton />
         ) : (
           <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.review.holdTitle')}>
-            {busy ? t('assetCard.review.rolling') : t('assetCard.actions.rollOver')}
+            {busy
+              ? t('assetCard.review.rolling')
+              : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+                ? t('common.refreshing')
+                : t('assetCard.actions.rollOver')}
           </HoldToConfirmButton>
         )}
       </div>
@@ -2966,6 +3056,7 @@ function OpenOnlyReview({
   address,
   nowSec,
   perpImUsd,
+  rates,
   markets,
   entrySeedPct,
   settling,
@@ -2983,6 +3074,7 @@ function OpenOnlyReview({
   address: string;
   nowSec: number;
   perpImUsd: number;
+  rates: RollRateInputs;
   markets: ReadonlyArray<BorosPairMarketRow>;
   /** The tolerance the pick page settled on for the entry at this size, in %
    * APR — wider than the per-market seed when the size needed it. */
@@ -3027,6 +3119,7 @@ function OpenOnlyReview({
     maturity: target.maturity,
     heldLegs: yuLegs,
     nowSec,
+    rates,
     keepOld: true,
   }).netRate;
   const ackShown = sim.data?.gate.requiresAcknowledgement === true;
@@ -3148,8 +3241,6 @@ function OpenOnlyReview({
     slipHint: t('assetCard.openOnly.slipHint'),
   };
   const blank = <span className="text-ink-500">{sim.isPending ? '…' : '—'}</span>;
-  const old = fmtDateLocal(pair.soonestMaturitySec);
-
   return (
     <div className="flex flex-col gap-3">
       {sim.isError && <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />}
@@ -3160,18 +3251,6 @@ function OpenOnlyReview({
         <div className="flex flex-col gap-1.5">
           <RollFixedAprRow rate={fixedApr} />
           <AfterRates sim={simulation} legs={openRows} liqWarn={liqWarnOf(sim.data?.gate.funding)} />
-          <EstimateRow label={t('assetCard.roll.matures')} value={`${fmtDateLocal(target.maturity)} · ${daysLeftText(target.maturity, nowSec)}`} />
-          <EstimateRow
-            label={
-              <HoverCard label={t('assetCard.roll.oldPositions', { date: old })} widthPx={280}>
-                <span className="flex flex-col gap-1">
-                  <span>{t('assetCard.roll.openOnly2', { old })}</span>
-                  <span>{t('assetCard.roll.openOnly3', { old })}</span>
-                </span>
-              </HoverCard>
-            }
-            value={<span className="font-normal text-rose-300">{t('assetCard.roll.oldStayOpen')}</span>}
-          />
         </div>
         <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
           {simulation ? <MarginUsageRow sim={simulation} /> : <EstimateRow label={t('pairTicket.borosBits.marginUsage')} value={blank} strong />}
@@ -3194,7 +3273,11 @@ function OpenOnlyReview({
       {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
       <BlockerList
         blockers={blockers.filter(
-          (b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged') && !(sim.isError && b.code === 'quote-failed'),
+          (b) =>
+            b.code !== 'slippage-exceeds-max' &&
+            !QUOTE_WAIT_CODES.has(b.code) &&
+            !(ackShown && b.code === 'flip-unacknowledged') &&
+            !(sim.isError && b.code === 'quote-failed'),
         )}
       />
 
@@ -3203,7 +3286,11 @@ function OpenOnlyReview({
           <BorosLogInButton />
         ) : (
           <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.openOnly.holdTitle')}>
-            {busy ? t('assetCard.openOnly.opening') : t('assetCard.roll.openNewMaturity')}
+            {busy
+              ? t('assetCard.openOnly.opening')
+              : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+                ? t('common.refreshing')
+                : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
         )}
       </div>
@@ -3229,6 +3316,7 @@ function RollOption({
   exitSlippageApr,
   entrySlippageApr,
   nowSec,
+  rates,
   openOnly = false,
   selected,
   onSelect,
@@ -3242,6 +3330,7 @@ function RollOption({
   /** The size being rolled, in the collateral token — the modal's input. */
   size: number;
   perpImUsd: number;
+  rates: RollRateInputs;
   address: string | null;
   /** Per-leg tolerance of each batch, as an APR fraction. */
   exitSlippageApr: number;
@@ -3288,7 +3377,7 @@ function RollOption({
 
   const entrySim = entry.data?.simulation;
   const exitSim = exit.data?.simulation;
-  const { netRate, netByMaturityUsd } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec, keepOld: openOnly });
+  const { netRate, netByMaturityUsd } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec, keepOld: openOnly, rates });
   const costUsd = openOnly
     ? batchCost(entrySim, entrySlippageApr).totalUsd
     : sumUsd([batchCost(exitSim, exitSlippageApr).totalUsd, batchCost(entrySim, entrySlippageApr).totalUsd]);

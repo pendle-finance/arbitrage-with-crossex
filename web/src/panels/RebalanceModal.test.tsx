@@ -1379,10 +1379,10 @@ describe('RebalanceModal presets and custom amount', () => {
     await user.type(screen.getByRole('textbox', { name: 'Amount' }), '60');
     // The last quote stays on screen, but it was priced for 50: the hold
     // waits rather than send it, and says why.
-    expect(screen.getByRole('button', { name: 'Pricing the move.' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refreshing…' })).toBeDisabled();
     await waitFor(() => expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeEnabled(), { timeout: 3000 });
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
-    expect(screen.queryByText('Pricing the move.')).toBeNull();
+    expect(screen.queryByText('Refreshing…')).toBeNull();
     fireEvent.pointerDown(screen.getByRole('button', { name: /^Hold to move/ }));
     await waitFor(() => expect(sent).toEqual([expect.objectContaining({ goal: 'custom', amount: 60 })]));
   });
@@ -1838,7 +1838,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
   });
 
-  it('while a new custom amount prices, the hold reads Pricing and nothing above or below it moves', async () => {
+  it('while a new custom amount prices, the hold reads Refreshing and nothing above or below it moves', async () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
@@ -1847,8 +1847,8 @@ describe('RebalanceModal Realize uPnL tab', () => {
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
     expect(screen.queryByRole('button', { name: 'Hold to realize' })).toBeNull();
-    expect(screen.getAllByText('Pricing the move.')).toHaveLength(1);
-    expect(screen.getByRole('button', { name: /Pricing the move\./ })).toBeDisabled();
+    expect(screen.getAllByText('Refreshing…')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Refreshing…/ })).toBeDisabled();
   });
 
   it('slice rows show one row per slice count, smallest size first, then Custom', async () => {

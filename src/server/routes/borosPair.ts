@@ -828,6 +828,7 @@ export function borosPairRoutes(deps: AppDeps) {
         currentSize: account.positionByMarket.get(m.marketId) ?? 0,
         collateralPriceUsd: prices.get(m.tokenId) ?? null,
         openCostPerSize: openCostPerSize(m, nowSec),
+        settleFeeApr: m.settleFeeApr,
               spreadVenues: m.spreadVenues,
       });
       const byName = (x: { name: string }, y: { name: string }): number => x.name.localeCompare(y.name);
