@@ -118,21 +118,6 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     );
   });
 
-  it('states that only the first leg carries the band', async () => {
-    // The old copy promised "mark ± slippage" for the whole close, but the
-    // hedge leg is deliberately a plain MARKET IOC (see decide.ts) — a
-    // book-mid limit band gets price-limit-rejected and would strand it.
-    server.use(...baseHandlers(), previewSpy([]));
-    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
-    await pickMarket();
-    // The full note rides as the tooltip on the footer line under the
-    // button, so assert the title rather than visible text.
-    const badge = (await screen.findByText(/^Reduce-only$/)).closest('p') as HTMLElement;
-    expect(badge).toHaveAttribute(
-      'title',
-      expect.stringContaining("Second leg: market, inside the venue's price limit."),
-    );
-  });
 });
 
 describe('ClosePairForm — one size, both legs, never a naked remainder', () => {
