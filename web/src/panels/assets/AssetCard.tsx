@@ -1730,6 +1730,8 @@ function RollStep({
   slipInvalidText,
   slipAria,
   slipHint,
+  children = null,
+  footer = null,
 }: {
   n?: number;
   title: string;
@@ -1740,23 +1742,26 @@ function RollStep({
   slipInvalidText: string;
   slipAria: string;
   slipHint: string;
+  children?: ReactNode;
+  footer?: ReactNode;
 }) {
   const cost = batchCost(sim, slip.apr);
-  const est = sim?.slippageApr != null ? `${fmtPct(sim.slippageApr)}${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null;
+  const est = sim?.slippageApr != null ? fmtPct(sim.slippageApr) : null;
   const overVenues = sim ? sim.legs.filter((l) => l.slippageExceeded).map((l) => prettyVenue(l.venue)) : [];
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="flex items-center gap-2 text-[12.5px] font-semibold text-ink-50">
+    <section aria-label={title} className="card flex flex-col gap-1.5 px-3.5 py-3">
+      <span className="flex items-center gap-2 text-[13px] font-semibold text-ink-50">
         {n !== undefined && <StepBadge n={n} />}
         {title}
       </span>
       {legs.map((leg) => (
         <RollLegLine key={leg.marketId} leg={leg} collateral={collateral} />
       ))}
+      {children && <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">{children}</div>}
       <SlippageLine
         est={est}
         max={fmtPct(slip.apr * Math.max(1, legs.length))}
-        unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
+        unit="APR"
         open={slip.open}
         onToggle={slip.onToggle}
         value={slip.str}
@@ -1772,7 +1777,8 @@ function RollStep({
         </p>
       )}
       <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value={usdOrDash(cost.feeUsd)} />
-    </div>
+      {footer}
+    </section>
   );
 }
 
@@ -2714,13 +2720,61 @@ function RollReview({
   const blank = <span className="text-ink-500">{pending ? '…' : '—'}</span>;
   const reasons = [...new Set([...(exitSim?.reasons ?? []), ...(entrySim?.reasons ?? [])])];
 
+  const exitCost = batchCost(exitSim, exitSlip.apr);
+  const entryCost = batchCost(entrySim, entrySlip.apr);
+  const fundTone = marginShort > 0 ? 'border-amber-500/40' : marginOk ? 'border-emerald-500/30' : '';
+
   return (
     <div className="flex flex-col gap-3">
       {roll.isError && <QueryError title={t('assetCard.review.quoteFailed')} error={roll.error} onRetry={() => roll.refetch()} />}
-      <SummaryCard
-        title={t('accounts.moveCash.cost')}
-        aside={<EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />}
-      >
+      <div className="card flex flex-wrap items-end justify-between gap-x-6 gap-y-3 px-4 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[12px] text-ink-300">
+            <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={280}>
+              <HoverRows
+                lead={t('assetCard.roll.fixedAprHint')}
+                rows={[
+                  [t('assetCard.option.perpMargin'), fmtUsd(perpImUsd)],
+                  [t('assetCard.option.newBorosMargin'), usdOrDash(fig.newBorosImUsd)],
+                  [t('common.capital'), usdOrDash(fig.capitalUsd)],
+                ]}
+              />
+            </HoverCard>
+            <EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />
+          </div>
+          <div className="num mt-1.5 text-[26px] font-semibold leading-none tracking-[-0.02em]">
+            {fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : blank}
+            <span className="ml-2 text-[13px] font-normal text-ink-300">{daysLeftText(target.maturity, nowSec)}</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-x-5">
+          <div>
+            <div className={statLabel}>{t('common.size')}</div>
+            <div className={`${statValue} font-semibold text-ink-50`}>{exactQty(size, collateral)}</div>
+          </div>
+          <div>
+            <div className={statLabel}>{t('assetCard.estEarnings')}</div>
+            <div className={`${statValue} font-semibold`}>
+              {fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : blank}
+            </div>
+          </div>
+          <div>
+            <div className={statLabel}>
+              <HoverCard label={t('pairTicket.borosBits.totalCost')} widthPx={260}>
+                <HoverRows
+                  rows={[
+                    [t('assetCard.roll.stepClose', { date: fmtDateLocal(oldMaturity) }), usdOrDash(exitCost.totalUsd)],
+                    [t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) }), usdOrDash(entryCost.totalUsd)],
+                  ]}
+                />
+              </HoverCard>
+            </div>
+            <div className={`${statValue} font-semibold text-ink-50`}>{totalUsd !== null ? fmtUsd(totalUsd) : blank}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
         <RollStep
           n={1}
           title={t('assetCard.roll.stepClose', { date: fmtDateLocal(oldMaturity) })}
@@ -2731,45 +2785,7 @@ function RollReview({
           slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
           slipAria={t('assetCard.batch.slipAria', { label: t('assetCard.roll.exit') })}
           slipHint={t('assetCard.batch.slipHint')}
-        />
-        <div className="border-t border-ink-800 pt-2">
-          <RollStep
-            n={2}
-            title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
-            legs={entryRows}
-            collateral={collateral}
-            sim={entrySim}
-            slip={entrySlip}
-            slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-            slipAria={t('assetCard.batch.slipAria', { label: t('assetCard.roll.reentry') })}
-            slipHint={t('assetCard.batch.slipHint')}
-          />
-        </div>
-        <div className="border-t border-ink-800 pt-1.5">
-          <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={totalUsd !== null ? fmtUsd(totalUsd) : blank} strong />
-        </div>
-      </SummaryCard>
-
-      <SummaryCard title={t('accounts.moveCash.after')}>
-        <div className="flex flex-col gap-1.5">
-          <EstimateRow
-            label={
-              <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={280}>
-                <HoverRows
-                  lead={t('assetCard.roll.fixedAprHint')}
-                  rows={[
-                    [t('assetCard.option.perpMargin'), fmtUsd(perpImUsd)],
-                    [t('assetCard.option.newBorosMargin'), usdOrDash(fig.newBorosImUsd)],
-                    [t('common.capital'), usdOrDash(fig.capitalUsd)],
-                  ]}
-                />
-              </HoverCard>
-            }
-            value={fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : blank}
-            strong
-          />
-          <AfterRates sim={entrySim} legs={entryRows} liqWarn={() => suggestedTopUp === null || suggestedTopUp > 0} />
-          <EstimateRow label={t('assetCard.roll.matures')} value={`${fmtDateLocal(target.maturity)} · ${daysLeftText(target.maturity, nowSec)}`} />
+        >
           <EstimateRow
             label={
               <HoverCard label={t('assetCard.review.exitPnl')} widthPx={300}>
@@ -2783,84 +2799,92 @@ function RollReview({
               </HoverCard>
             }
             value={exitPnl.total !== null ? money(exitPnl.total) : blank}
-          />
-          <EstimateRow
-            label={t('assetCard.estEarnings')}
-            value={fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : blank}
             strong
           />
+        </RollStep>
+        <RollStep
+          n={2}
+          title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
+          legs={entryRows}
+          collateral={collateral}
+          sim={entrySim}
+          slip={entrySlip}
+          slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+          slipAria={t('assetCard.batch.slipAria', { label: t('assetCard.roll.reentry') })}
+          slipHint={t('assetCard.batch.slipHint')}
+        >
+          <AfterRates sim={entrySim} legs={entryRows} liqWarn={() => suggestedTopUp === null || suggestedTopUp > 0} />
+        </RollStep>
+      </div>
+
+      <section aria-label={t('assetCard.review.canFund')} className={`card flex flex-col gap-1.5 px-3.5 py-3 ${fundTone}`}>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[13px] font-semibold text-ink-50">{t('assetCard.review.canFund')}</span>
+          {marginShort > 0 ? (
+            <span className="num text-[12.5px] text-rose-300">{t('assetCard.roll.fundShort', { qty: fmtTokenQty(marginShort, collateral) })}</span>
+          ) : marginOk ? (
+            <span className="inline-flex items-center gap-1 text-[12.5px] text-emerald-300">
+              <Check size={12} aria-hidden />
+              {t('assetCard.roll.fundYes')}
+            </span>
+          ) : (
+            blank
+          )}
         </div>
-        <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
-          <EstimateRow
-            label={t('assetCard.review.requiredMargin')}
-            value={
-              marginNeed !== null ? (
-                <>
-                  {fmtTokenQty(marginNeed, collateral)}
-                  {usdNote(marginNeed)}
-                </>
-              ) : (
-                blank
-              )
-            }
-          />
+        {marginShort > 0 && <p className="text-[11px] leading-relaxed text-rose-200/90">{t('assetCard.roll.fundShortSub')}</p>}
+        <EstimateRow
+          label={t('assetCard.review.requiredMargin')}
+          value={
+            marginNeed !== null ? (
+              <>
+                {fmtTokenQty(marginNeed, collateral)}
+                {usdNote(marginNeed)}
+              </>
+            ) : (
+              blank
+            )
+          }
+        />
+        <EstimateRow
+          label={
+            <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
+              {availableAfter === null && availableAfterExit !== null ? t('assetCard.review.availTitleExit') : t('assetCard.review.availTitleAfter')}
+            </HoverCard>
+          }
+          value={
+            availableBefore !== null && afterAvail !== null ? (
+              <span className={afterAvail < 0 || marginShort > 0 ? 'text-rose-300' : ''}>
+                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(afterAvail, collateral)}
+                {usdNote(afterAvail)}
+              </span>
+            ) : (
+              blank
+            )
+          }
+        />
+        {suggestedTopUp !== null && suggestedTopUp > 0 && (
           <EstimateRow
             label={
-              <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
-                {availableAfter === null && availableAfterExit !== null ? t('assetCard.review.availTitleExit') : t('assetCard.review.availTitleAfter')}
-              </HoverCard>
+              <span className="text-amber-300">
+                <HoverCard label={t('pairTicket.borosBits.suggestedTopUp')} widthPx={260}>
+                  {t('pairTicket.borosBits.suggestedTopUpHint')}
+                </HoverCard>
+              </span>
             }
             value={
-              availableBefore !== null && afterAvail !== null ? (
-                <span className={afterAvail < 0 || marginShort > 0 ? 'text-rose-300' : ''}>
-                  {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(afterAvail, collateral)}
-                  {usdNote(afterAvail)}
-                </span>
-              ) : (
-                blank
-              )
+              <span className="text-amber-300">
+                +{depositQty(suggestedTopUp, collateral)}
+                {usdNote(suggestedTopUp)}
+              </span>
             }
           />
-          {suggestedTopUp !== null && suggestedTopUp > 0 && (
-            <EstimateRow
-              label={
-                <span className="text-amber-300">
-                  <HoverCard label={t('pairTicket.borosBits.suggestedTopUp')} widthPx={260}>
-                    {t('pairTicket.borosBits.suggestedTopUpHint')}
-                  </HoverCard>
-                </span>
-              }
-              value={
-                <span className="text-amber-300">
-                  +{depositQty(suggestedTopUp, collateral)}
-                  {usdNote(suggestedTopUp)}
-                </span>
-              }
-            />
-          )}
+        )}
+        {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
           <EstimateRow
-            label={t('assetCard.review.canFund')}
-            sub={marginShort > 0 ? t('assetCard.roll.fundShortSub') : undefined}
-            value={
-              marginShort > 0 ? (
-                <span className="text-rose-300">{t('assetCard.roll.fundShort', { qty: fmtTokenQty(marginShort, collateral) })}</span>
-              ) : marginOk ? (
-                <span className="inline-flex items-center gap-1 text-emerald-300">
-                  <Check size={12} aria-hidden />
-                  {t('assetCard.roll.fundYes')}
-                </span>
-              ) : (
-                blank
-              )
-            }
+            label={t('assetCard.roll.openOrders', { date: fmtDateLocal(oldMaturity) })}
+            value={size < pairRollGeometry(pair).heldSize ? t('assetCard.roll.cancelledPart') : t('assetCard.roll.cancelled')}
           />
-          {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
-            <EstimateRow
-              label={t('assetCard.roll.openOrders', { date: fmtDateLocal(oldMaturity) })}
-              value={size < pairRollGeometry(pair).heldSize ? t('assetCard.roll.cancelledPart') : t('assetCard.roll.cancelled')}
-            />
-          )}
-        </div>
+        )}
         {reasons.length > 0 && (
           <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
             {reasons.map((r) => (
@@ -2868,7 +2892,7 @@ function RollReview({
             ))}
           </ul>
         )}
-      </SummaryCard>
+      </section>
 
       {(roll.data?.gate.warnings ?? []).map((w) => (
         <p
@@ -3081,24 +3105,22 @@ function OpenOnlyReview({
   return (
     <div className="flex flex-col gap-3">
       {sim.isError && <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />}
-      <SummaryCard
-        title={t('accounts.moveCash.cost')}
-        aside={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />}
-      >
-        <RollStep
-          title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
-          legs={openRows}
-          collateral={collateral}
-          sim={simulation}
-          slip={slip}
-          slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-          slipAria={t('assetCard.openOnly.slipAria')}
-          slipHint={t('assetCard.openOnly.slipHint')}
-        />
-        <div className="border-t border-ink-800 pt-1.5">
-          <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={totalUsd !== null ? fmtUsd(totalUsd) : blank} strong />
-        </div>
-      </SummaryCard>
+      <RollStep
+        title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
+        legs={openRows}
+        collateral={collateral}
+        sim={simulation}
+        slip={slip}
+        slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+        slipAria={t('assetCard.openOnly.slipAria')}
+        slipHint={t('assetCard.openOnly.slipHint')}
+        footer={
+          <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+            <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={totalUsd !== null ? fmtUsd(totalUsd) : blank} strong />
+            <EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />
+          </div>
+        }
+      />
 
       <SummaryCard title={t('accounts.moveCash.after')}>
         <div className="flex flex-col gap-1.5">
