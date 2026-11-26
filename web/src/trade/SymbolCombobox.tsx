@@ -53,15 +53,17 @@ export function FieldLabel({ children, htmlFor }: { children: ReactNode; htmlFor
 
 interface CoinComboboxProps {
   value: string | null;
+  coins?: string[];
   onSelect: (base: string) => void;
   /** Right-hand end of the "Coin" caption row — the pair ticket puts the
    * coin's live price there. */
   aside?: ReactNode;
 }
 
-export function CoinCombobox({ value, onSelect, aside }: CoinComboboxProps) {
+export function CoinCombobox({ value, coins: offered = QUICK_PICK_COINS, onSelect, aside }: CoinComboboxProps) {
   const { t } = useTranslation();
-  const coins = value && !QUICK_PICK_COINS.includes(value) ? [...QUICK_PICK_COINS, value] : QUICK_PICK_COINS;
+  const isValue = (coin: string): boolean => value !== null && coin.toUpperCase() === value.toUpperCase();
+  const coins = value && !offered.some(isValue) ? [...offered, value] : offered;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
@@ -70,7 +72,7 @@ export function CoinCombobox({ value, onSelect, aside }: CoinComboboxProps) {
       </div>
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('trade.symbol.quickPick')}>
         {coins.map((coin) => (
-          <PickChip key={coin} active={value === coin} onClick={() => coin !== value && onSelect(coin)}>
+          <PickChip key={coin} active={isValue(coin)} onClick={() => onSelect(coin)}>
             <TokenIcon symbol={coin} size={14} />
             {coin}
           </PickChip>

@@ -359,6 +359,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           ) : undefined
         }
         onSelect={(b) => {
+          if (b === base) return;
           setBase(b);
           setLongSym(null);
           setShortSym(null);

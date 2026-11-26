@@ -6,6 +6,8 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
+import { ListPicker } from '../components/ListPicker';
+import { SwapButton } from '../components/SwapButton';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
@@ -13,7 +15,7 @@ import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
 import { EstimateHeadline } from './EstimateHeadline';
 import { BookToggle, fmtTradeCost, PlanLine } from './TicketEstimateBits';
-import { ChevronDown, RotateCw } from 'lucide-react';
+import { RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
 
@@ -301,7 +303,7 @@ export function LeverageValue({ text }: { text: string | null }) {
 // ---------------------------------------------------------------------------
 
 /** LONG or SHORT venue as a dropdown — the other leg's venue is disabled. */
-function VenueSelect({
+export function VenueSelect({
   tone,
   value,
   otherValue,
@@ -329,26 +331,19 @@ function VenueSelect({
           {t(long ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
         </span>
       </div>
-      <div className="relative">
-        <select
-          aria-label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
-          className="select"
-          value={value ?? ''}
-          onChange={(e) => onPick(e.target.value)}
-        >
-          <option value="">{loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}</option>
-          {(venues ?? []).map((r) => (
-            <option key={r.symbol} value={r.symbol} disabled={r.exchange === otherVenue}>
-              {prettyVenue(r.exchange)}
-              {r.quote !== 'USDT' ? ` · ${r.quote}` : ''}
-              {r.exchange === otherVenue ? ` (${t(long ? 'pairTicket.bits.shortVenue' : 'pairTicket.bits.longVenue')})` : ''}
-            </option>
-          ))}
-        </select>
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
-          <ChevronDown size={14} aria-hidden />
-        </span>
-      </div>
+      <ListPicker
+        label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
+        value={value ?? ''}
+        onChange={onPick}
+        placeholder={loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}
+        rows={(venues ?? []).map((r) => ({
+          key: r.symbol,
+          icon: <VenueIcon venue={r.exchange} size={16} />,
+          name: `${prettyVenue(r.exchange)}${r.quote !== 'USDT' ? ` · ${r.quote}` : ''}`,
+          value: r.exchange === otherVenue ? t(long ? 'pairTicket.bits.shortVenue' : 'pairTicket.bits.longVenue') : undefined,
+          disabled: r.exchange === otherVenue,
+        }))}
+      />
     </div>
   );
 }
@@ -375,16 +370,7 @@ export function PairVenues({
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
       <VenueSelect tone="long" value={longSym} otherValue={shortSym} onPick={onLong} venues={venues} loading={loading} />
-      <button
-        type="button"
-        aria-label={t('pairTicket.bits.swapVenues')}
-        title={t('pairTicket.bits.swapVenuesHint')}
-        disabled={!longSym && !shortSym}
-        onClick={onSwap}
-        className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        ⇄
-      </button>
+      <SwapButton label={t('pairTicket.bits.swapVenues')} title={t('pairTicket.bits.swapVenuesHint')} disabled={!longSym && !shortSym} onClick={onSwap} />
       <VenueSelect tone="short" value={shortSym} otherValue={longSym} onPick={onShort} venues={venues} loading={loading} />
     </div>
   );
