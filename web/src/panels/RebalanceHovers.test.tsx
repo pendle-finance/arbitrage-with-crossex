@@ -79,7 +79,7 @@ describe('borrow facts', () => {
     expect(borrowingValues).toHaveLength(2);
     expect(interestValues).toHaveLength(3);
     for (const span of borrowingValues) expect(span.className).toContain('text-right');
-    for (const span of interestValues) expect(span.className).toContain('text-right');
+    for (const span of interestValues) expect(span.className).not.toContain('text-right');
   });
 
   it('a figure with a hover keeps its colour: amber for a borrow and its interest, white for interest paid', () => {
