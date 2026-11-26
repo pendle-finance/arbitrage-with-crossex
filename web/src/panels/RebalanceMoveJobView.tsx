@@ -5,7 +5,8 @@ import { t } from '../i18n';
 import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { ProgressBar } from './RebalanceBits';
 import { DUST, Facts, receivingHeld, roundCountOf, roundOf, ROUTE_LABEL, SpotLines } from './RebalanceHovers';
-import { abandonNote, Actions, CloseButton, haltLine, StopBox, stopTitle, type JobViewProps } from './RebalanceJobBits';
+import { ResultBox } from '../components/ResultBox';
+import { abandonNote, Actions, haltLine, StopBox, stopTitle, type JobViewProps } from './RebalanceJobBits';
 import { landedOf } from './rebalanceJobSteps';
 import { StepsFold, stepsHoverOf } from './RebalancePlanBits';
 import { jobRows, jobSeconds } from './rebalanceStepRows';
@@ -18,7 +19,7 @@ const GOAL_WORD: Record<GoalKind, 'accounts.moveCash.clearDebt' | 'accounts.move
 };
 
 export function MoveJobView(props: JobViewProps) {
-  const { job, view, now, transfer, onTransfer, onClose } = props;
+  const { job, view, now, transfer, onTransfer } = props;
   const [stepsOpen, setStepsOpen] = useState(false);
   const held = receivingHeld(view.buckets, job.steps);
   const rounds = roundCountOf(job);
@@ -35,13 +36,13 @@ export function MoveJobView(props: JobViewProps) {
     return (
       <>
         {header}
-        <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.finishedLead')}</p>
-        <Facts
-          items={[
-            { key: 'route', label: t('accounts.rebalanceModal.route'), value: ROUTE_LABEL[job.route] },
-            { key: 'moved', label: t('accounts.rebalanceModal.moved'), value: fmtUsd(landedOf(job)) },
-            { key: 'took', label: t('accounts.rebalanceModal.took'), value: fmtAge(took) },
-            ...(job.costUsd === null ? [] : [{ key: 'cost', label: t('accounts.moveCash.totalCost'), value: fmtUsd(job.costUsd) }]),
+        <ResultBox
+          tone="done"
+          title={t('accounts.sliceRun.movedTitle', { amount: fmtUsd(landedOf(job)) })}
+          rows={[
+            { label: t('accounts.rebalanceModal.route'), value: ROUTE_LABEL[job.route] },
+            { label: t('accounts.rebalanceModal.took'), value: fmtAge(took) },
+            ...(job.costUsd === null ? [] : [{ label: t('accounts.moveCash.totalCost'), value: fmtUsd(job.costUsd) }]),
           ]}
         />
         {left !== null && (
@@ -57,7 +58,6 @@ export function MoveJobView(props: JobViewProps) {
           </div>
         )}
         {fold}
-        <CloseButton onClose={onClose} />
       </>
     );
   }

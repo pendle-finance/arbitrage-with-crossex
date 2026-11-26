@@ -484,12 +484,11 @@ describe('RebalanceModal run states', () => {
     expect(screen.getByText('Running')).toBeInTheDocument();
     await next();
     expect(screen.getAllByText('Done')[0]).toBeInTheDocument();
-    expect(facts()).toEqual({ Route: 'Spot loop', Moved: '$175.63', Took: '4m 18s', 'Total cost': '$0.26' });
+    expect(screen.getByText('Moved $175.63')).toBeInTheDocument();
+    expect(facts()).toEqual({ Route: 'Spot loop', Took: '4m 18s', 'Total cost': '$0.26' });
     expect(screen.queryByRole('group', { name: 'Now' })).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
-    // Close is the one way out once the run has finished under the dialog.
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Close' }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
   });
 });
 
@@ -628,7 +627,7 @@ describe('RebalanceModal moved amount', () => {
     // (the house green) — the chip no longer spells it `emerald`.
     expect(screen.getAllByText(chip).length).toBeGreaterThan(0);
     expect(screen.queryByText('Balanced')).toBeNull();
-    expect(facts().Moved).toBe(moved);
+    expect(screen.getByText(`Moved ${moved}`)).toBeInTheDocument();
   });
 });
 
@@ -939,7 +938,8 @@ describe('RebalanceModal where the money is', () => {
     expect(screen.getByRole('alert').textContent).toBe('Stopped at Convert.Convert quote was more than 0.3% under the Gate spot price.');
     await next();
     expect(screen.getAllByText('Done')[0]).toBeInTheDocument();
-    expect(facts()).toEqual({ Route: 'Convert', Moved: '$498.00', Took: '2s', 'Total cost': '$2.00' });
+    expect(screen.getByText('Moved $498.00')).toBeInTheDocument();
+    expect(facts()).toEqual({ Route: 'Convert', Took: '2s', 'Total cost': '$2.00' });
     const rows = within(dialog()).getAllByRole('listitem');
     expect(rows).toHaveLength(1);
     expect(rows[0].textContent).toContain(
@@ -1988,13 +1988,12 @@ describe('RebalanceModal Realize uPnL tab', () => {
 });
 
 describe('RebalanceModal TWAP run', () => {
-  const closeText = () => within(dialog()).getByText('Close', { selector: 'button' });
+  const closeText = () => within(dialog()).queryByText('Close', { selector: 'button' });
 
-  it('shows a stopped TWAP on the first open after a reload, with Close, then the form', () => {
-    const { onClose } = show(twapFixtures.normal.stopped.rebalance);
+  it('shows a stopped TWAP on the first open after a reload, with no Close, then the form', () => {
+    show(twapFixtures.normal.stopped.rebalance);
     expect(screen.getByText(/^Stopped at slice \d+ of \d+$/)).toBeTruthy();
-    fireEvent.click(closeText());
-    expect(onClose).toHaveBeenCalled();
+    expect(closeText()).toBeNull();
     cleanup();
     show(twapFixtures.normal.stopped.rebalance);
     expect(screen.queryByText(/^Stopped at slice/)).toBeNull();
@@ -2003,7 +2002,7 @@ describe('RebalanceModal TWAP run', () => {
   it('shows a done TWAP on the first open after a reload', () => {
     show(twapFixtures.normal.done.rebalance);
     expect(screen.getByText('Took')).toBeTruthy();
-    expect(closeText()).toBeTruthy();
+    expect(closeText()).toBeNull();
   });
 
   it('a TWAP run has no tab row and one state chip', () => {

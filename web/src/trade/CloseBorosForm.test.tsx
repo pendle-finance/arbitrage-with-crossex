@@ -208,7 +208,7 @@ describe('CloseBorosForm — whose legs these are', () => {
 });
 
 describe('CloseBorosForm — saying that it landed', () => {
-  const panel = () => screen.queryByText(/Position closed\./);
+  const panel = () => screen.queryByText(/^Position closed$/);
   const armed = () => screen.queryByRole('button', { name: /Close position/ });
 
   it('reports DONE when the request filled, even though the venue is not flat', async () => {
@@ -221,10 +221,9 @@ describe('CloseBorosForm — saying that it landed', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     await confirmClose();
 
-    expect(await screen.findByText(/Position closed\./)).toBeInTheDocument();
-    // The confirm is GONE, replaced by Done — the whole point.
+    expect(await screen.findByText(/^Position closed$/)).toBeInTheDocument();
     expect(armed()).toBeNull();
-    expect(screen.getByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
     expect(screen.queryByText(/close again to finish it/i)).toBeNull();
   });
 
@@ -253,7 +252,7 @@ describe('CloseBorosForm — saying that it landed', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     await confirmClose();
 
-    expect(await screen.findByText(/Position closed\./)).toBeInTheDocument();
+    expect(await screen.findByText(/^Position closed$/)).toBeInTheDocument();
     expect(screen.getByText(/another pair's share of the same position, not yours/)).toBeInTheDocument();
     expect(armed()).toBeNull();
   });

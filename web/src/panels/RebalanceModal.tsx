@@ -11,7 +11,6 @@ import { useNow } from '../lib/useNow';
 import { DeleverTab } from './DeleverTab';
 import { MoveCashTab } from './MoveCashTab';
 import { RealizeTab } from './RealizeTab';
-import { CloseButton } from './RebalanceJobBits';
 import { isTwapRun, JobChip, RebalanceJobView } from './RebalanceJobView';
 import { useRebalanceOpenState, useTransferPick, type RebalanceTab } from './rebalanceOpener';
 
@@ -86,7 +85,6 @@ export function RebalanceModal({
         onAbandon={() => abandon.mutate(job.id, { onError })}
       />
     );
-    if (twapRun && ended) body = <>{body}<CloseButton onClose={onClose} /></>;
   } else if (tab === 'move') {
     body = <MoveCashTab view={view} holdMs={holdMs} lock={lock} onTab={setTab} onStarted={onStarted} onTransfer={onTransfer} />;
   } else if (tab === 'realize') {

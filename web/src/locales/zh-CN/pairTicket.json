@@ -67,7 +67,7 @@
     "cancelledNoPosition": "挂单已撤销，但没有可平的仓位。",
     "nothingClosed": "没有平掉任何仓位。",
     "noLegs": "此组合没有 Boros 仓位。",
-    "closedDone_other": "已平仓 {{count}} 个仓位。卡片稍后更新。",
+    "closedDoneTitle_other": "已平仓 {{count}} 个仓位",
     "residualYours": "此仓位仍有 {{amount}} 未平。您只平了一部分。",
     "residualOthers": "交易所上另有 {{amount}} 未平。那是同一仓位中其他组合的份额，不属于此组合。",
     "daysShort": "{{n}} 天",

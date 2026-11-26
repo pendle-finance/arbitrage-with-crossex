@@ -28,6 +28,7 @@ import { ApiError, postJson } from '../api/client';
 import { useAccount, usePositions, useRebalance, useStartRebalance } from '../api/queries';
 import type { ActionInput, DealResponse, PreviewResult, RebalanceJob, TwapPlanView } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { ResultBox } from '../components/ResultBox';
 import { Spinner } from '../components/Spinner';
 import { SymbolCell } from '../components/VenueChip';
 import { fmtUsd, groupedExact, parseSymbol, qtyGrouped, sigGrouped } from '../lib/fmt';
@@ -424,21 +425,16 @@ export function ExecuteControl({
       {lockUnknown && <p role="status" className="mt-1 text-[11px] text-amber-200">{t('trade.twap.lock.unknown')}</p>}
       {viewOnly && <p className="mt-1 text-[11px] text-ink-400">{t('trade.execute.viewOnly')}</p>}
       {placedResting && (
-        <div
-          role="status"
-          className="mt-1 flex items-start justify-between gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/5 px-2 py-1.5 text-[11px] text-emerald-300"
-        >
-          <span>
-            <Trans
-              i18nKey="trade.execute.placed"
-              values={{ summary: placedResting }}
-              components={{ b: <span className="font-medium" />, n: <span className="num" /> }}
-            />
-          </span>
+        <div className="relative mt-1">
+          <ResultBox
+            tone="done"
+            title={t('trade.execute.placedTitle')}
+            lines={[placedResting, t('trade.execute.placedLine')]}
+          />
           <button
             type="button"
             aria-label={t('common.dismiss')}
-            className="px-1 leading-none text-emerald-400/70 transition-colors hover:text-emerald-200"
+            className="absolute right-2 top-2 px-1 leading-none text-grass/70 transition-colors hover:text-grass"
             onClick={() => setPlacedResting(null)}
           >
             <X size={12} aria-hidden />

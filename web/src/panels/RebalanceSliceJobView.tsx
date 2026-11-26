@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { usePositions, useRebalanceCommand, useRebalanceFix } from '../api/queries';
 import type { ImUsedRow, RebalanceFixAction, RebalanceJob } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { ResultBox } from '../components/ResultBox';
 import { Spinner } from '../components/Spinner';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
@@ -10,7 +11,7 @@ import { fmtAbout, fmtUsd, num, prettyVenue, WALLET_SHORT } from '../lib/fmt';
 import { RunView } from '../trade/RunView';
 import { markPriceOf, ProgressBar } from './RebalanceBits';
 import { poolKey, sideText, sizeText } from './rebalanceCopy';
-import { Actions, CloseButton, haltLine, StopBox, type JobViewProps } from './RebalanceJobBits';
+import { Actions, haltLine, StopBox, type JobViewProps } from './RebalanceJobBits';
 import type { RebalanceTab } from './rebalanceOpener';
 import { NotHedgedLine } from './RebalancePlanBits';
 import { MAX_SLIPPAGE_RATIO } from './SliceTable';
@@ -40,7 +41,7 @@ function imOf(rows: ImUsedRow[] | null | undefined, account: string | undefined)
 const accountText = (account: ImUsedRow['account'] | undefined): string => (account ? (WALLET_SHORT[poolKey(account)] ?? account) : '');
 
 export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab) => void }) {
-  const { job, view, holdMs, busy, onAbandon, onClose, onTab } = props;
+  const { job, view, holdMs, busy, onAbandon, onTab } = props;
   const pause = useRebalanceCommand('pause');
   const fix = useRebalanceFix();
   const positions = usePositions().data?.positions ?? [];
@@ -132,17 +133,13 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     );
   };
 
-  const nextOrClose = (borrowLeft: boolean) =>
+  const nextMove = (borrowLeft: boolean) =>
     borrowLeft ? (
-      <div className="border-t border-ink-800 pt-3">
-        <button type="button" className="btn-primary gap-1.5" onClick={() => onTab?.('move')}>
-          {sk('next')}
-          <ArrowRight size={14} aria-hidden />
-        </button>
-      </div>
-    ) : (
-      <CloseButton onClose={onClose} />
-    );
+      <button type="button" className="btn-primary w-full gap-1.5" onClick={() => onTab?.('move')}>
+        {sk('next')}
+        <ArrowRight size={14} aria-hidden />
+      </button>
+    ) : null;
 
   if (job.status === 'done') {
     const borrowLeft = view.buckets.some((bucket) => bucket.borrow > 0);
@@ -151,28 +148,27 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       const start = imOf(job.imUsedStart, account);
       const end = imOf(job.imUsedEnd, account);
       return show({
-        title: sk('deleverDoneHeader', { pct: pctText(delever.pct) }),
-        lines: [
-          <Line key="perps">
-            {dk('afterPerps', {
-              longVenue: prettyVenue(longLeg?.exchange ?? ''), shortVenue: prettyVenue(shortLeg?.exchange ?? ''), a: sizeText(perpBefore), b: sizeText(perpNow), coin,
-            })}
-          </Line>,
-          borosBefore > 0 && <Line key="boros">{dk('afterBoros', { a: sizeText(borosBefore), b: sizeText(borosNow) })}</Line>,
-        ].filter(Boolean),
-        rows: [
-          ...(start !== null && end !== null
-            ? [{ label: sk('imLabel', { account: accountText(account) }), value: sk('imDone', { a: pctText(start), b: pctText(end) }) }]
-            : []),
-          ...totalCostRows,
-        ],
-        acts: nextOrClose(borrowLeft),
+        firstLine: (
+          <ResultBox
+            tone="done"
+            title={sk('deleverDoneHeader', { pct: pctText(delever.pct) })}
+            rows={[
+              { label: sk('perpsRow'), value: sk('perpsLine', { old: sizeText(perpBefore), now: sizeText(perpNow), coin }) },
+              ...(borosBefore > 0 ? [{ label: sk('borosLabel'), value: sk('borosChange', { a: sizeText(borosBefore), b: sizeText(borosNow) }) }] : []),
+              ...(start !== null && end !== null
+                ? [{ label: sk('imLabel', { account: accountText(account) }), value: sk('imDone', { a: pctText(start), b: pctText(end) }) }]
+                : []),
+              ...totalCostRows,
+            ]}
+          />
+        ),
+        acts: nextMove(borrowLeft),
       });
     }
     return show({
-      lines: [<Line key="realized" tone="font-semibold text-ink-100">{sk('realized', { amount: num(realized, 0) })}</Line>],
-      rows: totalCostRows,
-      acts: nextOrClose(true),
+      title: null,
+      firstLine: <ResultBox tone="done" title={sk('realized', { amount: num(realized, 0) })} rows={totalCostRows} />,
+      acts: nextMove(true),
     });
   }
 
@@ -351,9 +347,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
             {fixError}
           </>
         )}
-        {abandoned ? (
-          <CloseButton onClose={onClose} />
-        ) : (
+        {!abandoned && (
           <Actions
             {...props}
             note={open > 0 ? abandonNote : ''}
