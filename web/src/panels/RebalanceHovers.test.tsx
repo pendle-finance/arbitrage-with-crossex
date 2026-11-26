@@ -77,7 +77,7 @@ describe('borrow facts', () => {
     const borrowingValues = [...((await hoverRows('Borrowing')).grid?.querySelectorAll('span:nth-child(2n)') ?? [])];
     const interestValues = [...((await hoverRows('Interest now')).grid?.querySelectorAll('span:nth-child(2n)') ?? [])];
     expect(borrowingValues).toHaveLength(2);
-    expect(interestValues).toHaveLength(2);
+    expect(interestValues).toHaveLength(3);
     for (const span of borrowingValues) expect(span.className).toContain('text-right');
     for (const span of interestValues) expect(span.className).toContain('text-right');
   });
@@ -97,6 +97,7 @@ describe('borrow facts', () => {
     expect(lines('Interest now')).toEqual(['$0.0017 an hour']);
     expect(await rows('Interest now')).toEqual([
       { name: 'Lighter', value: '$0.0017 an hour' },
+      { name: '', value: '$0.04 a day' },
       { name: 'Hyperliquid', value: '$0.00 an hour' },
     ]);
   });
@@ -139,7 +140,10 @@ describe('borrow facts', () => {
   it('lighter charges from the first dollar', async () => {
     show(rebalanceViews.oneBorrow.buckets);
 
-    expect(await rows('Interest now')).toEqual([{ name: 'Lighter', value: '$0.0017 an hour' }]);
+    expect(await rows('Interest now')).toEqual([
+      { name: 'Lighter', value: '$0.0017 an hour' },
+      { name: '', value: '$0.04 a day' },
+    ]);
   });
 
   it('borrow comes from liability', async () => {
@@ -174,7 +178,10 @@ describe('borrow facts', () => {
 
     expect(lines('Borrowing')[0]).toBe('12,000.00 USDC');
     expect(lines('Interest now')[0]).toBe('$0.0113 an hour');
-    expect(await rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.0113 an hour' }]);
+    expect(await rows('Interest now')).toEqual([
+      { name: 'Hyperliquid', value: '$0.0113 an hour' },
+      { name: '', value: '$0.27 a day' },
+    ]);
   });
 
   it('a 2,000 USDT borrow shows $0.0129 an hour', async () => {
@@ -182,7 +189,10 @@ describe('borrow facts', () => {
 
     expect(lines('Borrowing')[0]).toBe('2,000.00 USDT');
     expect(lines('Interest now')[0]).toBe('$0.0129 an hour');
-    expect(await rows('Interest now')).toEqual([{ name: 'CrossEx', value: '$0.0129 an hour' }]);
+    expect(await rows('Interest now')).toEqual([
+      { name: 'CrossEx', value: '$0.0129 an hour' },
+      { name: '', value: '$0.31 a day' },
+    ]);
   });
 
   it('interest an hour of $1 or more shows 2 decimals', () => {

@@ -23,6 +23,7 @@ import {
   poolKey,
   RATE_PER_YEAR,
   INTEREST_PER_HOUR,
+  INTEREST_PER_DAY,
   legFeeUsd,
   rateUnknown,
   verdictNoBorrow,
@@ -64,6 +65,7 @@ const WALLET_HOVER: Readonly<Record<string, string>> = {
 export interface FactRow {
   name: string;
   value: string;
+  sub?: string;
 }
 
 export interface Fact {
@@ -220,6 +222,13 @@ function perHourText(usd: number): string {
 const walletPerHour = (b: RebalanceBucket) =>
   isRateUnknown(b) ? rateUnknown() : INTEREST_PER_HOUR(perHourText(b.interestPerDayUsd / 24));
 
+const interestRows = (wallets: RebalanceBucket[]): FactRow[] =>
+  wallets.map((b) => ({
+    name: WALLET_SHORT[keyOf(b)],
+    value: walletPerHour(b),
+    sub: isRateUnknown(b) || b.interestPerDayUsd <= 0 ? undefined : INTEREST_PER_DAY(b.interestPerDayUsd >= 0.01 ? fmtUsd(b.interestPerDayUsd) : perHourText(b.interestPerDayUsd)),
+  }));
+
 const walletRows = (wallets: RebalanceBucket[], valueOf: (b: RebalanceBucket) => string): FactRow[] =>
   wallets.map((b) => ({ name: WALLET_SHORT[keyOf(b)], value: valueOf(b) }));
 
@@ -299,6 +308,12 @@ function RowsHover({ factKey, value, rows, warn }: { factKey: string; value: str
           <Fragment key={row.name}>
             <span>{row.name}</span>
             <span className="num whitespace-nowrap text-right">{row.value}</span>
+            {row.sub && (
+              <>
+                <span />
+                <span className="num -mt-1 whitespace-nowrap text-right text-ink-400">{row.sub}</span>
+              </>
+            )}
           </Fragment>
         ))}
       </div>
@@ -323,7 +338,7 @@ export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
       key: 'interest',
       label: <InterestInfo buckets={buckets} />,
       value: INTEREST_PER_HOUR(perHourText(perHour)),
-      rows: walletRows(borrowing, walletPerHour),
+      rows: interestRows(borrowing),
       warn: perHour > 0,
     }),
     rowsOnHover({

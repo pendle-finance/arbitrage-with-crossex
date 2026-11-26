@@ -58,8 +58,7 @@ function jobButton(job: RebalanceJob): string {
 type CardVerdict = { tone: VerdictTone | 'recommend'; text: ReactNode; sub: string | null; primary: boolean };
 
 function planLine(plan: FullPlan): string {
-  const values = { cost: fmtUsd(plan.costUsd), interest: fmtUsd(plan.interestPerMonthUsd) };
-  return plan.needsRealize ? t('accounts.borrowCard.lineRealizeThenMove', values) : t('accounts.borrowCard.lineMove', values);
+  return plan.needsRealize ? t('accounts.borrowCard.lineRealizeThenMove') : t('accounts.borrowCard.lineMove');
 }
 
 function borrowVerdict(view: RebalanceView, onDelever: () => void): CardVerdict | null {
@@ -82,12 +81,13 @@ function borrowVerdict(view: RebalanceView, onDelever: () => void): CardVerdict 
   }
   if (!plan?.clearsBorrow || plan.days === null) return null;
   const days = num(plan.days, 0);
+  const cost = fmtUsd(plan.costUsd);
   if (plan.days <= WORTH_IT_DAYS) {
-    return { tone: 'recommend', text: t('accounts.borrowCard.recommended', { days }), sub: planLine(plan), primary: true };
+    return { tone: 'recommend', text: t('accounts.borrowCard.recommended', { cost, days }), sub: planLine(plan), primary: true };
   }
   return {
     tone: 'warn',
-    text: t('accounts.borrowCard.notRecommended', { days, limit: num(WORTH_IT_DAYS, 0) }),
+    text: t('accounts.borrowCard.notRecommended', { cost, days, limit: num(WORTH_IT_DAYS, 0) }),
     sub: t('accounts.borrowCard.needs', { line: planLine(plan) }),
     primary: false,
   };

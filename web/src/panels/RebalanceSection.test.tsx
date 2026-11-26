@@ -147,8 +147,10 @@ function TabSwitch() {
 
 const fullPlanOf = (view: RebalanceView): FullPlan => view.fullPlan as FullPlan;
 
-const planText = (plan: FullPlan): string =>
-  `${plan.needsRealize ? 'Realize uPnL, then Move cash' : 'Move cash'} · Total cost ${fmtUsd(plan.costUsd)} · Interest a month ${fmtUsd(plan.interestPerMonthUsd)} → 0`;
+const planText = (plan: FullPlan): string => (plan.needsRealize ? 'Realize uPnL, then Move cash' : 'Move cash');
+
+const recommendedText = (plan: FullPlan): string =>
+  `Reduce borrow recommended · Total cost ${fmtUsd(plan.costUsd)} = ${plan.days} days of interest`;
 
 const refusedWith = (refused: RealizeRefusal): RebalanceView => {
   const view = rebalanceViews.realizeRefused;
@@ -278,7 +280,7 @@ describe('RebalanceSection verdict', () => {
   it('recommended tone and line', async () => {
     const view = rebalanceViews.recommendedRealize;
     await show(view);
-    const verdict = line(`Reduce borrow recommended · cost = ${fullPlanOf(view).days} days of interest`);
+    const verdict = line(recommendedText(fullPlanOf(view)));
     expect(verdict).toHaveClass('text-pastel-blue');
     expect(verdict?.closest('.alert-blue')).not.toBeNull();
     expect(region().querySelector('.lucide-check')).not.toBeNull();
@@ -299,34 +301,33 @@ describe('RebalanceSection verdict', () => {
     expect(fullPlanOf(view).needsRealize).toBe(true);
     await show(view);
     expect(sub()).toBe(planText(fullPlanOf(view)));
-    expect(sub()).toMatch(/^Realize uPnL, then Move cash · Total cost \$[\d,.]+ · Interest a month \$[\d,.]+ → 0$/);
+    expect(sub()).not.toMatch(/Interest a month/);
   });
 
   it('line two cash only', async () => {
     const view = rebalanceViews.recommendedCashOnly;
     expect(fullPlanOf(view).needsRealize).toBe(false);
     await show(view);
-    expect(line(`Reduce borrow recommended · cost = ${fullPlanOf(view).days} days of interest`)).not.toBeNull();
+    expect(line(recommendedText(fullPlanOf(view)))).not.toBeNull();
     expect(sub()).toBe(planText(fullPlanOf(view)));
-    expect(sub()).toMatch(/^Move cash · Total cost \$[\d,.]+ · Interest a month \$[\d,.]+ → 0$/);
   });
 
   it('above the 30 day limit', async () => {
     const plan = fullPlanOf(rebalanceViews.ownerAccount);
     expect(plan.days).toBe(36);
     await show(rebalanceViews.ownerAccount);
-    expect(line('Not recommended: cost = 36 days of interest (limit 30)')).toHaveClass('text-gold');
-    expect(sub()).toBe(`Needs Realize uPnL, then Move cash · Total cost $41.82 · Interest a month ${fmtUsd(plan.interestPerMonthUsd)} → 0`);
+    expect(line('Not recommended: Total cost $41.82 = 36 days of interest (limit 30)')).toHaveClass('text-gold');
+    expect(sub()).toBe('Needs Realize uPnL, then Move cash');
     expect(cardButtons()[0].className).not.toContain('btn-primary');
     expect(region().querySelector('.alert-blue')).toBeNull();
     cleanup();
     const cashOnly = rebalanceViews.recommendedCashOnly;
     await show({ ...cashOnly, fullPlan: { ...fullPlanOf(cashOnly), days: 31 } });
-    expect(line('Not recommended: cost = 31 days of interest (limit 30)')).not.toBeNull();
+    expect(line(`Not recommended: Total cost ${fmtUsd(fullPlanOf(cashOnly).costUsd)} = 31 days of interest (limit 30)`)).not.toBeNull();
     expect(sub()).toBe(`Needs ${planText(fullPlanOf(cashOnly))}`);
     cleanup();
     await show({ ...cashOnly, fullPlan: { ...fullPlanOf(cashOnly), days: 30 } });
-    expect(line('Reduce borrow recommended · cost = 30 days of interest')).not.toBeNull();
+    expect(line(recommendedText({ ...fullPlanOf(cashOnly), days: 30 }))).not.toBeNull();
   });
 
   it('part clear never colors', async () => {
@@ -393,8 +394,8 @@ describe('RebalanceSection verdict', () => {
     const view = whaleRebalanceViews.ownerAccount;
     await show(view);
     const plan = fullPlanOf(view);
-    expect(sub()).toContain(`Total cost ${fmtUsd(plan.costUsd)} · Interest a month ${fmtUsd(plan.interestPerMonthUsd)}`);
-    expect(sub()).not.toMatch(/\d[KM]\b/);
+    expect(line(`Not recommended: Total cost ${fmtUsd(plan.costUsd)} = ${plan.days} days of interest (limit 30)`)).not.toBeNull();
+    expect(fmtUsd(plan.costUsd)).not.toMatch(/\d[KM]\b/);
   });
 
   it('a failed rate read shows in the Interest now hover AND says so on the card', async () => {
@@ -457,6 +458,7 @@ describe('RebalanceSection facts rows', () => {
     await show(rebalanceViews.twoBorrows);
     expect(await factRows(user, 'interest', '$0.0017 an hour')).toEqual([
       ['Lighter', '$0.0017 an hour'],
+      ['', '$0.04 a day'],
       ['Hyperliquid', '$0.00 an hour'],
     ]);
     const card = await hoverCard(user, 'Interest now', region());
