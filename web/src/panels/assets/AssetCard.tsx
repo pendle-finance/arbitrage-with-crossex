@@ -2373,8 +2373,10 @@ export function RollOverModal({
                         widthPx={320}
                         label={<span className="underline decoration-dotted underline-offset-4">{t('assetCard.roll.modeOpenOnly')}</span>}
                       >
-                        <span>{t('assetCard.roll.modeOpenOnlyHedge')}</span>
-                        <span>{t('assetCard.roll.modeOpenOnlyOld', { date: fmtDateLocal(soonest) })}</span>
+                        <span className="flex flex-col gap-1 text-xs leading-snug">
+                          <span>{t('assetCard.roll.modeOpenOnlyHedge')}</span>
+                          <span>{t('assetCard.roll.modeOpenOnlyOld', { date: fmtDateLocal(soonest) })}</span>
+                        </span>
                       </HoverCard>
                     ),
                   },
