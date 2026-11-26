@@ -140,7 +140,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   }, [customLeadNow]);
   const twapPricing = twapQuery !== null && (customQuery.isPlaceholderData || customQuery.isPending);
   const realizeTwap = twapQuery !== null && !twapPricing ? (customQuery.data?.realizeTwap ?? null) : null;
-  const liveTab = sliceQueried ? (customQuery.data?.realize ?? null) : null;
+  const liveTab = twapQuery !== null ? (twapPricing ? null : (customQuery.data?.realize ?? null)) : sliceQueried ? (customQuery.data?.realize ?? null) : null;
   const shownClear = liveTab ? (hasPlan(liveTab.clearDebt) ? liveTab.clearDebt : null) : clearDebt;
   const shownAll = liveTab ? (hasPlan(liveTab.all) ? liveTab.all : null) : all;
   const pricedPlan = shownClear && shownClear.legs.length > 0 ? shownClear : shownAll;
