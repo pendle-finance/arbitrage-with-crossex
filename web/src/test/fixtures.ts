@@ -2455,7 +2455,7 @@ function acctTab(b: BorrowBook, refused: RealizeRefusal | null, custom: number |
   const all = b.upnl > 0 ? acctRealize(b.upnl, refused, clearDebt ? null : (custom ?? 25_000)) : null;
   const lead = clearDebt ?? all;
   return {
-    pool: 'HYPERLIQUID', clearDebt, all, custom: null,
+    pool: 'HYPERLIQUID', pools: ['HYPERLIQUID'], clearDebt, all, custom: null,
     sliceOptions: lead === null ? [] : sliceRowsOf(lead.legs[0]!.qty * b.mid, b.mid, custom),
     defaultSliceUsd: custom ?? 25_000,
   };
