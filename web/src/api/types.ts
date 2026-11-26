@@ -368,6 +368,7 @@ export interface DeleverPlan {
   refused: { reason: 'below-min'; venue: string; minQty: number; coin: string } | { reason: 'same-side'; coin: string } | null;
   twap?: (TwapPlanPreview & { price: number }) | null;
   priceImpact?: PriceImpactPreview | null;
+  twapDefault?: TwapDefault | null;
   borosCloses?: number;
   borosGasUsd?: number | null;
 }
@@ -481,7 +482,6 @@ export interface TwapDefault {
 export interface PriceImpactPreview {
   whole: number | null;
   sliced: number;
-  twapDefault: TwapDefault;
 }
 
 export interface TwapPlanPreview {
@@ -1274,6 +1274,7 @@ export interface PreviewResponse {
   previews: PreviewResult[];
   makerLeg?: MakerLegPreview | null;
   priceImpact?: PriceImpactPreview | null;
+  twapDefault?: TwapDefault | null;
   twap?: TwapPlanPreview | null;
 }
 

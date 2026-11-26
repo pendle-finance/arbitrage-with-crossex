@@ -148,7 +148,7 @@ export function SingleTicket() {
   const ref = p?.refPrice?.value ?? book.data?.mid;
   const twapPreview = twapOn ? (preview.data?.twap ?? null) : null;
   const impact = preview.data?.priceImpact ?? null;
-  useTwapDefault(twap, type !== 'LIMIT' ? undefined : preview.data && (impact?.twapDefault ?? null), 'maker');
+  useTwapDefault(twap, type !== 'LIMIT' ? undefined : preview.data && preview.data.twapDefault, 'maker');
   const twapBlocked = twapOn && twap.blockedBy(twapPreview);
   const plan = twapPreview?.plan ?? null;
 

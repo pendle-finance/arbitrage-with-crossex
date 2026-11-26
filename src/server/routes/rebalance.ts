@@ -47,7 +47,7 @@ import {
   type RouteName,
 } from '../../core/rebalance/plan';
 import { touchOf } from '../../core/estimate/books';
-import { depthOf, makerLegOf, priceImpactOf, TWAP_DEFAULT_INPUT, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
+import { depthOf, legsTwapDefaultOf, makerLegOf, priceImpactOf, TWAP_DEFAULT_INPUT, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
 import { planSlices, splitFixOf, type SplitLeg, splitPlans, splitSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult, type TwapRefusal } from '../../core/twap';
 import type { Store } from '../../engine/db';
 import { fx, FX_ZERO, type Fx } from '../../engine/fx';
@@ -518,7 +518,8 @@ export function rebalanceRoutes(deps: AppDeps) {
       const depths = legBooks.map(depthOf).filter((depth): depth is number => depth !== null);
       const bookQty = depths.length ? qtyText(Math.min(...depths)) : null;
       const result = planOr400(totalQty, input, twapRules, refPrice, bookQty);
-      return { result, price: refPrice, rules: twapRules, bookQty, priceImpact: result.plan ? priceImpactOf(legBooks, Number(totalQty), result.plan) : null };
+      const priceImpact = result.plan ? priceImpactOf(legBooks, Number(totalQty), result.plan) : null;
+      return { result, price: refPrice, rules: twapRules, bookQty, priceImpact, twapDefault: legsTwapDefaultOf(legBooks, Number(totalQty)) };
     };
 
     const makerSymbolOf = (req: DealRequest): OrderLeg => (req.makerLeg === 'b' && req.b ? req.b : req.a);
@@ -829,15 +830,16 @@ export function rebalanceRoutes(deps: AppDeps) {
 
     const deleverTwapOf = async (plan: DeleverPlan, perps: RealizePerp[], input: TwapInput | null, fresh: boolean) => {
       const lead = plan.legs[plan.makerLeg];
-      if (input === null || plan.refused || !lead || lead.closeQty <= 0) return { twap: null, priceImpact: null };
+      if (plan.refused || !lead || lead.closeQty <= 0) return { twap: null, priceImpact: null, twapDefault: null };
       const ordered = [lead, ...plan.legs.filter((leg) => leg !== lead)];
       const legs = ordered.map((leg): OrderLeg => ({ symbol: leg.symbol, side: leg.side === 'LONG' ? 'SELL' : 'BUY' }));
       const markUsd = livePerpsOf(perps).find((perp) => perp.symbol === lead.symbol)?.markPrice ?? null;
-      const planned = await twapPlanFor(legs, qtyText(lead.closeQty), input, fresh, markUsd);
+      const planned = await twapPlanFor(legs, qtyText(lead.closeQty), input ?? TWAP_DEFAULT_INPUT, fresh, markUsd);
       const { result } = planned;
       return {
-        twap: { plan: result.plan, refusal: result.ok ? null : result.refusal, price: planned.price },
+        twap: input === null ? null : { plan: result.plan, refusal: result.ok ? null : result.refusal, price: planned.price },
         priceImpact: planned.priceImpact,
+        twapDefault: planned.twapDefault,
       };
     };
 
@@ -877,7 +879,8 @@ export function rebalanceRoutes(deps: AppDeps) {
       const counts = splitSlices(shape.slices, usd);
       const split: SplitLeg[] = [];
       for (const [index, leg] of legs.entries()) {
-        const planned = await twapPlanFor([orderLeg(leg)], qtyText(leg.qty), { intervalSec: shape.intervalSec, slices: Math.max(2, counts[index]) }, fresh, markOf(leg.symbol));
+        const reopen: OrderLeg = { symbol: leg.symbol, side: orderLeg(leg).side === 'BUY' ? 'SELL' : 'BUY' };
+        const planned = await twapPlanFor([orderLeg(leg), reopen], qtyText(leg.qty), { intervalSec: shape.intervalSec, slices: Math.max(2, counts[index]) }, fresh, markOf(leg.symbol));
         split.push({ qty: qtyText(leg.qty), rules: planned.rules, mark: planned.price, bookQty: planned.bookQty });
       }
       const planned = splitPlans(shape.intervalSec, counts, split);
@@ -897,11 +900,10 @@ export function rebalanceRoutes(deps: AppDeps) {
       const twapInput = twapInputOf((req.body as { twap?: unknown } | undefined)?.twap);
       const { input, plan: whole, perps } = await loadDelever(request, false);
       const twapped = await deleverTwapOf(whole, perps, twapInput, false);
-      const offImpact = twapInput === null ? (await deleverTwapOf(whole, perps, TWAP_DEFAULT_INPUT, false)).priceImpact : null;
       const plan = twapped.twap?.plan ? planDelever(input, twapQtysOf(twapped.twap.plan)) : whole;
       const borosCloses = twapped.twap?.plan ? twapped.twap.plan.slices * plan.boros.filter((row) => row.closeSize > 0).length : 0;
       const perCloseUsd = borosCloses > 0 ? await borosOrderGasUsd() : 0;
-      return reply.ok({ ...plan, ...twapped, priceImpact: twapped.priceImpact ?? offImpact, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
+      return reply.ok({ ...plan, ...twapped, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
     });
 
     interface StartBody {
@@ -1105,7 +1107,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (loaded.plan.legs.every((leg) => leg.closeQty <= 0)) return conflict(reply, NOTHING_TO_CLOSE);
       const askedTwap = (body.delever as { twap?: { takerAfterSec?: number | null; repegBehindBp?: 2 | 5 | 10 | null } | null } | undefined)?.twap;
       const twapInput = twapInputOf(askedTwap);
-      const { twap } = await deleverTwapOf(loaded.plan, loaded.perps, twapInput, true);
+      const twap = twapInput ? (await deleverTwapOf(loaded.plan, loaded.perps, twapInput, true)).twap : null;
       if (twap?.refusal) return refuse400(reply, twap.refusal.text);
       const plan = twap?.plan ? planDelever(loaded.input, twapQtysOf(twap.plan)) : loaded.plan;
       const takerAfterSec = twap?.plan ? takerAfterOf({ timeoutSec: askedTwap?.takerAfterSec }, twap.plan) : null;

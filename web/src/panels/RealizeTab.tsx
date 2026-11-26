@@ -174,7 +174,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
     : otherRefusal
       ? refusalOf({ ...view.plans.repay, realize: active })
       : sliceRefused
-        ? { title: realizeText('bookTitle'), body: t('accounts.deleverTab.bookBody') }
+        ? { title: realizeText('bookTitle'), body: twap.on ? realizeText('bookBody') : t('accounts.deleverTab.bookBody') }
         : null;
   const wallet = WALLET_LABEL[poolKey(tab.pool)] ?? poolKey(tab.pool);
   const bucket = view.buckets.find((b) => keyOf(b) === poolKey(tab.pool));

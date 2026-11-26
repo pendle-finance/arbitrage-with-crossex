@@ -504,7 +504,7 @@ describe('ClosePopover: TWAP', () => {
               fees: { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { taker: 129.75 } },
             }),
           ],
-          priceImpact: { whole: 8, sliced: 1, twapDefault: TWAP_OFF },
+          priceImpact: { whole: 8, sliced: 1 }, twapDefault: TWAP_OFF,
           twap: {
             plan: { slices: 5, sliceQty: '30', lastQty: '30', intervalSec: 180, durationSec: 900, takerAfterSec: 144 },
             refusal: null,

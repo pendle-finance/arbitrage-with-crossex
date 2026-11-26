@@ -54,7 +54,7 @@ describe('sliceSizeOf', () => {
     const totalUsd = 1_000_000;
     expect(sliceSizeOf({ book: fourBp, side: 'BUY', mid: MID, totalUsd })).toBe(100_000);
     expect(sliceSizeOf({ book: onlySmall, side: 'BUY', mid: MID, totalUsd })).toBe(25_000);
-    expect(sliceSizeOf({ book: eightBp, side: 'BUY', mid: MID, totalUsd })).toBe(25_000);
+    expect(sliceSizeOf({ book: eightBp, side: 'BUY', mid: MID, totalUsd })).toBe(100_000);
     expect(sliceSizeOf({ book: fourBp, side: 'SELL', mid: MID, totalUsd })).toBe(100_000);
   });
 
@@ -301,6 +301,27 @@ describe('TWAP default from the book', () => {
   it('stays off when slicing cannot lower the cost: a wide spread costs the same in every slice', () => {
     expect(needsTwap(order(flat(8), 50))).toBe(false);
     expect(needsTwap(order(flat(8), 6_000_000))).toBe(false);
+  });
+
+  it('stays off when slices save less than 1 bp', () => {
+    const shallowStep = book(
+      [
+        [1000.5, 25],
+        [1000.6, DEEP],
+      ],
+      [[999.5, DEEP]],
+    );
+    expect(needsTwap(order(shallowStep, 1_000_000))).toBe(false);
+  });
+
+  it('with no size within 5 bp, takes the largest size that costs no more than 1 bp over the cheapest', () => {
+    expect(twapSlicesOf(order(flat(8), 2_000_000))).toBe(20);
+  });
+
+  it('with every size past the book, sizes the slice to half the visible depth', () => {
+    const tiny = book([[1000.1, 10]], [[999.9, 10]]);
+    expect(needsTwap(order(tiny, 500_000))).toBe(true);
+    expect(twapSlicesOf(order(tiny, 500_000))).toBe(100);
   });
 
   it('counts slices at the largest of $25k, $50k or $100k that stays within 5 bp', () => {
