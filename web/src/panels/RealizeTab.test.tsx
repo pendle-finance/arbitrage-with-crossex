@@ -106,6 +106,31 @@ describe('RealizeTab TWAP', () => {
     expect(screen.getByText('Slices 12')).toBeInTheDocument();
   });
 
+  it('shows the size of the TWAP plan, not the plan without TWAP', async () => {
+    const owner = rebalanceViews.ownerAccount;
+    const lead = owner.realize!.clearDebt!.legs[0]!;
+    const twapLead: RealizeLeg = { ...lead, qty: 7.77, positionQty: Math.max(lead.positionQty, 7.77) };
+    const twapped = withLegs(owner, [twapLead]);
+    const asked: URLSearchParams[] = [];
+    server.use(
+      transferHandler(transferViews.spotZero),
+      accountHandler(accountBodies.accountA),
+      http.get('/api/positions', () => HttpResponse.json(env({ positions: [], exposure: [] }))),
+      http.get('/api/rebalance', ({ request }) => {
+        const search = new URL(request.url).searchParams;
+        asked.push(search);
+        if (!search.has('twapSlices')) return HttpResponse.json(env({ ...owner, realizeTwap: null }));
+        const realizeTwap = { clearDebt: twapOf([twapLead], [12], 41.5), all: twapOf([twapLead], [12], 41.5), custom: null };
+        return HttpResponse.json(env({ ...twapped, realizeTwap }));
+      }),
+    );
+    renderWithClient(<RealizeTab view={owner} holdMs={50} lock={null} onTab={vi.fn()} onStarted={vi.fn()} />);
+    expect(screen.queryByText(/7\.77 of/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+    await waitFor(() => expect(asked.some((q) => q.has('twapSlices'))).toBe(true));
+    expect(await screen.findByText(/7\.77 of/)).toBeInTheDocument();
+  });
+
   it('a refused TWAP plan blocks the hold', async () => {
     const owner = rebalanceViews.ownerAccount;
     const lead = owner.realize!.clearDebt!.legs[0]!;
