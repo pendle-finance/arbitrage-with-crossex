@@ -10,6 +10,7 @@ interface Props {
   locked?: boolean;
   onClose: () => void;
   widthClass?: string;
+  tabbed?: boolean;
   children: ReactNode;
 }
 
@@ -17,7 +18,7 @@ interface Props {
  * ancestor with backdrop-filter/transform (the sticky blurred header, where
  * the update pill lives) would otherwise become the containing block for the
  * fixed overlay and trap it — half-hidden behind the page content. */
-export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]', children }: Props) {
+export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]', tabbed = false, children }: Props) {
   const { t } = useTranslation();
   const panel = useRef<HTMLDivElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -54,9 +55,9 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
         onClick={locked ? undefined : onClose}
       />
       <div ref={panel} className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-950 ${widthClass}`}>
-        <div className="flex items-center justify-between gap-3 px-5 pt-5">
-          <h2 ref={heading} className="text-[20px] font-bold leading-[24.2px] text-ink-50">{title}</h2>
-          {!locked && (
+        <div className={`flex items-center justify-between gap-3 ${tabbed ? 'border-b border-ink-800' : 'px-5 pt-5'}`}>
+          <h2 ref={heading} className={`text-[20px] font-bold leading-[24.2px] text-ink-50 ${tabbed ? 'min-w-0 flex-1 self-stretch' : ''}`}>{title}</h2>
+          {!locked && !tabbed && (
             <button
               type="button"
               onClick={onClose}
@@ -67,7 +68,7 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
             </button>
           )}
         </div>
-        <div className="max-h-[78vh] overflow-y-auto p-5">{children}</div>
+        <div className={`max-h-[78vh] overflow-y-auto ${tabbed ? 'px-5 pb-5 pt-4' : 'p-5'}`}>{children}</div>
       </div>
     </div>,
     document.body,

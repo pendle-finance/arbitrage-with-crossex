@@ -80,7 +80,7 @@ export function walletChanges(view: RebalanceView, _plan: EvenPlan, route: Route
   return changesOf(view.buckets, route.after, route.marginFreedUsd);
 }
 
-const COLUMN = 'w-28 shrink-0 text-right';
+const ROW = 'col-span-full grid grid-cols-subgrid items-center';
 
 function valueText(row: ChangeRow, value: number): string {
   if (row.coin) return `${sizeText(value)} ${row.coin}`;
@@ -104,44 +104,50 @@ function Line({ row }: { row: ChangeRow }) {
   const beforeTone = numeric && row.before !== null && row.before < 0 ? 'text-rose-400' : 'text-ink-400';
   const afterTone = numeric && row.after < 0 ? 'text-rose-400' : changed ? 'text-ink-50' : 'text-ink-100';
   return (
-    <div role="row" className="flex items-center gap-2">
-      <span role="rowheader" className="min-w-0 flex-1 pl-2.5 text-ink-300">
+    <div role="row" className={ROW}>
+      <span role="rowheader" className="min-w-0 pl-2.5 text-ink-300">
         {row.hover ? <Term label={row.label} text={row.hover} /> : row.label}
       </span>
-      <span role="cell" data-column="before" className={`num ${COLUMN} ${beforeTone}`}>
+      <span role="cell" data-column="before" className={`num text-right ${beforeTone}`}>
         {before}
       </span>
-      <span className="flex w-4 shrink-0 justify-center text-ink-500">
-        {before !== '' && <ArrowRight size={12} aria-hidden />}
+      <span className="flex justify-center text-ink-500">
+        {before !== '' && <ArrowRight size={16} aria-hidden />}
       </span>
-      <span role="cell" data-column="after" className={`num ${numeric ? COLUMN : 'shrink-0 whitespace-nowrap text-right'} ${afterTone} ${changed ? 'font-semibold' : ''}`}>
+      <span role="cell" data-column="after" className={`num whitespace-nowrap text-right ${afterTone} ${changed ? 'font-semibold' : ''}`}>
         {row.suffix ? `${after} ${row.suffix}` : after}
       </span>
     </div>
   );
 }
 
-export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mode: 'after' | 'now' }) {
+export interface FooterRow {
+  label: string;
+  value: string;
+  hover: string;
+}
+
+export function RebalanceBeforeAfter({ rows, mode, footer }: { rows: WalletChange[]; mode: 'after' | 'now'; footer?: FooterRow | null }) {
   if (rows.length === 0) return null;
   const afterHead = mode === 'after' ? t('accounts.rebalanceRealize.after') : t('accounts.rebalanceRealize.now');
   return (
-    <div role="table" className="card flex flex-col gap-2 p-3 text-xs">
+    <div role="table" className="card grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-x-2 gap-y-2 p-3 text-xs">
       {mode === 'after' && (
-        <div role="caption" className="text-[14px] font-semibold text-ink-50">
+        <div role="caption" className="col-span-full text-[14px] font-semibold text-ink-50">
           {t('accounts.moveCash.after')}
         </div>
       )}
       {rows.map((group, index) => (
-        <div key={group.key} role="rowgroup" aria-label={group.label} className={`flex flex-col gap-2 ${index > 0 ? 'mt-2' : ''}`}>
-          <div role="row" className="flex items-center gap-2">
-            <span role="rowheader" className="min-w-0 flex-1 font-semibold text-ink-400">
+        <div key={group.key} role="rowgroup" aria-label={group.label} className={`col-span-full grid grid-cols-subgrid gap-y-2 ${index > 0 ? 'mt-2' : ''}`}>
+          <div role="row" className={ROW}>
+            <span role="rowheader" className="min-w-0 font-semibold text-ink-400">
               {WALLET_LABEL[group.key] ? <WalletTerm wallet={group.key} /> : group.label}
             </span>
             {index === 0 && (
               <>
-                <span role="columnheader" className={`${COLUMN} ${microLabelClass}`}>{t('accounts.rebalanceRealize.before')}</span>
-                <span className="w-4 shrink-0" />
-                <span role="columnheader" className={`${COLUMN} ${microLabelClass}`}>{afterHead}</span>
+                <span role="columnheader" className={`text-right ${microLabelClass}`}>{t('accounts.rebalanceRealize.before')}</span>
+                <span />
+                <span role="columnheader" className={`text-right ${microLabelClass}`}>{afterHead}</span>
               </>
             )}
           </div>
@@ -150,6 +156,18 @@ export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mod
           ))}
         </div>
       ))}
+      {footer && (
+        <div role="row" className={`${ROW} mt-0.5 border-t border-ink-800 pt-2`}>
+          <span role="rowheader" className="min-w-0 font-semibold text-ink-50">
+            <Term label={footer.label} text={footer.hover} />
+          </span>
+          <span />
+          <span />
+          <span role="cell" data-column="after" className="num whitespace-nowrap text-right font-semibold text-ink-50">
+            {footer.value}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -7,8 +7,7 @@ import { t } from '../i18n';
 import { fmtUsd, num } from '../lib/fmt';
 import { StepList, type StepRow } from './RebalanceBits';
 import { HOVER, modalFeeLabel, modalImpactLabel, modalSteps, poolKey, WALLET_LABEL } from './rebalanceCopy';
-import { daysText, paybackDays, totalCostUsd, WORTH_IT_DAYS, worthChip } from './RebalanceHovers';
-import { realizeFeeUsd, realizeImpactUsd, routeFeeUsd, routeImpactUsd, Term } from './RebalanceHovers';
+import { costPartsUsd, daysText, paybackDays, Term, WORTH_IT_DAYS, worthChip } from './RebalanceHovers';
 
 export const realizeText = (key: string, values?: Record<string, string | number>): string =>
   t(`accounts.rebalanceRealize.${key}` as 'accounts.rebalanceRealize.howItRuns', values);
@@ -35,11 +34,11 @@ export interface CostRow {
 export function legacyCostOf(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): { rows: CostRow[]; chip: ReactNode; daysLine: string | null } {
   const kind = worthChip(plan, route, buckets);
   const days = paybackDays(plan, route, buckets);
-  const impact = realizeImpactUsd(plan) + routeImpactUsd(route);
+  const { feeUsd, impactUsd, totalUsd } = costPartsUsd(plan, route);
   const rows: CostRow[] = [
-    { label: modalFeeLabel(), usd: realizeFeeUsd(plan) + routeFeeUsd(route) },
-    ...(impact > 0 ? [{ label: modalImpactLabel(), usd: impact, hover: HOVER.priceImpact }] : []),
-    { label: rk('totalCost'), usd: totalCostUsd(plan, route), strong: true },
+    { label: modalFeeLabel(), usd: feeUsd },
+    ...(impactUsd > 0 ? [{ label: modalImpactLabel(), usd: impactUsd, hover: HOVER.priceImpact }] : []),
+    { label: rk('totalCost'), usd: totalUsd, strong: true },
   ];
   const chip = kind === null ? null : <Chip tone={kind === 'worth' ? 'info' : 'amber'} sm>{rk(kind === 'worth' ? 'worthIt' : 'notWorthItYet')}</Chip>;
   const daysLine = kind !== null && days !== null ? rk('daysLine', { days: daysText(days), max: num(WORTH_IT_DAYS, 0) }) : null;

@@ -626,12 +626,16 @@ export function useCustomPlan(custom: CustomMove | null) {
   });
 }
 
-export function useRealizeCustom(usd: number | null, sliceUsd: number | null = null) {
-  const query = [usd !== null && usd > 0 ? `realizeUsd=${usd}` : null, sliceUsd !== null && sliceUsd > 0 ? `sliceUsd=${sliceUsd}` : null]
+export function useRealizeCustom(usd: number | null, sliceUsd: number | null = null, pool: Pool | null = null) {
+  const query = [
+    usd !== null && usd > 0 ? `realizeUsd=${usd}` : null,
+    sliceUsd !== null && sliceUsd > 0 ? `sliceUsd=${sliceUsd}` : null,
+    pool !== null ? `realizePool=${pool}` : null,
+  ]
     .filter((part) => part !== null)
     .join('&');
   return useQuery({
-    queryKey: [...qk.rebalance, 'realize', usd ?? 0, sliceUsd ?? 0] as const,
+    queryKey: [...qk.rebalance, 'realize', usd ?? 0, sliceUsd ?? 0, pool ?? ''] as const,
     queryFn: () => fetchJson<RebalanceView>(`/rebalance?${query}`),
     enabled: query !== '',
     placeholderData: keepPreviousData,
@@ -657,6 +661,7 @@ export interface StartRebalanceBody extends Partial<CustomMove> {
   sliceUsd?: number;
   realizeUsd?: number;
   realizeTarget?: 'clear-debt' | 'all' | 'custom';
+  realizePool?: Pool;
   delever?: DeleverRequest;
   costUsd: number;
 }

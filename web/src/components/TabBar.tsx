@@ -13,6 +13,7 @@
  */
 import { useTranslation } from 'react-i18next';
 import { createContext, Fragment, useContext, type ReactNode } from 'react';
+import { GLOW_ACTIVE, GLOW_IDLE, GLOW_TAB, glowStyle } from './UnderlineTabs';
 
 export const ACTIVE_TAB_KEY = 'crossex:activeTab:v1';
 
@@ -83,21 +84,12 @@ export function TabBar({
                 // makes the change read as a sweep rather than a repaint. The
                 // primaries keep their larger type; nothing is upper-cased,
                 // because the mock's tabs are sentence case.
-                className={`relative flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap border-0 bg-transparent transition-all duration-300 ease-in after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-info after:transition-transform after:duration-300 after:content-[''] ${
-                  activeTab
-                    ? 'text-ink-50 after:scale-x-100'
-                    : 'text-ink-500 after:scale-x-0 hover:text-ink-400'
-                } ${
+                className={`${GLOW_TAB} ${activeTab ? GLOW_ACTIVE : GLOW_IDLE} ${
                   t.primary
                     ? 'px-5 py-[15px] text-[13px] font-medium'
                     : 'px-4 py-[13px] text-[12px] font-normal'
                 }`}
-                style={{
-                  backgroundImage:
-                    'linear-gradient(to top, rgba(96,120,255,0.25) 0%, transparent 50%, transparent 100%)',
-                  backgroundSize: '200% 200%',
-                  backgroundPosition: activeTab ? '99% 99%' : '1% 1%',
-                }}
+                style={glowStyle(activeTab)}
               >
                 {t.label}
                 {t.badge}
