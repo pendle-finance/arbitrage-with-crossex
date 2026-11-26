@@ -14,6 +14,7 @@ import { fmtAbout, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt'
 import { rebalanceHandler } from '../test/fixtures';
 import { RebalanceModal, RebalanceModalHost } from './RebalanceModal';
 import { RebalanceOpenerProvider, useRebalanceOpener, type RebalanceTab } from './rebalanceOpener';
+import { sizeText } from './rebalanceCopy';
 
 const NO_POSITIONS: PositionsResponse = { positions: [], exposure: [] };
 
@@ -1707,6 +1708,43 @@ describe('RebalanceModal Realize uPnL tab', () => {
     el.closest('label')?.textContent ?? '';
   const pick = ownerSlices.find((option) => option.sizeUsd === owner.realize!.defaultSliceUsd)!;
   const impactPair = () => screen.getAllByText('Price impact').map((el) => el.closest('span.ml-auto')).find((el) => el !== null) as HTMLElement;
+  const hedgeValue = (): string =>
+    screen
+      .getAllByText('Max not hedged')
+      .map((el) => el.closest('.justify-between'))
+      .find((row) => row?.parentElement?.classList.contains('border-t'))
+      ?.querySelector('.num')?.textContent ?? '';
+
+  it('the not hedged size is a quiet row in the Split box, not a yellow warning', () => {
+    showOn(owner);
+    const box = screen.getByRole('switch', { name: 'Split the close' }).closest('.rounded-md') as HTMLElement;
+    expect(within(box).getAllByText('Max not hedged').length).toBeGreaterThan(0);
+    expect(hedgeValue()).toBe(`${sizeText(pick.notHedgedMaxQty)} ETH (${fmtUsd(pick.notHedgedMaxUsd, 0)})`);
+    expect(document.querySelector('.text-gold')).toBeNull();
+  });
+
+  it('Limit + hedge has the maker settings, and the start sends them; Market has none', async () => {
+    serve({});
+    const sent = starts();
+    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} holdMs={50} />);
+    fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Never' }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Off' }));
+    const hold = screen.getByRole('button', { name: 'Hold to realize' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0] as { maker?: unknown }).maker).toEqual({ takerAfterSec: null, repegBehindBp: null });
+    await userEvent.click(orders()[1]!);
+    expect(screen.queryByRole('button', { name: /Maker settings/ })).toBeNull();
+  });
+
+  it('a 10 min wait before taker shows as about 10 min per slice', async () => {
+    showOn(owner);
+    fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: '10m' }));
+    expect(orders()[0]).toHaveTextContent(/· about 10 min per slice$/);
+  });
 
   it('limit + hedge first and default', () => {
     showOn(owner);
@@ -1809,10 +1847,12 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(query.get('realizePool')).toBe('HYPERLIQUID');
   });
 
-  it('realize wallet: one wallet in profit reads as a line, with no picker', () => {
+  it('realize wallet: one wallet in profit shows the same picker, with that one wallet', () => {
     showOn(owner);
-    expect(screen.getByText('Wallet: USDC · Hyperliquid')).toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Wallet' })).toBeNull();
+    const picker = screen.getByRole('combobox', { name: 'Wallet' });
+    expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual([expect.stringMatching(/^USDC · Hyperliquid · uPnL [\d,]+ USDC$/)]);
+    expect(picker).toHaveValue('HYPERLIQUID');
+    expect(screen.queryByText(/^Wallet: /)).toBeNull();
   });
 
   it('realize wallet: two wallets in profit give a picker, and the pick prices and starts from that wallet', async () => {
@@ -1870,14 +1910,13 @@ describe('RebalanceModal Realize uPnL tab', () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    const hedged = (await screen.findByText(/^Not hedged during each slice/)).textContent;
+    await screen.findAllByText('Max not hedged');
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
     expect(screen.queryByRole('button', { name: 'Hold to realize' })).toBeNull();
     expect(screen.getAllByText('Pricing the move.')).toHaveLength(1);
     expect(screen.getByRole('button', { name: /Pricing the move\./ })).toBeDisabled();
-    expect(screen.getByText(/^Not hedged during each slice/).textContent).toBe(hedged);
   });
 
   it('slice rows show one row per slice count, smallest size first, then Custom', async () => {
@@ -1920,7 +1959,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
     const pair = impactPair();
     expect(pair.querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
     expect(orders()[0]!.textContent).not.toContain('per slice');
-    expect(screen.getByText(/^Not hedged during the order: max /).textContent).toContain(fmtUsd(whole.notHedgedMaxUsd, 0));
+    expect(hedgeValue()).toContain(fmtUsd(whole.notHedgedMaxUsd, 0));
     await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${whole.sizeUsd}`))).toBe(true));
     const hold = screen.getByRole('button', { name: 'Hold to realize' });
     await waitFor(() => expect(hold).toBeEnabled());
@@ -1971,7 +2010,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
     const before = totalCard().textContent;
     const row = slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!;
     await userEvent.click(row);
-    expect(screen.getByText(/^Not hedged during (each slice|the order): max /).textContent).toContain(fmtUsd(other.notHedgedMaxUsd, 0));
+    expect(hedgeValue()).toContain(fmtUsd(other.notHedgedMaxUsd, 0));
     if (other.impactUsd !== pick.impactUsd) expect(totalCard().textContent).not.toBe(before);
   });
 

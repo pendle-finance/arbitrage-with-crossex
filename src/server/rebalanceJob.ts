@@ -268,8 +268,14 @@ export interface Job {
   twap?: JobTwap | null;
   sizeRefusal?: SizeRefusal | null;
   deleverTwap?: DeleverTwap | null;
+  maker?: MakerOpts | null;
   sleptFrom?: number | null;
   sleptTo?: number | null;
+}
+
+export interface MakerOpts {
+  takerAfterSec: number | null;
+  repegBehindBp: 2 | 5 | 10 | null;
 }
 
 export interface DeleverTwap {
@@ -672,6 +678,7 @@ export function newJob(
     delever?: DeleverJobInput | null;
     imUsedStart?: ImUsedRow[] | null;
     twap?: DeleverTwap | null;
+    maker?: MakerOpts | null;
   },
   now: number,
 ): Job {
@@ -702,6 +709,7 @@ export function newJob(
     retryConverts: 0,
     haltKind: null,
     deleverTwap: delever ? (input.twap ?? null) : null,
+    maker: sliced && input.exec === 'maker' ? (input.maker ?? null) : null,
   } satisfies Partial<Job>;
   return {
     ...fields,
@@ -986,8 +994,19 @@ function applyDefaults(job: Partial<Job>): void {
   if (typeof job.twap !== 'object' || job.kind !== 'twap') job.twap = null;
   if (typeof job.sizeRefusal !== 'object' || job.kind !== 'twap') job.sizeRefusal = null;
   if (job.kind !== 'delever' || !isDeleverTwap(job.deleverTwap)) job.deleverTwap = null;
+  if (!isMakerOpts(job.maker)) job.maker = null;
   job.sleptFrom = typeof job.sleptFrom === 'number' && Number.isFinite(job.sleptFrom) ? job.sleptFrom : null;
   job.sleptTo = typeof job.sleptTo === 'number' && Number.isFinite(job.sleptTo) ? job.sleptTo : null;
+}
+
+function isMakerOpts(value: unknown): value is MakerOpts {
+  const maker = value as Partial<MakerOpts> | null | undefined;
+  return (
+    typeof maker === 'object' &&
+    maker !== null &&
+    (maker.takerAfterSec === null || (typeof maker.takerAfterSec === 'number' && Number.isFinite(maker.takerAfterSec) && maker.takerAfterSec > 0)) &&
+    [null, 2, 5, 10].includes(maker.repegBehindBp ?? -1)
+  );
 }
 
 function isDeleverTwap(value: unknown): value is DeleverTwap {

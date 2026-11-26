@@ -68,6 +68,10 @@ function show(pairs: OpenPair[], pairKey: string | null = null, onStarted = () =
 }
 
 const trigger = () => screen.getByRole('button', { name: 'Pair' });
+async function factValue(label: string): Promise<string> {
+  const row = (await screen.findByText(label)).closest('.justify-between');
+  return row?.querySelector('.num')?.textContent ?? '';
+}
 async function afterRows(): Promise<string[]> {
   const table = (await screen.findByText('Before')).closest<HTMLElement>('[role="table"]')!;
   return within(table)
@@ -353,24 +357,33 @@ describe('DeleverTab plan', () => {
     expect(rows).toEqual(['IM used · CrossEx 91.2% → 74.2%']);
   });
 
-  it('boros gap line', async () => {
+  it('the Boros gap is a quiet row in the TWAP box, with the full sentence in its hover', async () => {
     const plan = deleverPlans.twentyPct;
     servePlan(plan);
     show(openPairs.btc900);
     const time = fmtAbout(defaultOption(plan).seconds.maker);
-    expect(
-      await screen.findByText(`Boros closes after the perps. Until then, the YU with no perp behind it grows to 180 by the end (${time}).`),
-    ).toBeInTheDocument();
+    expect(await factValue('Boros not hedged')).toBe(`up to 180 YU · ${time}`);
+    expect(screen.queryByText(/^Boros closes after the perps/)).toBeNull();
+    fireEvent.mouseEnter(screen.getByText('Boros not hedged'));
+    expect(await screen.findByText(`Boros closes after the perps. Until then, the YU with no perp behind it grows to 180 by the end (${time}).`)).toBeInTheDocument();
   });
 
-  it('delever not hedged line names the one order while TWAP is off', async () => {
+  it('max not hedged is a quiet row in the TWAP box, not a yellow warning', async () => {
     const plan = deleverPlans.twentyPct;
     servePlan(plan);
     show(openPairs.btc900);
-    const text = `Not hedged during the order: max ${sigGrouped(plan.notHedgedMaxQty)} BTC (${fmtUsd(plan.notHedgedMaxUsd, 0)})`;
-    const line = await screen.findByText(text);
-    expect(line.tagName).toBe('P');
-    expect(line.closest('[role="alert"], .card')).toBeNull();
+    expect(await factValue('Max not hedged')).toBe(`${sigGrouped(plan.notHedgedMaxQty)} BTC (${fmtUsd(plan.notHedgedMaxUsd, 0)})`);
+    const box = screen.getByRole('switch', { name: 'TWAP' }).closest('.rounded-md');
+    expect(within(box as HTMLElement).getByText('Max not hedged')).toBeInTheDocument();
+    expect(document.querySelector('.text-gold')).toBeNull();
+  });
+
+  it('Cost comes before After, like Realize and Move cash', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    const cost = await screen.findByText('Total cost');
+    const after = screen.getByText('Before');
+    expect(cost.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('delever cost rows', async () => {
@@ -411,7 +424,8 @@ describe('DeleverTab plan', () => {
     const [limit, market] = within(orders).getAllByRole('radio');
     expect(limit).toHaveTextContent(/per slice$/);
     expect(market).toHaveTextContent(/per slice$/);
-    expect(screen.getByText(/^Not hedged during each slice: max /)).toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByText('Max not hedged'));
+    expect(await screen.findByText(/while one slice fills/)).toBeInTheDocument();
   });
 
   it('orders toggle reads per slice once TWAP is on', async () => {
@@ -548,10 +562,28 @@ describe('DeleverTab TWAP', () => {
     await waitFor(() => expect(sent[sent.length - 1]!.twap).toMatchObject({ takerAfterSec: null }));
   });
 
-  it('no maker settings fold with twap off', async () => {
+  it('with twap off, Limit + hedge has the same maker settings and the start sends them; Market has none', async () => {
+    const starts: { maker?: unknown; delever: DeleverRequest }[] = [];
+    server.use(
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as { maker?: unknown; delever: DeleverRequest });
+        return HttpResponse.json(env({ id: 'delv0003' }));
+      }),
+    );
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     await screen.findByText('Total cost');
+    fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: '10m' }));
+    const orders = screen.getByRole('radiogroup', { name: 'Orders' });
+    await waitFor(() => expect(within(orders).getAllByRole('radio')[0]).toHaveTextContent(/· about 10 min$/));
+    const hold = screen.getByRole('button', { name: 'Hold to delever 180 BTC' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(starts).toHaveLength(1));
+    expect(starts[0]!.maker).toEqual({ takerAfterSec: 600, repegBehindBp: 5 });
+    expect(starts[0]!.delever.twap).toBeUndefined();
+    await userEvent.click(within(orders).getAllByRole('radio')[1]!);
     expect(screen.queryByRole('button', { name: /Maker settings/ })).toBeNull();
   });
 
@@ -594,7 +626,7 @@ describe('DeleverTab TWAP', () => {
     show(openPairs.btc900);
     await turnTwapOn('4h', '5m');
     await screen.findByText(/^Slices 48/);
-    expect(await screen.findByText(/^Not hedged during each slice: max 3\.75 BTC/)).toBeInTheDocument();
+    await waitFor(async () => expect(await factValue('Max not hedged')).toMatch(/^3\.75 BTC/));
   });
 
   it('a twap refusal clears the cost box', async () => {

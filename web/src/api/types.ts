@@ -532,6 +532,7 @@ export interface RebalanceJob {
   openGaps?: RebalanceOpenGap[];
   kind?: 'move' | 'realize' | 'delever' | 'twap';
   exec?: RealizeExec;
+  maker?: { takerAfterSec: number | null; repegBehindBp: number | null } | null;
   slice?: { index: number; count: number; sizeUsd: number; qty?: number } | null;
   notHedgedQty?: number;
   followMisses?: number;

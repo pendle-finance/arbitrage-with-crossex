@@ -119,10 +119,9 @@ describe('RebalanceJobView, sliced runs', () => {
     expect(screen.getByText(`${fmtUsd(job.totalCostUsd!)} (est. ${fmtUsd(job.estimate!.totalUsd)})`)).toBeInTheDocument();
   });
 
-  it('realize done pair pnl', () => {
+  it('realize done shows no Pair PnL row', () => {
     show(rebalanceViews.ownerRealizeDone);
-    const row = screen.getByText('Pair PnL').parentElement!.parentElement!;
-    expect(row).toHaveTextContent('Pair PnLUnchanged, except cost');
+    expect(screen.queryByText('Pair PnL')).not.toBeInTheDocument();
   });
 
   it('realize done next move cash', () => {

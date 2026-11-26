@@ -164,7 +164,7 @@ export function TwapArea({
   impact,
   coin,
   lot,
-  offLabel,
+  facts,
 }: {
   on: boolean;
   onToggle: (on: boolean) => void;
@@ -174,7 +174,7 @@ export function TwapArea({
   impact: PriceImpactPreview | null;
   coin: string;
   lot?: string;
-  offLabel?: ReactNode;
+  facts?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [drafts, setDrafts] = useState<Partial<Record<Box, string>>>({});
@@ -256,7 +256,6 @@ export function TwapArea({
         </HoverCard>
         {impact && <ImpactPair impact={impact} on={on} />}
       </div>
-      {!on && offLabel}
       {on && (
         <>
           <div className="grid grid-cols-3 gap-2">
@@ -277,6 +276,7 @@ export function TwapArea({
           )}
         </>
       )}
+      {facts}
     </div>
   );
 }

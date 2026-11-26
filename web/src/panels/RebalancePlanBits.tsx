@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
 import type { EvenPlan, Pool, RebalanceBucket, RoutePlan } from '../api/types';
 import { Chip } from '../components/Chip';
+import { HoverCard } from '../components/HoverCard';
 import { t } from '../i18n';
 import { fmtUsd, num } from '../lib/fmt';
 import { StepList, type StepRow } from './RebalanceBits';
@@ -71,6 +72,24 @@ export function NotHedgedLine({ text }: { text: string }) {
       <TriangleAlert size={14} aria-hidden className="shrink-0" />
       {text}
     </p>
+  );
+}
+
+export type ExecFact = { label: string; hover: string; value: string };
+
+export function ExecFacts({ rows }: { rows: ExecFact[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-2.5 text-xs">
+      {rows.map((row) => (
+        <div key={row.label} className="flex items-center justify-between gap-3 text-ink-300">
+          <HoverCard label={row.label} widthPx={260}>
+            {row.hover}
+          </HoverCard>
+          <span className="num text-ink-100">{row.value}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 

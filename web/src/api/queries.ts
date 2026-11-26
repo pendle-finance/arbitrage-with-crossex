@@ -663,6 +663,7 @@ export interface StartRebalanceBody extends Partial<CustomMove> {
   realizeTarget?: 'clear-debt' | 'all' | 'custom';
   realizePool?: Pool;
   delever?: DeleverRequest;
+  maker?: { takerAfterSec: number | null; repegBehindBp: number | null };
   costUsd: number;
 }
 

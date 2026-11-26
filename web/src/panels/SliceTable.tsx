@@ -52,6 +52,7 @@ export function SplitArea({
   hover,
   impact,
   table,
+  facts,
 }: {
   on: boolean;
   onToggle: (on: boolean) => void;
@@ -59,6 +60,7 @@ export function SplitArea({
   hover: string;
   impact: PriceImpactPreview | null;
   table: SliceTableProps;
+  facts?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-2.5 rounded-md border border-ink-700 px-3 py-2.5">
@@ -74,6 +76,7 @@ export function SplitArea({
         {impact && <ImpactPair impact={impact} on={false} />}
       </div>
       {on && <SliceTable {...table} />}
+      {facts}
     </div>
   );
 }

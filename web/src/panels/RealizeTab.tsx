@@ -16,12 +16,14 @@ import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './Rebalance
 import { VerdictAlert } from './RebalanceBits';
 import { keyOf, SLICE_HOVER, Term } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { NotHedgedLine, realizeText, refusalOf, TotalCost, type CostRow } from './RebalancePlanBits';
+import { ExecFacts, realizeText, refusalOf, TotalCost, type CostRow, type ExecFact } from './RebalancePlanBits';
 import { CONVERT_TO, execModeLabel, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
 import { costOf, hasPlan, netOf, sliceOf, type Cost, type Slice } from './realizeTabCost';
 import { SplitArea } from './SliceTable';
+import { CloseMakerSettings, useCloseMaker, withMakerWait } from './closeMaker';
+import { useTwapTakerAfter } from '../trade/useTwapTakerAfter';
 
 type AmountPick = 'clear' | 'all' | 'custom';
 
@@ -61,14 +63,7 @@ function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; poo
   const { t } = useTranslation();
   const walletOf = (p: Pool): string => WALLET_LABEL[poolKey(p)] ?? poolKey(p);
   const upnlOf = (p: Pool): number => view.buckets.find((b) => keyOf(b) === poolKey(p))?.upnl ?? 0;
-  if (pools.length < 2) {
-    return (
-      <div className="flex items-center gap-3 text-xs">
-        <span className="text-ink-400">{t('accounts.realizeTab.wallet', { wallet: walletOf(pool) })}</span>
-        <span className="num text-ink-100">{t('accounts.realizeTab.walletUpnl', { amount: num(upnlOf(pool), 0), coin: poolCoin(pool) })}</span>
-      </div>
-    );
-  }
+  const shown = pools.includes(pool) ? pools : [pool, ...pools];
   return (
     <div className="flex flex-col gap-1.5">
       <span className={microLabelClass}>{t('accounts.realizeTab.walletLabel')}</span>
@@ -78,7 +73,7 @@ function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; poo
         value={pool}
         onChange={(e) => onPick(e.target.value as Pool)}
       >
-        {pools.map((p) => (
+        {shown.map((p) => (
           <option key={p} value={p}>
             {t('accounts.realizeTab.walletOption', { wallet: walletOf(p), amount: num(upnlOf(p), 0), coin: poolCoin(p) })}
           </option>
@@ -100,8 +95,10 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const [sliceText, setSliceText] = useState('');
   const [split, setSplit] = useState<boolean | null>(null);
   const [customText, setCustomText] = useState('');
+  const maker = useCloseMaker();
+  const takerOff = useTwapTakerAfter(maker.taker, false, null);
 
-  const presetOptions = tab?.sliceOptions ?? [];
+  const presetOptions = withMakerWait(tab?.sliceOptions ?? [], maker.taker.sec);
   const basePriced = clearDebt && clearDebt.legs.length > 0 ? clearDebt : all;
   const splitPlan = amount === 'clear' ? clearDebt : all;
   const baseSliceOf = (sizeUsd: number): Slice | null => (splitPlan ? sliceOf(presetOptions, sizeUsd, splitPlan.legs[0], splitPlan === basePriced) : null);
@@ -127,14 +124,14 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const shownClear = liveTab ? (hasPlan(liveTab.clearDebt) ? liveTab.clearDebt : null) : clearDebt;
   const shownAll = liveTab ? (hasPlan(liveTab.all) ? liveTab.all : null) : all;
   const pricedPlan = shownClear && shownClear.legs.length > 0 ? shownClear : shownAll;
-  const options = liveTab?.sliceOptions ?? presetOptions;
+  const options = liveTab ? withMakerWait(liveTab.sliceOptions, maker.taker.sec) : presetOptions;
   const customOption = customSlice ? (liveTab?.sliceOptions.find((o) => o.custom) ?? null) : null;
   const shownSliceUsd = customOption?.sizeUsd ?? sliceUsd;
   const sliceFor = (plan: RealizePlan): Slice | null => sliceOf(options, shownSliceUsd, plan.legs[0], plan === pricedPlan);
   const costFor = (plan: RealizePlan, mode: RealizeExec): Cost => costOf(plan, mode, sliceFor(plan));
   const allNet = shownAll ? Math.max(0, netOf(shownAll, costFor(shownAll, exec))) : 0;
 
-  const lastWarning = useRef<string | null>(null);
+  const lastFact = useRef<ExecFact | null>(null);
 
   if (!tab || (!clearDebt && !all)) {
     return (
@@ -217,7 +214,6 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
           rows: [
             { label: t('accounts.realizeTab.realizedAfterCost'), before: null, after: net, unit: 'coin' },
             { label: hoverCash(), before: cashNow, after: cashNow + net - landed, unit: 'coin' },
-            { label: t('accounts.sliceRun.pairPnl'), before: 0, after: 0, unit: 'text', text: { before: '', after: t('accounts.sliceRun.pairPnlValue') } },
           ],
         },
         ...(target ? [{ key: targetKey, label: WALLET_LABEL[targetKey] ?? targetKey, rows: borrowRows(target, Math.max(0, target.borrow - landed), null) }] : []),
@@ -242,14 +238,22 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
         realizeTarget: TARGET[amount],
         realizePool: tab.pool,
         costUsd: cost.totalUsd,
+        ...(exec === 'maker' ? { maker: maker.opts } : {}),
       },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
     );
   };
 
-  const warning = slice && lead ? t(oneOrder ? 'accounts.realizeTab.notHedgedWhole' : 'accounts.realizeTab.notHedged', { qty: sizeText(slice.qty), coin: lead.base, usd: fmtUsd(slice.usd, 0) }) : null;
-  if (warning !== null) lastWarning.current = warning;
-  const shownWarning = warning ?? (pricing ? lastWarning.current : null);
+  const hedgeFact: ExecFact | null =
+    slice && lead
+      ? {
+          label: t('accounts.slices.maxNotHedged'),
+          hover: t(oneOrder ? 'accounts.realizeTab.notHedgedOrderHover' : 'accounts.realizeTab.notHedgedSliceHover'),
+          value: t('accounts.realizeTab.notHedgedValue', { qty: sizeText(slice.qty), coin: lead.base, usd: fmtUsd(slice.usd, 0) }),
+        }
+      : null;
+  if (hedgeFact !== null) lastFact.current = hedgeFact;
+  const shownFact = hedgeFact ?? (pricing ? lastFact.current : null);
   const sentence: string | null = customMissing
     ? t('accounts.realizeTab.typeAmount')
     : sliceInvalid
@@ -334,8 +338,11 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
               hover={splitHover}
               impact={impact}
               table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, coin: lead?.base, dedupe: active === pricedPlan }}
+              facts={<ExecFacts rows={shownFact ? [shownFact] : []} />}
             />
           )}
+
+          {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} />}
 
           {rows.length > 0 && <TotalCost rows={rows} />}
 
@@ -348,7 +355,6 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       ) : (
         <RebalanceModalFooter
           rows={[]}
-          verdict={shownWarning && !sentence ? <NotHedgedLine text={shownWarning} /> : undefined}
           holdLabel={pricing ? t('accounts.rebalanceModal.pricing') : t('accounts.realizeTab.holdRealize')}
           optional={false}
           stale={false}
@@ -356,7 +362,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
           lock={lock}
           pricing={pricing}
           holdMs={holdMs}
-          disabled={lock !== null || start.isPending || pricing || sliceInvalid || !active || active.legs.length === 0 || !(Math.round(net) >= 1)}
+          disabled={lock !== null || start.isPending || pricing || sliceInvalid || (exec === 'maker' && takerOff) || !active || active.legs.length === 0 || !(Math.round(net) >= 1)}
           onRefresh={() => void customQuery.refetch()}
           onConfirm={confirm}
         />
