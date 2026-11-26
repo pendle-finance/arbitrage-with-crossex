@@ -136,6 +136,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   says "1 slice". The Move cash done view says "Done." above its facts.
 - **Roll over keeps its hold on screen** when the size box is empty. The hold is disabled
   until a size is typed.
+- **Transfer opens on the wallet you picked** from its first frame, with no flash of the
+  default wallet.
 
 ## 1.7.9 — 2026-11-10
 
