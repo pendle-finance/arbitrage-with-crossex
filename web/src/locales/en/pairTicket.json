@@ -83,7 +83,6 @@
     "sizeAria": "Close size, applied to all positions",
     "sizeInvalid": "Must be above 0 and at most {{max}} {{unit}}",
     "sharedLabel": "This pair's share",
-    "flat": "Flat",
     "sharedOpen": "Shared part stays open",
     "quoteFailed": "Couldn’t quote this close",
     "estPnl": "Est. PnL",

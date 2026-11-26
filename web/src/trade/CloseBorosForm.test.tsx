@@ -582,7 +582,7 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     const input = screen.getByLabelText(/Close size, applied to all positions/) as HTMLInputElement;
     expect(input.value).not.toContain(',');
     fireEvent.change(input, { target: { value: '100' } });
-    expect(await screen.findByText(left)).toBeInTheDocument();
+    expect(await screen.findByText(`${text} → ${left}`)).toBeInTheDocument();
     fireEvent.change(input, { target: { value: '99999999' } });
     expect(await screen.findByText(`Must be above 0 and at most ${text}`)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
@@ -595,7 +595,7 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 37.3, share: 0.0734 }]} />);
     expect(await screen.findByText('Shared part stays open')).toBeInTheDocument();
     expect(screen.getByText("This pair's share")).toBeInTheDocument();
-    expect(screen.queryByText('Flat')).not.toBeInTheDocument();
+    expect(screen.queryByText(/→ 0 ETH/)).not.toBeInTheDocument();
   });
 
   const heldOnChain = (currentSize: number) =>
@@ -636,19 +636,27 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
     server.use(versionHandler(), agentReady(), heldOnChain(kept * 2.5));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: kept, share: 1 }]} />);
     expect(await screen.findByText('Shared part stays open')).toBeInTheDocument();
-    expect(screen.queryByText('Flat')).not.toBeInTheDocument();
+    expect(screen.queryByText(/→ 0 ETH/)).not.toBeInTheDocument();
   });
 
   it('flat after when the close takes the whole on-chain leg', async () => {
     server.use(versionHandler(), agentReady(), heldOnChain(2_400));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 2_400, share: 1 }]} />);
-    expect(await screen.findByText('Flat')).toBeInTheDocument();
+    expect(await screen.findByText('2,400 ETH → 0 ETH')).toBeInTheDocument();
+    expect(screen.queryByText('Flat')).not.toBeInTheDocument();
   });
 
-  it('still says flat after for a whole leg at the max', async () => {
+  it('still says before to zero for a whole leg at the max', async () => {
     server.use(...ready());
-    renderWithClient(<CloseBorosForm legs={[{ ...leg(), share: 1 }]} />);
-    expect(await screen.findByText('Flat')).toBeInTheDocument();
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 66, share: 1 }]} />);
+    expect(await screen.findByText('66 ETH → 0 ETH')).toBeInTheDocument();
+  });
+
+  it('says before to after on a part close', async () => {
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 66, share: 1 }]} />);
+    fireEvent.change(await screen.findByLabelText(/Close size, applied to all positions/), { target: { value: '50' } });
+    expect(await screen.findByText('66 ETH → 16 ETH')).toBeInTheDocument();
   });
 });
 
@@ -941,21 +949,24 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     expect(screen.queryByText('Perps')).toBeNull();
   });
 
-  it('under the pair picker the leg box drops the size and the coin and date line', async () => {
+  it('shows each leg as one step row, and under the pair picker drops the size and date facts', async () => {
     server.use(...ready());
     const leg = { ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] as ['HYPERLIQUID', 'GATE'] };
     const full = renderWithClient(<CloseBorosForm legs={[leg]} />);
     await screen.findByText('ETH Spread HL-GATE');
-    const fullBox = screen.getByText('ETH Spread HL-GATE').closest('.card') as HTMLElement;
-    const fullText = fullBox.textContent ?? '';
-    expect(fullText).toContain(' · ');
+    const fullRow = screen.getByText('ETH Spread HL-GATE').closest('li') as HTMLElement;
+    expect(fullRow.closest('ol')).not.toBeNull();
+    expect(fullRow).toHaveTextContent('SHORT');
+    expect(fullRow).toHaveTextContent(/0\.255 ETH · /);
+    const fullText = fullRow.textContent ?? '';
     full.unmount();
     renderWithClient(<CloseBorosForm legs={[leg]} underPicker />);
     await screen.findByText('ETH Spread HL-GATE');
-    const box = screen.getByText('ETH Spread HL-GATE').closest('.card') as HTMLElement;
-    expect((box.textContent ?? '').length).toBeLessThan(fullText.length);
-    expect(box).not.toHaveTextContent(/ETH · /);
-    expect(box).toHaveTextContent(/mark/);
+    const row = screen.getByText('ETH Spread HL-GATE').closest('li') as HTMLElement;
+    expect((row.textContent ?? '').length).toBeLessThan(fullText.length);
+    expect(row).not.toHaveTextContent(/0\.255 ETH/);
+    expect(row).toHaveTextContent(/mark/);
+    expect(row).toHaveAttribute('class', expect.stringContaining('border-ink-800'));
   });
 
   it('shows the perps left on floating funding in After when the pair keeps its perps', async () => {
