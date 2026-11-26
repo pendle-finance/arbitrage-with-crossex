@@ -206,7 +206,7 @@ export interface BorosMarketPosition {
    * response. Feeds the bucket health factor (equity / maintenance). */
   maintMargin?: string;
   hasRestingOrders?: boolean;
-  restingOrderMargin?: { long: string; short: string };
+  restingOrderMargin?: { long: string; short: string; longSize: string; shortSize: string };
 }
 
 /** A margin group: the cross account or one isolated position bucket. */
@@ -740,22 +740,31 @@ const toBig = (v: unknown): bigint => {
   return Number.isFinite(n) ? BigInt(n) : 0n;
 };
 
+function restingOrderMarginOf(p: Record<string, unknown>): { long: string; short: string; longSize: string; shortSize: string } {
+  let long = 0n;
+  let short = 0n;
+  let longSize = 0n;
+  let shortSize = 0n;
+  for (const o of Array.isArray(p.orders) ? (p.orders as Array<Record<string, unknown>>) : []) {
+    const size = toBig(o.size);
+    const abs = size < 0n ? -size : size;
+    if (Number(o.side) === 0) {
+      long += toBig(o.initialMargin);
+      longSize += abs;
+    } else {
+      short += toBig(o.initialMargin);
+      shortSize += abs;
+    }
+  }
+  return { long: long.toString(), short: short.toString(), longSize: longSize.toString(), shortSize: shortSize.toString() };
+}
+
 /**
  * The position's own IM out of the combined per-market `initialMargin`, which
  * the venue computes as max(pos + same-side orders, opposite-side orders − pos).
  * Both branches fit the combined number, so the whitepaper IM at mark picks the
  * right one.
  */
-function restingOrderMarginOf(p: Record<string, unknown>): { long: string; short: string } {
-  let long = 0n;
-  let short = 0n;
-  for (const o of Array.isArray(p.orders) ? (p.orders as Array<Record<string, unknown>>) : []) {
-    if (Number(o.side) === 0) long += toBig(o.initialMargin);
-    else short += toBig(o.initialMargin);
-  }
-  return { long: long.toString(), short: short.toString() };
-}
-
 function positionOnlyInitialMargin(
   p: Record<string, unknown>,
   market: BorosMarket | undefined,

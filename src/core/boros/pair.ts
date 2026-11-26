@@ -332,12 +332,16 @@ export interface BorosPairLegInput {
 export interface RestingOrderMargin {
   long: number;
   short: number;
+  longSize: number;
+  shortSize: number;
 }
 
 function marketMarginWithOrders(positionMargin: number, size: number, orders: RestingOrderMargin): number {
-  if (size > 0) return Math.max(positionMargin + orders.long, orders.short - positionMargin);
-  if (size < 0) return Math.max(positionMargin + orders.short, orders.long - positionMargin);
-  return Math.max(orders.long, orders.short);
+  if (size === 0) return Math.max(orders.long, orders.short);
+  const same = positionMargin + (size > 0 ? orders.long : orders.short);
+  const oppositeSize = size > 0 ? orders.shortSize : orders.longSize;
+  const opposite = oppositeSize <= Math.abs(size) ? 0 : Math.max(0, (size > 0 ? orders.short : orders.long) - positionMargin);
+  return Math.max(same, opposite);
 }
 
 export interface SimulatedLeg {
@@ -1126,7 +1130,9 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   const blockers: PairBlocker[] = [];
   const warnings: string[] = [];
   const opening = sim.intent !== 'close';
-  const ordersOf = (leg: BorosPairLegInput): RestingOrderMargin | undefined => (opening ? leg.restingOrderMargin : undefined);
+  const ordersKnown = opening && account.cross?.availableWithOrders !== undefined;
+  const ordersOf = (leg: BorosPairLegInput): RestingOrderMargin | undefined =>
+    ordersKnown && !leg.isolatedOnly ? leg.restingOrderMargin : undefined;
   const crossAvailable = (opening ? account.cross?.availableWithOrders : undefined) ?? account.cross?.available ?? 0;
 
   const spreadLegs = input.legs.filter((l) => isSpreadMarket(l.market)).length;

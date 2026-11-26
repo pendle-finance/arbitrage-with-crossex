@@ -606,6 +606,39 @@ describe('fetchBorosCollaterals', () => {
     expect((await posIm([], 10)).markApr).toBe(0.1);
   });
 
+  it('sums each side of the resting orders: their margin and their remaining size', async () => {
+    const order = (side: number, size: string, initialMargin: string) => ({ id: '1', side, size, initialMargin, initialMarginWithLeverage: initialMargin });
+    const zones = await fetchBorosCollaterals(
+      accountStub(
+        {
+          results: [
+            {
+              marketAcc: CROSS,
+              netBalance: '1000000000000000000',
+              positions: [
+                {
+                  marketId: 242,
+                  signedSize: '0',
+                  initialMargin: '267672426068855519',
+                  orders: [order(1, '66000000000000000000', '267672426068855478'), order(1, '4000000000000000000', '10'), order(0, '-2000000000000000000', '7')],
+                },
+              ],
+            },
+          ],
+        },
+        { results: [] },
+      ),
+      ROOT,
+      [],
+    );
+    expect(zones[0].cross!.marketPositions[0].restingOrderMargin).toEqual({
+      long: '7',
+      short: '267672426068855488',
+      longSize: '2000000000000000000',
+      shortSize: '70000000000000000000',
+    });
+  });
+
   it('throws a network CoreError when either read is not the documented shape', async () => {
     await expect(
       fetchBorosCollaterals(accountStub({ collaterals: [] }, { results: [] }), ROOT, []),
