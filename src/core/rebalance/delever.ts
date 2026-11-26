@@ -256,6 +256,10 @@ export function planDelever(input: DeleverInput, twapQtys?: number[]): DeleverPl
     return { feePerpsUsd, feeBorosUsd, impactUsd, totalUsd: feePerpsUsd + feeBorosUsd + impactUsd };
   };
   const followImpactUsd = impactUsdOf(follow, qtys);
+  const leadPastBook = (qty: number): boolean => request.exec === 'market' && (impactOf(lead.book, closeSideOf(lead), lead.mid, qty)?.pastBook ?? true);
+  const options = sliceOptions({ ...slice, totalQty: closeQty, minQty, lot, customUsd, maxUsd }).map((option) =>
+    option.pastBook || !leadPastBook(option.notHedgedMaxQty) ? option : { ...option, pastBook: true },
+  );
   return {
     legs: legs.map((leg, index) => ({
       symbol: leg.symbol,
@@ -270,7 +274,7 @@ export function planDelever(input: DeleverInput, twapQtys?: number[]): DeleverPl
     boros: boros.map(({ marketId, before, after, closeSize }) => ({ marketId, before, after, closeSize })),
     imUsed: imUsedAfterOf(input.account, legs, legs.map((leg, index) => (whole[index] ? leg.held : closeQty))),
     makerLeg,
-    sliceOptions: sliceOptions({ ...slice, totalQty: closeQty, minQty, lot, customUsd, maxUsd }),
+    sliceOptions: options,
     defaultSliceUsd,
     estimates: {
       maker: estimateOf(feeOf(lead, lead.makerRate) + feeOf(follow, follow.takerRate), followImpactUsd),

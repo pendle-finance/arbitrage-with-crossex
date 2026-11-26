@@ -59,8 +59,15 @@ export function project(pair: PairRow, orders: OrderRow[]): Projection {
     }
   }
 
+  let hedgeReduceOnlyRefusals = 0;
+  for (const o of orders.filter((x) => x.leg === 'B').sort((x, y) => y.seq - x.seq)) {
+    if (!isRefusedFor(o, 'reduce-only-violation')) break;
+    hedgeReduceOnlyRefusals++;
+  }
+
   const target = fx(pair.targetQty);
   return {
+    hedgeReduceOnlyRefusals,
     aFilled: fxStr(aFilled),
     aReserved: fxStr(aReserved),
     bFilled: fxStr(bFilled),
@@ -143,15 +150,23 @@ function isRepegDue(pair: PairRow, m: OrderRow, now: number, best: string | null
   return behind > FX_ZERO && behind * 10_000n >= BigInt(Math.round(pair.repegBehindBp)) * bestFx;
 }
 
-export function hasMarginRefusalLabel(order: OrderRow): boolean {
+function refusalCategory(order: OrderRow): string | null {
   const label = order.closeReason?.startsWith('rejected:') ? order.closeReason.slice('rejected:'.length) : order.venueReason;
-  if (!label) return false;
-  return classifyGateError({ response: { data: { label } } }).category === 'insufficient-margin';
+  if (!label) return null;
+  return classifyGateError({ response: { data: { label } } }).category;
+}
+
+export function hasMarginRefusalLabel(order: OrderRow): boolean {
+  return refusalCategory(order) === 'insufficient-margin';
+}
+
+function isRefusedFor(o: OrderRow | null, category: string): boolean {
+  if (!o || (o.state !== 'DEAD' && o.state !== 'CLOSED') || fx(o.cumQty) > FX_ZERO) return false;
+  return refusalCategory(o) === category;
 }
 
 function isRefusedForMargin(o: OrderRow | null): boolean {
-  if (!o || (o.state !== 'DEAD' && o.state !== 'CLOSED') || fx(o.cumQty) > FX_ZERO) return false;
-  return hasMarginRefusalLabel(o);
+  return isRefusedFor(o, 'insufficient-margin');
 }
 
 function report(pair: PairRow, p: Projection, reason: string): Report {
@@ -318,7 +333,8 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
   const hedgeGaveUp =
     pair.mode === 'STOPPING' &&
     pair.b?.reduceOnly === true &&
-    pair.hedgeRejectStreak >= TUNING.STOP_HEDGE_GIVE_UP;
+    pair.hedgeRejectStreak >= TUNING.STOP_HEDGE_GIVE_UP &&
+    p.hedgeReduceOnlyRefusals >= TUNING.STOP_HEDGE_GIVE_UP;
   if (!hedgeGaveUp && now >= pair.hedgeNotBefore && hedgeSized !== null && hedgeSized > FX_ZERO && pair.b) {
     if (pair.a.reduceOnly === true && pair.b.contract === pair.a.contract && m?.state === 'OPEN') {
       return { type: 'cancel', order: m };
@@ -345,11 +361,11 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
       if (m && m.state === 'OPEN') return { type: 'cancel', order: m };
       if (hedgeGaveUp && pair.b) {
         if (!p.allSettled) return { type: 'idle', reason: 'waiting for orders to settle' };
-        const why = `hedge leg refused ${pair.hedgeRejectStreak} times — its position may already be closed`;
+        const why = `hedge leg refused ${p.hedgeReduceOnlyRefusals} times — its position may already be closed`;
         return {
           type: 'finish',
           report: report(pair, p, `${pair.haltReason ?? 'stopped'} (${why}; unhedged ${p.unhedged})`),
-          alert: `The close stopped: ${pair.b.contract} refused ${pair.hedgeRejectStreak} reduce-only orders in a row, so its position may already be closed. Check both legs on Gate.`,
+          alert: `The close stopped: ${pair.b.contract} refused ${p.hedgeReduceOnlyRefusals} reduce-only orders in a row, so its position may already be closed. Check both legs on Gate.`,
         };
       }
       return finishIfSettled(pair, p, pair.haltReason ?? 'stopped', hedgeSized);
@@ -455,10 +471,10 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
         // terminal report — STOPPING finishes with `haltReason ?? 'stopped'`,
         // and a bare "stopped" hides the one failure the user can immediately
         // fix (the modal keys its try-again guidance off this text).
-        const why =
-          /MAX_ORDERS_ERROR/.test(p.makerOrder?.closeReason ?? '')
-            ? OPEN_ORDER_CAP_REASON
-            : `the limit price kept crossing the market — the venue rejected the post-only maker ${TUNING.MAX_POC_REJECTS} times in a row`;
+        const openOrderCap = /MAX_ORDERS_ERROR/.test(p.makerOrder?.closeReason ?? '');
+        const why = openOrderCap
+          ? OPEN_ORDER_CAP_REASON
+          : `the limit price kept crossing the market — the venue rejected the post-only maker ${TUNING.MAX_POC_REJECTS} times in a row`;
         // A close the trader asked for finishes at market rather than stopping
         // half done: the timeout would send the same market clips anyway.
         if (pair.a.reduceOnly && pair.deadlineAt !== null) {
@@ -466,7 +482,11 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
             type: 'setMode',
             mode: 'CONVERTING',
             reason: `${why} — closing the rest at market`,
+            haltReason: why,
             resetClipBudget: true,
+            alert: openOrderCap
+              ? `Gate refused the resting close order on ${pair.a.contract}: too many open orders on this market. Closing the rest at market.`
+              : `The resting close order on ${pair.a.contract} kept crossing the market. Closing the rest at market.`,
           };
         }
         return { type: 'setMode', mode: 'STOPPING', reason: why, haltReason: why };

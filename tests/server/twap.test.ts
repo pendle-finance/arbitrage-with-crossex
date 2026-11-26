@@ -1023,24 +1023,19 @@ describe('TWAP money paths at size', { timeout: 60_000 }, () => {
     expect(fx(child(again, 2)!.targetQty) <= fx('1.824')).toBe(true);
   });
 
-  it('a carry over the venue max halts the run and resume re-plans under the max', async () => {
+  it('a carry over the venue max sends the max and keeps the rest in the carry', async () => {
     const w = boot();
     w.gate.rules = [ruleRow(A_CONTRACT, { maxSize: '0.2' }), ruleRow(B_CONTRACT)];
     await start(w, {}, { timeoutSec: null });
     await fillChild(w, childId(w, 1), '0.076');
-    const calls = w.venue.createCalls.length;
-    for (let i = 0; i < 20 && job(w).status === 'running'; i += 1) await step(w);
-    expect(job(w), stateOf(w)).toMatchObject({ status: 'halted', haltKind: 'refused' });
-    expect(job(w).haltReason).toMatch(/^Slice 2 is over \S+'s 0\.2 ETH maximum$/);
-    expect(child(w, 1)!.mode).toBe('DONE');
-    expect(child(w, 2)).toBeNull();
-    expect(w.venue.createCalls).toHaveLength(calls);
-    const res = await post(w, `rebalance/${job(w).id}/resume`);
-    expect(res.statusCode, res.body).toBe(200);
-    await settle(w);
-    const twap = job(w).twap!;
-    expect(fx(twap.sliceQty) <= fx('0.2')).toBe(true);
-    for (let slice = 2; slice <= twap.slices; slice += 1) {
+    await untilSlice(w, 2);
+    expect(job(w), stateOf(w)).toMatchObject({ status: 'running', haltKind: null });
+    expect(child(w, 2)!.targetQty).toBe('0.2');
+    await fillChild(w, childId(w, 2));
+    await untilSlice(w, 3);
+    expect(child(w, 3)!.targetQty).toBe('0.18');
+    await fillChild(w, childId(w, 3));
+    for (let slice = 4; slice <= job(w).twap!.slices; slice += 1) {
       await untilSlice(w, slice);
       const target = child(w, slice)!.targetQty;
       expect(onLots(target), target).toBe(true);

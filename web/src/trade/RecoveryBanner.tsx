@@ -154,7 +154,7 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
       !(d.pair.b === null && d.pair.limitPrice !== null && d.pair.mode === 'OPENING') &&
       !(twapJob && isTwapChildId(d.pair.id, twapJob.id)),
   );
-  const standing = alerts.data ?? [];
+  const standing = (alerts.data ?? []).filter((alert) => !(twapJob && alert.pairId && isTwapChildId(alert.pairId, twapJob.id)));
 
   let dealBand: ReactNode = null;
   if (!flow.modalOpen && deals.length > 0) {
@@ -199,19 +199,9 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
     );
   }
 
-  if (twapJob)
-    return (
-      <>
-        <TwapStrip job={twapJob} />
-        {dealBand}
-      </>
-    );
-  if (dealBand) return dealBand;
-
-  if (standing.length === 0) return null;
-  const alert = standing[0];
-  const isRebalance = alert.pairId?.startsWith('rebalance:') ?? false;
-  return (
+  const alert = standing.at(0);
+  const isRebalance = alert?.pairId?.startsWith('rebalance:') ?? false;
+  const alertBand = alert ? (
     <div role="alert" className="border-b border-amber-500/30 bg-amber-500/10">
       <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-3 px-5 py-2 text-xs text-amber-200">
         <span>
@@ -242,5 +232,14 @@ export function RecoveryBanner({ onOpenTab }: { onOpenTab?: (tab: 'balances') =>
         </button>
       </div>
     </div>
-  );
+  ) : null;
+  const band = dealBand ?? alertBand;
+  if (twapJob)
+    return (
+      <>
+        <TwapStrip job={twapJob} />
+        {band}
+      </>
+    );
+  return band;
 }

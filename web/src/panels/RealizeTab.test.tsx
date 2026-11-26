@@ -1,13 +1,16 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { fireEvent, render as rtlRender, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
-import type { RealizeLeg, RealizeTwap, RebalanceView, TwapPlanView } from '../api/types';
-import { accountBodies, accountHandler, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
+import type { RealizeLeg, RealizePlan, RealizeTwap, RebalanceView, TwapPlanView } from '../api/types';
+import { ToastProvider } from '../components/Toast';
+import { accountBodies, accountHandler, realizeCustomPlan, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RealizeTab } from './RealizeTab';
 import { twapQueryOf } from './realizeTabCost';
+import { TrackedAddressProvider } from './trackedAddress';
 
 type Body = { kind?: string; costUsd?: number; maker?: unknown; twap?: Record<string, unknown> };
 
@@ -150,6 +153,77 @@ describe('RealizeTab TWAP', () => {
     fireEvent.pointerDown(hold);
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.costUsd).toBeCloseTo(6_480.25, 6);
+  });
+});
+
+function renderCustom(view: RebalanceView, customOf: (usd: number) => RealizePlan, gate: { wait: Promise<void> | null } = { wait: null }) {
+  const sent: (Body & { realizeUsd?: number; realizeTarget?: string })[] = [];
+  server.use(
+    transferHandler(transferViews.spotZero),
+    accountHandler(accountBodies.accountA),
+    http.get('/api/positions', () => HttpResponse.json(env({ positions: [], exposure: [] }))),
+    http.get('/api/rebalance', async ({ request }) => {
+      const usd = Number(new URL(request.url).searchParams.get('realizeUsd') ?? 0);
+      if (gate.wait) await gate.wait;
+      return HttpResponse.json(env({ ...view, realize: { ...view.realize!, custom: usd > 0 ? customOf(usd) : null }, realizeTwap: null }));
+    }),
+    http.post('/api/rebalance', async ({ request }) => {
+      sent.push((await request.json()) as Body & { realizeUsd?: number });
+      return HttpResponse.json(env({ id: 'real0002' }));
+    }),
+  );
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false, refetchOnWindowFocus: false } } });
+  rtlRender(
+    <QueryClientProvider client={client}>
+      <ToastProvider>
+        <TrackedAddressProvider>
+          <RealizeTab view={view} holdMs={50} lock={null} onTab={vi.fn()} onStarted={vi.fn()} />
+        </TrackedAddressProvider>
+      </ToastProvider>
+    </QueryClientProvider>,
+  );
+  return { sent, client };
+}
+
+async function typeCustom(text: string) {
+  const box = screen.getByRole('textbox', { name: 'Amount to realize' });
+  await userEvent.clear(box);
+  await userEvent.type(box, text);
+}
+
+describe('RealizeTab amounts', () => {
+  it('a Custom realize sends the amount it was priced at, not the net after cost', async () => {
+    const { sent } = renderCustom(rebalanceViews.ownerAccount, (usd) => realizeCustomPlan(usd + 200));
+    await typeCustom('5000');
+    const hold = await screen.findByRole('button', { name: 'Hold to realize' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ realizeTarget: 'custom', realizeUsd: 5000 });
+  });
+
+  it('a background read of the Custom plan keeps the hold on', async () => {
+    const gate: { wait: Promise<void> | null } = { wait: null };
+    const { client } = renderCustom(rebalanceViews.ownerAccount, (usd) => realizeCustomPlan(usd), gate);
+    await typeCustom('5000');
+    const hold = await screen.findByRole('button', { name: 'Hold to realize' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    let release: () => void = () => {};
+    gate.wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    void client.refetchQueries();
+    await waitFor(() => expect(client.isFetching()).toBeGreaterThan(0));
+    expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeEnabled();
+    release();
+  });
+
+  it('the After card counts the reopen Convert and the borrow it pays for the Debt amount', async () => {
+    const owner = rebalanceViews.ownerAccount;
+    render(owner, () => twapOf(owner.realize!.clearDebt!.legs, [12], 41.5));
+    expect(screen.getByRole('radio', { name: /^Debt/ })).toHaveAttribute('aria-checked', 'true');
+    const group = screen.getByRole('rowgroup', { name: 'USDT · CrossEx' });
+    expect(within(group).getAllByRole('row').length).toBeGreaterThan(1);
   });
 });
 

@@ -382,9 +382,17 @@ describe('maker + hedge close (both legs reduce-only)', () => {
     expect(decide(p, proj, 1_000, { ...ctx, maxClip: '1.5' })).toMatchObject({ type: 'place', leg: 'B', qty: '4' });
   });
 
+  const refusedHedges = (n: number, label: string): OrderRow[] =>
+    Array.from({ length: n }, (_, i) =>
+      hedgeOrder({ seq: i + 1, clientId: `t-p1.B${i + 1}`, side: 'BUY', state: 'DEAD', closeReason: `rejected:${label}` }),
+    );
+
   it('a stopping close gives up on a hedge leg that keeps refusing, and says so', () => {
     const p = closePair({ mode: 'STOPPING', hedgeRejectStreak: TUNING.STOP_HEDGE_GIVE_UP });
-    const proj = project(p, [restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1, cumQty: '0.152' })]);
+    const proj = project(p, [
+      restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1, cumQty: '0.152' }),
+      ...refusedHedges(TUNING.STOP_HEDGE_GIVE_UP, 'REDUCE_ONLY_ORDER_REJECTED'),
+    ]);
     const a = decide(p, proj, 1_000, ctx);
     expect(a.type).toBe('finish');
     if (a.type !== 'finish') return;
@@ -396,6 +404,17 @@ describe('maker + hedge close (both legs reduce-only)', () => {
   it('below the give-up limit a stopping close still retries the hedge', () => {
     const p = closePair({ mode: 'STOPPING', hedgeRejectStreak: TUNING.STOP_HEDGE_GIVE_UP - 1 });
     const proj = project(p, [restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1, cumQty: '0.152' })]);
+    expect(decide(p, proj, 1_000, ctx)).toMatchObject({ type: 'place', leg: 'B', qty: '0.152' });
+  });
+
+  it('hedge failures that are not reduce-only refusals never make a stopping close give up', () => {
+    const p = closePair({ mode: 'STOPPING', hedgeRejectStreak: 50 });
+    const proj = project(p, [
+      restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 1, cumQty: '0.152' }),
+      ...refusedHedges(TUNING.STOP_HEDGE_GIVE_UP - 1, 'REDUCE_ONLY_ORDER_REJECTED'),
+      hedgeOrder({ seq: 20, clientId: 't-p1.B20', side: 'BUY', state: 'DEAD', closeReason: 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR' }),
+      hedgeOrder({ seq: 21, clientId: 't-p1.B21', side: 'BUY', state: 'CLOSED', closeReason: 'cancelled' }),
+    ]);
     expect(decide(p, proj, 1_000, ctx)).toMatchObject({ type: 'place', leg: 'B', qty: '0.152' });
   });
 

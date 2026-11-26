@@ -277,7 +277,9 @@ describe('the card, by the grouping DoD', () => {
     expect(within(dialog).getByLabelText('Close size, applied to both legs')).toHaveValue('0.949');
     expect(within(dialog).getByRole('radio', { name: '100%' })).toHaveAttribute('aria-checked', 'true');
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
-    expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: undefined, HYPERLIQUID_FUTURE_ETH_USDT: undefined });
+    await waitFor(() => expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: undefined, HYPERLIQUID_FUTURE_ETH_USDT: '0.949' }));
+    await user.click(within(dialog).getByRole('radio', { name: /^Market/ }));
+    await waitFor(() => expect(closeQtys(seen.at(-1))).toEqual({ GATE_FUTURE_ETH_USDT: undefined, HYPERLIQUID_FUTURE_ETH_USDT: undefined }));
     await waitFor(() => expect(textOf(within(dialog).getByRole('region', { name: 'Cost' }))).toMatch(/LONG\s*Gate.*SHORT\s*Hyperliquid/));
     expect(textOf(within(dialog).getByRole('region', { name: 'After' }))).not.toMatch(/not in this pair|left/);
   });
@@ -298,8 +300,11 @@ describe('the card, by the grouping DoD', () => {
     });
     await expand(user, card);
     await user.click(within(card).getByRole('button', { name: 'Close perps' }));
+    await user.click(within(await screen.findByRole('dialog')).getByRole('radio', { name: /^Market/ }));
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
-    expect(closeQtys(seen.at(-1))).toEqual({ HYPERLIQUID_FUTURE_ETH_USDT: ownCard ? String(gate) : undefined, GATE_FUTURE_ETH_USDT: undefined });
+    await waitFor(() =>
+      expect(closeQtys(seen.at(-1))).toEqual({ HYPERLIQUID_FUTURE_ETH_USDT: ownCard ? String(gate) : undefined, GATE_FUTURE_ETH_USDT: undefined }),
+    );
   });
 
   it.each(RUNGS)('S-OPEN-01 open prefill prices the capped size at every rung ($%i)', async (usd) => {

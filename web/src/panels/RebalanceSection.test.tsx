@@ -16,6 +16,7 @@ import {
   rebased,
   transferHandler,
   transferViews,
+  twapFixtures,
   whaleRebalanceViews,
 } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -286,6 +287,12 @@ describe('RebalanceSection verdict', () => {
     expect(region().querySelector('.lucide-check')).not.toBeNull();
     expect(region().querySelector('.lucide-triangle-alert')).toBeNull();
     expect(region().querySelector('.alert-red')).toBeNull();
+  });
+
+  it('one day of interest reads 1 day, not 1 days', async () => {
+    const view = rebalanceViews.recommendedRealize;
+    await show({ ...view, fullPlan: { ...fullPlanOf(view), days: 1 } });
+    expect(line(`Reduce borrow recommended · Total cost ${fmtUsd(fullPlanOf(view).costUsd)} = 1 day of interest`)).not.toBeNull();
   });
 
   it('recommended button primary', async () => {
@@ -713,6 +720,18 @@ describe('Borrow card names the job by kind and state', () => {
     renderWithClient(withOpener(<RebalanceSection />));
     const card = await screen.findByRole('region', { name: 'Borrow' });
     expect(await within(card).findByText('Boros 52.82 YU has no perp behind it')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['running', 'TWAP running.', 'Running'],
+    ['paused', 'TWAP paused.', 'Paused · open'],
+  ] as const)('a %s ticket TWAP reads as a TWAP, not a Rebalance at Convert', async (state, text, button) => {
+    serve(twapFixtures.normal[state].rebalance);
+    renderWithClient(withOpener(<RebalanceSection />));
+    const card = await screen.findByRole('region', { name: 'Borrow' });
+    expect(await within(card).findByText(text)).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: button })).toBeInTheDocument();
+    expect(within(card).queryByText(/Rebalance (running|stopped)|Convert/)).toBeNull();
   });
 
   it('an abandoned Delever shows its Boros gap', async () => {

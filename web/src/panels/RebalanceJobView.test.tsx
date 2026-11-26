@@ -144,6 +144,19 @@ describe('RebalanceJobView, sliced runs', () => {
     expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
   });
 
+  it('a realize on USDT · CrossEx names USDT in the run and the receipt', () => {
+    const onCrossex = (job: RebalanceJob): Partial<RebalanceJob> => ({
+      realize: { ...job.realize!, legs: job.realize!.legs.map((leg) => ({ ...leg, pool: 'CROSSEX' as const })) },
+    });
+    const running = show(rebalanceViews.ownerRealizeRunning, onCrossex(rebalanceViews.ownerRealizeRunning.job!)).job;
+    const runNet = running.realize!.legs.reduce((sum, leg) => sum + leg.realizedUsd, 0) - running.feeSoFarUsd!;
+    expect(screen.getByText(`${num(runNet, 0)} of ${num(running.amount, 0)} USDT`)).toBeInTheDocument();
+    cleanup();
+    const done = show(rebalanceViews.ownerRealizeDone, onCrossex(rebalanceViews.ownerRealizeDone.job!)).job;
+    const doneNet = done.realize!.legs.reduce((sum, leg) => sum + leg.realizedUsd, 0) - done.totalCostUsd!;
+    expect(screen.getByText(`Realized ${num(doneNet, 0)} USDT`)).toBeInTheDocument();
+  });
+
   it('realize done receipt', () => {
     const { job } = show(rebalanceViews.ownerRealizeDone);
     const net = job.realize!.legs.reduce((sum, leg) => sum + leg.realizedUsd, 0) - job.totalCostUsd!;

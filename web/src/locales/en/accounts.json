@@ -306,8 +306,7 @@
     "after": {
       "boros": "Boros",
       "perps": "Perps",
-      "borosUnhedged": "{{qty}} {{coin}} fixed rate · not hedged",
-      "openFloating": "Open, not hedged, floating funding"
+      "borosUnhedged": "{{qty}} {{coin}} fixed rate · not hedged"
     },
     "head": {
       "leg": "Leg",
@@ -436,8 +435,8 @@
     "reduce": "Reduce borrow",
     "none": "No borrow",
     "free": "Interest-free under {{amount}} USDC",
-    "recommended": "Reduce borrow recommended · Total cost {{cost}} = {{days}} days of interest",
-    "notRecommended": "Not recommended: Total cost {{cost}} = {{days}} days of interest (limit {{limit}})",
+    "recommended": "Reduce borrow recommended · Total cost {{cost}} = {{days}} of interest",
+    "notRecommended": "Not recommended: Total cost {{cost}} = {{days}} of interest (limit {{limit}})",
     "lineRealizeThenMove": "Realize uPnL, then Move cash",
     "lineMove": "Move cash",
     "needs": "Needs {{line}}",
@@ -473,7 +472,6 @@
     "convertFee": "Convert fee",
     "priceImpact": "Price impact",
     "totalCost": "Total cost",
-    "paysBack": "Pays back in {{days}} days of interest",
     "paysBackLabel": "Pays back in",
     "cashShort": "{{left}} {{coin}} of borrow left. No more cash in {{wallet}}.",
     "cashShortLink": "Realize uPnL",
@@ -535,6 +533,7 @@
     "afterPerps": "{{longVenue}} Long · {{shortVenue}} Short {{a}} → {{b}} {{coin}} each",
     "perpsLabel": "{{longVenue}} Long · {{shortVenue}} Short",
     "coinEach": "{{coin}} each",
+    "perpLegLabel": "{{venue}} {{side}}",
     "borosLabel": "Boros",
     "yu": "YU",
     "imUsedLabel": "IM used · {{account}}",
@@ -544,6 +543,7 @@
     "stepBoros": "Close Boros · {{qty}} YU",
     "stepBorosEach": "Close Boros · {{qty}} YU each",
     "hold": "Hold to delever {{qty}} {{coin}}",
+    "holdNoSize": "Hold to delever",
     "noPairs": "No open pairs",
     "noPairsMatch": "No pairs match",
     "belowMin": "{{venue}} takes at least {{min}} {{coin}}",
@@ -556,7 +556,7 @@
   "sliceRun": {
     "slice": "Slice {{i}} of {{n}}",
     "left": "Est. {{time}} left",
-    "realizedOf": "{{x}} of {{y}} USDC",
+    "realizedOf": "{{x}} of {{y}} {{coin}}",
     "notHedgedNow": "Not hedged now {{qty}} {{coin}} ({{usd}})",
     "feeSoFar": "Fee so far {{fee}} · est. total {{est}}",
     "holdPause": "Pause after this slice",
@@ -586,7 +586,7 @@
     "feeEst": "Fee so far {{fee}} · Est. fee {{est}}",
     "imDone": "{{a}}% → {{b}}%",
     "totalCost": "{{real}} (est. {{est}})",
-    "realized": "Realized {{amount}} USDC",
+    "realized": "Realized {{amount}} {{coin}}",
     "done": "Done",
     "next": "Next: Move cash",
     "leftover": "The last move left {{amount}} USDC in Gate spot.",

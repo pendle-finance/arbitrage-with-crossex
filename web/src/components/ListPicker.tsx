@@ -35,6 +35,7 @@ export function ListPicker<K extends string>({
   const fired = useRef(false);
   const listId = useId();
   const picked = rows.find((row) => row.key === value) ?? null;
+  const at = Math.min(active, rows.length - 1);
   const { place, start, stop } = usePopoverPlacement({ button, panel, anchor: 'left', open, onClose: () => hide(false) });
 
   const show = () => {
@@ -80,10 +81,10 @@ export function ListPicker<K extends string>({
     if (rows.length === 0) return;
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
-      if (!e.repeat) select(rows[active]);
+      if (!e.repeat) select(rows[at]);
       return;
     }
-    const next = e.key === 'ArrowDown' ? (active + 1) % rows.length : e.key === 'ArrowUp' ? (active <= 0 ? rows.length : active) - 1 : null;
+    const next = e.key === 'ArrowDown' ? (at + 1) % rows.length : e.key === 'ArrowUp' ? (at <= 0 ? rows.length : at) - 1 : null;
     if (next === null) return;
     e.preventDefault();
     e.stopPropagation();
@@ -134,7 +135,7 @@ export function ListPicker<K extends string>({
             id={listId}
             role="listbox"
             aria-label={label}
-            aria-activedescendant={rows[active] ? optionId(rows[active]) : undefined}
+            aria-activedescendant={rows[at] ? optionId(rows[at]) : undefined}
             tabIndex={-1}
             onKeyDown={onListKey}
             onKeyUp={(e) => {
@@ -143,7 +144,7 @@ export function ListPicker<K extends string>({
             style={{ left: place.left, width: place.width, top: place.top, bottom: place.bottom }}
             className="pp-tooltip fixed z-50 flex max-h-64 flex-col overflow-y-auto p-1 outline-none"
           >
-            {rows.map((row, at) => (
+            {rows.map((row, index) => (
               <button
                 key={row.key}
                 id={optionId(row)}
@@ -154,9 +155,9 @@ export function ListPicker<K extends string>({
                 aria-selected={row.key === value}
                 aria-disabled={row.disabled || undefined}
                 onMouseDown={(e) => e.preventDefault()}
-                onMouseEnter={() => setActive(at)}
+                onMouseEnter={() => setActive(index)}
                 onClick={() => select(row)}
-                className={`flex items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${row.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'} ${at === active ? 'bg-info/15' : ''}`}
+                className={`flex items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${row.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'} ${index === at ? 'bg-info/15' : ''}`}
               >
                 <span className="flex w-3.5 shrink-0 text-info">{row.key === value && <Check size={14} aria-hidden />}</span>
                 <span className={`${line} flex-1`}>

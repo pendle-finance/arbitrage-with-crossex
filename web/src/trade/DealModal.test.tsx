@@ -524,7 +524,7 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0', unhedged: '0.05' },
       }),
     );
-    expect(await screen.findByText(/^Opened 0\.05 ETH each/)).toBeInTheDocument();
+    expect(await screen.findByText(/^Filled · Gate 0\.05 ETH .*\/ Filled · Binance 0(\.00)? ETH/)).toBeInTheDocument();
     expect(screen.queryByText('Slippage')).not.toBeInTheDocument();
   });
 

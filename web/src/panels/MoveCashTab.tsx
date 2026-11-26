@@ -123,7 +123,6 @@ export function MoveCashTab({
   const clearsBorrow = goal !== 'custom' || receivingBorrow(buckets, planSteps(plan)) !== null;
   const worth = chosen === null || !clearsBorrow ? null : worthLine(plan, route, buckets);
   const days = chosen === null ? null : paybackDays(plan, route, buckets);
-  const paysBack = days !== null && days > 0 ? t('accounts.moveCash.paysBack', { days: num(Math.max(1, Math.ceil(days)), 0) }) : null;
   const imStop = fromPools.includes('CROSSEX') ? crossexImFull(view.imUsed) : null;
   const cashShort = goal === 'repay' && !plan.balanced && flow.left >= DUST && flow.borrowCoin !== null;
   const walletPools = POOLS.filter((pool) => buckets.some((bucket) => keyOf(bucket) === poolKey(pool)));
@@ -154,7 +153,7 @@ export function MoveCashTab({
   } else if (aboveMost) {
     body = (
       <>
-        <VerdictAlert tone="warn" text={realizeText('customMax', { max: num(plan.customMaxUsd ?? 0, 0), coin: poolCoin(customFrom) })} />
+        <VerdictAlert tone="warn" text={realizeText('customMax', { max: num(floorCents(plan.customMaxUsd ?? 0)), coin: poolCoin(customFrom) })} />
         {waits !== null ? (
           <p className="text-xs text-ink-400">{waits}</p>
         ) : (
@@ -222,7 +221,7 @@ export function MoveCashTab({
           <RebalanceModalFooter
             rows={[]}
             holdLabel={HOLD_LABEL.custom}
-            verdict={worth?.tone === 'warn' ? <VerdictAlert tone="warn" text={worth.text} sub={paysBack} /> : undefined}
+            verdict={worth?.tone === 'warn' ? <VerdictAlert tone="warn" text={worth.text} /> : undefined}
             optional={worth !== null && worth.tone !== 'act'}
             stale={stale}
             lock={waits}

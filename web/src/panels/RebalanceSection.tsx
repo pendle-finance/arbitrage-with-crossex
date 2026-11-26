@@ -14,7 +14,7 @@ import { VerdictAlert } from './RebalanceBits';
 import { jobSeconds } from './rebalanceStepRows';
 import { abandonedGapText, hasLeftGap } from './rebalanceCardGap';
 import { CARD_LABEL, realizeBlockedReason, sizeText, verdictRateUnknown, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
-import { borrowFacts, DUST, Facts, hasUnknownRate, HYPERLIQUID_INTEREST_FREE_USDC, isFreeBorrow, WORTH_IT_DAYS, type VerdictTone } from './RebalanceHovers';
+import { borrowFacts, daysText, DUST, Facts, hasUnknownRate, HYPERLIQUID_INTEREST_FREE_USDC, isFreeBorrow, WORTH_IT_DAYS, type VerdictTone } from './RebalanceHovers';
 import { RebalanceInfo, roundCountOf, roundOf } from './RebalanceHovers';
 import { crossexImFull } from './rebalanceImStop';
 import { useRebalanceOpener } from './rebalanceOpener';
@@ -24,9 +24,12 @@ const timeLeft = (seconds: number): string =>
     .replace(/(\d+) h\b/, (_all, n: string) => t('accounts.rebalanceSection.hours', { count: Number(n), n }))
     .replace(/(\d+(?:\.\d+)?) (?:min|m)\b/, (_all, n: string) => t('accounts.rebalanceSection.minutes', { count: Number(n), n }));
 
-const isSliced = (job: RebalanceJob): boolean => job.kind === 'realize' || job.kind === 'delever';
+const isSliced = (job: RebalanceJob): boolean => job.kind === 'realize' || job.kind === 'delever' || job.kind === 'twap';
 
-const jobWhat = (job: RebalanceJob): string => (job.kind === 'realize' || job.kind === 'delever' ? t(`accounts.rebalanceTabs.${job.kind}` as 'accounts.rebalanceTabs.move') : CARD_LABEL[job.goal]);
+function jobWhat(job: RebalanceJob): string {
+  if (job.kind === 'twap') return t('trade.twap.area.title');
+  return job.kind === 'realize' || job.kind === 'delever' ? t(`accounts.rebalanceTabs.${job.kind}` as 'accounts.rebalanceTabs.move') : CARD_LABEL[job.goal];
+}
 
 function jobVerdict(job: RebalanceJob, now: number): string {
   const round = roundOf(job);
@@ -80,7 +83,7 @@ function borrowVerdict(view: RebalanceView, onDelever: () => void): CardVerdict 
     return { tone: 'warn', text, sub: null, primary: false };
   }
   if (!plan?.clearsBorrow || plan.days === null) return null;
-  const days = num(plan.days, 0);
+  const days = daysText(plan.days);
   const cost = fmtUsd(plan.costUsd);
   if (plan.days <= WORTH_IT_DAYS) {
     return { tone: 'recommend', text: t('accounts.borrowCard.recommended', { cost, days }), sub: planLine(plan), primary: true };
