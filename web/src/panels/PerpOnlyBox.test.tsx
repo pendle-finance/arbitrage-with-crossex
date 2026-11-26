@@ -24,7 +24,7 @@ function previewHandler(bodies: Array<{ twap?: unknown }> = [], fees?: typeof FE
     return HttpResponse.json(
       env<PreviewResponse>({
         makerLeg: { auto: 'a', why: 'fees' },
-        priceImpact: { whole: 12, sliced: 3, twapDefault: TWAP_OFF },
+        priceImpact: { whole: 12, sliced: 3 }, twapDefault: TWAP_OFF,
         twap: { plan: PLAN, refusal: null },
         previews: body.actions.map((a) =>
           previewFor(a, {
@@ -84,7 +84,7 @@ function heldPreviewHandler(held: Record<string, string>, bodies: Array<{ action
       env<PreviewResponse>({
         previews,
         makerLeg: { auto: 'a', why: 'fees' },
-        priceImpact: { whole: 12, sliced: 3, twapDefault: TWAP_OFF },
+        priceImpact: { whole: 12, sliced: 3 }, twapDefault: TWAP_OFF,
         twap: body.twap !== undefined && sameQty ? { plan: PLAN, refusal: null } : null,
       }),
     );

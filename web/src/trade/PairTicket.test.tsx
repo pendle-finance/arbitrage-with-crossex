@@ -117,7 +117,7 @@ function previewHandler(opts: {
       env<PreviewResponse>({
         previews,
         makerLeg: opts.makerLeg ?? { auto: 'a', why: 'book' },
-        priceImpact: { whole: 12, sliced: 3, twapDefault: TWAP_OFF },
+        priceImpact: { whole: 12, sliced: 3 }, twapDefault: TWAP_OFF,
         twap: planFor(twap ?? {}),
       }),
     );

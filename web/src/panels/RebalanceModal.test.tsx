@@ -1862,6 +1862,16 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.queryByText('Turn on TWAP to close it in parts.')).toBeNull();
   });
 
+  it('with TWAP on and its slices still past the book, the tab asks for a smaller amount', async () => {
+    const refused = rebalanceViews.realizeRefused;
+    serve({});
+    server.use(http.get('/api/rebalance', () => HttpResponse.json(env(refused))));
+    renderWithClient(<RebalanceModal view={refused} onClose={vi.fn()} />);
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+    expect(await screen.findByText('Pick a smaller Custom amount.')).toBeInTheDocument();
+    expect(screen.queryByText('Turn on TWAP to close it in parts.')).toBeNull();
+  });
+
   it('a realize past the book shows why in place of the hold and keeps the TWAP switch', () => {
     showOn(rebalanceViews.realizeRefused);
     expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
