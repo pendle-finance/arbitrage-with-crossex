@@ -9,6 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { Clients } from '../../src/core/clients';
 import { REPEG_DEFAULT_BP, resolveDeal, type DealRequest } from '../../src/engine/create';
+import { OPEN_ORDER_CAP_REASON } from '../../src/engine/decide';
 import { fxStr, fx } from '../../src/engine/fx';
 import { commands, startLoop, tickPair } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
@@ -1817,6 +1818,19 @@ describe('an order-count refusal on a re-peg keeps the deal and does not loop', 
     expect(w.store.listAlerts().some((a) => /Orders on the first leg keep failing/.test(a.message))).toBe(true);
     assertHonestReport(w);
     expect(JSON.parse(pair.reportJson!).aFilled).toBe('0.05');
+    const reason = JSON.parse(pair.reportJson!).reason as string;
+    expect(reason.startsWith(OPEN_ORDER_CAP_REASON)).toBe(true);
+    expect(reason).not.toMatch(/crossing the market/);
+  });
+
+  it('maker leg: one open-order refusal, then margin refusals, stops with the crossing text, not the cap', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.venue.nextCreate = [await gateAnswerFor(ORDER_COUNT), ...Array(400).fill('reject:INSUFFICIENT_MARGIN')];
+    for (let i = 0; i < RUN_TICKS; i++) await stepChecked(w);
+    const pair = w.store.getPair(w.pairId)!;
+    const reason = JSON.parse(pair.reportJson!).reason as string;
+    expect(reason).toMatch(/crossing the market/);
+    expect(reason.startsWith(OPEN_ORDER_CAP_REASON)).toBe(false);
   });
 
   it('hedge leg: the hedge wall halts the deal, the maker is cancelled, retries stay paced', async () => {

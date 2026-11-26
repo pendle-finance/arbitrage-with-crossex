@@ -45,6 +45,7 @@ const RULES: readonly Rule[] = [
   [/^Gate's one-step close takes only tiny positions\. Use the Close button instead\.$/, 'hintCloseReduceOnly'],
   [/^The price is outside what Gate accepts\. Refresh the price and try again\.$/, 'hintPriceBand'],
   [/^Gate refused this key\. Check the key, the secret and its CrossEx permission\.$/, 'hintCredentialsRejected'],
+  [/^Too many open orders on this market at Gate\. Cancel some, then try again\.$/, 'hintOpenOrderCap'],
   [/^Gate is limiting requests from this account\. Try again in a minute\.$/, 'hintRateLimited'],
   [/^This reduce-only order would not shrink any position: its side or size does not match what you hold\. Check your positions, then try again\.$/, 'hintReduceOnly'],
   [/^Gate refused the leverage or position limit\. Lower the size, then try again\.$/, 'hintLeverage'],
@@ -466,6 +467,7 @@ const RULES: readonly Rule[] = [
   [/^target reached \(unacquired sub-minimum residual (\S+) on the maker leg\)$/, 'dealTargetResidual', ['size']],
   [/^hedge failed (\d+)x — stopped acquiring unhedgeable exposure$/, 'dealHedgeFailed', ['count']],
   [/^A-leg failing repeatedly \(position gone, venue wall, or persistent whiffs\) — stopped honestly$/, 'dealALegFailing'],
+  [/^Gate refused the order: too many open orders on this market\. Cancel some on Gate, then start again\.$/, 'dealOpenOrderCap'],
   [/^the limit price kept crossing the market — the venue rejected the post-only maker (\d+) times in a row$/, 'dealCrossing', ['count']],
   // Order close reasons (closeReasonOf in src/engine/loop.ts).
   [/^cancelled$/, 'orderCancelled'],

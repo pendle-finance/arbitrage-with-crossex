@@ -17,6 +17,8 @@ import {
   type Report,
 } from './types';
 
+export const OPEN_ORDER_CAP_REASON =
+  'Gate refused the order: too many open orders on this market. Cancel some on Gate, then start again.';
 /** A close reason counts as a post-only rejection (requote), not a user STOP. */
 export const POC_REASON = /POC|POST[-_ ]?ONLY|IMMEDIATE/i;
 
@@ -453,7 +455,10 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
         // terminal report — STOPPING finishes with `haltReason ?? 'stopped'`,
         // and a bare "stopped" hides the one failure the user can immediately
         // fix (the modal keys its try-again guidance off this text).
-        const why = `the limit price kept crossing the market — the venue rejected the post-only maker ${TUNING.MAX_POC_REJECTS} times in a row`;
+        const why =
+          /MAX_ORDERS_ERROR/.test(p.makerOrder?.closeReason ?? '')
+            ? OPEN_ORDER_CAP_REASON
+            : `the limit price kept crossing the market — the venue rejected the post-only maker ${TUNING.MAX_POC_REJECTS} times in a row`;
         // A close the trader asked for finishes at market rather than stopping
         // half done: the timeout would send the same market clips anyway.
         if (pair.a.reduceOnly && pair.deadlineAt !== null) {

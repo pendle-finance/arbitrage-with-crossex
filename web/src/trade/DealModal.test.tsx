@@ -495,6 +495,25 @@ describe('DealModal', () => {
     expect(screen.getByText(/Try again from the order form with a fresh limit price/)).toBeInTheDocument();
   });
 
+  it('DONE by the open-order cap: shows the real cause, not the crossed alert', async () => {
+    renderModal(
+      makeDealView({
+        pair: {
+          mode: 'DONE',
+          reportJson: JSON.stringify({
+            aFilled: '0',
+            bFilled: '0',
+            unhedged: '0',
+            reason: 'Gate refused the order: too many open orders on this market. Cancel some on Gate, then start again.',
+          }),
+        },
+        projection: { aFilled: '0', bFilled: '0', unhedged: '0' },
+      }),
+    );
+    expect(await screen.findByText(/too many open orders on this market/)).toBeInTheDocument();
+    expect(screen.queryByText(/the limit price was already through the market/)).not.toBeInTheDocument();
+  });
+
   it('DONE: omits slippage when a leg has no average fill', async () => {
     renderModal(
       makeDealView({
