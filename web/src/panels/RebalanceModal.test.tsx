@@ -10,7 +10,7 @@ import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW,
 import { extraRebalanceViews, transferHandler, transferViews, twapFixtures } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { fmtApprox, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
+import { num, sigGrouped } from '../lib/fmt';
 import { rebalanceHandler } from '../test/fixtures';
 import { RebalanceModal, RebalanceModalHost } from './RebalanceModal';
 import { RebalanceOpenerProvider, useRebalanceOpener, type RebalanceTab } from './rebalanceOpener';
@@ -1637,11 +1637,6 @@ describe('RebalanceModal Move cash tab', () => {
 
 describe('RebalanceModal Realize uPnL tab', () => {
   const orders = () => within(screen.getByRole('radiogroup', { name: 'Orders' })).getAllByRole('radio');
-  const slices = () => within(screen.getByRole('radiogroup', { name: 'Slice size' })).getAllByRole('radio');
-  const nameOf = (el: HTMLElement) =>
-    el.closest('label')?.textContent ?? '';
-  const pick = ownerSlices.find((option) => option.sizeUsd === owner.realize!.defaultSliceUsd)!;
-  const impactPair = () => screen.getAllByText('Price impact').map((el) => el.closest('span.ml-auto')).find((el) => el !== null) as HTMLElement;
   it('Realize shows no Max not hedged, as a row, a column or a yellow warning', () => {
     showOn(owner);
     expect(screen.queryByText('Max not hedged')).toBeNull();
@@ -1665,82 +1660,68 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.queryByRole('button', { name: /Maker settings/ })).toBeNull();
   });
 
-  it('a 10 min wait before taker shows as about 10 min per slice', async () => {
+  it('a 10 min wait before taker shows as about 10 min for the one order', async () => {
     showOn(owner);
     fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
     fireEvent.click(await screen.findByRole('radio', { name: '10m' }));
-    expect(orders()[0]).toHaveTextContent(/· 10 min per slice$/);
+    expect(orders()[0]).toHaveTextContent(/· 10 min$/);
   });
 
-  it('limit + hedge first and default', () => {
+  it('limit + hedge first and default, as one order with no slices', () => {
     showOn(owner);
     expect(orders()[0]!.textContent).toMatch(/^Limit \+ hedge about \$[\d,]+ · /);
-    expect(orders()[0]!.textContent).toContain(`· ${fmtApprox(pick.seconds.maker / pick.count)} per slice`);
+    expect(orders()[0]!.textContent).not.toContain('per slice');
     expect(orders()[0]).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('switch', { name: 'Split the close' })).toBeNull();
+    expect(screen.queryByRole('radiogroup', { name: 'Slice size' })).toBeNull();
   });
 
-  it('market second', () => {
+  it('market second, as one order', () => {
     showOn(owner);
     expect(orders()[1]!.textContent).toMatch(/^Market about \$[\d,]+ · /);
-    expect(orders()[1]!.textContent).toContain(`· ${fmtApprox(pick.seconds.market / pick.count)} per slice`);
+    expect(orders()[1]!.textContent).not.toContain('per slice');
   });
 
-  it('a $6M realize at $50k slices reads about 5 min per slice', () => {
+  it('TWAP starts off when the server says one order is fine', () => {
+    showOn(owner);
+    expect(screen.getByRole('switch', { name: 'TWAP' })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('a $6M realize the server marks for TWAP starts with TWAP on at the server span, and Market takes the Market span', async () => {
     const view = whaleRebalanceViews.realizeWhale;
-    const tab = view.realize!;
-    const option = tab.sliceOptions.find((o) => o.sizeUsd === 50_000)!;
-    expect(tab.clearDebt!.legs[0]!.realizedUsd).toBeGreaterThan(5_900_000);
-    expect(option.count).toBeGreaterThan(100);
-    showOn(view, 'realize');
-    expect(orders()[0]!.textContent).toContain(`· ${fmtApprox(300)} per slice`);
-    expect(orders()[0]!.textContent).not.toContain(fmtApprox(option.seconds.maker));
-    expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'true');
-    expect(nameOf(slices().find((radio) => (radio as HTMLInputElement).checked)!)).toContain(fmtNotionalShort(50_000));
-  });
-
-  it('a custom slice below the venue minimum shows the slice raised to the minimum', async () => {
-    const raised = { ...ownerSlices.find((o) => !o.custom)!, sizeUsd: 11, custom: true, count: 640 };
-    const sliced = { ...owner, realize: { ...owner.realize!, sliceOptions: [...ownerSlices.filter((o) => !o.custom), raised] } };
-    serve({});
-    server.use(http.get('/api/rebalance', () => HttpResponse.json(env(sliced))));
-    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    await userEvent.type(screen.getByRole('textbox', { name: 'Custom' }), '1');
-    await waitFor(() => expect(nameOf(slices().at(-1)!)).toContain('640'), { timeout: 3000 });
-    expect(slices().at(-1)).toBeChecked();
-  });
-
-  it('a non-default preset slice judges the plan the server prices at that slice', async () => {
-    const other = ownerSlices.find((o) => !o.custom && o.sizeUsd !== owner.realize!.defaultSliceUsd)!;
-    const refused = { reason: 'past-book' as const, bp: null };
-    const tab = owner.realize!;
-    const sliced = {
-      ...owner,
-      realize: { ...tab, clearDebt: tab.clearDebt ? { ...tab.clearDebt, refused } : null, all: tab.all ? { ...tab.all, refused } : null },
-    };
-    const asked: string[] = [];
+    const on = { on: true, maker: { durationSec: 36_000, intervalSec: 300 }, market: { durationSec: 7_200, intervalSec: 60 } };
+    const marked = { ...view, realize: { ...view.realize!, twapDefault: { clearDebt: on, all: on, custom: on } } };
+    const asked: URLSearchParams[] = [];
     serve({});
     server.use(http.get('/api/rebalance', ({ request }) => {
-      asked.push(new URL(request.url).search);
-      return HttpResponse.json(env(sliced));
+      asked.push(new URL(request.url).searchParams);
+      return HttpResponse.json(env(marked));
     }));
-    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    await userEvent.click(slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!);
-    await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${other.sizeUsd}`))).toBe(true), { timeout: 3000 });
-    expect(await screen.findByText('Order book too thin to price.', {}, { timeout: 3000 })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
-    expect(screen.getByRole('radiogroup', { name: 'Slice size' })).toBeInTheDocument();
+    renderWithClient(<RebalanceModal view={marked} tab="realize" onClose={vi.fn()} />);
+    expect(marked.realize.clearDebt!.legs[0]!.realizedUsd).toBeGreaterThan(5_900_000);
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'TWAP' })).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.getByRole('textbox', { name: 'Duration' })).toHaveValue('10h');
+    expect(screen.getByRole('textbox', { name: 'Interval' })).toHaveValue('5m');
+    await waitFor(() => expect(asked.some((q) => q.get('twapDurationSec') === '36000' && q.get('twapSlices') === '120')).toBe(true));
+    await userEvent.click(orders()[1]!);
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Duration' })).toHaveValue('2h'));
+    expect(screen.getByRole('textbox', { name: 'Interval' })).toHaveValue('1m');
   });
 
-  it('a preset slice the server marks past the book refuses in place of the hold and keeps the slice table', async () => {
-    const other = ownerSlices.find((o) => !o.custom && o.sizeUsd !== owner.realize!.defaultSliceUsd)!;
-    const marked = { ...owner, realize: { ...owner.realize!, sliceOptions: ownerSlices.map((o) => (o.sizeUsd === other.sizeUsd ? { ...o, pastBook: true } : o)) } };
+  it('a trader who turns the suggested TWAP off keeps it off', async () => {
+    const view = whaleRebalanceViews.realizeWhale;
+    const on = { on: true, maker: { durationSec: 36_000, intervalSec: 300 }, market: { durationSec: 7_200, intervalSec: 60 } };
+    const marked = { ...view, realize: { ...view.realize!, twapDefault: { clearDebt: on, all: on, custom: on } } };
     serve({});
     server.use(http.get('/api/rebalance', () => HttpResponse.json(env(marked))));
-    renderWithClient(<RebalanceModal view={marked} onClose={vi.fn()} />);
-    await userEvent.click(slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!);
-    expect(await screen.findByText('Pick a smaller slice size.')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
-    expect(screen.getByRole('radiogroup', { name: 'Slice size' })).toBeInTheDocument();
+    renderWithClient(<RebalanceModal view={marked} tab="realize" onClose={vi.fn()} />);
+    const toggle = screen.getByRole('switch', { name: 'TWAP' });
+    await waitFor(() => expect(toggle).toHaveAttribute('aria-checked', 'true'));
+    await userEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await userEvent.click(orders()[1]!);
+    await userEvent.click(amountPresets()[1]!);
+    expect(screen.getByRole('switch', { name: 'TWAP' })).toHaveAttribute('aria-checked', 'false');
   });
 
   it('realize amount: the box holds the lit preset, and typing lights none', async () => {
@@ -1842,7 +1823,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    await screen.findByRole('switch', { name: 'Split the close' });
+    await screen.findByRole('switch', { name: 'TWAP' });
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
@@ -1851,107 +1832,21 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.getByRole('button', { name: /Refreshing…/ })).toBeDisabled();
   });
 
-  it('slice rows show one row per slice count, smallest size first, then Custom', async () => {
-    showOn(owner);
-    expect(ownerSlices.filter((o) => !o.custom && !o.whole).map((o) => o.count)).toEqual([2, 1, 1, 1]);
-    const names = slices().map(nameOf);
-    expect(names).toHaveLength(3);
-    ['$25k', '$50k', 'Custom'].forEach((label, index) => expect(names[index]).toContain(label));
-  });
-
-  it('Split the close is on by default when the recommended size gives 2 or more slices, with price impact one order to sliced', () => {
-    showOn(owner);
-    const whole = ownerSlices.find((o) => o.whole)!;
-    expect(pick.count).toBeGreaterThan(1);
-    expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'true');
-    const pair = impactPair();
-    expect(pair).toHaveTextContent(`${fmtUsd(whole.reopenImpactUsd, 0)}`);
-    expect(pair.querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
-  });
-
-  it('Split the close off hides the table, keeps price impact one order to recommended, and starts one order', async () => {
-    const starts: { sliceUsd?: number }[] = [];
-    const asked: string[] = [];
-    serve({});
-    server.use(
-      http.get('/api/rebalance', ({ request }) => {
-        asked.push(new URL(request.url).search);
-        return HttpResponse.json(env(owner));
-      }),
-      http.post('/api/rebalance', async ({ request }) => {
-        starts.push((await request.json()) as { sliceUsd?: number });
-        return HttpResponse.json(env({ id: 'real0001' }));
-      }),
-    );
-    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    const whole = ownerSlices.find((o) => o.whole)!;
-    await userEvent.click(screen.getByRole('switch', { name: 'Split the close' }));
-    expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'false');
-    expect(screen.queryByRole('radiogroup', { name: 'Slice size' })).toBeNull();
-    const pair = impactPair();
-    expect(pair.querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
-    expect(orders()[0]!.textContent).not.toContain('per slice');
-    await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${whole.sizeUsd}`))).toBe(true));
-    const hold = screen.getByRole('button', { name: 'Hold to realize' });
-    await waitFor(() => expect(hold).toBeEnabled());
-    fireEvent.pointerDown(hold);
-    await waitFor(() => expect(starts).toHaveLength(1));
-    expect(starts[0]!.sliceUsd).toBe(whole.sizeUsd);
-  });
-
-  it('Split the close cannot turn on when every size gives one slice, and the hover says why', async () => {
-    const single = ownerSlices.map((o) => ({ ...o, count: 1 }));
-    const small = { ...owner, realize: { ...owner.realize!, sliceOptions: single } };
-    showOn(small);
-    const toggle = screen.getByRole('switch', { name: 'Split the close' });
-    expect(toggle).toBeDisabled();
-    expect(toggle).toHaveAttribute('aria-checked', 'false');
-    expect(screen.queryByRole('radiogroup', { name: 'Slice size' })).toBeNull();
-    fireEvent.mouseEnter(toggle.parentElement as HTMLElement);
-    expect(await screen.findByText('Too small to split. One order of this size fits in one slice.')).toBeInTheDocument();
-  });
-
-  it('one order past the book with Split the close off points at the switch', async () => {
+  it('one order past the book points at TWAP in place of the hold', async () => {
     const marked = { ...owner, realize: { ...owner.realize!, sliceOptions: ownerSlices.map((o) => (o.whole ? { ...o, pastBook: true } : o)) } };
     showOn(marked);
-    await userEvent.click(screen.getByRole('switch', { name: 'Split the close' }));
-    expect(await screen.findByText('Turn on Split the close.')).toBeInTheDocument();
+    expect(await screen.findByText('Turn on TWAP to close it in parts.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
-    const pair = impactPair();
-    expect(pair).toHaveTextContent('Book too thin to price');
+    expect(screen.getByRole('switch', { name: 'TWAP' })).toBeInTheDocument();
   });
 
-  it('slice columns', async () => {
-    showOn(owner);
-    ['Count', 'Est. time', 'Price impact', 'Max slippage 0.25%'].forEach((head) => expect(screen.getAllByText(head).length).toBeGreaterThan(0));
-    expect(screen.queryByText('Max not hedged')).toBeNull();
-    const before = nameOf(slices()[0]!);
-    await userEvent.click(orders()[1]!);
-    expect(nameOf(slices()[0]!)).not.toBe(before);
-  });
-
-  it('slice default row', async () => {
-    showOn(owner);
-    const checked = slices().find((radio) => (radio as HTMLInputElement).checked);
-    expect(nameOf(checked!)).toContain(fmtNotionalShort(owner.realize!.defaultSliceUsd));
-  });
-
-  it('slice row updates cost', async () => {
-    showOn(owner);
-    const other = ownerSlices.find((option) => !option.custom && !option.whole && option.sizeUsd !== pick.sizeUsd)!;
-    const before = totalCard().textContent;
-    const row = slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!;
-    await userEvent.click(row);
-    expect((row as HTMLInputElement).checked).toBe(true);
-    if (other.impactUsd !== pick.impactUsd) expect(totalCard().textContent).not.toBe(before);
-  });
-
-  it('a realize past the book shows why in place of the hold and keeps the split controls', () => {
+  it('a realize past the book shows why in place of the hold and keeps the TWAP switch', () => {
     showOn(rebalanceViews.realizeRefused);
     expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
     expect(screen.getAllByText('Order book too thin to price.').length).toBeGreaterThan(0);
+    expect(screen.getByText('Turn on TWAP to close it in parts.')).toBeInTheDocument();
     expect(screen.getByRole('radiogroup', { name: 'Orders' })).toBeInTheDocument();
-    expect(screen.getByRole('switch', { name: 'Split the close' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'TWAP' })).toBeInTheDocument();
   });
 
   it('a margin refusal wins over a thin book, and hides the orders', () => {
@@ -1963,28 +1858,6 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
   });
 
-  it('a recommended size that is not a preset starts with Split the close off, and on picks the largest size that splits', async () => {
-    const view = { ...owner, realize: { ...owner.realize!, defaultSliceUsd: 40_000 } };
-    showOn(view);
-    const toggle = screen.getByRole('switch', { name: 'Split the close' });
-    expect(toggle).toBeEnabled();
-    expect(toggle).toHaveAttribute('aria-checked', 'false');
-    expect(impactPair().querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
-    fireEvent.mouseEnter(toggle.parentElement as HTMLElement);
-    expect(await screen.findByText(new RegExp(`Recommended: ${fmtNotionalShort(pick.sizeUsd).replace('$', '\\$')}, ${pick.count} slices`))).toBeInTheDocument();
-    await userEvent.click(toggle);
-    const checked = slices().find((radio) => (radio as HTMLInputElement).checked);
-    expect(nameOf(checked!)).toContain(fmtNotionalShort(pick.sizeUsd));
-  });
-
-  it('All can split when the debt amount fits in one slice', async () => {
-    const single = ownerSlices.map((o) => ({ ...o, count: 1 }));
-    const small = { ...owner, realize: { ...owner.realize!, sliceOptions: single } };
-    showOn(small);
-    expect(screen.getByRole('switch', { name: 'Split the close' })).toBeDisabled();
-    await userEvent.click(amountPresets()[1]!);
-    expect(screen.getByRole('switch', { name: 'Split the close' })).toBeEnabled();
-  });
 });
 
 describe('RebalanceModal TWAP run', () => {

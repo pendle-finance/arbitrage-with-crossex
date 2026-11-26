@@ -14,7 +14,7 @@ import { prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
-import { TwapArea, useTwapInput } from '../trade/TwapArea';
+import { TwapArea, useTwapDefault, useTwapInput } from '../trade/TwapArea';
 import { useTwapTakerAfter } from '../trade/useTwapTakerAfter';
 import { pairPickerRowOf, useOpenPairs, type OpenPair } from './assets/pairs';
 import { CloseMakerSettings, type MakerOpts, useCloseMaker, withMakerWait } from './closeMaker';
@@ -126,6 +126,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const twapSent = twap.on && !twap.startBlocked ? { ...twap.input, ...(exec === 'maker' ? makerOpts : {}) } : undefined;
   const request = pair !== null && close !== null ? requestOf(pair, close, exec, twapSent) : null;
   const query = useDeleverPlan(request);
+  useTwapDefault(twap, query.data?.priceImpact?.twapDefault, exec);
   const takerOff = useTwapTakerAfter(maker.taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
   const takerBad = exec === 'maker' && takerOff;
 
