@@ -63,6 +63,13 @@ describe('classifyGateError label anchoring', () => {
     expect(classifyGateError(gate(400, 'TOO_MANY_REQUESTS')).category).toBe('rate-limited');
   });
 
+  it('too many open orders on the symbol is a venue refusal, not an order allowance', () => {
+    const c = classifyGateError(gate(400, 'TRADE_MAX_ORDERS_ERROR'));
+    expect(c.category).toBe('venue-rejected');
+    expect(c.retryable).toBe(false);
+    expect(c.message).toBe('Too many open orders on this market at Gate. Cancel some, then try again. (Gate: TRADE_MAX_ORDERS_ERROR)');
+  });
+
   it('transfer amount below minimum is still unknown', () => {
     expect(classifyGateError(gate(422, 'TRANSFER_AMOUNT_MINTRANS_INVALID_ERROR')).category).toBe('unknown');
   });

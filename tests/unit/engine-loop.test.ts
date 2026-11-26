@@ -13,12 +13,14 @@ import { fxStr, fx } from '../../src/engine/fx';
 import { commands, startLoop, tickPair } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
 import { TUNING } from '../../src/engine/types';
+import { gateVenue } from '../../src/engine/venueGate';
 import {
   A_CONTRACT,
   B_CONTRACT,
   assertHonestReport,
   assertInvariants,
   mkWorld,
+  type CreateDirective,
   type World,
 } from './engine-sim';
 
@@ -1741,5 +1743,108 @@ describe('an order-count refusal on a re-peg', () => {
     const oldPriceRepost = w.store.listOrders(w.pairId).find((o) => o.seq > refused.seq && o.price === '2500');
     expect(oldPriceRepost).toBeDefined();
     expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2501.5');
+  });
+});
+
+describe('an order-count refusal on a re-peg keeps the deal and does not loop', () => {
+  const ORDER_COUNT = 'TRADE_MAX_ORDERS_ERROR';
+  const RUN_TICKS = 300;
+
+  const gateAnswerFor = async (label: string): Promise<CreateDirective> => {
+    const clients = {
+      crossEx: {
+        createCrossexOrder: async () => {
+          throw { response: { status: 400, data: { label, message: 'The open order num exceeds the limit' } } };
+        },
+      },
+    } as unknown as Clients;
+    const out = await gateVenue(() => clients).create({
+      contract: A_CONTRACT,
+      side: 'BUY',
+      qty: '0.102',
+      price: '2501.5',
+      tif: 'poc',
+      clientText: 't-p1.A9',
+    });
+    return out.kind === 'reject' ? `reject:${out.label}` : 'unknown-lost';
+  };
+
+  const liveOnVenue = (w: World) =>
+    [...w.venue.orders.values()].filter((o) => o.rawStatus === 'NEW' || o.rawStatus === 'OPEN');
+
+  const expectNoOrphan = (w: World) => {
+    const known = new Set(
+      w.store
+        .listOrders(w.pairId)
+        .filter((o) => o.state !== 'DEAD')
+        .map((o) => o.clientId),
+    );
+    for (const o of liveOnVenue(w)) expect(known.has(o.clientText)).toBe(true);
+  };
+
+  const sendTimes = (w: World, leg: 'A' | 'B', from: number) =>
+    w.store
+      .listOrders(w.pairId)
+      .filter((o) => o.leg === leg && o.createdAt >= from)
+      .map((o) => o.createdAt)
+      .sort((x, y) => x - y);
+
+  const gaps = (times: number[]) => times.slice(1).map((t, i) => t - times[i]);
+
+  it('maker leg: a few paced sends, then the deal stops with what filled, hedged', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    await stepChecked(w);
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, '0.05');
+    await stepChecked(w, 3);
+    expect(fxStr(w.venue.truth().bTrue)).toBe('0.05');
+    w.venue.nextCreate = Array(400).fill(await gateAnswerFor(ORDER_COUNT));
+    w.venue.bestA = '2501.5';
+    const from = w.clock.now();
+    for (let i = 0; i < RUN_TICKS; i++) {
+      await stepChecked(w);
+      expectNoOrphan(w);
+      expect(liveOnVenue(w).length).toBeLessThanOrEqual(1);
+    }
+    const sends = sendTimes(w, 'A', from);
+    const pair = w.store.getPair(w.pairId)!;
+    const where = `mode ${pair.mode}, ${sends.length} sends on leg A at ${sends.map((t) => (t - from) / 1000).join(', ')} s`;
+    expect(sends.length, where).toBeGreaterThan(0);
+    expect(sends.length, where).toBeLessThanOrEqual(TUNING.MAX_POC_REJECTS);
+    for (const gap of gaps(sends)) expect(gap, where).toBeGreaterThanOrEqual(TUNING.POC_BACKOFF_MS);
+    expect(sends.every((t) => t < from + 60_000), where).toBe(true);
+    expect(liveOnVenue(w)).toHaveLength(0);
+    expect(w.store.listAlerts().some((a) => /Orders on the first leg keep failing/.test(a.message))).toBe(true);
+    assertHonestReport(w);
+    expect(JSON.parse(pair.reportJson!).aFilled).toBe('0.05');
+  });
+
+  it('hedge leg: the hedge wall halts the deal, the maker is cancelled, retries stay paced', async () => {
+    const w = mkWorld({ deadlineInMs: null, pricePolicy: 'touch' });
+    w.store.updatePair(w.pairId, { repegBehindBp: 5 });
+    await stepChecked(w);
+    w.venue.nextCreate = Array(400).fill(await gateAnswerFor(ORDER_COUNT));
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, '0.05');
+    const from = w.clock.now();
+    for (let i = 0; i < RUN_TICKS; i++) {
+      await stepChecked(w);
+      expectNoOrphan(w);
+    }
+    const sends = sendTimes(w, 'B', from);
+    const pair = w.store.getPair(w.pairId)!;
+    const where = `mode ${pair.mode}, ${sends.length} sends on leg B at ${sends.map((t) => (t - from) / 1000).join(', ')} s`;
+    expect(pair.mode, where).toBe('HALTED');
+    expect(pair.haltReason).toContain('hedge failed');
+    expect(w.store.listAlerts().some((a) => /Hedge orders keep failing/.test(a.message))).toBe(true);
+    expect(w.venue.liveOrder(A_CONTRACT)).toBeUndefined();
+    for (const gap of gaps(sends)) expect(gap, where).toBeGreaterThanOrEqual(TUNING.HEDGE_BACKOFF_MS);
+    expect(sends.length, where).toBeLessThanOrEqual(RUN_TICKS * TUNING.TICK_MS / TUNING.HEDGE_BACKOFF_MS + 1);
+    expect(fxStr(w.venue.truth().aTrue)).toBe('0.05');
+
+    w.venue.nextCreate = [];
+    commands.resumeAfterHalt(w.store, w.pairId);
+    await stepChecked(w, 6);
+    assertHonestReport(w);
+    expect(JSON.parse(w.store.getPair(w.pairId)!.reportJson!).bFilled).toBe('0.05');
   });
 });
