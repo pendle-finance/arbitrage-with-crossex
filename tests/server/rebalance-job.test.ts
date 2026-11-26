@@ -799,13 +799,13 @@ describe('sliced jobs through the routes', () => {
     { symbol: HL, position_side: 'NONE', position_qty: String(-hl), position_value: String(hl * 1821), mark_price: '1821' },
     { symbol: GATE_ETH, position_side: 'NONE', position_qty: String(gateQty), position_value: String(gateQty * 1821), mark_price: '1821' },
   ];
-  function sliceVenue(positions: unknown[] = heldPerps(66, 66)): Sent[] {
+  function sliceVenue(positions: unknown[] = heldPerps(66, 66), rules: unknown[] = [perpRule(HL), perpRule(GATE_ETH)]): Sent[] {
     const sent: Sent[] = [];
     gate()
       .persist()
       .get(`${API}/crossex/rule/symbols`)
       .query(true)
-      .reply(200, [perpRule(HL), perpRule(GATE_ETH)]);
+      .reply(200, rules);
     mockView({ positions });
     const tier = (symbol: string) => ({ symbol, tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '50' }] });
     gate().persist().get(`${API}/crossex/open_orders`).query(true).reply(200, []);
@@ -988,6 +988,21 @@ describe('sliced jobs through the routes', () => {
     expect(h.file().slice!.index).toBeGreaterThan(6);
     expect(h.file().realize!.legs[0].filledQty).toBe(33);
     expect(sent).toEqual([]);
+  });
+
+  it('a slice never asks more than the venue max order size, even when the live mid is below the plan mark', async () => {
+    sliceVenue(heldPerps(66, 66), [perpRule(HL), { ...perpRule(GATE_ETH), max_market_size: '5', max_limit_size: '5' }]);
+    const job = unfilled();
+    expect(job.slice!.sizeUsd / 1821).toBeGreaterThan(5);
+    const h = boot({ job, extra: borosDeps() });
+
+    expect((await h.post(`/api/rebalance/${job.id}/resume`)).statusCode).toBe(200);
+    await waitFor(() => h.file().status === 'done', 'done');
+
+    const children = h.store!.listPairs();
+    expect(children.length).toBeGreaterThan(1);
+    for (const child of children) expect(Number(child.targetQty)).toBeLessThanOrEqual(5);
+    expect(h.file().realize!.legs[0].filledQty).toBe(33);
   });
 
   it('with TWAP off, Pause lets the child in flight end first, then the job pauses', async () => {

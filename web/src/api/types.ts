@@ -269,6 +269,7 @@ export interface RealizePlan {
 export interface SliceOption {
   sizeUsd: number;
   custom: boolean;
+  whole: boolean;
   count: number;
   impactBp: number;
   impactUsd: number;

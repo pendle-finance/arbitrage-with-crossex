@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { useDeleverPlan, useStartRebalance } from '../api/queries';
-import type { DeleverPlan, DeleverRequest, RealizeExec, SliceOption } from '../api/types';
+import type { DeleverPlan, DeleverRequest, RealizeExec } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { HoverCard } from '../components/HoverCard';
 import { ExecModeToggle } from '../components/ExecModeToggle';
@@ -25,14 +25,11 @@ import { spanText } from '../lib/span';
 import { execModeLabel, poolKey } from './rebalanceCopy';
 import { SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { parsedAmount } from './rebalanceModalPlan';
 import { NotHedgedLine, realizeText, TotalCost, type CostRow } from './RebalancePlanBits';
-import { SliceSizeRow } from './SliceTable';
 import { useActiveWallet } from './trackedAddress';
 
 type Share = '10' | '20' | '30';
 const SHARES: Share[] = ['10', '20', '30'];
-type SlicePick = { kind: 'preset'; usd: number } | { kind: 'custom' } | null;
 
 const largestIm = (pairs: OpenPair[]): OpenPair | null =>
   pairs.reduce<OpenPair | null>((best, p) => (best === null || p.imUsd > best.imUsd ? p : best), null);
@@ -81,28 +78,14 @@ function requestOf(
   pair: OpenPair,
   close: number,
   exec: RealizeExec,
-  sliceUsd: number | null,
   twap: (DeleverRequest['twap'] & MakerOpts) | undefined,
 ): DeleverRequest {
   return {
     perps: pair.perps.map((p) => ({ symbol: p.symbol, qty: close })),
     boros: pair.boros.map((b) => ({ marketId: b.marketId, size: (b.size * close) / pair.size })),
     exec,
-    ...(sliceUsd !== null ? { sliceUsd } : {}),
     ...(twap ? { twap } : {}),
   };
-}
-
-function sliceUsdOf(pick: SlicePick, customText: string): number | null {
-  if (pick === null) return null;
-  return pick.kind === 'preset' ? pick.usd : parsedAmount(customText);
-}
-
-function optionOf(plan: DeleverPlan, pick: SlicePick): SliceOption | null {
-  const options = plan.sliceOptions;
-  const preset = (usd: number) => options.find((o) => !o.custom && o.sizeUsd === usd) ?? null;
-  if (pick?.kind === 'custom') return options.find((o) => o.custom) ?? preset(plan.defaultSliceUsd);
-  return preset(pick === null ? plan.defaultSliceUsd : pick.usd) ?? preset(plan.defaultSliceUsd);
 }
 
 const qtyRow = (label: string, before: number, after: number, suffix: string): ChangeRow => ({
@@ -147,15 +130,11 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const [picked, setPicked] = useState<string | null>(pairKey);
   const [typed, setTyped] = useState<string | null>(null);
   const [exec, setExec] = useState<RealizeExec>('maker');
-  const [slicePick, setSlicePick] = useState<SlicePick>(null);
-  const [sliceText, setSliceText] = useState('');
-  const [slicesOpen, setSlicesOpen] = useState(false);
   const pairs = open.filter((p) => p.unit === 'base');
   const pair = pairs.find((p) => p.key === picked) ?? largestIm(pairs);
   const amountText = typed ?? (pair ? shareText(pair, '20') : '');
   const { close, error: amountProblem } = pair ? closeOf(pair, amountText) : { close: null, error: null };
   const twap = useTwapInput();
-  const sliceUsd = sliceUsdOf(slicePick, sliceText);
   const taker = useTakerAfter();
   const [repegBp, setRepegBp] = useState<number | null>(REPEG_DEFAULT_BP);
   const makerOpts: MakerOpts = {
@@ -163,7 +142,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     repegBehindBp: repegBp,
   };
   const twapSent = twap.on && !twap.startBlocked ? { ...twap.input, ...(exec === 'maker' ? makerOpts : {}) } : undefined;
-  const request = pair !== null && close !== null ? requestOf(pair, close, exec, twap.on ? null : sliceUsd, twapSent) : null;
+  const request = pair !== null && close !== null ? requestOf(pair, close, exec, twapSent) : null;
   const query = useDeleverPlan(request);
   const takerBad = useTwapTakerAfter(taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
 
@@ -184,7 +163,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
 
   const plan = request !== null ? (query.data ?? null) : null;
   const pct = close === null ? 0 : (close / pair.size) * 100;
-  const option = plan ? optionOf(plan, slicePick) : null;
+  const option = plan?.sliceOptions.find((o) => o.whole) ?? null;
   const estimate = plan?.estimates[exec] ?? null;
   const borosGapYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
   const leadClose = plan?.legs[plan.makerLeg]?.closeQty ?? 0;
@@ -215,8 +194,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     !start.isPending &&
     walletReady;
 
-  const modeLabel = (mode: RealizeExec): string =>
-    execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(option ? option.seconds[mode] / Math.max(1, option.count) : 0));
+  const oneOrder = !twapPlan && option?.count === 1;
+  const orderSec = (mode: RealizeExec): number =>
+    twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : option ? option.seconds[mode] / Math.max(1, option.count) : 0;
+  const modeLabel = (mode: RealizeExec): string => execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(orderSec(mode)), oneOrder);
 
   const costRows: CostRow[] = estimate
     ? [
@@ -237,9 +218,9 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
 
   const confirm = () => {
     if (request === null || estimate === null || close === null) return;
-    const delever = twapBody ? requestOf(pair, close, exec, null, twapBody) : request;
+    const delever = twapBody ? requestOf(pair, close, exec, twapBody) : request;
     start.mutate(
-      { kind: 'delever', exec, sliceUsd: twapBody ? undefined : (option?.sizeUsd ?? sliceUsd ?? undefined), delever, costUsd: estimate.totalUsd },
+      { kind: 'delever', exec, delever, costUsd: estimate.totalUsd },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
     );
   };
@@ -270,8 +251,6 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     }
     if (query.isError && plan === null) return <VerdictAlert tone="warn" text={query.error.message} />;
     if (plan === null) return <Skeleton className="h-48 w-full" />;
-    const hedgeGapQty = twapPlan ? Number(twapPlan.sliceQty) : plan.notHedgedMaxQty;
-    const hedgeGapUsd = twapPlan ? (plan.notHedgedMaxUsd / plan.notHedgedMaxQty) * hedgeGapQty : plan.notHedgedMaxUsd;
     const costBox = costRows.length > 0 && !twapBlocked && !plan.refused && !slicePastBook ? <TotalCost rows={costRows} /> : null;
     const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
     return (
@@ -294,28 +273,6 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           preview={plan.twap ?? null}
           impact={twapBlocked ? null : (plan.priceImpact ?? null)}
           coin={pair.base}
-          offLabel={
-            option && (
-              <SliceSizeRow
-                sizeUsd={option.sizeUsd}
-                count={option.count}
-                open={slicesOpen}
-                onToggle={() => setSlicesOpen((v) => !v)}
-                table={{
-                  options: plan.sliceOptions,
-                  value: slicePick?.kind === 'custom' ? (plan.sliceOptions.find((o) => o.custom)?.sizeUsd ?? -1) : option.sizeUsd,
-                  exec,
-                  onPick: (usd) => setSlicePick(plan.sliceOptions.some((o) => !o.custom && o.sizeUsd === usd) ? { kind: 'preset', usd } : { kind: 'custom' }),
-                  customText: sliceText,
-                  onCustom: (text) => {
-                    setSliceText(text);
-                    setSlicePick({ kind: 'custom' });
-                  },
-                  coin: pair.base,
-                }}
-              />
-            )
-          }
         />
         {twap.on && exec === 'maker' && (
           <MakerSettings
@@ -344,7 +301,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {plan.notHedgedMaxQty > 0 && (
           <NotHedgedLine
-            text={t('accounts.deleverTab.notHedged', { qty: qtyText(hedgeGapQty), coin: pair.base, usd: fmtUsd(hedgeGapUsd, 0) })}
+            text={t(oneOrder ? 'accounts.realizeTab.notHedgedWhole' : 'accounts.deleverTab.notHedged', { qty: qtyText(plan.notHedgedMaxQty), coin: pair.base, usd: fmtUsd(plan.notHedgedMaxUsd, 0) })}
           />
         )}
         {borosGapYu > 0 && (
@@ -367,7 +324,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             }
           />
         ) : slicePastBook ? (
-          <VerdictAlert tone="warn" text={realizeText('bookTitle')} sub={realizeText('sliceBookBody')} />
+          <VerdictAlert tone="warn" text={realizeText('bookTitle')} sub={t('accounts.deleverTab.bookBody')} />
         ) : walletBlocked && wallet.loginLabel ? (
           <BorosLogInButton />
         ) : (

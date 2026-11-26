@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
-import type { Pool, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView } from '../api/types';
+import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView, SliceOption } from '../api/types';
 import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
 import { ExecModeToggle } from '../components/ExecModeToggle';
@@ -10,7 +10,7 @@ import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { apiErrorText } from '../lib/apiErrorText';
-import { fmtAbout, fmtUsd, num } from '../lib/fmt';
+import { fmtAbout, fmtNotionalShort, fmtUsd, num } from '../lib/fmt';
 import { useDebounced } from '../lib/useDebounced';
 import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
@@ -21,7 +21,7 @@ import { CONVERT_TO, execModeLabel, HOVER, hoverCash, poolCoin, poolKey, sizeTex
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
 import { costOf, hasPlan, netOf, sliceOf, type Cost, type Slice } from './realizeTabCost';
-import { SliceSizeRow } from './SliceTable';
+import { SplitArea } from './SliceTable';
 
 type AmountPick = 'clear' | 'all' | 'custom';
 
@@ -96,13 +96,23 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const all = hasPlan(tab?.all ?? null) ? (tab?.all ?? null) : null;
   const [amount, setAmount] = useState<AmountPick>(() => (clearDebt ? 'clear' : 'all'));
   const [exec, setExec] = useState<RealizeExec>('maker');
-  const [sliceUsd, setSliceUsd] = useState(() => tab?.defaultSliceUsd ?? 0);
+  const [pickedUsd, setPickedUsd] = useState<number | null>(null);
   const [sliceText, setSliceText] = useState('');
-  const [tableOpen, setTableOpen] = useState(false);
+  const [split, setSplit] = useState<boolean | null>(null);
   const [customText, setCustomText] = useState('');
 
   const presetOptions = tab?.sliceOptions ?? [];
   const basePriced = clearDebt && clearDebt.legs.length > 0 ? clearDebt : all;
+  const splitPlan = amount === 'clear' ? clearDebt : all;
+  const baseSliceOf = (sizeUsd: number): Slice | null => (splitPlan ? sliceOf(presetOptions, sizeUsd, splitPlan.legs[0], splitPlan === basePriced) : null);
+  const presetRows = presetOptions.filter((o) => !o.custom && !o.whole);
+  const splitRows = presetRows.filter((o) => (baseSliceOf(o.sizeUsd)?.count ?? 1) > 1);
+  const recommended = splitRows.find((o) => o.sizeUsd === tab?.defaultSliceUsd) ?? null;
+  const suggested = recommended ?? splitRows.reduce<SliceOption | null>((best, o) => (best === null || o.sizeUsd > best.sizeUsd ? o : best), null);
+  const suggestedSlice = suggested ? baseSliceOf(suggested.sizeUsd) : null;
+  const canSplit = suggested !== null;
+  const splitOn = canSplit && (split ?? recommended !== null);
+  const sliceUsd = splitOn ? (pickedUsd ?? suggested?.sizeUsd ?? 0) : (presetOptions.find((o) => o.whole)?.sizeUsd ?? 0);
   const customSlice = sliceUsd > 0 && !presetOptions.some((o) => !o.custom && o.sizeUsd === sliceUsd);
   const sliceQueried = sliceUsd > 0 && sliceUsd !== tab?.defaultSliceUsd;
   const debouncedSlice = useDebounced(sliceUsd, CUSTOM_DEBOUNCE_MS);
@@ -139,7 +149,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
     );
   }
 
-  const sliceInvalid = sliceText.trim() !== '' && !((parsedAmount(sliceText) ?? 0) > 0);
+  const sliceInvalid = splitOn && sliceText.trim() !== '' && !((parsedAmount(sliceText) ?? 0) > 0);
   const customMissing = amount === 'custom' && customUsd === null;
   const customOverAll = amount === 'custom' && typedUsd !== null && customUsd !== null && typedUsd > customUsd;
   const active = amount === 'clear' ? shownClear : amount === 'all' ? shownAll : customMissing ? null : customPlan;
@@ -150,12 +160,16 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const net = active && cost ? netOf(active, cost) : 0;
   const lead = active?.legs[0];
   const slicePastBook = options.find((o) => o.sizeUsd === shownSliceUsd)?.pastBook === true;
-  const refusal = active?.refused
-    ? refusalOf({ ...view.plans.repay, realize: active })
-    : active && slicePastBook
-      ? { title: realizeText('bookTitle'), body: realizeText('sliceBookBody') }
-      : null;
-  const sliceRefused = slicePastBook || (sliceQueried && active?.refused?.reason === 'past-book');
+  const otherRefusal = active?.refused && active.refused.reason !== 'past-book' ? active.refused : null;
+  const sliceRefused = !otherRefusal && (slicePastBook || active?.refused?.reason === 'past-book');
+  const bookBody = splitOn ? 'sliceBookBody' : canSplit ? 'wholeBookBody' : 'bookBody';
+  const refusal = !active
+    ? null
+    : otherRefusal
+      ? refusalOf({ ...view.plans.repay, realize: active })
+      : sliceRefused
+        ? { title: realizeText('bookTitle'), body: realizeText(bookBody) }
+        : null;
   const wallet = WALLET_LABEL[poolKey(tab.pool)] ?? poolKey(tab.pool);
   const bucket = view.buckets.find((b) => keyOf(b) === poolKey(tab.pool));
   const cashNow = bucket?.cash ?? 0;
@@ -165,8 +179,22 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const allText = String(Math.round(allNet));
   const boxText = amount === 'clear' ? debtText : amount === 'all' ? allText : customText;
 
+  const oneOrder = slice?.count === 1;
   const execLabel = (mode: RealizeExec): string =>
-    execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode] / Math.max(1, slice.count)) : '—');
+    execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode] / Math.max(1, slice.count)) : '—', oneOrder);
+  const impactOf = (o: SliceOption): number => (exec === 'market' ? o.impactUsd : 0) + o.reopenImpactUsd;
+  const wholeOption = options.find((o) => o.whole) ?? null;
+  const shownOption = splitOn
+    ? (options.find((o) => o.sizeUsd === shownSliceUsd) ?? null)
+    : suggested
+      ? (options.find((o) => !o.custom && !o.whole && o.sizeUsd === suggested.sizeUsd) ?? null)
+      : null;
+  const impact: PriceImpactPreview | null =
+    wholeOption && shownOption && active === pricedPlan ? { whole: wholeOption.pastBook ? null : impactOf(wholeOption), sliced: impactOf(shownOption) } : null;
+  const splitHover =
+    suggested && suggestedSlice
+      ? t('accounts.realizeTab.splitHover', { size: fmtNotionalShort(suggested.sizeUsd), count: suggestedSlice.count, time: fmtAbout(suggestedSlice.seconds[exec]) })
+      : t('accounts.realizeTab.splitTooSmall');
 
   const rows: CostRow[] = cost
     ? [
@@ -196,11 +224,11 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       ]
     : [];
 
-  const pickSlice = (sizeUsd: number) => setSliceUsd(sizeUsd);
+  const pickSlice = (sizeUsd: number) => setPickedUsd(sizeUsd);
   const typeSlice = (text: string) => {
     setSliceText(text);
     const parsed = parsedAmount(text);
-    if (parsed !== null && parsed > 0) setSliceUsd(parsed);
+    if (parsed !== null && parsed > 0) setPickedUsd(parsed);
   };
 
   const confirm = () => {
@@ -219,7 +247,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
     );
   };
 
-  const warning = slice && lead ? t('accounts.realizeTab.notHedged', { qty: sizeText(slice.qty), coin: lead.base, usd: fmtUsd(slice.usd, 0) }) : null;
+  const warning = slice && lead ? t(oneOrder ? 'accounts.realizeTab.notHedgedWhole' : 'accounts.realizeTab.notHedged', { qty: sizeText(slice.qty), coin: lead.base, usd: fmtUsd(slice.usd, 0) }) : null;
   if (warning !== null) lastWarning.current = warning;
   const shownWarning = warning ?? (pricing ? lastWarning.current : null);
   const sentence: string | null = customMissing
@@ -298,13 +326,14 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
             />
           </div>
 
-          {slice && (
-            <SliceSizeRow
-              sizeUsd={slice.count === 1 ? Math.min(shownSliceUsd, slice.usd) : shownSliceUsd}
-              count={slice.count}
-              open={tableOpen}
-              onToggle={() => setTableOpen(!tableOpen)}
-              table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, coin: lead?.base }}
+          {wholeOption && (
+            <SplitArea
+              on={splitOn}
+              onToggle={setSplit}
+              canSplit={canSplit}
+              hover={splitHover}
+              impact={impact}
+              table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, coin: lead?.base, dedupe: active === pricedPlan }}
             />
           )}
 
