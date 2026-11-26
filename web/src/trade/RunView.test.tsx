@@ -298,11 +298,13 @@ describe('RunView, TWAP running', () => {
     expect(within(rows[6]!).getByText('Limit 1,729.80 · 1')).toBeTruthy();
   });
 
-  it('footer lines', () => {
+  it('one keep-awake line sits above the buttons', () => {
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel');
     renderRun(job());
-    expect(screen.getByText('Runs in the app on this computer. Closing this view does not stop it.')).toBeTruthy();
-    expect(screen.getByText('Keeps this Mac awake until it ends. Closing the lid still sleeps it.')).toBeTruthy();
+    const awake = screen.getByText('Keeps this Mac awake until it ends. Closing the lid still sleeps it.');
+    const pause = screen.getByRole('button', { name: 'Pause' });
+    expect(awake.compareDocumentPosition(pause) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(/Runs in the app on this computer/)).toBeNull();
   });
 
   it('behind row', () => {

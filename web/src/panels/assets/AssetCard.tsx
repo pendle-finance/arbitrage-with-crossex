@@ -2361,7 +2361,7 @@ export function RollOverModal({
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
             {t('assetCard.roll.title')}
             <span className="text-[14px] font-medium text-ink-200">
-              <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} />
+              <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} sides={false} />
             </span>
           </span>
         )

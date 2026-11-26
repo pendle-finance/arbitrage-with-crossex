@@ -391,7 +391,6 @@
       "slippageSoFar": "Slippage so far"
     },
     "footer": {
-      "runsInApp": "Runs in the app on this computer. Closing this view does not stop it.",
       "awake": "Keeps this Mac awake until it ends. Closing the lid still sleeps it."
     }
   }
