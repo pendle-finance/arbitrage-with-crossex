@@ -5,13 +5,17 @@ import {
   DEFAULT_SLICE_CHOICES_USD,
   MAKER_SLICE_SECONDS,
   MARKET_SLICE_SECONDS,
+  needsTwap,
   ONE_ORDER_USD,
+  pairTwapDefaultOf,
   SLICE_IMPACT_BP,
   SLICE_SIZES_USD,
   sliceOptions,
   sliceQtys,
+  twapDefaultOf,
   twapQtysFor,
   twapSliceQty,
+  twapSlicesOf,
   sliceSizeOf,
 } from '../../src/core/rebalance/slices';
 
@@ -270,5 +274,59 @@ describe('sliceQtys at the venue cap', () => {
     expect(twapSliceQty(100.002, 1, 1, '0.001', 0.003, 100)).toBe(99.999);
     expect(twapQtysFor(100.002, 1, '0.001', 0.003, 100)).toEqual([99.999, 0.003]);
     expect(twapQtysFor(1, 3, '0.0001', 0.0001, Infinity)).toEqual([0.3333, 0.3333, 0.3334]);
+  });
+});
+
+describe('TWAP default from the book', () => {
+  const order = (bookAt: NormalizedBook | null, totalUsd: number, side: 'BUY' | 'SELL' = 'BUY') => ({ book: bookAt, side, mid: MID, qty: totalUsd / MID });
+  const thin = book([[1000.1, 100]], [[999.9, 100]]);
+  const ladder = book(
+    [
+      [1000.3, 25],
+      [1002, DEEP],
+    ],
+    [[999.7, DEEP]],
+  );
+
+  it('turns on when one order costs more than 5 bp and slices cost less, or one order runs past the book', () => {
+    expect(needsTwap(order(flat(4), 1_000_000))).toBe(false);
+    expect(needsTwap(order(ladder, 1_000_000))).toBe(true);
+    expect(needsTwap(order(ladder, 1_000_000, 'SELL'))).toBe(false);
+    expect(needsTwap(order(thin, 1_000_000))).toBe(true);
+    expect(needsTwap(order(thin, 50))).toBe(false);
+    expect(needsTwap(order(null, 1_000_000))).toBe(false);
+    expect(needsTwap({ ...order(ladder, 1_000_000), mid: null })).toBe(false);
+  });
+
+  it('stays off when slicing cannot lower the cost: a wide spread costs the same in every slice', () => {
+    expect(needsTwap(order(flat(8), 50))).toBe(false);
+    expect(needsTwap(order(flat(8), 6_000_000))).toBe(false);
+  });
+
+  it('counts slices at the largest of $25k, $50k or $100k that stays within 5 bp', () => {
+    expect(twapSlicesOf(order(flat(4), 1_000_000))).toBe(10);
+    expect(twapSlicesOf(order(ladder, 1_000_000))).toBe(40);
+    expect(twapSlicesOf(order(flat(4), 50))).toBe(1);
+    expect(twapSlicesOf(order(null, 1_000_000))).toBe(1);
+  });
+
+  it('spans 5 min per slice on Limit + hedge and 1 min on Market, within 2 to 100 slices and 5 min to 24 h', () => {
+    expect(twapDefaultOf(true, 10)).toEqual({ on: true, maker: { durationSec: 3_000, intervalSec: 300 }, market: { durationSec: 600, intervalSec: 60 } });
+    expect(twapDefaultOf(false, 1)).toEqual({ on: false, maker: { durationSec: 600, intervalSec: 300 }, market: { durationSec: 300, intervalSec: 150 } });
+    expect(twapDefaultOf(true, 240)).toEqual({ on: true, maker: { durationSec: 30_000, intervalSec: 300 }, market: { durationSec: 6_000, intervalSec: 60 } });
+  });
+
+  it('a $50 order stays one order, and a $6M order runs 100 slices over 8 h 20 min', () => {
+    expect(pairTwapDefaultOf([order(ladder, 50)]).on).toBe(false);
+    const whale = pairTwapDefaultOf([order(ladder, 6_000_000)]);
+    expect(whale.on).toBe(true);
+    expect(whale.maker).toEqual({ durationSec: 30_000, intervalSec: 300 });
+  });
+
+  it('a pair takes the leg with more slices, and turns on when either leg needs it', () => {
+    const pair = pairTwapDefaultOf([order(flat(4), 1_000_000, 'SELL'), order(ladder, 1_000_000)]);
+    expect(pair.on).toBe(true);
+    expect(pair.maker).toEqual({ durationSec: 12_000, intervalSec: 300 });
+    expect(pairTwapDefaultOf([order(flat(4), 1_000_000), order(flat(4), 1_000_000, 'SELL')]).on).toBe(false);
   });
 });

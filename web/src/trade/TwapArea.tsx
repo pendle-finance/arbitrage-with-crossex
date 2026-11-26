@@ -1,14 +1,14 @@
 import { ArrowRight } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { PriceImpactPreview, TwapPlanPreview, TwapPlanView, TwapRefusalView } from '../api/types';
+import type { PriceImpactPreview, TwapDefault, TwapPlanPreview, TwapPlanView, TwapRefusalView } from '../api/types';
 import { HoverCard } from '../components/HoverCard';
 import { Switch } from '../components/Switch';
 import { localizeServerText } from '../i18n/serverMessages';
 import { fmtUsd, qtyGrouped } from '../lib/fmt';
 import { parseSpan, spanText } from '../lib/span';
 import { sectionHeadClass } from './FoldRow';
-import { AffixedInput } from './PairTicketBits';
+import { AffixedInput, type ExecMode } from './PairTicketBits';
 import { ViolationList } from './previewBits';
 
 import type { TwapInput } from '../api/types';
@@ -96,20 +96,40 @@ function isComplete(input: TwapInput): boolean {
   return false;
 }
 
-export function useTwapInput(): {
+type Suggested = { on: boolean; input: TwapInput };
+
+export interface TwapInputState {
   on: boolean;
   setOn: (on: boolean) => void;
   input: TwapInput;
   setInput: (input: TwapInput) => void;
   startBlocked: boolean;
   blockedBy: (preview: TwapPlanPreview | null | undefined) => boolean;
-} {
-  const [on, setOn] = useState(false);
-  const [input, setInput] = useState<TwapInput>(DEFAULT_INPUT);
+  suggest: (suggested: Suggested) => void;
+}
+
+export function useTwapInput(): TwapInputState {
+  const [picked, setOn] = useState<boolean | null>(null);
+  const [typed, setInput] = useState<TwapInput | null>(null);
+  const [suggested, suggest] = useState<Suggested | null>(null);
+  const on = picked ?? suggested?.on ?? false;
+  const input = typed ?? suggested?.input ?? DEFAULT_INPUT;
   const startBlocked = on && !isComplete(input);
   const blockedBy = (preview: TwapPlanPreview | null | undefined): boolean =>
     on && (startBlocked || !preview?.plan || preview.refusal !== null);
-  return { on, setOn, input, setInput, startBlocked, blockedBy };
+  return { on, setOn, input, setInput, startBlocked, blockedBy, suggest };
+}
+
+export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null | undefined, exec: ExecMode): void {
+  const on = value?.on;
+  const span = value?.[exec];
+  const durationSec = span?.durationSec;
+  const intervalSec = span?.intervalSec;
+  const { suggest } = twap;
+  useEffect(() => {
+    if (on === undefined || durationSec === undefined || intervalSec === undefined) return;
+    suggest({ on, input: { durationSec, intervalSec } });
+  }, [suggest, on, durationSec, intervalSec]);
 }
 
 export function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {

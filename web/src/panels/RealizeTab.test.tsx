@@ -63,10 +63,8 @@ describe('RealizeTab TWAP', () => {
     const owner = rebalanceViews.ownerAccount;
     const lead = owner.realize!.clearDebt!.legs[0]!;
     const { asked, sent } = render(owner, () => twapOf([lead], [12], 41.5));
-    expect(screen.getByRole('switch', { name: 'Split the close' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
     await waitFor(() => expect(asked.some((q) => q.get('twapDurationSec') === '3600' && q.get('twapSlices') === '12')).toBe(true));
-    expect(screen.queryByRole('switch', { name: 'Split the close' })).not.toBeInTheDocument();
     const hold = await screen.findByRole('button', { name: 'Hold to realize · TWAP 1h' });
     await waitFor(() => expect(hold).toBeEnabled());
     expect(screen.getByText('Slices 12')).toBeInTheDocument();
@@ -79,18 +77,19 @@ describe('RealizeTab TWAP', () => {
     expect(sent[0]!.twap).toHaveProperty('takerAfterSec');
   });
 
-  it('Market sends twap with no maker settings and the market estimate', async () => {
+  it('Market sends twap at the Market span, with no maker settings and the market estimate', async () => {
     const owner = rebalanceViews.ownerAccount;
     const lead = owner.realize!.clearDebt!.legs[0]!;
     const { sent } = render(owner, () => twapOf([lead], [12], 41.5));
     await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
     await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Orders' })).getAllByRole('radio')[1]!);
+    expect(screen.getByRole('textbox', { name: 'Duration' })).toHaveValue('12m');
     const hold = await screen.findByRole('button', { name: 'Hold to realize · TWAP 1h' });
     await waitFor(() => expect(hold).toBeEnabled());
     fireEvent.pointerDown(hold);
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]!.costUsd).toBeCloseTo(62.25, 6);
-    expect(sent[0]!.twap).toEqual({ durationSec: 3600, slices: 12 });
+    expect(sent[0]!.twap).toEqual({ durationSec: 720, slices: 12 });
   });
 
   it('two legs show one slice count per leg', async () => {

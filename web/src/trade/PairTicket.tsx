@@ -19,7 +19,7 @@ import { estimateMargin, pairModeFees } from './previewBits';
 import { AffixedInput, PairEstimate, PairVenues, type ExecMode, storedExecMode } from './PairTicketBits';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
-import { TwapArea, twapControlOf, useTwapInput } from './TwapArea';
+import { TwapArea, twapControlOf, useTwapDefault, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
 import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 import { TRACKED_PRICE_TOLERANCE, withinTrackedDrift } from './trackedPriceDrift';
@@ -255,6 +255,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
   const legLong = preview.previews?.[0];
   const legShort = preview.previews?.[1];
   const previewData = preview.previews ? preview.data : undefined;
+  useTwapDefault(twap, previewData?.priceImpact?.twapDefault, mode);
   const landedTwap = useRef<string | null>(null);
   if (preview.data && !preview.isPlaceholderData && twapSettled) landedTwap.current = twapJson;
   const twapFresh = twapOn && twapSettled && landedTwap.current === twapJson;

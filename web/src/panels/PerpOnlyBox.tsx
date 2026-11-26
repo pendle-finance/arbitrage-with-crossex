@@ -23,7 +23,7 @@ import {
   decorateClose,
   shownLegOf,
 } from './ClosePairParts';
-import { TwapArea, useTwapInput } from '../trade/TwapArea';
+import { TwapArea, useTwapDefault, useTwapInput } from '../trade/TwapArea';
 import { usePreviewDebounced } from '../trade/usePreview';
 import { useTakerAfter, useTwapTakerAfter } from '../trade/useTwapTakerAfter';
 import { useTradeFlowOptional } from '../trade/TradeFlow';
@@ -132,6 +132,7 @@ export function ClosePairForm({
     twap: twapOn ? twap.input : undefined,
   });
   const plan = preview.data?.twap?.plan ?? null;
+  useTwapDefault(twap, preview.data?.priceImpact?.twapDefault, mode);
   const takerBlocked = useTwapTakerAfter(taker, twapOn, plan?.takerAfterSec ?? null);
   if (!flow || legs.length !== 2) return null;
 

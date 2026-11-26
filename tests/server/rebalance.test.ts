@@ -1102,7 +1102,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
 
     expect(res.statusCode).toBe(202);
     const job = h.file();
-    expect(job).toMatchObject({ kind: 'realize', exec: 'maker', slice: { index: 1, sizeUsd: realize.defaultSliceUsd } });
+    expect(job).toMatchObject({ kind: 'realize', exec: 'maker', slice: { index: 1, sizeUsd: 0 } });
     expect(job.realize!.legs.map((leg) => leg.qty)).toEqual(plan.legs.map((leg: RealizeLeg) => leg.qty));
     expect(job.steps.map((step) => step.name)).toContain('Slices');
     await waitFor(() => h.file().status === 'halted', 'the halt');
@@ -1543,19 +1543,19 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
-  it('a realize start with Split the close off runs one order', async () => {
+  it('a realize start with TWAP off sends no slice size and runs one order', async () => {
     mockAccount(ownerAccount());
     refuseSends();
     const h = boot();
     const { realize } = (await h.view()).data;
     const whole = (realize.sliceOptions as SliceOption[]).find((option) => option.whole)!;
     expect(whole.count).toBe(1);
-    const plan = (await h.get(`/api/rebalance?sliceUsd=${whole.sizeUsd}`)).json().data.realize.all;
+    const plan = realize.all;
 
-    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', sliceUsd: whole.sizeUsd, costUsd: plan.estimates.maker.totalUsd });
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd: plan.estimates.maker.totalUsd });
 
     expect(res.statusCode, res.body).toBe(202);
-    expect(h.file().slice).toMatchObject({ count: 1, sizeUsd: whole.sizeUsd });
+    expect(h.file().slice).toMatchObject({ count: 1, sizeUsd: 0 });
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 

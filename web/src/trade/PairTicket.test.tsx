@@ -13,7 +13,7 @@ import type {
   TwapPlanPreview,
 } from '../api/types';
 import type { TwapInput } from './TwapArea';
-import { baseHandlers, BTC_BINANCE, ETH_GATE, previewFor, symbolHandlers } from '../test/fixtures';
+import { baseHandlers, BTC_BINANCE, ETH_GATE, previewFor, symbolHandlers, TWAP_OFF } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { pickOption } from '../test/picker';
 import { renderWithClient } from '../test/utils';
@@ -117,7 +117,7 @@ function previewHandler(opts: {
       env<PreviewResponse>({
         previews,
         makerLeg: opts.makerLeg ?? { auto: 'a', why: 'book' },
-        priceImpact: { whole: 12, sliced: 3 },
+        priceImpact: { whole: 12, sliced: 3, twapDefault: TWAP_OFF },
         twap: planFor(twap ?? {}),
       }),
     );

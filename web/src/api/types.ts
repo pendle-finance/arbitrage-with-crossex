@@ -290,6 +290,7 @@ export interface RealizeTab {
   custom: RealizePlan | null;
   sliceOptions: SliceOption[];
   defaultSliceUsd: number;
+  twapDefault: Record<'clearDebt' | 'all' | 'custom', TwapDefault>;
 }
 
 export interface RealizeTwap extends TwapPlanPreview {
@@ -466,9 +467,21 @@ export interface MakerLegPreview {
   why: 'fees' | 'book';
 }
 
+export interface TwapSpan {
+  durationSec: number;
+  intervalSec: number;
+}
+
+export interface TwapDefault {
+  on: boolean;
+  maker: TwapSpan;
+  market: TwapSpan;
+}
+
 export interface PriceImpactPreview {
   whole: number | null;
   sliced: number;
+  twapDefault: TwapDefault;
 }
 
 export interface TwapPlanPreview {

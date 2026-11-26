@@ -452,11 +452,11 @@ describe('realize fix round', () => {
     expect(planRealize(gate('100000'))?.refused).toBeNull();
   });
 
-  it('past-book judges one slice: a $1M order on a 30 ETH book is fine in 50k slices, refused in 100k ones', () => {
+  it('past-book judges one slice: a $1M order on a 30 ETH book is refused as one order, fine in 50k slices, refused in 100k ones', () => {
     const thin = { books: { HYPERLIQUID_FUTURE_ETH_USDC: evenBook(2800, 3, 10) } };
     const plan = planRealize(hlShortInput(1_000_000, thin));
     expect((plan?.legs[0].qty ?? 0) * 2800).toBeGreaterThan(1_000_000);
-    expect(plan?.refused).toBeNull();
+    expect(plan?.refused).toEqual({ reason: 'past-book', bp: null });
     expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 50_000 }))?.refused).toBeNull();
     expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 100_000 }))?.refused).toEqual({ reason: 'past-book', bp: null });
     expect(planRealize(hlShortInput(50, thin))?.refused).toBeNull();
@@ -752,5 +752,31 @@ describe('realize without a price impact cap', () => {
     expect(plan?.legs).toHaveLength(1);
     expect(Math.round((plan?.legs[0].impactBp ?? 0) * 10) / 10).toBe(187.5);
     expect(plan?.estimates.market.impactUsd).toBeGreaterThan(plan?.estimates.maker.impactUsd ?? Infinity);
+  });
+});
+
+describe('realize TWAP default', () => {
+  it('a $1M realize on a deep book stays one order', () => {
+    const book = realizeBookOf(1_000_000, 7_500);
+    const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    expect(tab?.twapDefault.clearDebt.on).toBe(false);
+    expect(tab?.twapDefault.all.on).toBe(false);
+  });
+
+  it('a $1M realize on thin bids turns TWAP on, sized from the book, with slices summed over the legs', () => {
+    const book = lopsidedOf(realizeBookOf(1_000_000, 7_500));
+    const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    const twap = tab!.twapDefault.clearDebt;
+    expect(twap.on).toBe(true);
+    expect(twap.maker.intervalSec).toBe(300);
+    expect(twap.market.intervalSec).toBe(60);
+    expect(twap.maker.durationSec / twap.maker.intervalSec).toBeGreaterThanOrEqual(2);
+    expect(twap.maker.durationSec).toBeLessThanOrEqual(86_400);
+  });
+
+  it('no plan gives the off default', () => {
+    const book = realizeBookOf(1_000_000, 7_500);
+    const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    expect(tab?.twapDefault.custom.on).toBe(false);
   });
 });

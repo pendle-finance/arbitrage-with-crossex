@@ -2,7 +2,7 @@ import { type NormalizedBook, touchOf } from '../estimate/books';
 import { resolveFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { DEFAULT_STEP, parseSymbol, roundToStep } from '../numbers';
 import { ceilCents, CONVERT_MAX, CONVERT_RATE, HYPERLIQUID_MIN_USDC, marginPerConvertUsdc, type Pool } from './plan';
-import { impactOf, type SliceOption, sliceQtys, sliceSizeOf, twapQtysFor } from './slices';
+import { impactOf, ONE_ORDER_USD, type SliceOption, sliceQtys, twapQtysFor } from './slices';
 
 export { marginPerConvertUsdc };
 
@@ -271,8 +271,7 @@ function slicesOf(leg: Paying, qty: number): number[] {
   const { sliceUsd, twapSlices } = leg.split;
   if (twapSlices !== undefined && twapSlices > 0) return twapQtysFor(qty, twapSlices, leg.lot, leg.minQty, capQty);
   const mid = touchOf(leg.book)?.mid ?? leg.mark;
-  const side = leg.side === 'SHORT' ? 'BUY' : 'SELL';
-  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : sliceSizeOf({ book: leg.book, side, mid, totalUsd: qty * mid });
+  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : ONE_ORDER_USD;
   return sliceQtys(qty, Math.min(askedUsd / mid, capQty), leg.minQty, leg.lot, capQty);
 }
 
@@ -351,8 +350,7 @@ interface SliceVerdict {
 function sliceVerdictOf(leg: Paying, qty: number, sliceUsd: number | undefined): SliceVerdict {
   const touch = touchOf(leg.book);
   if (!leg.book || !touch) return { pastBook: true, overCapUsd: null };
-  const side = leg.side === 'SHORT' ? 'BUY' : 'SELL';
-  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : sliceSizeOf({ book: leg.book, side, mid: touch.mid, totalUsd: qty * touch.mid });
+  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : ONE_ORDER_USD;
   const capQty = leg.capUsd / leg.mark;
   const sliceQty = Math.min(qty, Math.max(leg.minQty, Math.min(askedUsd / touch.mid, capQty)));
   return { pastBook: priceOrder(leg, sliceQty).pastBook, overCapUsd: Math.min(qty, leg.minQty) > capQty ? leg.capUsd : null };

@@ -15,7 +15,7 @@ import { estimateFees, resolveFeeRates, type VenueFeeRow } from './estimate/fees
 import { pickMakerLeg, type MakerLegPick } from './estimate/makerLeg';
 import { DEFAULT_STEP, parseSymbol } from './numbers';
 import { marketableClosePrice } from './orders';
-import { impactOf } from './rebalance/slices';
+import { impactOf, pairTwapDefaultOf, type TwapDefault } from './rebalance/slices';
 import { planSlices, type TwapInput, type TwapLegRule, type TwapPlan, type TwapRefusal } from './twap';
 
 interface PreviewDeps {
@@ -101,6 +101,7 @@ export interface MakerLegPreview {
 export interface PriceImpactPreview {
   whole: number | null;
   sliced: number;
+  twapDefault: TwapDefault;
 }
 
 export interface TwapPlanPreview {
@@ -201,7 +202,7 @@ export function priceImpactOf(legs: TwapLegBook[], qty: number, plan: TwapPlan):
       total + (impactAt(leg, sliceQty)?.usd ?? 0) * (plan.slices - 1) + (impactAt(leg, lastQty)?.usd ?? 0),
     0,
   );
-  return { whole, sliced };
+  return { whole, sliced, twapDefault: pairTwapDefaultOf(legs.map((leg) => ({ book: leg.book, side: leg.side, mid: leg.mid, qty }))) };
 }
 
 export async function previewTwap(
