@@ -98,6 +98,21 @@ describe('AvailableMarginLines / SuggestedTopUpLines', () => {
     expect(screen.getByText('Suggested top-up amount').parentElement!.textContent).toMatch(/\+3\.25 ETH/);
   });
 
+  it('a short open shows only the margin available now', () => {
+    render(
+      <AvailableMarginLines
+        sim={sim}
+        funding={[{ ...cross, availableBefore: 0.205284, availableAfter: -0.075725 }]}
+        nameOf={nameOf}
+        fallback={null}
+        unit="ETH"
+      />,
+    );
+    const row = screen.getByText('Available margin').closest('.justify-between')!.textContent!;
+    expect(row).toMatch(/0\.205284 ETH$/);
+    expect(row).not.toMatch(/→|-0\.07/);
+  });
+
   it('before a quote shows the free margin alone', () => {
     render(<AvailableMarginLines sim={null} funding={undefined} nameOf={nameOf} fallback={7} unit="ETH" />);
     expect(screen.getByText('Available margin').closest('.justify-between')!.textContent).toMatch(/^Available margin\D*7 ETH$/);

@@ -6,6 +6,7 @@ import { useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { BorosLegDirection, PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
+import { HoverCard } from '../components/HoverCard';
 import { ListPicker } from '../components/ListPicker';
 import { SwapButton } from '../components/SwapButton';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
@@ -98,7 +99,7 @@ export function EstimateAge({
   const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
   return (
     <span className="num text-[11px] text-ink-400">
-      {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('trade.execute.pricing') : (
+      {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('common.refreshing') : (
         <>
           <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
         </>
@@ -253,10 +254,12 @@ export function SlippageLine({
   title,
   label,
   hint,
+  cost,
   quick = ['0.2', '0.4', '1', '2'],
 }: {
   /** The estimated give-up, already formatted; null while unknown. */
   est: string | null;
+  cost?: string | null;
   /** The bound, already formatted (what the button shows). */
   max: string;
   /** Trailing unit word after the bound, e.g. "APR"; omitted for % of price. */
@@ -276,29 +279,53 @@ export function SlippageLine({
   quick?: string[];
 }) {
   const { t } = useTranslation();
+  const name = label ?? t('pairTicket.bits.slippage');
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[12px] text-ink-200" title={title}>
-          {label ?? t('pairTicket.bits.slippage')}
-        </span>
-        <span className="num text-[12px] text-ink-400">
-          {t('pairTicket.bits.est')} <span className="text-ink-50">{est ?? '—'}</span>
-          {' / '}{t('pairTicket.bits.max')}{' '}
+      {cost !== undefined ? (
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-[12px] text-ink-200">
+            <HoverCard label={name} widthPx={240}>
+              <span className="num flex flex-col gap-0.5">
+                <span>{t('pairTicket.bits.est')} {est ?? '—'}</span>
+                <span>{t('pairTicket.bits.max')} {max}{unit ? ` ${unit}` : ''}</span>
+              </span>
+            </HoverCard>
+          </span>
           <button
             type="button"
-            className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+            className="num text-[12px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
             title={t('pairTicket.bits.changeTolerance')}
             onClick={onToggle}
           >
-            {max}
+            {cost ?? '—'}
           </button>
-          {unit ? ` ${unit}` : ''}
-        </span>
-      </div>
+        </div>
+      ) : (
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-[12px] text-ink-200" title={title}>
+            {name}
+          </span>
+          <span className="num text-[12px] text-ink-400">
+            {t('pairTicket.bits.est')} <span className="text-ink-50">{est ?? '—'}</span>
+            {' / '}{t('pairTicket.bits.max')}{' '}
+            <button
+              type="button"
+              className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+              title={t('pairTicket.bits.changeTolerance')}
+              onClick={onToggle}
+            >
+              {max}
+            </button>
+            {unit ? ` ${unit}` : ''}
+          </span>
+        </div>
+      )}
       {open && (
         <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
-          <span className="text-[10.5px] leading-relaxed text-ink-400">{hint}</span>
+          <span className="text-[10.5px] leading-relaxed text-ink-400">
+            <span className="text-ink-200">{t('pairTicket.bits.thisTradeOnly')}</span> {hint}
+          </span>
           <div className="flex items-center gap-1.5">
             {quick.map((q) => (
               <button

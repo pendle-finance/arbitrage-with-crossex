@@ -170,7 +170,6 @@
     "to": "转入",
     "preset": "预设",
     "typeAmount": "请输入划转金额。",
-    "pricing": "正在计算报价。",
     "steps": "步骤",
     "showSteps": "显示全部步骤",
     "hideSteps": "隐藏步骤",
@@ -304,7 +303,7 @@
       "boros": "Boros",
       "perps": "永续",
       "borosUnhedged": "{{qty}} {{coin}} 固定利率 · 未对冲",
-      "openFloating": "仍持仓，资金费率浮动"
+      "openFloating": "仍持仓，未对冲，资金费率浮动"
     },
     "head": {
       "leg": "腿",

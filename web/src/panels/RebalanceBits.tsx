@@ -119,7 +119,7 @@ const STEP_MARK: Record<StepState, string> = {
 
 export function StepDot({ n, state }: { n: number; state: StepState }) {
   return (
-    <span aria-hidden data-step-dot={state} className={`num flex w-4 shrink-0 items-center ${STEP_MARK[state]}`}>
+    <span aria-hidden data-step-dot={state} className={`num flex shrink-0 items-center ${STEP_MARK[state]}`}>
       {state === 'running' ? <Spinner className="h-3 w-3" /> : state === 'done' ? <Check size={12} strokeWidth={2.5} /> : num(n, 0)}
     </span>
   );

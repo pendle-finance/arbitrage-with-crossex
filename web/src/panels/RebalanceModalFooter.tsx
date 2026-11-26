@@ -79,7 +79,7 @@ export function RebalanceModalFooter(props: FooterProps) {
               disabled={disabled}
               onConfirm={onConfirm}
             >
-              {pricing ? t('accounts.rebalanceModal.pricing') : holdLabel}
+              {pricing ? t('common.refreshing') : holdLabel}
             </HoldToConfirmButton>
           )}
         </div>

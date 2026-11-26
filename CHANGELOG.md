@@ -117,6 +117,15 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   shows the Fixed APR, and Available now on a refused roll. Close perps After shows each leg
   before → after and says "Realized price PnL". Every window keeps its header padding and draws
   a line under the header once the body scrolls.
+- **Roll over's Fixed APR follows your Opportunities settings** (exit mode, maker + hedge,
+  rebate). The "roll now" banner prices each roll the way it prices holding, so a better roll
+  is no longer hidden by a setting. A view-only wallet gets no rebate.
+- **A roll refused for margin says how much cross margin is short** and suggests a top-up that
+  also covers the new legs' fees.
+- **Boros slippage shows its dollar cost;** click it to change the max. Every slippage editor
+  says the change is for this trade only.
+- **Close Boros:** the steps sit under Close size, each shows the size it closes and the mark.
+- **A quote that is loading reads "Refreshing…" on the button** instead of a red banner.
 
 ## 1.7.9 — 2026-11-10
 
