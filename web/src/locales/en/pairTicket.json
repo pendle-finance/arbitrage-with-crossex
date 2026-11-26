@@ -80,6 +80,7 @@
     "sizeInvalid": "Must be above 0 and at most {{max}} {{unit}}",
     "sharedLabel": "This pair's share",
     "sharedOpen": "Shared part stays open",
+    "perpsUnhedged": "{{qty}} {{coin}} · not hedged, floating funding",
     "quoteFailed": "Couldn’t quote this close",
     "estPnl": "Est. PnL",
     "beforeFee": "Before fee",

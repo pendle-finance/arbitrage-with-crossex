@@ -356,6 +356,13 @@ describe('RunView, TWAP paused and ended', () => {
     expect(screen.queryByTestId('book-graph')).toBeNull();
   });
 
+  it('pausing keeps Hold to stop and drops Pause and Resume', () => {
+    renderRun(job({ pauseRequested: true }));
+    expect(screen.getByRole('button', { name: 'Hold to stop' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Pause' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  });
+
   it('paused rows', () => {
     renderRun(paused());
     expect(screen.getByText('Paused at slice 3 of 12')).toBeTruthy();

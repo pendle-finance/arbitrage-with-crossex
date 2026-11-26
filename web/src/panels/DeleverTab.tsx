@@ -84,9 +84,16 @@ const qtyRow = (label: string, before: number, after: number, suffix: string): C
 });
 
 function afterChanges(plan: DeleverPlan, pair: OpenPair): WalletChange[] {
-  const lead = plan.legs[0];
+  const [lead, other] = plan.legs;
   const perpsLabel = t('accounts.deleverTab.perpsLabel', { longVenue: prettyVenue(pair.longVenue), shortVenue: prettyVenue(pair.shortVenue) });
-  const perps = lead ? [qtyRow(perpsLabel, lead.before, lead.after, t('accounts.deleverTab.coinEach', { coin: pair.base }))] : [];
+  const legLabel = (leg: DeleverPlan['legs'][number]): string =>
+    t('accounts.deleverTab.perpLegLabel', { venue: prettyVenue(leg.exchange), side: t(leg.side === 'LONG' ? 'common.long' : 'common.short') });
+  const perps =
+    lead && other && lead.before !== other.before
+      ? plan.legs.map((leg) => qtyRow(legLabel(leg), leg.before, leg.after, pair.base))
+      : lead
+        ? [qtyRow(perpsLabel, lead.before, lead.after, t('accounts.deleverTab.coinEach', { coin: pair.base }))]
+        : [];
   const boros = plan.boros.map((b) => qtyRow(t('accounts.deleverTab.borosLabel'), Math.abs(b.before), Math.abs(b.after), t('accounts.deleverTab.yu')));
   const im = plan.imUsed.map((row): ChangeRow => ({
     label: t('accounts.deleverTab.imUsedLabel', { account: WALLET_SHORT[poolKey(row.account)] ?? row.account }),
@@ -160,14 +167,12 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const walletReady = !needsBoros || wallet.canTrade;
   const stale = plan !== null && query.isError;
   const twapPlan = twap.on ? (plan?.twap?.plan ?? null) : null;
-  const twapBody = twapPlan
-    ? { durationSec: twapPlan.durationSec, slices: twapPlan.slices, ...(exec === 'maker' ? makerOpts : {}) }
-    : undefined;
   const gas = (plan ?? {}) as BorosGas;
   const gasRow =
     twapPlan && (gas.borosCloses ?? 0) > 0 && (gas.borosGasUsd ?? 0) > 0
       ? [{ label: t('accounts.delever.borosGas', { n: gas.borosCloses }), usd: gas.borosGasUsd as number }]
       : [];
+  const gasUsd = gasRow[0]?.usd ?? 0;
   const slicePastBook = !twap.on && option?.pastBook === true;
   const twapBlocked = twap.blockedBy(plan?.twap);
   const ready =
@@ -186,7 +191,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const oneOrder = !twapPlan && option?.count === 1;
   const orderSec = (mode: RealizeExec): number =>
     twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : option ? option.seconds[mode] / Math.max(1, option.count) : 0;
-  const orderCost = perMode((mode) => plan?.estimates[mode].totalUsd ?? null);
+  const orderCost = perMode((mode) => (plan ? plan.estimates[mode].totalUsd + gasUsd : null));
   const orderTime = perMode((mode) => (plan ? orderSec(mode) : null));
 
   const costRows: CostRow[] = estimate
@@ -195,22 +200,24 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         ...(plan && plan.boros.length > 0 ? [{ label: t('accounts.deleverTab.tradingFeeBoros'), usd: estimate.feeBorosUsd }] : []),
         ...gasRow,
         { label: t('accounts.deleverTab.priceImpact'), usd: estimate.impactUsd, hover: SLICE_HOVER.priceImpact },
-        { label: t('accounts.deleverTab.totalCost'), usd: estimate.totalUsd, strong: true },
+        { label: t('accounts.deleverTab.totalCost'), usd: estimate.totalUsd + gasUsd, strong: true },
       ]
     : [];
 
+  const sentQty = plan && !query.isPlaceholderData ? (plan.legs[0]?.closeQty ?? null) : null;
   const typedQty = Number(amountText.trim());
-  const holdQty = close ?? (Number.isFinite(typedQty) ? typedQty : 0);
+  const holdQty = sentQty ?? close ?? (typedQty > 0 ? typedQty : null);
   const holdLabel =
-    twapPlan
-      ? t('accounts.delever.holdTwap', { coin: pair.base, qty: qtyText(holdQty), duration: spanText(twapPlan.durationSec) })
-      : t('accounts.deleverTab.hold', { coin: pair.base, qty: qtyText(holdQty) });
+    holdQty === null
+      ? t('accounts.deleverTab.holdNoSize')
+      : twapPlan
+        ? t('accounts.delever.holdTwap', { coin: pair.base, qty: qtyText(holdQty), duration: spanText(twapPlan.durationSec) })
+        : t('accounts.deleverTab.hold', { coin: pair.base, qty: qtyText(holdQty) });
 
   const confirm = () => {
-    if (request === null || estimate === null || close === null) return;
-    const delever = twapBody ? requestOf(pair, close, exec, twapBody) : request;
+    if (request === null || estimate === null) return;
     start.mutate(
-      { kind: 'delever', exec, delever, costUsd: estimate.totalUsd, ...(exec === 'maker' && !twapBody ? { maker: makerOpts } : {}) },
+      { kind: 'delever', exec, delever: request, costUsd: estimate.totalUsd, ...(exec === 'maker' && !request.twap ? { maker: makerOpts } : {}) },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
     );
   };
@@ -244,7 +251,8 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     const costBox = costRows.length > 0 && !twapBlocked && !plan.refused && !slicePastBook ? <TotalCost rows={costRows} /> : null;
     const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
     const lead = plan.legs[0];
-    const borosUsd = estimate ? estimate.feeBorosUsd + (gasRow[0]?.usd ?? 0) : null;
+    const borosUsd = estimate ? estimate.feeBorosUsd + gasUsd : null;
+    const totalUsd = estimate ? estimate.totalUsd + gasUsd : null;
     const steps: PlanStep[] =
       plan.refused || !lead
         ? []
@@ -257,14 +265,15 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
                 qty: qtyText(lead.closeQty),
                 coin: pair.base,
               }),
-              usd: estimate && borosUsd !== null ? estimate.totalUsd - (borosYu > 0 ? borosUsd : 0) : null,
+              usd: totalUsd !== null && borosUsd !== null ? totalUsd - (borosYu > 0 ? borosUsd : 0) : null,
             },
             ...(borosYu > 0 ? [{ key: 'boros', icon: pair.base, text: borosStep, usd: borosUsd }] : []),
           ];
     return (
       <>
         <PlanSteps label={t('accounts.deleverTab.steps')} rows={steps} />
-        <OrdersGroup value={exec} onChange={setExec} cost={orderCost} seconds={orderTime} whole={perMode(() => oneOrder)}>
+        {!plan.refused && (
+          <OrdersGroup value={exec} onChange={setExec} cost={orderCost} seconds={orderTime} whole={perMode(() => oneOrder)}>
             {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
             <TwapArea
               on={twap.on}
@@ -276,9 +285,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
               waiting={twapWait}
               coin={pair.base}
             />
-        </OrdersGroup>
+          </OrdersGroup>
+        )}
         {costBox}
-        <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
+        {!plan.refused && <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />}
         {walletBlocked && !wallet.loginLabel && (
           <p className="text-xs text-gold">{t('pairTicket.closeBoros.agentReason')}</p>
         )}
@@ -349,7 +359,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             unit: '%',
             inputLabel: t('accounts.deleverTab.customPctAria'),
             max: 100,
-            onApply: (pctPicked) => setTyped(sig((pair.size * pctPicked) / 100)),
+            onApply: (pctPicked) => {
+              const text = sig((pair.size * pctPicked) / 100);
+              setTyped(pctPicked >= 100 || Number(text) > pair.size ? String(pair.size) : text);
+            },
           }}
         />
         {amountProblem !== null && amountText.trim() !== '' && <p className="num text-xs text-guava">{amountProblem}</p>}

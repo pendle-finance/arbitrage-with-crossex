@@ -5,7 +5,7 @@ import type { AssetViewResponse } from '../../api/types';
 import { assetViewBodies, makeSpreadWhaleBook } from '../../test/fixtures';
 import { RebalanceOpenerProvider, useRebalanceOpenState, useRebalanceOpener } from '../rebalanceOpener';
 import { deriveAsset } from './assetModel';
-import { openPairKey, openPairsOf, pairKey } from './pairs';
+import { openPairKey, openPairsOf, pairKey, pairPickerRowOf, type OpenPair } from './pairs';
 
 const books: [string, AssetViewResponse][] = [
   ['whale', assetViewBodies.whale],
@@ -54,6 +54,29 @@ describe('openPairsOf', () => {
   it('keys the same venues and date apart per coin', () => {
     const parts = { longVenue: 'HYPERLIQUID', shortVenue: 'GATE', soonestMaturitySec: 1_800_000_000, kind: 'spread' as const };
     expect(openPairKey('ETH', parts)).not.toBe(openPairKey('BTC', parts));
+  });
+});
+
+describe('pairPickerRowOf', () => {
+  const open = (unit: OpenPair['unit'], size: number): OpenPair => ({
+    key: 'k',
+    base: 'HYPE',
+    longVenue: 'HYPERLIQUID',
+    shortVenue: 'GATE',
+    maturitySec: 1_800_000_000,
+    unit,
+    size,
+    imUsd: 2_000,
+    perps: [],
+    boros: [],
+  });
+
+  it('a dollar-sized pair shows dollars, not the dollar figure with the coin name', () => {
+    expect(pairPickerRowOf(open('usd', 50_000), 1_790_000_000).sizeText).toBe('$50.0k');
+  });
+
+  it('a coin-sized pair shows the coin', () => {
+    expect(pairPickerRowOf(open('base', 1_250), 1_790_000_000).sizeText).toBe('1,250 HYPE');
   });
 });
 

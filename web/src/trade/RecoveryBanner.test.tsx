@@ -53,11 +53,11 @@ function twapJob(overrides: Partial<RebalanceJob> = {}): RebalanceJob {
   } as unknown as RebalanceJob;
 }
 
-function renderTwap(job: RebalanceJob, deals: ReturnType<typeof makeDealView>[] = []) {
+function renderTwap(job: RebalanceJob, deals: ReturnType<typeof makeDealView>[] = [], alerts: unknown[] = []) {
   server.use(
     http.get('/api/rebalance', () => HttpResponse.json(env({ ...makeRebalanceView(), job }))),
   );
-  return renderBanner(deals);
+  return renderBanner(deals, alerts);
 }
 
 describe('RecoveryBanner', () => {
@@ -168,6 +168,25 @@ describe('RecoveryBanner', () => {
     renderTwap(twapJob(), [makeDealView({ pair: { id: 'plain1', mode: 'HALTED' } })]);
     await screen.findByText(/halted — needs you/);
     expect(screen.getAllByRole('alert')).toHaveLength(2);
+  });
+
+  it('a standing alert from another deal shows under a paused TWAP strip', async () => {
+    renderTwap(twapJob({ status: 'halted', paused: true }), [], [
+      { id: 1, ts: 0, level: 'error', pairId: 'plain1', message: 'Hedge orders keep failing. The position is not hedged.', ack: 0 },
+    ]);
+    await screen.findByText(/Hedge orders keep failing/);
+    expect(screen.getAllByRole('alert')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+  });
+
+  it('an alert from the TWAP own child stays under the strip only', async () => {
+    renderTwap(twapJob({ status: 'halted', haltKind: 'error' }), [], [
+      { id: 1, ts: 0, level: 'error', pairId: 'job1-s3-1', message: 'Slice 3 stopped on an error.', ack: 0 },
+    ]);
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+    expect(screen.queryByText(/Slice 3 stopped on an error/)).not.toBeInTheDocument();
   });
 
   it('a failed deal read says so', async () => {

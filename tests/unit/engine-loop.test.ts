@@ -1254,6 +1254,41 @@ describe('maker + hedge close (both legs reduce-only)', () => {
     expect(w.store.listAlerts().some((a) => a.level === 'error' && /may already be closed/.test(a.message))).toBe(true);
   });
 
+  it('a stopping close keeps retrying a hedge refused for order allowance, then hedges', async () => {
+    const w = closeWorld();
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.152');
+    w.venue.nextCreate = Array(200).fill('reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR');
+    await stepChecked(w, 30);
+    expect(w.store.getPair(w.pairId)!.mode).toBe('HALTED');
+    commands.resumeAfterHalt(w.store, w.pairId);
+    await stepChecked(w, 200);
+    expect(w.store.getPair(w.pairId)!.mode).toBe('STOPPING');
+    w.venue.nextCreate = [];
+    for (let i = 0; i < 50 && w.store.getPair(w.pairId)!.mode !== 'DONE'; i++) await stepChecked(w);
+    const done = w.store.getPair(w.pairId)!;
+    expect(done.mode).toBe('DONE');
+    expect(JSON.parse(done.reportJson!).unhedged).toBe('0');
+  });
+
+  it('a stopping close waits out a hedge book outage instead of ending unhedged', async () => {
+    const w = closeWorld({ b: { reduceOnly: true, minNotional: '10' } });
+    await stepChecked(w);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    commands.stop(w.store, w.pairId);
+    w.venue.fill(maker.clientText, '0.152');
+    w.venue.refPrices.delete(B_CONTRACT);
+    await stepChecked(w, 200);
+    expect(w.store.getPair(w.pairId)!.mode).toBe('STOPPING');
+    expect(w.venue.createCalls.filter((c) => c.includes('.B')).length).toBe(0);
+    w.venue.refPrices.set(B_CONTRACT, '2500');
+    for (let i = 0; i < 50 && w.store.getPair(w.pairId)!.mode !== 'DONE'; i++) await stepChecked(w);
+    const done = w.store.getPair(w.pairId)!;
+    expect(done.mode).toBe('DONE');
+    expect(JSON.parse(done.reportJson!).unhedged).toBe('0');
+  });
+
   it('a resting close re-pegs to the best price once it is far enough behind', async () => {
     const w = closeWorld({ pricePolicy: 'touch' });
     w.store.updatePair(w.pairId, { repegBehindBp: 2 });
@@ -1821,6 +1856,18 @@ describe('an order-count refusal on a re-peg keeps the deal and does not loop', 
     const reason = JSON.parse(pair.reportJson!).reason as string;
     expect(reason.startsWith(OPEN_ORDER_CAP_REASON)).toBe(true);
     expect(reason).not.toMatch(/crossing the market/);
+  });
+
+  it('close maker leg: the cap turns the close to market, keeps the cap reason, and never says it is stopping', async () => {
+    const w = mkWorld({ a: { reduceOnly: true }, b: { reduceOnly: true }, clipBandBp: 50 });
+    w.venue.nextCreate = Array(TUNING.MAX_POC_REJECTS).fill(await gateAnswerFor(ORDER_COUNT));
+    for (let i = 0; i < 30 && w.store.getPair(w.pairId)!.mode === 'OPENING'; i++) await stepChecked(w);
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.mode).not.toBe('OPENING');
+    expect(pair.haltReason).toBe(OPEN_ORDER_CAP_REASON);
+    const alerts = w.store.listAlerts();
+    expect(alerts.some((a) => /first leg keep failing/.test(a.message))).toBe(false);
+    expect(alerts.some((a) => /too many open orders on this market\. Closing the rest at market/.test(a.message))).toBe(true);
   });
 
   it('maker leg: one open-order refusal, then margin refusals, stops with the crossing text, not the cap', async () => {

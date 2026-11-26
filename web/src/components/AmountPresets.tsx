@@ -87,7 +87,10 @@ export function AmountPresets<T extends string>({
               setCustomWidth([...(segRef.current?.querySelectorAll('button') ?? [])].at(-1)?.offsetWidth || null);
               setEditing(true);
             }
-            else if (next !== '') onPreset(next);
+            else if (next !== '') {
+              close();
+              onPreset(next);
+            }
           }}
           options={options}
         />
@@ -113,8 +116,11 @@ export function AmountPresets<T extends string>({
                   close();
                 }
               }}
-              onBlur={apply}
+              onBlur={() => {
+                if (customError === null) apply();
+              }}
               title={customError ?? undefined}
+              aria-invalid={customError !== null || undefined}
               className="num w-full min-w-0 bg-transparent text-xs font-semibold text-ink-50 outline-none"
             />
             <span className="shrink-0 text-xs text-ink-400">{custom.unit}</span>

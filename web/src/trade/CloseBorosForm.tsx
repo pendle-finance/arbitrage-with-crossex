@@ -82,13 +82,13 @@ const FALLBACK_SLIPPAGE_PCT = 1;
 
 export function CloseBorosForm({
   legs,
-  perpsUnhedged = false,
+  perpsUnhedged = null,
   underPicker = false,
   onClosed,
   onSent,
 }: {
   legs: CloseLeg[];
-  perpsUnhedged?: boolean;
+  perpsUnhedged?: { qty: number; coin: string } | null;
   underPicker?: boolean;
   onSent?: () => void;
   /**
@@ -523,6 +523,8 @@ export function CloseBorosForm({
     return open > 0 ? wholeOf(l) < open : (l.share ?? 1) < 0.9995;
   });
   const flatAfter = atMax && !sharedLeg;
+  const closedShare = anySizeInvalid ? 0 : closesAll ? 1 : maxCloseSize > 0 ? Math.min(1, typedSize / maxCloseSize) : 0;
+  const perpsLeft = perpsUnhedged && closedShare > 0 ? perpsUnhedged.qty * closedShare : null;
   const leftOf = (l: CloseLeg): number => {
     const left = heldWei(l) - toWei(sizeOf(l));
     return left > 0n ? fromWei(left) : 0;
@@ -561,7 +563,7 @@ export function CloseBorosForm({
       ),
       sub: null,
       right: mark,
-      state: busy && pending.includes(l) ? 'running' : 'pending',
+      state: done.some((d) => d.marketId === l.marketId) ? 'done' : busy && pending.includes(l) ? 'running' : 'pending',
       progress: null,
     };
   });
@@ -739,10 +741,14 @@ export function CloseBorosForm({
               <span className="num text-[12px] text-ink-300">{`${sigGrouped(heldOf(f.l))} ${f.l.collateral ?? ''} → ${sigGrouped(leftOf(f.l))} ${f.l.collateral ?? ''}`}</span>
             </div>
           ))}
-        {perpsUnhedged && (
+        {perpsUnhedged && perpsLeft !== null && (
           <EstimateRow
             label={t('accounts.closePair.after.perps')}
-            value={<span className="text-rose-400">{t('accounts.closePair.after.openFloating')}</span>}
+            value={
+              <span className="text-rose-400">
+                {t('pairTicket.closeBoros.perpsUnhedged', { qty: sigGrouped(perpsLeft), coin: perpsUnhedged.coin })}
+              </span>
+            }
           />
         )}
       </SummaryCard>

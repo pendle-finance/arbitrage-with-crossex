@@ -59,6 +59,7 @@ function previewHandler(opts: {
   makerLeg?: MakerLegPreview;
   twapCalls?: TwapInput[];
   rules?: Record<string, SymbolRule>;
+  twapOn?: boolean;
 }) {
   const rates = opts.rates ?? {
     GATE: { maker: 0.0002, taker: 0.0005 },
@@ -117,7 +118,7 @@ function previewHandler(opts: {
       env<PreviewResponse>({
         previews,
         makerLeg: opts.makerLeg ?? { auto: 'a', why: 'book' },
-        priceImpact: { whole: 12, sliced: 3 }, twapDefault: TWAP_OFF,
+        priceImpact: { whole: 12, sliced: 3 }, twapDefault: { ...TWAP_OFF, on: opts.twapOn === true },
         twap: planFor(twap ?? {}),
       }),
     );
@@ -1112,12 +1113,22 @@ describe('PairTicket layout C', () => {
     expect(screen.getByText(/vs 2 taker orders/)).toBeInTheDocument();
   });
 
-  it('switching to Market and back turns TWAP off', async () => {
+  it('switching to Market and back keeps the TWAP the trader turned on', async () => {
     await ready();
     await twapOn();
     await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
     await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
-    expect(twapSwitch()).toHaveAttribute('aria-checked', 'false');
+    expect(twapSwitch()).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('switching to Market and back keeps the book-sized TWAP default', async () => {
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [], twapOn: true }));
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'true'), { timeout: 4000 });
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'true'), { timeout: 4000 });
   });
 
   it('leverage is venue max with no control', async () => {

@@ -334,6 +334,7 @@ describe('RebalanceModal plan state', () => {
     expect(holdButton()).toBeEnabled();
     await next();
     expect(screen.queryByRole('button', { name: HOLD })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Refresh route' })).toHaveClass('w-full');
     await user.click(screen.getByRole('button', { name: 'Refresh route' }));
     expect(holdButton()).toBeEnabled();
   });
@@ -1474,9 +1475,19 @@ describe('RebalanceModal close and reopen, before the hold', () => {
     show(rebalanceViews.ownerBook);
     await user.click(screen.getByRole('radio', { name: 'Custom amount' }));
     await typeCustom(user, '50000');
-    expect(await screen.findByText('Up to 3,140 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText('Up to 3,140.00 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeDisabled();
     expect(screen.queryByText('Total cost')).toBeNull();
+  });
+
+  it('the cap line keeps cents and never rounds above the cap', async () => {
+    const user = userEvent.setup();
+    const custom = rebalanceViews.ownerBook.plans.custom!;
+    customPlans({ 3140.9: { ...custom, goal: { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 3140.9 }, customMaxUsd: 3140.678 } });
+    show(rebalanceViews.ownerBook);
+    await user.click(screen.getByRole('radio', { name: 'Custom amount' }));
+    await typeCustom(user, '3140.9');
+    expect(await screen.findByText('Up to 3,140.67 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
   });
 
   it('above the most on a $6,000,000 book names the whole 10,500,000 cap', async () => {
@@ -1486,7 +1497,7 @@ describe('RebalanceModal close and reopen, before the hold', () => {
     show(whaleRebalanceViews.realizeWhale);
     await user.click(screen.getByRole('radio', { name: 'Custom amount' }));
     await typeCustom(user, '12000000');
-    expect(await screen.findByText('Up to 10,500,000 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(await screen.findByText('Up to 10,500,000.00 USDC from this wallet.', {}, { timeout: 3000 })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeDisabled();
   });
 
@@ -1521,6 +1532,19 @@ describe('RebalanceModal tabs', () => {
     expect(tabRadio('Delever')).toHaveAttribute('aria-checked', 'true');
     expect(await screen.findByText(/^Boros [\d.,]+ YU has no perp behind it$/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Hold to close [\d.,]+ YU on Boros/ })).toBeInTheDocument();
+  });
+
+  it('an abandoned delever with a boros gap does not lock the other tabs', async () => {
+    showOn(extraRebalanceViews.deleverAbandonedGap);
+    await userEvent.click(tabRadio('Move cash'));
+    expect(screen.queryByText('New deals and transfers wait until it ends.')).toBeNull();
+    await userEvent.click(tabRadio('Realize uPnL'));
+    expect(screen.queryByText('New deals and transfers wait until it ends.')).toBeNull();
+  });
+
+  it('a TWAP delever run shows its chip on the Delever tab', () => {
+    showOn(twapFixtures.normal.deleverRunning.rebalance);
+    expect(within(tabRadio('Delever')).getByText('Running')).toBeInTheDocument();
   });
 
   it('opens on the tab that clears it', () => {

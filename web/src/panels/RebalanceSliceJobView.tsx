@@ -12,7 +12,7 @@ import { RunView } from '../trade/RunView';
 import { SliceGraph, SlicePriceBox } from '../trade/RunViewBits';
 import { spanText } from '../lib/span';
 import { markPriceOf, ProgressBar } from './RebalanceBits';
-import { poolKey, sideText, sizeText } from './rebalanceCopy';
+import { poolCoin, poolKey, sideText, sizeText } from './rebalanceCopy';
 import { Actions, haltLine, StopBox, type JobViewProps } from './RebalanceJobBits';
 import type { RebalanceTab } from './rebalanceOpener';
 import { NotHedgedLine } from './RebalancePlanBits';
@@ -89,6 +89,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   const borosEnd = (delever?.boros ?? []).reduce((sum, row) => sum + row.after, 0);
   const realCost = job.totalCostUsd ?? null;
   const estCost = job.estimate?.totalUsd ?? job.costUsd ?? 0;
+  const cashCoin = poolCoin(legs[0]?.pool ?? 'HYPERLIQUID');
   const realized = legs.reduce((sum, l) => sum + l.realizedUsd, 0) - (realCost ?? job.feeSoFarUsd ?? 0);
   const addedLegs = job.steps.find((step) => step.addBack)?.addBack?.legs ?? [];
   const perpSizes = (delever?.legs ?? []).map((l) => ({
@@ -202,7 +203,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       firstLine: (
         <ResultBox
           tone="done"
-          title={sk('realized', { amount: num(realized, 0) })}
+          title={sk('realized', { amount: num(realized, 0), coin: cashCoin })}
           lines={(job.profitStops ?? []).map((stop) => sk('profitStop', { closed: sizeText(stop.closedQty), planned: sizeText(stop.plannedQty), coin: stop.base }))}
           rows={totalCostRows}
         />
@@ -229,7 +230,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       ]
     : [
         { label: t('trade.twap.run.slice', { i: num(index, 0), n: num(count, 0) }), value: sk('left', { time: fmtAbout((count - index + 1) * (twap ? twap.intervalSec : (job.exec ?? 'maker') === 'maker' && job.maker?.takerAfterSec ? job.maker.takerAfterSec : SLICE_SECONDS[job.exec ?? 'maker'])) }) },
-        { label: sk('realizedLabel'), value: sk('realizedOf', { x: num(realized, 0), y: num(job.amount, 0) }) },
+        { label: sk('realizedLabel'), value: sk('realizedOf', { x: num(realized, 0), y: num(job.amount, 0), coin: cashCoin }) },
         { label: t('trade.twap.run.notHedged'), value: `${sizeText(open)} ${coin} (${usdOf(open)})` },
         feeRow,
       ];

@@ -9,12 +9,15 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
+import { useState } from 'react';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse } from '../api/types';
-import { account, baseHandlers, previewFor } from '../test/fixtures';
+import { account, baseHandlers, ETH_GATE, previewFor, symbolHandlers } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ClosePairForm } from './PerpOnlyBox';
+
+beforeEach(() => server.use(...symbolHandlers([{ ...ETH_GATE, lotSize: '0.0001', minSize: '0.0001' }])));
 
 const LEGS = [
   { symbol: 'BYBIT_FUTURE_HYPE_USDT', qty: 1.89, venue: 'BYBIT' },
@@ -152,6 +155,8 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
         ]}
       />,
     );
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([String(gate), String(gate)]), { timeout: 4000 });
+    await pickMarket();
     await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([String(gate), String(hl)]), { timeout: 4000 });
     first.unmount();
 
@@ -165,8 +170,9 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
         ]}
       />,
     );
-    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
-    expect(qtysOf(seen.at(-1))).toEqual([undefined, undefined]);
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([undefined, String(gate)]), { timeout: 4000 });
+    await pickMarket();
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([undefined, undefined]), { timeout: 4000 });
   });
 });
 
@@ -220,6 +226,62 @@ describe('ClosePairForm — slippage is part of the close intent', () => {
     // A different band is a different order ⇒ a different id, so the server
     // cannot dedupe the 2% close into the 0.5% one.
     expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
+  }, 15_000);
+});
+
+describe('ClosePairForm — the pair shrinks behind the form', () => {
+  const SHARED = LEGS.map((l) => ({ ...l, partial: true }));
+
+  function Shrinking() {
+    const [legs, setLegs] = useState(SHARED);
+    return (
+      <>
+        <button type="button" onClick={() => setLegs(SHARED.map((l) => ({ ...l, qty: 0.95 })))}>
+          Shrink
+        </button>
+        <ClosePairForm base="HYPE" legs={legs} />
+      </>
+    );
+  }
+
+  it('after a lost response, the retry keeps the deal id and the size it was sent with', async () => {
+    const seen: ActionInput[][] = [];
+    const dealCalls: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy(seen),
+      http.post('/api/deals', async ({ request }) => {
+        dealCalls.push((await request.json()) as DealRequest);
+        return HttpResponse.json({ ok: false, error: { category: 'network', message: 'socket hang up', retryable: true } }, { status: 500 });
+      }),
+    );
+    renderWithClient(<Shrinking />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Shrink' }));
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });
+    expect(dealCalls[1].id).toBe(dealCalls[0].id);
+    expect(qtysOf(seen.at(-1))).toEqual(['1.89', '1.89']);
+  }, 15_000);
+
+  it('after a send lands, the next close uses the new size', async () => {
+    const seen: ActionInput[][] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy(seen),
+      http.post('/api/deals', () => HttpResponse.json(env({ id: 'd-1' }), { status: 202 })),
+    );
+    renderWithClient(<Shrinking />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument(), { timeout: 4000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Shrink' }));
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual(['0.95', '0.95']), { timeout: 4000 });
   }, 15_000);
 });
 
@@ -321,6 +383,16 @@ describe('ClosePairForm: After card', () => {
     const after2 = await screen.findByRole('region', { name: 'After' });
     const boros = within(after2).getByText('1.89 HYPE fixed rate · not hedged');
     expect(boros).toHaveClass('text-amber-300');
+  });
+
+  it('a 25% close says only 25% of the Boros loses its hedge', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} borosUnhedged={{ qty: 1.89, coin: 'HYPE' }} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(within(after).getByText('1.89 HYPE fixed rate · not hedged')).toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Share shortcuts' })).getByRole('radio', { name: '25%' }));
+    expect(await within(after).findByText('0.4725 HYPE fixed rate · not hedged', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(within(after).queryByText('1.89 HYPE fixed rate · not hedged')).toBeNull();
   });
 
   it('a full close shows each leg going to 0 and the price PnL label lists each leg', async () => {
