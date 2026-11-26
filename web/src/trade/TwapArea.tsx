@@ -1,5 +1,5 @@
 import { ArrowRight } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PriceImpactPreview, TwapPlanPreview, TwapPlanView, TwapRefusalView } from '../api/types';
 import { HoverCard } from '../components/HoverCard';
@@ -7,6 +7,7 @@ import { Switch } from '../components/Switch';
 import { localizeServerText } from '../i18n/serverMessages';
 import { fmtUsd, qtyGrouped } from '../lib/fmt';
 import { parseSpan, spanText } from '../lib/span';
+import { sectionHeadClass } from './FoldRow';
 import { AffixedInput } from './PairTicketBits';
 import { ViolationList } from './previewBits';
 
@@ -164,7 +165,6 @@ export function TwapArea({
   impact,
   coin,
   lot,
-  offLabel,
 }: {
   on: boolean;
   onToggle: (on: boolean) => void;
@@ -174,7 +174,6 @@ export function TwapArea({
   impact: PriceImpactPreview | null;
   coin: string;
   lot?: string;
-  offLabel?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [drafts, setDrafts] = useState<Partial<Record<Box, string>>>({});
@@ -249,16 +248,15 @@ export function TwapArea({
   };
 
   return (
-    <div className="flex flex-col gap-2.5 rounded-md border border-ink-700 px-3 py-2.5">
-      <div className="flex items-center gap-3">
-        <HoverCard underline={false} wrapsControl widthPx={260} label={<Switch on={on} onChange={onToggle} label={t('trade.twap.area.title')} />}>
+    <div className="flex flex-col rounded-md border border-ink-700">
+      <div className={`flex items-center gap-3 ${sectionHeadClass(on)}`}>
+        <HoverCard underline={false} wrapsControl widthPx={260} label={<Switch on={on} onChange={onToggle} label={t('trade.twap.area.title')} heading />}>
           {t('trade.twap.area.hover')}
         </HoverCard>
         {impact && <ImpactPair impact={impact} on={on} />}
       </div>
-      {!on && offLabel}
       {on && (
-        <>
+        <div className="flex flex-col gap-2.5 border-t border-ink-700 px-3 py-2.5">
           <div className="grid grid-cols-3 gap-2">
             {field('durationSec', t('trade.twap.area.duration'))}
             {field('intervalSec', t('trade.twap.area.interval'))}
@@ -275,7 +273,7 @@ export function TwapArea({
                 : t('trade.twap.area.slices', { n: plan.slices, qty: qtyGrouped(plan.lastQty), coin })}
             </span>
           )}
-        </>
+        </div>
       )}
     </div>
   );

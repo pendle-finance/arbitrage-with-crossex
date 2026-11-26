@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
+import { ChevronRight, TriangleAlert } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import {
@@ -9,7 +9,6 @@ import {
   useVenueBook,
 } from '../api/queries';
 import type { ActionInput, Side } from '../api/types';
-import { Chip } from '../components/Chip';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { amountError } from '../lib/amount';
@@ -19,7 +18,7 @@ import { EstimateHeadline } from './EstimateHeadline';
 import { ExecuteControl } from './ExecuteControl';
 import { LimitPriceBox } from './LimitPriceBox';
 import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
-import { AffixedInput, EstimateCard, EstimateRow, LeverageValue } from './PairTicketBits';
+import { AffixedInput, EstimateCard, EstimateRow, LeverageValue, VenueSelect } from './PairTicketBits';
 import {
   estimateMargin,
   PREFLIGHT_MARGIN_BUFFER,
@@ -211,12 +210,8 @@ export function SingleTicket() {
           ) : undefined
         }
         onSelect={(coin) => {
+          if (coin === base) return;
           setBase(coin);
-          setSymbol(null);
-          resetCoin();
-        }}
-        onClear={() => {
-          setBase(null);
           setSymbol(null);
           resetCoin();
         }}
@@ -238,37 +233,14 @@ export function SingleTicket() {
           />
         </div>
         {base && (
-          <div className="flex min-w-0 flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <Chip sm tone={isLong ? 'green' : 'red'} className="font-semibold">
-                {t(isLong ? 'common.longUpper' : 'common.shortUpper')}
-              </Chip>
-              <span className="text-[12px] font-normal text-ink-300">
-                {t(isLong ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
-              </span>
-            </div>
-            <div className="relative">
-              <select
-                aria-label={t(isLong ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
-                className="select"
-                value={symbol ?? ''}
-                onChange={(e) => setSymbol(e.target.value || null)}
-              >
-                <option value="">
-                  {venues.isPending ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}
-                </option>
-                {venueRules.map((r) => (
-                  <option key={r.symbol} value={r.symbol}>
-                    {prettyVenue(r.exchange)}
-                    {r.quote !== 'USDT' ? ` · ${r.quote}` : ''}
-                  </option>
-                ))}
-              </select>
-              <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
-                <ChevronDown size={14} aria-hidden />
-              </span>
-            </div>
-          </div>
+          <VenueSelect
+            tone={isLong ? 'long' : 'short'}
+            value={symbol}
+            otherValue={null}
+            onPick={(next) => setSymbol(next || null)}
+            venues={venueRules}
+            loading={venues.isPending}
+          />
         )}
       </div>
 
@@ -340,6 +312,21 @@ export function SingleTicket() {
         />
       )}
 
+      {twapOn && (
+        <MakerSettings
+          legs={null}
+          makerLeg="auto"
+          autoPick={null}
+          onMakerLeg={() => undefined}
+          takerAfter={taker.takerAfter}
+          onTakerAfter={taker.pick}
+          takerCapSec={plan?.takerAfterSec ?? null}
+          repegBehindBp={repeg}
+          repegLocked={false}
+          onRepeg={(v) => setRepeg(v === 2 || v === 5 || v === 10 ? v : null)}
+        />
+      )}
+
       {type === 'LIMIT' && (
         <TwapArea
           on={twap.on}
@@ -355,7 +342,7 @@ export function SingleTicket() {
 
       {sliceMin && <p className="text-[11px] text-rose-400">{sliceMin}</p>}
 
-      {type === 'LIMIT' && !twapOn && (
+      {type === 'LIMIT' && !twapOn && symbol && (
         <div className="flex flex-col gap-1.5">
           <LimitPriceBox
             bookPrice={autoPrice}
@@ -366,21 +353,6 @@ export function SingleTicket() {
           />
           <span className="text-[10.5px] text-ink-400">{t('trade.single.postOnlyNote')}</span>
         </div>
-      )}
-
-      {twapOn && (
-        <MakerSettings
-          legs={null}
-          makerLeg="auto"
-          autoPick={null}
-          onMakerLeg={() => undefined}
-          takerAfter={taker.takerAfter}
-          onTakerAfter={taker.pick}
-          takerCapSec={plan?.takerAfterSec ?? null}
-          repegBehindBp={repeg}
-          repegLocked={false}
-          onRepeg={(v) => setRepeg(v === 2 || v === 5 || v === 10 ? v : null)}
-        />
       )}
 
       {type === 'LIMIT' && (

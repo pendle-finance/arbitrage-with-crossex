@@ -89,18 +89,12 @@
     "atMarket": "{{side}} {{venue}} · at market"
   },
   "symbol": {
-    "quickPick": "Quick pick coin",
-    "otherCoin": "Other coin",
-    "searching": "Searching…",
-    "noMatch": "No live perps match “{{q}}”",
     "venueChips": "Venue chips",
     "loadingVenues": "Loading venues…",
     "noPerpsFor": "No live perps for {{base}}",
     "pickCoin": "Pick a coin to see its venues",
     "searchSymbol": "Search coin (BTC…) or paste a full symbol",
-    "symbolSearch": "Symbol search",
-    "searchCoin": "Search coin (BTC…)",
-    "coinSearch": "Coin search"
+    "symbolSearch": "Symbol search"
   },
   "impact": {
     "bps": "{{value}} bps",

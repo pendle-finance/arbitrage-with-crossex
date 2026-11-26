@@ -217,6 +217,7 @@ export interface RoutePlan {
   savesPerDayUsd: number;
   after: WalletAfter[];
   steps: PlannedStep[];
+  idleSale?: { usdc: number; at: number } | null;
 }
 
 export type PerpSide = 'LONG' | 'SHORT';
@@ -238,6 +239,7 @@ export interface RealizeLeg {
   realizedUsd: number;
   convert: RealizeConvert | null;
   closeFeeUsd: number;
+  closeMakerFeeUsd?: number;
   reopenFeeUsd: number;
   closeImpactUsd: number;
   reopenImpactUsd: number;
@@ -532,6 +534,7 @@ export interface RebalanceJob {
   openGaps?: RebalanceOpenGap[];
   kind?: 'move' | 'realize' | 'delever' | 'twap';
   exec?: RealizeExec;
+  maker?: { takerAfterSec: number | null; repegBehindBp: number | null } | null;
   slice?: { index: number; count: number; sizeUsd: number; qty?: number } | null;
   notHedgedQty?: number;
   followMisses?: number;

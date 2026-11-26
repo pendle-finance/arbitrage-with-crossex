@@ -8,6 +8,7 @@ import { TabActiveContext } from '../components/TabBar';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { baseHandlers, ethPosition, pairContextBodies, previewFor } from '../test/fixtures';
 import { env, server } from '../test/server';
+import { pickOption, waitForOptions } from '../test/picker';
 import { renderWithClient } from '../test/utils';
 import { BorosPairTicket } from './BorosPairTicket';
 import { ClosePopover } from './ClosePopover';
@@ -157,11 +158,9 @@ function handlers(opts: { onExecute?: (body: Record<string, unknown>) => void } 
 }
 
 async function fillTicket(user: ReturnType<typeof userEvent.setup>) {
-  await waitFor(() =>
-    expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-  );
-  await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
-  await user.selectOptions(screen.getByLabelText('Market B'), String(BN));
+  await waitForOptions(user, 'Market A');
+  await pickOption(user, 'Market A', String(HL));
+  await pickOption(user, 'Market B', String(BN));
   await user.type(screen.getByLabelText(/^Size per market/), '100000');
 }
 

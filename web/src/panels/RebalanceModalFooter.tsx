@@ -59,12 +59,15 @@ export function RebalanceModalFooter(props: FooterProps) {
       {verdict}
       {rows.length > 0 && <TotalCost rows={rows} chip={chip} />}
       {daysLine !== null && <span className="num text-xs text-ink-400">{daysLine}</span>}
-      {quoteStale && lock === null && <p className="text-xs text-gold">{t('accounts.rebalanceModal.staleQuote')}</p>}
       {lock !== null ? (
         <p className="text-xs text-ink-400">{lock}</p>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
-          {stale && !quoteStale ? (
+          {quoteStale ? (
+            <button type="button" className="btn btn-primary w-full" onClick={onRefresh}>
+              {t('accounts.rebalanceModal.refreshQuote')}
+            </button>
+          ) : stale ? (
             <button type="button" className="btn btn-primary num" onClick={onRefresh}>
               {modalRefreshRoute()}
             </button>
@@ -73,7 +76,7 @@ export function RebalanceModalFooter(props: FooterProps) {
               tone={optional ? 'outline' : 'cyan'}
               className="w-full"
               holdMs={holdMs}
-              disabled={disabled || quoteStale}
+              disabled={disabled}
               onConfirm={onConfirm}
             >
               {pricing ? t('accounts.rebalanceModal.pricing') : holdLabel}

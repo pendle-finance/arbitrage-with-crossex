@@ -1011,6 +1011,7 @@ const ACCOUNT_A_CONVERT: RoutePlan = {
   steps: [
     { round: null, kind: 'convert', buy: 0, move: 175.94, arrives: 175.58, borrowLeft: 0, seconds: 0, ...TO_HYPERLIQUID },
   ],
+  idleSale: { usdc: 111.96, at: 0 },
 };
 
 const ACCOUNT_A_PLAN: EvenPlan = {

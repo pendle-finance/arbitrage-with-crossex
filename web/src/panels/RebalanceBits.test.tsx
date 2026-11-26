@@ -9,7 +9,7 @@ import { StepDot, StepList, type StepRow } from './RebalanceBits';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { RealizeTab } from './RealizeTab';
-import { jobRows } from './rebalanceStepRows';
+import { jobRows, planRows } from './rebalanceStepRows';
 
 const BAR_CAPTION = 'Equity (cash + unrealized PnL)';
 const HOVER_TARGET = 'Balanced target';
@@ -355,6 +355,49 @@ describe('jobRows for a Convert in chunks', () => {
 
     expect(row).toMatchObject({ state: 'done', sub: '' });
     expect(row.text).toContain('12.00');
+  });
+});
+
+describe('the idle Gate USDC sale', () => {
+  const IDLE = 'Sell 111.96 idle USDC in the CrossEx Gate wallet for USDT';
+  const convert = rebalanceViews.accountA.plans.even.routes.convert;
+
+  it('the plan lists the sale as its own instant row before the Convert', () => {
+    const rows = planRows(convert);
+
+    expect(rows.map((row) => row.text)).toEqual([IDLE, expect.stringContaining('175.94')]);
+    expect(rows[0]).toMatchObject({ coin: 'USDC', state: 'pending', right: 'Instant' });
+  });
+
+  it('the plan puts a round-out sale after the round it rides with', () => {
+    const loop = rebalanceViews.accountA.plans.even.routes.loop!;
+    const rows = planRows({ ...loop, idleSale: { usdc: 111.96, at: 1 } });
+
+    expect(rows).toHaveLength(loop.steps.length + 1);
+    expect(rows[1].text).toBe(IDLE);
+  });
+
+  it('a plan with no sale, or a sale of 0, lists only its steps', () => {
+    expect(planRows({ ...convert, idleSale: null })).toHaveLength(1);
+    expect(planRows({ ...convert, idleSale: { usdc: 0, at: 0 } })).toHaveLength(1);
+  });
+
+  it('a job shows the sale the runner adds before a Convert as its own row', () => {
+    const base = rebalanceViews.accountADone.job!;
+    const step = (name: string, planned: number, status: RebalanceStep['status']): RebalanceStep => ({
+      ...base.steps[0], name, from: 'CROSSEX', to: 'HYPERLIQUID', round: null, planned, qty: null, status,
+      arrives: null, borrowLeft: null, startedAt: status === 'pending' ? null : 1_000, doneAt: status === 'done' ? 2_000 : null,
+    });
+    const job: RebalanceJob = {
+      ...base, goal: 'even', route: 'convert', status: 'running', stepIndex: 1, updatedAt: 2_000,
+      steps: [step('Sell USDC', 111.96, 'done'), step('Convert', 175.94, 'running')],
+    };
+
+    const rows = jobRows(job, 3_000);
+
+    expect(rows.map((row) => row.text)).toEqual([IDLE, expect.stringContaining('175.94')]);
+    expect(rows.map((row) => row.state)).toEqual(['done', 'running']);
+    expect(rows[0].coin).toBe('USDC');
   });
 });
 

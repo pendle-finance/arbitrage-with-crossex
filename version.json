@@ -7,6 +7,7 @@
     "Close a perp pair with Limit + hedge: one leg rests as a maker order, the other hedges each fill, for lower fees",
     "The roll-over banner and Telegram alert no longer count fees you already paid, so a lower later rate no longer reads as better",
     "Telegram alerts set up only for the wallet logged in on the terminal",
-    "Aster perps on CrossEx get fill estimates from Aster's own order book"
+    "Aster perps on CrossEx get fill estimates from Aster's own order book",
+    "The order ticket opens as a popup and shows its estimate as a Cost card and an After card"
   ]
 }

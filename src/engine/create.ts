@@ -48,7 +48,8 @@ export interface DealRequest {
 const ID_RE = /^[a-zA-Z0-9-]{6,40}$/;
 const TIMEOUT_DEFAULT_S = 300;
 export const TIMEOUT_MIN_S = 30;
-const TIMEOUT_MAX_S = 86_400;
+export const TIMEOUT_MAX_S = 86_400;
+export const TIMEOUT_RANGE_TEXT = 'Taker after must be 30s to 24h.';
 export const REPEG_CHOICES_BP = [2, 5, 10] as const;
 type RepegBehindBp = (typeof REPEG_CHOICES_BP)[number];
 export const REPEG_DEFAULT_BP: RepegBehindBp = 5;
@@ -71,7 +72,7 @@ function timeoutOf(req: DealRequest): number | null {
   if (req.timeoutSec === null) return null;
   const sec = req.timeoutSec === undefined ? TIMEOUT_DEFAULT_S : Number(req.timeoutSec);
   if (!Number.isFinite(sec) || sec < TIMEOUT_MIN_S || sec > TIMEOUT_MAX_S) {
-    throw new CoreError('Taker after must be 30s to 24h.');
+    throw new CoreError(TIMEOUT_RANGE_TEXT);
   }
   if (req.deadlineCapSec === undefined) return sec;
   const cap = Number(req.deadlineCapSec);

@@ -183,7 +183,7 @@
     "whereCaption": "Where your money is",
     "onTheWay": "On the way",
     "waitsLine": "New deals and transfers wait until it ends.",
-    "staleQuote": "The quote is out of date. Waiting for a fresh one.",
+    "refreshQuote": "Refresh quote",
     "started": "Started {{age}} ago. You can close this. The rebalance keeps going.",
     "finishedLead": "Done. This is what each wallet holds now.",
     "abandonTransit": "Abandon leaves {{qty}} {{coin}} in transit. It is not margin until it lands.",
@@ -218,6 +218,7 @@
     "moveTo": "Move {{move}} USDC to {{wallet}}",
     "buyMoveIt": "Buy {{buy}} USDC, move it to {{wallet}}",
     "buyMove": "Buy {{buy}} USDC, move {{move}} USDC to {{wallet}}",
+    "sellIdle": "Sell {{amount}} idle USDC in the CrossEx Gate wallet for USDT",
     "stopped": "Stopped",
     "elapsedOf": "{{elapsed}} of {{expected}}"
   },
@@ -503,10 +504,10 @@
     "closeReopen": "Close and reopen",
     "legPart": "{{coin}} {{side}} {{size}} of {{held}}",
     "orders": "Orders",
-    "limitHedge": "Limit + hedge {{usd}} · {{time}} per slice",
-    "market": "Market {{usd}} · {{time}} per slice",
-    "limitHedgeWhole": "Limit + hedge {{usd}} · {{time}}",
-    "marketWhole": "Market {{usd}} · {{time}}",
+    "limitHedge": "Limit + hedge <approx/>{{usd}} · {{time}} per slice",
+    "market": "Market <approx/>{{usd}} · {{time}} per slice",
+    "limitHedgeWhole": "Limit + hedge <approx/>{{usd}} · {{time}}",
+    "marketWhole": "Market <approx/>{{usd}} · {{time}}",
     "split": "Split the close",
     "splitHover_one": "Splits the close into slices, so each order moves the price less. Recommended: {{size}}, {{count}} slice, {{time}}.",
     "splitHover_other": "Splits the close into slices, so each order moves the price less. Recommended: {{size}}, {{count}} slices, {{time}}.",
@@ -515,8 +516,6 @@
     "priceImpact": "Price impact",
     "totalCost": "Total cost",
     "realizedAfterCost": "Realized, after cost",
-    "notHedged": "Not hedged during each slice: max {{qty}} {{coin}} ({{usd}})",
-    "notHedgedWhole": "Not hedged during the order: max {{qty}} {{coin}} ({{usd}})",
     "holdRealize": "Hold to realize",
     "amount": "Realize amount",
     "amountAria": "Amount to realize",
@@ -525,10 +524,7 @@
     "allPreset": "All ({{amount}} {{coin}})",
     "upToShort": "Up to {{amount}}",
     "noUpnl": "No uPnL to realize.",
-    "wallet": "Wallet: {{wallet}}",
     "walletLabel": "Wallet",
-    "walletOption": "{{wallet}} · uPnL {{amount}} {{coin}}",
-    "walletUpnl": "uPnL {{amount}} {{coin}}",
     "typeAmount": "Type an amount to realize.",
     "typeSlice": "Type a slice size above $0.",
     "customOverAll": "More than you can realize. This realizes all {{amount}} {{coin}}."
@@ -543,7 +539,6 @@
     "count": "Count",
     "estTime": "Est. time",
     "priceImpact": "Price impact",
-    "maxNotHedged": "Max not hedged",
     "maxSlippage": "Max slippage {{pct}}"
   },
   "deleverTab": {
@@ -573,8 +568,9 @@
     "yu": "YU",
     "imUsedLabel": "IM used · {{account}}",
     "afterBoros": "Boros {{a}} → {{b}} YU",
-    "borosGap": "Boros closes after the perps. Until then, the YU with no perp behind it grows to {{amount}} by the end ({{time}}).",
-    "notHedged": "Not hedged during each slice: max {{qty}} {{coin}} ({{usd}})",
+    "steps": "Steps",
+    "stepPerps": "Close {{pair}} · {{qty}} {{coin}} each",
+    "stepBoros": "Close Boros · {{qty}} YU",
     "hold": "Hold to delever {{qty}} {{coin}}",
     "noPairs": "No open pairs",
     "noPairsMatch": "No pairs match",
@@ -617,8 +613,6 @@
     "imDone": "{{a}}% → {{b}}%",
     "totalCost": "{{real}} (est. {{est}})",
     "realized": "Realized {{amount}} USDC",
-    "pairPnl": "Pair PnL",
-    "pairPnlValue": "Unchanged, except cost",
     "done": "Done",
     "next": "Next: Move cash",
     "leftover": "The last move left {{amount}} USDC in Gate spot.",
@@ -639,10 +633,7 @@
   },
   "delever": {
     "holdTwap": "Hold to delever {{qty}} {{coin}} · TWAP {{duration}}",
-    "borosGas": "Boros gas · {{n}} closes",
-    "borosPerSlice": "Boros close per slice",
-    "borosPerSliceValue": "{{amount}} YU",
-    "borosPerSliceHover": "A share of $10 or less waits and closes with the next slice."
+    "borosGas": "Boros gas · {{n}} closes"
   },
   "closeLeg": {
     "twap": {

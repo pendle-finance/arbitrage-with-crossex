@@ -64,4 +64,10 @@ export function costOf(plan: RealizePlan, exec: RealizeExec, slice: Slice | null
 
 export const netOf = (plan: RealizePlan, cost: Cost): number => sum(plan.legs.map((leg) => leg.realizedUsd)) - cost.totalUsd;
 
+export function legCostsOf(plan: RealizePlan, exec: RealizeExec, cost: Cost): number[] {
+  const own = plan.legs.map((leg) => (exec === 'maker' ? (leg.closeMakerFeeUsd ?? leg.closeFeeUsd) : leg.closeFeeUsd) + leg.reopenFeeUsd + leadWalkUsd(leg, exec));
+  const rest = sum(own.slice(1)) + sum(plan.legs.map((leg) => leg.convert?.feeUsd ?? 0));
+  return [cost.totalUsd - rest, ...own.slice(1)];
+}
+
 export const hasPlan = (plan: RealizePlan | null): plan is RealizePlan => plan !== null && (plan.legs.length > 0 || plan.refused !== null);

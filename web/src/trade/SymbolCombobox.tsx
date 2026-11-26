@@ -1,57 +1,6 @@
-/**
- * Coin-first fuzzy symbol search over GET /api/symbols?q= (debounced 250ms),
- * plus the chip pickers the two perp tickets are built from.
- *
- * - CoinCombobox (pair ticket): a "Coin" row — quick-pick majors as chips, a
- *   search box for anything else — that selects a BASE only.
- */
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useMemo, useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { fetchJson } from '../api/client';
-import { qk } from '../api/queries';
-import type { SymbolRule } from '../api/types';
-import { isRatioBase } from '../lib/ratioBase';
-import { useDebounced } from '../lib/useDebounced';
-
-const MAX_GROUPS = 10;
-
-function useSymbolSearch(q: string) {
-  return useQuery({
-    queryKey: qk.symbols(q),
-    queryFn: () => fetchJson<SymbolRule[]>(`/symbols?q=${encodeURIComponent(q)}`),
-    enabled: q.length > 0,
-    staleTime: 300_000,
-    placeholderData: keepPreviousData,
-  });
-}
-
-/** Group matches by base, ranking exact base match > prefix > rest.
- * Ratio-pair bases (ETHBTC…) are hidden from the list — see isRatioBase. */
-function groupByBase(rules: SymbolRule[] | undefined, needle: string): Array<[string, SymbolRule[]]> {
-  const m = new Map<string, SymbolRule[]>();
-  for (const r of rules ?? []) {
-    const g = m.get(r.base) ?? [];
-    g.push(r);
-    m.set(r.base, g);
-  }
-  // The "base index" for ratio detection is only this result set — a best-effort
-  // approximation. It is NOT a full base universe: a substring search for
-  // "ETHBTC" does not also return "ETH" (ETH's symbols don't contain that
-  // substring), so a ratio may slip through when the user types the ratio itself.
-  // Wrapped-asset exceptions are handled inside isRatioBase, not here.
-  const allBases = new Set(m.keys());
-  const up = needle.toUpperCase();
-  const rank = (b: string) => (b === up ? 0 : b.startsWith(up) ? 1 : 2);
-  return [...m.entries()]
-    .filter(([b]) => !isRatioBase(b, allBases))
-    .sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b))
-    .slice(0, MAX_GROUPS);
-}
-
-// ---------------------------------------------------------------------------
-// Chips
-// ---------------------------------------------------------------------------
+import { TokenIcon } from '../components/AssetIcon';
 
 /**
  * The ticket's pick chip: an outlined pill, filled and brightened when it is
@@ -93,69 +42,6 @@ export function PickChip({
 /** The coins the terminal supports (src/core/coins.ts), pinned as quick picks in both tickets. */
 const QUICK_PICK_COINS = ['ETH', 'BTC', 'HYPE'];
 
-/**
- * The coin chip row: the majors, plus the chosen coin as an extra chip when it
- * is not one of them (a searched-for coin must still show as selected). The
- * trailing "other coin" opens the search again — the search box itself is
- * only on screen while nothing is picked.
- */
-function CoinChips({
-  active,
-  onPick,
-  onOther,
-}: {
-  active: string | null;
-  onPick: (coin: string) => void;
-  /** Clear the pick and show the search box. Omitted = nothing picked yet. */
-  onOther?: () => void;
-}) {
-  const { t } = useTranslation();
-  const coins = active && !QUICK_PICK_COINS.includes(active) ? [...QUICK_PICK_COINS, active] : QUICK_PICK_COINS;
-  return (
-    <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('trade.symbol.quickPick')}>
-      {coins.map((coin) => (
-        <PickChip key={coin} active={active === coin} onClick={() => onPick(coin)}>
-          {coin}
-        </PickChip>
-      ))}
-      {onOther && (
-        <button
-          type="button"
-          onClick={onOther}
-          className="ml-0.5 text-[10.5px] text-ink-400 underline decoration-ink-600 underline-offset-2 transition-colors hover:text-ink-100"
-        >
-          {t('trade.symbol.otherCoin')}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function SearchResults({
-  q,
-  isPending,
-  groups,
-  renderGroup,
-}: {
-  q: string;
-  isPending: boolean;
-  groups: Array<[string, SymbolRule[]]>;
-  renderGroup: (base: string, rules: SymbolRule[]) => JSX.Element;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="max-h-56 overflow-y-auto rounded-lg border border-ink-800 bg-ink-950/70">
-      {isPending ? (
-        <div className="px-3 py-2 text-xs text-ink-500">{t('trade.symbol.searching')}</div>
-      ) : groups.length === 0 ? (
-        <div className="px-3 py-2 text-xs text-ink-500">{t('trade.symbol.noMatch', { q })}</div>
-      ) : (
-        groups.map(([base, rules]) => renderGroup(base, rules))
-      )}
-    </div>
-  );
-}
-
 /** The small caption every ticket section starts with. */
 export function FieldLabel({ children, htmlFor }: { children: ReactNode; htmlFor?: string }) {
   return (
@@ -165,82 +51,33 @@ export function FieldLabel({ children, htmlFor }: { children: ReactNode; htmlFor
   );
 }
 
-// ---------------------------------------------------------------------------
-// Base-coin combobox (pair ticket)
-// ---------------------------------------------------------------------------
-
 interface CoinComboboxProps {
   value: string | null;
+  coins?: string[];
   onSelect: (base: string) => void;
-  onClear: () => void;
   /** Right-hand end of the "Coin" caption row — the pair ticket puts the
    * coin's live price there. */
   aside?: ReactNode;
 }
 
-export function CoinCombobox({ value, onSelect, onClear, aside }: CoinComboboxProps) {
+export function CoinCombobox({ value, coins: offered = QUICK_PICK_COINS, onSelect, aside }: CoinComboboxProps) {
   const { t } = useTranslation();
-  const [text, setText] = useState('');
-  const q = useDebounced(text.trim(), 250);
-  const results = useSymbolSearch(q);
-  const groups = useMemo(() => groupByBase(results.data, q), [results.data, q]);
-
-  const pick = (base: string) => {
-    onSelect(base);
-    setText('');
-  };
-
+  const isValue = (coin: string): boolean => value !== null && coin.toUpperCase() === value.toUpperCase();
+  const coins = value && !offered.some(isValue) ? [...offered, value] : offered;
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2">
         <FieldLabel>{t('common.coin')}</FieldLabel>
         {aside}
       </div>
-      <CoinChips
-        active={value}
-        onPick={(coin) => {
-          if (coin !== value) pick(coin);
-        }}
-        onOther={value ? onClear : undefined}
-      />
-      {!value && (
-        <>
-          <input
-            className="input"
-            placeholder={t('trade.symbol.searchCoin')}
-            aria-label={t('trade.symbol.coinSearch')}
-            autoComplete="off"
-            spellCheck={false}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-          />
-          {text.trim() !== '' && (
-            <SearchResults
-              q={q}
-              isPending={results.isPending || q !== text.trim()}
-              groups={groups}
-              renderGroup={(base, rules) => (
-                <button
-                  key={base}
-                  type="button"
-                  className="flex w-full items-center gap-2 border-t border-ink-800 px-2.5 py-1.5 text-left transition-colors first:border-t-0 hover:bg-ink-800/60"
-                  onClick={() => pick(base)}
-                >
-                  <span className="w-14 shrink-0 text-xs font-semibold text-ink-100">{base}</span>
-                  <span className="flex flex-wrap gap-1">
-                    {rules.map((r) => (
-                      <span key={r.symbol} className="chip chip-sm">
-                        {r.exchange}
-                        {r.quote !== 'USDT' && <span className="text-[9px] opacity-70">{r.quote}</span>}
-                      </span>
-                    ))}
-                  </span>
-                </button>
-              )}
-            />
-          )}
-        </>
-      )}
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.coin')}>
+        {coins.map((coin) => (
+          <PickChip key={coin} active={isValue(coin)} onClick={() => onSelect(coin)}>
+            <TokenIcon symbol={coin} size={14} />
+            {coin}
+          </PickChip>
+        ))}
+      </div>
     </div>
   );
 }

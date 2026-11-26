@@ -5,31 +5,13 @@ import { describe, expect, it } from 'vitest';
 import type { SymbolRule } from '../api/types';
 import { BTC_BINANCE, ETH_GATE } from '../test/fixtures';
 import { env, server } from '../test/server';
+import { optionLabels, waitForOptions } from '../test/picker';
 import { renderWithClient } from '../test/utils';
 import { PairTicket } from './PairTicket';
 import { SingleTicket } from './SingleTicket';
 
-/** GATE lists ratio perps whose base is itself a pair — must be hidden. */
-const ETHBTC_GATE: SymbolRule = { ...ETH_GATE, symbol: 'GATE_FUTURE_ETHBTC_USDT', base: 'ETHBTC' };
-const SOL_GATE: SymbolRule = { ...ETH_GATE, symbol: 'GATE_FUTURE_SOL_USDT', base: 'SOL' };
 const HYPE_GATE: SymbolRule = { ...ETH_GATE, symbol: 'GATE_FUTURE_HYPE_USDT', base: 'HYPE' };
 const HYPE_BINANCE: SymbolRule = { ...BTC_BINANCE, symbol: 'BINANCE_FUTURE_HYPE_USDT', base: 'HYPE' };
-
-describe('coin search (ratio-pair filter)', () => {
-  it("typing 'eth' lists ETH but hides the ETHBTC ratio market", async () => {
-    server.use(
-      http.get('/api/symbols', () =>
-        HttpResponse.json(env([ETH_GATE, BTC_BINANCE, ETHBTC_GATE, SOL_GATE])),
-      ),
-    );
-    renderWithClient(<PairTicket />);
-
-    await userEvent.type(screen.getByLabelText('Coin search'), 'eth');
-
-    expect(await screen.findByText('ETH', { selector: '.w-14' })).toBeInTheDocument();
-    expect(screen.queryByText('ETHBTC')).not.toBeInTheDocument();
-  });
-});
 
 describe('quick-pick coins', () => {
   it('pair mode: clicking HYPE sets the coin and shows the venue rows', async () => {
@@ -43,11 +25,10 @@ describe('quick-pick coins', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'HYPE' }));
 
-    expect(await screen.findByLabelText('Long venue')).toBeInTheDocument();
-    expect(screen.getByLabelText('Short venue')).toBeInTheDocument();
-    // One venue option per dropdown for each fixture venue.
-    expect(await screen.findAllByRole('option', { name: 'Gate' })).toHaveLength(2);
-    expect(screen.getAllByRole('option', { name: 'Binance' })).toHaveLength(2);
+    const user = userEvent.setup();
+    await waitForOptions(user, 'Long venue');
+    expect(await optionLabels(user, 'Long venue')).toEqual(['Gate', 'Binance']);
+    expect(await optionLabels(user, 'Short venue')).toEqual(['Gate', 'Binance']);
     // The active quick-pick is marked as pressed.
     expect(screen.getByRole('button', { name: 'HYPE' })).toHaveAttribute('aria-pressed', 'true');
   });
@@ -55,8 +36,9 @@ describe('quick-pick coins', () => {
   it('offers only the supported coins as quick picks', () => {
     renderWithClient(<PairTicket />);
 
-    const chips = within(screen.getByRole('group', { name: 'Quick pick coin' })).getAllByRole('button');
-    expect(chips.map((chip) => chip.textContent)).toEqual(['ETH', 'BTC', 'HYPE']);
+    const chips = within(screen.getByRole('group', { name: 'Coin' })).getAllByRole('button');
+    expect(chips).toHaveLength(3);
+    ['ETH', 'BTC', 'HYPE'].forEach((coin, i) => expect(chips[i]).toHaveAccessibleName(coin));
   });
 
   it("single mode: clicking ETH lists ETH's venues in the leg's venue box", async () => {
@@ -65,7 +47,8 @@ describe('quick-pick coins', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'ETH' }));
 
-    const venueBox = await screen.findByLabelText('Long venue');
-    expect(await within(venueBox).findByRole('option', { name: 'Gate' })).toBeInTheDocument();
+    const user = userEvent.setup();
+    await waitForOptions(user, 'Long venue');
+    expect(await optionLabels(user, 'Long venue')).toEqual(['Gate']);
   });
 });

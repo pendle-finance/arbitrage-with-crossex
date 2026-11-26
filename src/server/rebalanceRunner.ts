@@ -1455,6 +1455,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   };
 
   const twap = job.kind === 'delever' ? (job.deleverTwap ?? null) : null;
+  const longWait = !!job.maker && (job.maker.takerAfterSec === null || job.maker.takerAfterSec > MAKER_REST_MS / 1000);
 
   const sliceRequest = (id: string, perp: StepPerp, follow: StepPerp, qty: string): DealRequest => {
     const base = { id, a: childLeg(perp), b: childLeg(follow), qty };
@@ -1463,9 +1464,9 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       ...base,
       execution: 'maker',
       pricePolicy: 'touch',
-      timeoutSec: twap ? (twap.takerAfterSec === undefined ? takerAfterCapSec(twap.intervalSec) : twap.takerAfterSec) : MAKER_REST_MS / 1000,
+      timeoutSec: twap ? (twap.takerAfterSec === undefined ? takerAfterCapSec(twap.intervalSec) : twap.takerAfterSec) : job.maker ? job.maker.takerAfterSec : MAKER_REST_MS / 1000,
       ...(twap ? { deadlineCapSec: takerAfterCapSec(twap.intervalSec) } : {}),
-      ...(twap?.repegBehindBp === undefined ? {} : { repegBehindBp: twap.repegBehindBp }),
+      ...(twap ? (twap.repegBehindBp === undefined ? {} : { repegBehindBp: twap.repegBehindBp }) : job.maker ? { repegBehindBp: job.maker.repegBehindBp } : {}),
     };
   };
 
@@ -1608,7 +1609,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         creditSliceChild(job, engine.store, child);
         deps.jobs.write(job);
         if (isLive(child)) {
-          if (twap && job.pauseRequested) {
+          if ((twap || longWait) && job.pauseRequested) {
             commands.stop(engine.store, child.id);
             engine.engineWake();
           }

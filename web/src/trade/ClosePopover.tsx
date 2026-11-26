@@ -414,16 +414,6 @@ export function ClosePopover({
           )}
         </div>
 
-        <TwapArea
-          on={twapOn}
-          onToggle={twapState.setOn}
-          input={twapState.input}
-          onInput={twapState.setInput}
-          preview={twapOn && action ? twapPreview : null}
-          impact={preview.data?.priceImpact ?? null}
-          coin={base}
-          lot={detail.data?.lotSize}
-        />
         {twapOn && (
           <MakerSettings
             legs={null}
@@ -439,6 +429,16 @@ export function ClosePopover({
             marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
           />
         )}
+        <TwapArea
+          on={twapOn}
+          onToggle={twapState.setOn}
+          input={twapState.input}
+          onInput={twapState.setInput}
+          preview={twapOn && action ? twapPreview : null}
+          impact={preview.data?.priceImpact ?? null}
+          coin={base}
+          lot={detail.data?.lotSize}
+        />
 
         {action && (
           <EstimateCard

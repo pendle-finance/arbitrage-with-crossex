@@ -43,8 +43,7 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Large realizes and Delevers run in slices** of $25k to $100k, maker or market. A run never
   closes more than one slice plus one venue minimum at a time. A stopped run shows where the money
   is, with one hold per fix and Abandon, which names any perp left uneven.
-- **Tickets show an Estimate card** with the trade cost, and prices and fees group thousands
-  (2,866.53, not 2866.53).
+- **Ticket prices and fees group thousands** (2,866.53, not 2866.53).
 - **Gate's "too many open orders" refusal stops the order and says so.** Before, the terminal sent
   the order again every 90 s.
 - **A cleaner Rebalance popup.** The three tabs fill the top row, and a running job shows in its
@@ -61,6 +60,19 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Move cash steps are one compact row each:** number, coin, the move and the time. Up to three
   show open; more show the first two and a "+N more steps" link. A running step shows its leg and
   a thin progress line.
+- **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
+  the sale adds up to the amount converted.
+- **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,
+  11 px sub-lines.
+- **The order ticket opens as a centered popup.** The coin row is three chips with icons. Venue
+  and market pickers use the app dropdown with venue icons. The estimate is two cards, Cost and
+  After, on CrossEx perps and Boros rates. A Boros spread's "Trade on" name opens the market on
+  Boros and shows the days to maturity.
+- **Maker settings sit in the Orders group** on Rebalance, the pair ticket and Close perps.
+  Realize uPnL and Delever closes use the taker-after time and re-peg you set there.
+- **Realize uPnL and Delever steps** show a token icon and the cost of each step. The Realize
+  wallet picker shows the wallet on the left and its uPnL on the right. A stale quote turns the
+  hold button into "Refresh quote". HYPE shows the Hyperliquid mark.
 
 ## 1.7.9 — 2026-11-10
 

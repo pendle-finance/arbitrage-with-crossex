@@ -88,18 +88,12 @@
     "atMarket": "{{side}} {{venue}} · 市价"
   },
   "symbol": {
-    "quickPick": "快速选择币种",
-    "otherCoin": "其他币种",
-    "searching": "搜索中…",
-    "noMatch": "没有匹配“{{q}}”的永续合约",
     "venueChips": "交易所选项",
     "loadingVenues": "正在加载交易所…",
     "noPerpsFor": "{{base}} 暂无可交易的永续合约",
     "pickCoin": "选择币种后显示可用交易所",
     "searchSymbol": "搜索币种（BTC…）或粘贴完整交易对",
-    "symbolSearch": "交易对搜索",
-    "searchCoin": "搜索币种（BTC…）",
-    "coinSearch": "币种搜索"
+    "symbolSearch": "交易对搜索"
   },
   "impact": {
     "bps": "{{value}} 基点",

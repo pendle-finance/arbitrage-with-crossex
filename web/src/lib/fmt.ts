@@ -232,16 +232,20 @@ function ageBucket(ms: number): { value: number; unit: 's' | 'm' | 'h' | 'd'; re
   return { value: Math.floor(h / 24), unit: 'd', rest: 0 };
 }
 
-export function fmtAbout(seconds: number): string {
-  if (seconds < 60) return t('app.about.seconds', { n: Math.round(seconds) });
-  if (seconds < 600) return t('app.about.minutes', { n: Math.round(seconds / 30) / 2 });
+type SpanKey = 'seconds' | 'minutes' | 'hours' | 'hoursMinutes';
+
+function spanOf(seconds: number, say: (key: SpanKey, values: Record<string, number>) => string): string {
+  if (seconds < 60) return say('seconds', { n: Math.round(seconds) });
+  if (seconds < 600) return say('minutes', { n: Math.round(seconds / 30) / 2 });
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return t('app.about.minutes', { n: minutes });
+  if (minutes < 60) return say('minutes', { n: minutes });
   const rest = minutes % 60;
-  return rest === 0
-    ? t('app.about.hours', { n: minutes / 60 })
-    : t('app.about.hoursMinutes', { h: Math.floor(minutes / 60), m: rest });
+  return rest === 0 ? say('hours', { n: minutes / 60 }) : say('hoursMinutes', { h: Math.floor(minutes / 60), m: rest });
 }
+
+export const fmtAbout = (seconds: number): string => spanOf(seconds, (key, values) => t(`app.about.${key}`, values));
+
+export const fmtApprox = (seconds: number): string => spanOf(seconds, (key, values) => t(`app.approx.${key}`, values));
 
 /** Unix seconds → UTC "YYYY-MM-DD" (maturities are quoted in UTC). */
 export function fmtDateUtc(unixSec: number): string {

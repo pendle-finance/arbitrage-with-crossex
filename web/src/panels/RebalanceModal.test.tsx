@@ -10,7 +10,7 @@ import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW,
 import { extraRebalanceViews, transferHandler, transferViews, twapFixtures } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { fmtAbout, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
+import { fmtApprox, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
 import { rebalanceHandler } from '../test/fixtures';
 import { RebalanceModal, RebalanceModalHost } from './RebalanceModal';
 import { RebalanceOpenerProvider, useRebalanceOpener, type RebalanceTab } from './rebalanceOpener';
@@ -1397,8 +1397,8 @@ describe('RebalanceModal presets and custom amount', () => {
     await user.click(screen.getByRole('radio', { name: 'Custom amount' }));
     expect(within(presets()).getByRole('radio', { checked: true })).toHaveAccessibleName('Custom amount');
     expect(screen.getByRole('textbox', { name: 'Amount' })).toHaveValue('22.18');
-    expect(screen.getByRole('combobox', { name: 'From' })).toHaveValue('HYPERLIQUID');
-    expect(screen.getByRole('combobox', { name: 'To' })).toHaveValue('CROSSEX');
+    expect(screen.getByRole('button', { name: 'From' })).toHaveTextContent('USDC · Hyperliquid');
+    expect(screen.getByRole('button', { name: 'To' })).toHaveTextContent('USDT · CrossEx');
     await user.clear(screen.getByRole('textbox', { name: 'Amount' }));
     await user.type(screen.getByRole('textbox', { name: 'Amount' }), '50');
     const hold = await screen.findByRole('button', { name: /^Hold to move/ }, { timeout: 3000 });
@@ -1694,18 +1694,47 @@ describe('RebalanceModal Realize uPnL tab', () => {
     el.closest('label')?.textContent ?? '';
   const pick = ownerSlices.find((option) => option.sizeUsd === owner.realize!.defaultSliceUsd)!;
   const impactPair = () => screen.getAllByText('Price impact').map((el) => el.closest('span.ml-auto')).find((el) => el !== null) as HTMLElement;
+  it('Realize shows no Max not hedged, as a row, a column or a yellow warning', () => {
+    showOn(owner);
+    expect(screen.queryByText('Max not hedged')).toBeNull();
+    expect(screen.queryByText(/Not hedged/)).toBeNull();
+    expect(document.querySelector('.text-gold')).toBeNull();
+  });
+
+  it('Limit + hedge has the maker settings, and the start sends them; Market has none', async () => {
+    serve({});
+    const sent = starts();
+    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} holdMs={50} />);
+    fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Never' }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Off' }));
+    const hold = screen.getByRole('button', { name: 'Hold to realize' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect((sent[0] as { maker?: unknown }).maker).toEqual({ takerAfterSec: null, repegBehindBp: null });
+    await userEvent.click(orders()[1]!);
+    expect(screen.queryByRole('button', { name: /Maker settings/ })).toBeNull();
+  });
+
+  it('a 10 min wait before taker shows as about 10 min per slice', async () => {
+    showOn(owner);
+    fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: '10m' }));
+    expect(orders()[0]).toHaveTextContent(/· 10 min per slice$/);
+  });
 
   it('limit + hedge first and default', () => {
     showOn(owner);
-    expect(orders()[0]!.textContent).toMatch(/^Limit \+ hedge \$[\d,]+ · /);
-    expect(orders()[0]!.textContent).toContain(`${fmtAbout(pick.seconds.maker / pick.count)} per slice`);
+    expect(orders()[0]!.textContent).toMatch(/^Limit \+ hedge about \$[\d,]+ · /);
+    expect(orders()[0]!.textContent).toContain(`· ${fmtApprox(pick.seconds.maker / pick.count)} per slice`);
     expect(orders()[0]).toHaveAttribute('aria-checked', 'true');
   });
 
   it('market second', () => {
     showOn(owner);
-    expect(orders()[1]!.textContent).toMatch(/^Market \$[\d,]+ · /);
-    expect(orders()[1]!.textContent).toContain(`${fmtAbout(pick.seconds.market / pick.count)} per slice`);
+    expect(orders()[1]!.textContent).toMatch(/^Market about \$[\d,]+ · /);
+    expect(orders()[1]!.textContent).toContain(`· ${fmtApprox(pick.seconds.market / pick.count)} per slice`);
   });
 
   it('a $6M realize at $50k slices reads about 5 min per slice', () => {
@@ -1715,8 +1744,8 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(tab.clearDebt!.legs[0]!.realizedUsd).toBeGreaterThan(5_900_000);
     expect(option.count).toBeGreaterThan(100);
     showOn(view, 'realize');
-    expect(orders()[0]!.textContent).toContain(`${fmtAbout(300)} per slice`);
-    expect(orders()[0]!.textContent).not.toContain(fmtAbout(option.seconds.maker));
+    expect(orders()[0]!.textContent).toContain(`· ${fmtApprox(300)} per slice`);
+    expect(orders()[0]!.textContent).not.toContain(fmtApprox(option.seconds.maker));
     expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'true');
     expect(nameOf(slices().find((radio) => (radio as HTMLInputElement).checked)!)).toContain(fmtNotionalShort(50_000));
   });
@@ -1796,10 +1825,17 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(query.get('realizePool')).toBe('HYPERLIQUID');
   });
 
-  it('realize wallet: one wallet in profit reads as a line, with no picker', () => {
+  it('realize wallet: one wallet in profit shows the same picker, with that one wallet', async () => {
     showOn(owner);
-    expect(screen.getByText('Wallet: USDC · Hyperliquid')).toBeInTheDocument();
+    const picker = screen.getByRole('button', { name: 'Wallet' });
+    expect(picker).toHaveTextContent(/^USDC · HyperliquiduPnL [\d,]+ USDC$/);
+    expect(picker.querySelector(".text-emerald-400")).not.toBeNull();
+    await userEvent.click(picker);
+    const options = within(screen.getByRole('listbox', { name: 'Wallet' })).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([expect.stringMatching(/^USDC · HyperliquiduPnL [\d,]+ USDC$/)]);
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('combobox', { name: 'Wallet' })).toBeNull();
+    expect(screen.queryByText(/^Wallet: /)).toBeNull();
   });
 
   it('realize wallet: two wallets in profit give a picker, and the pick prices and starts from that wallet', async () => {
@@ -1814,12 +1850,13 @@ describe('RebalanceModal Realize uPnL tab', () => {
       return HttpResponse.json(env(search.includes('realizePool=CROSSEX') ? onCrossex : twoPools));
     }));
     renderWithClient(<RebalanceModal view={twoPools} onClose={vi.fn()} holdMs={50} />);
-    const picker = screen.getByRole('combobox', { name: 'Wallet' });
-    expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual([
-      expect.stringMatching(/^USDC · Hyperliquid · uPnL [\d,]+ USDC$/),
-      expect.stringMatching(/^USDT · CrossEx · uPnL [\d,]+ USDT$/),
+    await userEvent.click(screen.getByRole('button', { name: 'Wallet' }));
+    const options = within(screen.getByRole('listbox', { name: 'Wallet' })).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringMatching(/^USDC · HyperliquiduPnL [\d,]+ USDC$/),
+      expect.stringMatching(/^USDT · CrossExuPnL [\d,]+ USDT$/),
     ]);
-    await userEvent.selectOptions(picker, 'CROSSEX');
+    await userEvent.click(options[1]);
     await waitFor(() => expect(asked.some((search) => search.includes('realizePool=CROSSEX'))).toBe(true));
     const chips = await waitFor(() => {
       const found = amountPresets();
@@ -1857,14 +1894,13 @@ describe('RebalanceModal Realize uPnL tab', () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    const hedged = (await screen.findByText(/^Not hedged during each slice/)).textContent;
+    await screen.findByRole('switch', { name: 'Split the close' });
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
     expect(screen.queryByRole('button', { name: 'Hold to realize' })).toBeNull();
     expect(screen.getAllByText('Pricing the move.')).toHaveLength(1);
     expect(screen.getByRole('button', { name: /Pricing the move\./ })).toBeDisabled();
-    expect(screen.getByText(/^Not hedged during each slice/).textContent).toBe(hedged);
   });
 
   it('slice rows show one row per slice count, smallest size first, then Custom', async () => {
@@ -1907,7 +1943,6 @@ describe('RebalanceModal Realize uPnL tab', () => {
     const pair = impactPair();
     expect(pair.querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
     expect(orders()[0]!.textContent).not.toContain('per slice');
-    expect(screen.getByText(/^Not hedged during the order: max /).textContent).toContain(fmtUsd(whole.notHedgedMaxUsd, 0));
     await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${whole.sizeUsd}`))).toBe(true));
     const hold = screen.getByRole('button', { name: 'Hold to realize' });
     await waitFor(() => expect(hold).toBeEnabled());
@@ -1940,7 +1975,8 @@ describe('RebalanceModal Realize uPnL tab', () => {
 
   it('slice columns', async () => {
     showOn(owner);
-    ['Count', 'Est. time', 'Price impact', 'Max not hedged', 'Max slippage 0.25%'].forEach((head) => expect(screen.getAllByText(head).length).toBeGreaterThan(0));
+    ['Count', 'Est. time', 'Price impact', 'Max slippage 0.25%'].forEach((head) => expect(screen.getAllByText(head).length).toBeGreaterThan(0));
+    expect(screen.queryByText('Max not hedged')).toBeNull();
     const before = nameOf(slices()[0]!);
     await userEvent.click(orders()[1]!);
     expect(nameOf(slices()[0]!)).not.toBe(before);
@@ -1954,11 +1990,11 @@ describe('RebalanceModal Realize uPnL tab', () => {
 
   it('slice row updates cost', async () => {
     showOn(owner);
-    const other = ownerSlices.find((option) => !option.custom && option.sizeUsd !== pick.sizeUsd && option.notHedgedMaxUsd !== pick.notHedgedMaxUsd)!;
+    const other = ownerSlices.find((option) => !option.custom && !option.whole && option.sizeUsd !== pick.sizeUsd)!;
     const before = totalCard().textContent;
     const row = slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!;
     await userEvent.click(row);
-    expect(screen.getByText(/^Not hedged during (each slice|the order): max /).textContent).toContain(fmtUsd(other.notHedgedMaxUsd, 0));
+    expect((row as HTMLInputElement).checked).toBe(true);
     if (other.impactUsd !== pick.impactUsd) expect(totalCard().textContent).not.toBe(before);
   });
 
