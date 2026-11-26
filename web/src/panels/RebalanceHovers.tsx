@@ -23,6 +23,7 @@ import {
   poolKey,
   RATE_PER_YEAR,
   INTEREST_PER_HOUR,
+  INTEREST_PER_DAY,
   legFeeUsd,
   rateUnknown,
   verdictNoBorrow,
@@ -64,6 +65,7 @@ const WALLET_HOVER: Readonly<Record<string, string>> = {
 export interface FactRow {
   name: string;
   value: string;
+  sub?: string;
 }
 
 export interface Fact {
@@ -220,6 +222,13 @@ function perHourText(usd: number): string {
 const walletPerHour = (b: RebalanceBucket) =>
   isRateUnknown(b) ? rateUnknown() : INTEREST_PER_HOUR(perHourText(b.interestPerDayUsd / 24));
 
+const interestRows = (wallets: RebalanceBucket[]): FactRow[] =>
+  wallets.map((b) => ({
+    name: WALLET_SHORT[keyOf(b)],
+    value: walletPerHour(b),
+    sub: isRateUnknown(b) || b.interestPerDayUsd <= 0 ? undefined : INTEREST_PER_DAY(b.interestPerDayUsd >= 0.01 ? fmtUsd(b.interestPerDayUsd) : perHourText(b.interestPerDayUsd)),
+  }));
+
 const walletRows = (wallets: RebalanceBucket[], valueOf: (b: RebalanceBucket) => string): FactRow[] =>
   wallets.map((b) => ({ name: WALLET_SHORT[keyOf(b)], value: valueOf(b) }));
 
@@ -292,13 +301,20 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: strin
 function RowsHover({ factKey, value, rows, warn }: { factKey: string; value: string; rows: FactRow[]; warn?: boolean }) {
   // The trigger's own grey would hide the figure's colour, so the figure keeps it.
   const label = <span className={warn ? 'text-amber-300' : 'text-ink-100'}>{value}</span>;
+  const align = rows.some((row) => row.sub) ? '' : 'text-right';
   return (
-    <HoverCard icon={false} widthPx={320} label={label}>
+    <HoverCard icon={false} label={label}>
       <div data-fact-rows={factKey} className="grid w-fit grid-cols-[auto_auto] gap-x-4 gap-y-1 text-xs">
         {rows.map((row) => (
           <Fragment key={row.name}>
             <span>{row.name}</span>
-            <span className="num whitespace-nowrap text-right">{row.value}</span>
+            <span className={`num whitespace-nowrap ${align}`}>{row.value}</span>
+            {row.sub && (
+              <>
+                <span />
+                <span className="num -mt-1 whitespace-nowrap text-ink-400">{row.sub}</span>
+              </>
+            )}
           </Fragment>
         ))}
       </div>
@@ -323,7 +339,7 @@ export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
       key: 'interest',
       label: <InterestInfo buckets={buckets} />,
       value: INTEREST_PER_HOUR(perHourText(perHour)),
-      rows: walletRows(borrowing, walletPerHour),
+      rows: interestRows(borrowing),
       warn: perHour > 0,
     }),
     rowsOnHover({

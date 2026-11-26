@@ -154,6 +154,19 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Boros ticket**: slippage shows dollars. The hover holds Est and Max.
 - **Move cash**: one row per wallet when a side has more than one wallet.
 - **Slice table**: "Slice size" shows once.
+- **Venue picker**: with no coin picked, it is off and says "Pick a coin to see its venues".
+- **Roll over, Open only**: a hover says the old positions stay open with no perps until they
+  mature.
+- **Borrow card**: one headline "Total cost $29.45 = 23 days of interest". The line under it
+  names only the route. No "Interest a month X → 0".
+- **Interest now hover**: each wallet's daily cost sits under its hourly cost.
+- **Rebalance tabs**: the job status (Done, Stopped, Not hedged) uses the standard small chip,
+  not a tab-sized pill.
+- **Position card**: the Delever button keeps its name while a run goes and opens the run.
+- **Roll over header**: the title alone. The legs sit in the steps below.
+- **Delever not hedged**: the red alert holds the title and the reason. Perp and Boros sizes
+  sit in rows under it.
+- **Wallet hovers** fit their content. Hourly and daily interest start at one edge.
 
 ## 1.7.9 — 2026-11-10
 

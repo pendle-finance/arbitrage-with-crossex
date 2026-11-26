@@ -448,12 +448,12 @@ describe('RollOverModal — the pick page', () => {
     expect(await within(dialog).findByRole('button', { name: 'Roll over' })).toBeDisabled();
   });
 
-  it('the header names the two venues without LONG or SHORT tags', async () => {
+  it('the header is the title alone; the venues sit in the steps below', async () => {
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
-    const heading = within(await screen.findByRole('dialog')).getByRole('heading');
-    await waitFor(() => expect(heading.textContent).toMatch(/Gate.*Hyperliquid/));
-    expect(heading.textContent).not.toMatch(/LONG|SHORT/);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading').textContent).toBe('Roll over Boros position');
+    await waitFor(() => expect(within(dialog).getAllByText(/Gate/).length).toBeGreaterThan(0));
   });
 
   it('with no ladder reported, or one that holds the position many times over, the whole position is the default', async () => {
@@ -524,6 +524,19 @@ describe('RollOverModal — spread target', () => {
     await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
     expect((await within(dialog).findAllByText('ETH Spread HL-GATE')).length).toBeGreaterThan(0);
     await waitFor(() => expect(entries.at(-1)!.legs).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short' })]), { timeout: 4_000 });
+  });
+
+  it('the Open only hover says the old positions stay open with no perps', async () => {
+    const user = userEvent.setup();
+    install({});
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
+    await within(dialog).findByText('Size to open');
+    await user.hover(within(dialog).getByText('Open only (keep old positions)'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent('Your perps hedge the new positions.');
+    expect(card).toHaveTextContent(/positions stay open with no perps until they mature/);
   });
 
   it('a close-only single at the target maturity is no target: the window does not open on a market that takes no open', async () => {
