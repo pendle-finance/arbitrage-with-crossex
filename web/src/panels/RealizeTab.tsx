@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
 import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView, SliceOption } from '../api/types';
 import { AmountPresets } from '../components/AmountPresets';
+import { BoxSelect } from '../components/BoxSelect';
 import { EmptyState } from '../components/EmptyState';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { Skeleton } from '../components/Skeleton';
@@ -72,18 +73,13 @@ function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; poo
   return (
     <div className="flex flex-col gap-1.5">
       <span className={microLabelClass}>{t('accounts.realizeTab.walletLabel')}</span>
-      <select
-        aria-label={t('accounts.realizeTab.walletLabel')}
-        className="input num h-8 !py-0 text-xs"
-        value={pool}
-        onChange={(e) => onPick(e.target.value as Pool)}
-      >
+      <BoxSelect<Pool> ariaLabel={t('accounts.realizeTab.walletLabel')} value={pool} onChange={onPick}>
         {pools.map((p) => (
           <option key={p} value={p}>
             {t('accounts.realizeTab.walletOption', { wallet: walletOf(p), amount: num(upnlOf(p), 0), coin: poolCoin(p) })}
           </option>
         ))}
-      </select>
+      </BoxSelect>
     </div>
   );
 }

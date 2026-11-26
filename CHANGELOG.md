@@ -56,6 +56,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   inside the box. A preset value has its own fill, so it reads apart from a typed one. With TWAP
   off, Delever sends one order in the mode you pick and splits only at a venue's order cap.
   Realize uPnL can split the close into slices.
+- **Move cash Custom amount lines up.** The From and To cards each show a label row, the wallet
+  select and the amount at one height. "Max X" sits on the From label row.
 
 ## 1.7.9 — 2026-11-10
 
