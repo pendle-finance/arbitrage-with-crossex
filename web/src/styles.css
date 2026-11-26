@@ -177,6 +177,10 @@
     @apply flex flex-col gap-1 rounded border border-guava/35 bg-guava/10 px-3 py-2.5;
   }
 
+  .alert-green {
+    @apply flex flex-col gap-1 rounded border border-grass/45 bg-grass/10 px-3 py-2.5;
+  }
+
   .alert-blue {
     @apply flex flex-col gap-1 rounded border border-info/45 bg-info/10 px-3 py-2.5;
   }

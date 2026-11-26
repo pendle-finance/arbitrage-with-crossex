@@ -73,6 +73,8 @@ import { aprCost, AvailableMarginLines, BlockerList, LegFillLine, legLetter, Liq
 import { EstimateAge, EstimateRow, SlippageLine, SummaryCard } from '../../trade/PairTicketBits';
 import { StepList } from '../RebalanceBits';
 import { StopBox } from '../RebalanceJobBits';
+import { ResultBox } from '../../components/ResultBox';
+import { FoldRow } from '../../trade/FoldRow';
 import { AmountPresets } from '../../components/AmountPresets';
 import { SegmentedToggle } from '../../components/SegmentedToggle';
 import { QueryError } from '../../components/QueryError';
@@ -1762,8 +1764,8 @@ function RollSteps({ batches, coin, busy }: { batches: RollBatch[]; coin: string
         key: b.key,
         coin,
         text: (
-          <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="font-semibold text-ink-50">{b.title}</span>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="min-w-[8.5rem] font-semibold text-ink-50">{b.title}</span>
             <span className="grid min-w-0 grid-cols-[minmax(0,auto)_auto_auto] items-center gap-x-1.5 gap-y-1">
               {b.legs.map((leg) => (
                 <RollLegCells key={leg.marketId} leg={leg} coin={coin} />
@@ -2531,15 +2533,14 @@ interface RollLegSection {
   nameOf?: (marketId: number) => string | null;
 }
 
-function RollLegReport({ sections, collateral, tone }: { sections: RollLegSection[]; collateral: string; tone: 'green' | 'amber' | 'rose' }) {
-  const box =
-    tone === 'green'
-      ? 'border-emerald-500/25 bg-emerald-500/5'
-      : tone === 'amber'
-        ? 'border-amber-500/30 bg-amber-500/[0.04]'
-        : 'border-rose-500/30 bg-rose-500/[0.04]';
+const legFilled = (fill: BorosLegFill): boolean => fill.failure === null && fill.filledSize > 0;
+
+const legsCount = (legs: BorosLegFill[]): string => t('assetCard.review.legsCount', { ok: legs.filter(legFilled).length, total: legs.length });
+
+function RollLegReport({ sections, collateral }: { sections: RollLegSection[]; collateral: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className={`flex flex-col gap-3 rounded-lg border px-3 py-2.5 ${box}`} role="status">
+    <FoldRow label={t('assetCard.review.legs')} summary={null} open={open} onToggle={() => setOpen((v) => !v)}>
       {sections.map(({ label, legs, nameOf }) => (
         <div key={label}>
           <span className="text-[12px] font-semibold text-ink-100">{label}</span>
@@ -2550,7 +2551,7 @@ function RollLegReport({ sections, collateral, tone }: { sections: RollLegSectio
           </div>
         </div>
       ))}
-    </div>
+    </FoldRow>
   );
 }
 
@@ -2598,7 +2599,6 @@ function RollReview({
   stepsSlot,
   onBusy,
   onResult,
-  onClose,
 }: {
   pair: PairEstimate;
   yuLegs: PairLegDetail[];
@@ -2795,7 +2795,6 @@ function RollReview({
     const payload = 'payload' in out ? out.payload : null;
     const result = payload?.result ?? null;
     const status = result?.status ?? null;
-    const tone = status === 'rolled' ? 'green' : status === 'unknown' ? 'amber' : 'rose';
     /** The market a named leg trades, from the priced legs by key. */
     const legMarketName = (key: BorosRollLegKey): string | null => {
       if (!payload) return null;
@@ -2808,54 +2807,52 @@ function RollReview({
     const refusedText = reason ? (namedMarket ? `${namedMarket}: ${localizeServerText(reason.message)}` : localizeServerText(reason.message)) : '';
     const canRetry = 'error' in out || status === 'refused';
     const canEdit = status === 'refused' || ('error' in out && out.refused);
+    const fillsOf = (prefix: string): BorosLegFill[] => (result ? Object.entries(result.legs).filter(([k]) => k.startsWith(prefix)).map(([, l]) => l) : []);
+    const exitFills = fillsOf('exit:');
+    const entryFills = fillsOf('entry:');
     return (
       <div className="flex flex-col gap-2">
+        {status === 'rolled' && result && (
+          <ResultBox
+            tone="done"
+            title={t('assetCard.review.rolled', { qty: exactQty(result.rolledSize, collateral), date: fmtDateLocal(target.maturity) })}
+            rows={[
+              { label: t('assetCard.review.stepOn', { step: t('assetCard.roll.exit'), date: fmtDateLocal(oldMaturity) }), value: legsCount(exitFills) },
+              { label: t('assetCard.review.stepOn', { step: t('assetCard.roll.reentry'), date: fmtDateLocal(target.maturity) }), value: legsCount(entryFills) },
+            ]}
+          />
+        )}
+        {status === 'refused' && <ResultBox tone="part" title={t('assetCard.review.nothingTraded', { reason: refusedText })} />}
+        {status === 'unknown' && <ResultBox tone="stop" title={t('assetCard.review.unknown')} />}
+        {'error' in out && <StopBox title={t('assetCard.review.notSent')} lines={[withoutRollStep(out.error)]} />}
         {result && (
           <RollLegReport
             sections={[
-              { label: t('assetCard.roll.exit'), legs: Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l), nameOf: (id) => legMarketName(`exit:${id}`) },
-              { label: t('assetCard.roll.reentry'), legs: Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l), nameOf: (id) => legMarketName(`entry:${id}`) },
+              { label: t('assetCard.roll.exit'), legs: exitFills, nameOf: (id) => legMarketName(`exit:${id}`) },
+              { label: t('assetCard.roll.reentry'), legs: entryFills, nameOf: (id) => legMarketName(`entry:${id}`) },
             ]}
             collateral={collateral}
-            tone={tone}
           />
         )}
-        {status === 'rolled' && (
-          <p className="text-[11.5px] text-ink-300" role="status">
-            {t('assetCard.review.rolled', { qty: exactQty(result!.rolledSize, collateral), date: fmtDateLocal(target.maturity) })}
-          </p>
-        )}
-        {status === 'refused' && (
-          <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            {t('assetCard.review.nothingTraded', { reason: refusedText })}
-          </p>
-        )}
-        {status === 'unknown' && (
-          <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
-            {t('assetCard.review.unknown')}
-          </p>
-        )}
-        {'error' in out && <StopBox title={t('assetCard.review.notSent')} lines={[withoutRollStep(out.error)]} />}
         {payload?.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
             {t('assetCard.replayed')}
           </p>
         )}
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
-            {t('common.close')}
-          </button>
-          {canEdit && (
-            <button type="button" className="btn" onClick={() => setOut(null)} disabled={busy}>
-              {t('common.back')}
-            </button>
-          )}
-          {canRetry && (
-            <HoldToConfirmButton tone="cyan" compact disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
-              {t('common.retry')}
-            </HoldToConfirmButton>
-          )}
-        </div>
+        {(canEdit || canRetry) && (
+          <div className="mt-2 flex items-center gap-2">
+            {canEdit && (
+              <button type="button" className="btn flex-1" onClick={() => setOut(null)} disabled={busy}>
+                {t('common.back')}
+              </button>
+            )}
+            {canRetry && (
+              <HoldToConfirmButton tone="cyan" compact className="flex-1" disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
+                {t('common.retry')}
+              </HoldToConfirmButton>
+            )}
+          </div>
+        )}
       </div>
     );
   }
@@ -3075,7 +3072,6 @@ function OpenOnlyReview({
   stepsSlot,
   onBusy,
   onResult,
-  onClose,
 }: {
   pair: PairEstimate;
   base: string;
@@ -3183,55 +3179,53 @@ function OpenOnlyReview({
 
   if (out !== null) {
     const result = 'payload' in out ? out.payload.result : null;
-    const tone = result === null || result.filledNothing ? 'rose' : result.partial ? 'amber' : 'green';
     // Not after a partial fill: the server keeps that answer for these ids, so a
     // retry would replay it, and fresh ids would resend the full size.
     const retryable = 'error' in out || (result?.filledNothing ?? false);
     return (
       <div className="flex flex-col gap-2">
+        {result && !result.filledNothing && !result.partial && (
+          <ResultBox
+            tone="done"
+            title={t('assetCard.openOnly.opened', { qty: exactQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity) })}
+            lines={[t('assetCard.openOnly.openedNote', { old: fmtDateLocal(pair.soonestMaturitySec) })]}
+            rows={[{ label: t('assetCard.openOnly.newLegs'), value: legsCount(result.legs) }]}
+          />
+        )}
+        {result?.partial && !result.filledNothing && (
+          <ResultBox
+            tone="part"
+            title={t('assetCard.openOnly.partial', { qty: exactQty(result.hedgedSize, collateral) })}
+            rows={[{ label: t('assetCard.openOnly.newLegs'), value: legsCount(result.legs) }]}
+          />
+        )}
+        {result?.filledNothing && <ResultBox tone="stop" title={t('assetCard.openOnly.nothing')} />}
+        {'error' in out && <StopBox title={t('assetCard.openOnly.notSent')} lines={[out.error]} />}
         {result && (
           <RollLegReport
             sections={[{ label: t('assetCard.openOnly.newLegs'), legs: result.legs, nameOf: (id) => simulation?.legs.find((l) => l.marketId === id)?.marketName ?? ('spreadVenues' in target ? spreadName(base, target.spreadVenues) : null) }]}
             collateral={collateral}
-            tone={tone}
           />
         )}
-        {result && !result.filledNothing && !result.partial && (
-          <p className="text-[11.5px] text-ink-300" role="status">
-            {t('assetCard.openOnly.opened', { qty: exactQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity), old: fmtDateLocal(pair.soonestMaturitySec) })}
-          </p>
-        )}
-        {result?.partial && !result.filledNothing && (
-          <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            {t('assetCard.openOnly.partial', { qty: exactQty(result.hedgedSize, collateral) })}
-          </p>
-        )}
-        {result?.filledNothing && (
-          <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
-            {t('assetCard.openOnly.nothing')}
-          </p>
-        )}
-        {'error' in out && <StopBox title={t('assetCard.openOnly.notSent')} lines={[out.error]} />}
         {'payload' in out && out.payload.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
             {t('assetCard.replayed')}
           </p>
         )}
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
-            {t('common.close')}
-          </button>
-          {result?.filledNothing && (
-            <button type="button" className="btn" onClick={() => setOut(null)} disabled={busy}>
-              {t('common.back')}
-            </button>
-          )}
-          {retryable && (
-            <HoldToConfirmButton tone="cyan" compact disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
-              {t('common.retry')}
-            </HoldToConfirmButton>
-          )}
-        </div>
+        {(result?.filledNothing || retryable) && (
+          <div className="mt-2 flex items-center gap-2">
+            {result?.filledNothing && (
+              <button type="button" className="btn flex-1" onClick={() => setOut(null)} disabled={busy}>
+                {t('common.back')}
+              </button>
+            )}
+            {retryable && (
+              <HoldToConfirmButton tone="cyan" compact className="flex-1" disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
+                {t('common.retry')}
+              </HoldToConfirmButton>
+            )}
+          </div>
+        )}
       </div>
     );
   }

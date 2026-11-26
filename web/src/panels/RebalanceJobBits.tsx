@@ -1,5 +1,7 @@
+import type { ReactNode } from 'react';
 import type { EvenPlan, GateAccount, RebalanceJob, RebalanceView, RoutePlan, TransferCoin, TransferView } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { ResultBox, type ResultRow } from '../components/ResultBox';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
 import { num } from '../lib/fmt';
@@ -54,30 +56,21 @@ export function stopTitle(job: RebalanceJob): string {
     : t('accounts.rebalanceModal.stoppedInRound', { round: num(round, 0), rounds: num(roundCountOf(job), 0) });
 }
 
-export function StopBox({ title, lines }: { title: string; lines: string[] }) {
-  return (
-    <div role="alert" className="alert-red">
-      <p className="num text-xs font-semibold text-guava">{title}</p>
-      {lines.map((line) => (
-        <p key={line} className="num text-xs text-ink-300">
-          {line}
-        </p>
-      ))}
-    </div>
-  );
+export function StopBox({ title, lines, rows }: { title: ReactNode; lines: ReactNode[]; rows?: ResultRow[] }) {
+  return <ResultBox tone="stop" title={title} lines={lines} rows={rows} />;
 }
 
 export function Actions({
   onResume, onAbandon, holdMs, busy, resuming, note, resumeLabel, abandonLabel, quietResume,
 }: JobViewProps & { note: string; resumeLabel?: string; abandonLabel?: string; quietResume?: boolean }) {
   return (
-    <div className="flex flex-col gap-2 border-t border-ink-800 pt-3">
-      <span className="num text-xs text-ink-400">{note}</span>
-      <div className="flex flex-wrap items-center gap-3">
-        <button type="button" className={`btn ${quietResume ? '' : 'btn-primary'} px-4 py-2 text-sm`} disabled={busy} onClick={onResume}>
+    <div className="flex flex-col gap-2">
+      {note && <span className="num text-xs text-ink-400">{note}</span>}
+      <div className="flex gap-2">
+        <button type="button" className={`btn ${quietResume ? '' : 'btn-primary'} flex-1`} disabled={busy} onClick={onResume}>
           {resuming ? t('accounts.rebalanceModal.resuming') : (resumeLabel ?? modalResume())}
         </button>
-        <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={busy} onConfirm={onAbandon}>
+        <HoldToConfirmButton tone="outline" compact className="flex-1" holdMs={holdMs} disabled={busy} onConfirm={onAbandon}>
           {abandonLabel ?? realizeText('holdAbandon')}
         </HoldToConfirmButton>
       </div>
@@ -85,12 +78,3 @@ export function Actions({
   );
 }
 
-export function CloseButton({ onClose }: { onClose?: () => void }) {
-  return (
-    <div className="border-t border-ink-800 pt-3">
-      <button type="button" className="btn btn-primary" onClick={onClose}>
-        {t('common.close')}
-      </button>
-    </div>
-  );
-}
