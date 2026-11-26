@@ -8,7 +8,7 @@ export interface ListPickerRow<K extends string> {
   key: K;
   icon?: string;
   name: ReactNode;
-  value: ReactNode;
+  value?: ReactNode;
 }
 
 export function ListPicker<K extends string>({
@@ -96,8 +96,8 @@ export function ListPicker<K extends string>({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded border bg-ink-900/40 px-3 text-left text-xs ${
-          open ? 'border-info' : 'border-ink-700 hover:border-ink-500'
+        className={`flex h-[35px] w-full cursor-pointer items-center gap-2 rounded border bg-wash/[0.05] pl-2.5 pr-2.5 text-left text-sm font-medium transition-colors hover:bg-wash/[0.08] ${
+          open ? 'border-info/70' : 'border-ink-700'
         }`}
         onClick={() => (open ? hide(false) : show())}
         onKeyDown={onTriggerKey}
@@ -111,7 +111,7 @@ export function ListPicker<K extends string>({
               {picked.icon && <TokenIcon symbol={picked.icon} size={16} />}
               <span className="truncate text-ink-50">{picked.name}</span>
             </span>
-            <span className="num shrink-0 text-ink-300">{picked.value}</span>
+            {picked.value && <span className="num shrink-0 text-xs font-normal text-ink-300">{picked.value}</span>}
           </span>
         )}
         <ChevronDown size={14} aria-hidden className={`shrink-0 text-ink-400 transition-transform ${open ? 'rotate-180' : ''}`} />
@@ -152,7 +152,7 @@ export function ListPicker<K extends string>({
                     {row.icon && <TokenIcon symbol={row.icon} size={16} />}
                     <span className="truncate text-ink-50">{row.name}</span>
                   </span>
-                  <span className="num shrink-0 text-ink-300">{row.value}</span>
+                  {row.value && <span className="num shrink-0 text-ink-300">{row.value}</span>}
                 </span>
               </button>
             ))}

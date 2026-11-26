@@ -29,7 +29,7 @@ import { RebalanceModalHost } from './panels/RebalanceModal';
 import { RebalanceOpenerProvider } from './panels/rebalanceOpener';
 import { RollOverBanner } from './panels/RollOverBanner';
 import { TradesPanel } from './panels/TradesPanel';
-import { Drawer } from './components/Drawer';
+import { Modal } from './components/Modal';
 import { RecoveryBanner } from './trade/RecoveryBanner';
 import { StrategyWizard } from './trade/StrategyWizard';
 import { TradeFlowProvider, useTradeFlow } from './trade/TradeFlow';
@@ -279,7 +279,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
           {isTrading && (
             <>
               <StrategyWizard onViewPositions={() => selectTab('positions')} />
-              <OrderTicketDrawer />
+              <OrderTicketModal />
             </>
           )}
           <RebalanceModalHost />
@@ -343,27 +343,31 @@ function OrderTicketButton() {
   );
 }
 
-/** The manual ticket, mounted ONLY while its drawer is open — a closed drawer
+/** The manual ticket, mounted ONLY while its popup is open — a closed popup
  * cannot sit armed with a stale order. Closing also clears any prefills.
  * `locked` while a Boros execution is in flight: closing would unmount the
  * ticket, and its fill report — a partial fill's remediation included — and
  * replay-protection order ids are component state that die with it while the
  * order executes at the venue regardless. */
-function OrderTicketDrawer() {
+function OrderTicketModal() {
   const flow = useTradeFlow();
   const [busy, setBusy] = useState(false);
   const [venue, setVenue] = useState<Venue>('perp');
-  const { t } = useTranslation();
   return (
-    <Drawer
-      open={flow.railOpen}
-      title={t('app.orderTicket')}
-      header={<TradeRailTabs venue={venue} onChange={setVenue} />}
-      locked={busy}
-      onClose={flow.closeRail}
-      widthClass="w-[560px]"
-    >
-      <TradeRail venue={venue} onVenueChange={setVenue} onBusyChange={setBusy} />
-    </Drawer>
+    flow.railOpen && (
+      <Modal
+        tabbed
+        widthClass="w-[680px]"
+        locked={busy}
+        onClose={flow.closeRail}
+        title={
+          <span className="flex h-full items-stretch gap-3">
+            <TradeRailTabs venue={venue} onChange={setVenue} />
+          </span>
+        }
+      >
+        <TradeRail venue={venue} onVenueChange={setVenue} onBusyChange={setBusy} />
+      </Modal>
+    )
   );
 }
