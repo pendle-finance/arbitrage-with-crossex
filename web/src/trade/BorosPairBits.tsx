@@ -665,7 +665,7 @@ export function AvailableMarginLines({
             {l.after !== null && l.after >= 0 && (
               <>
                 <span className="mx-1 text-ink-600">→</span>
-                <span className={`font-semibold ${l.after < 0 ? 'text-rose-300' : 'text-ink-50'}`}>{size(l.after)}</span>
+                <span className="font-semibold text-ink-50">{size(l.after)}</span>
               </>
             )}{' '}
             {unit}

@@ -173,6 +173,7 @@
     "days": "{{days}}d",
     "exitPnl": "Exit PnL",
     "requiredMargin": "Margin required",
+    "openFees": "Open fees",
     "availableMargin": "Available margin",
     "availTitleAfter": "Available margin before and after the roll. The old positions close first, so the margin they free counts.",
     "availTitleExit": "Available margin once the old positions close, before the new ones open. The new positions need more than this, so the venue refuses the roll.",

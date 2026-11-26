@@ -1794,7 +1794,7 @@ function RollCostCard({ batches, age }: { batches: RollBatch[]; age: ReactNode }
             <SlippageLine
               label={b.slipLabel}
               est={b.sim?.slippageApr != null ? `${fmtPct(b.sim.slippageApr)} APR${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null}
-              cost={cost.estSlipUsd === null ? null : fmtUsd(cost.estSlipUsd)}
+              cost={cost.estSlipUsd === null ? null : fmtUsd(cost.estSlipUsd, Math.abs(cost.estSlipUsd) < 100 ? 2 : 0)}
               max={fmtPct(b.slip.apr * Math.max(1, b.legs.length))}
               unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
               open={b.slip.open}
@@ -2714,6 +2714,10 @@ function RollReview({
   // between the closes and the opens, which is what the opens were judged on.
   const availableAfterExit = margin?.availableAfterExit ?? null;
   const marginShort = margin?.shortfall ?? 0;
+  const openFees =
+    availableAfter === null && marginShort > 0 && entrySim
+      ? entrySim.legs.reduce((sum, l) => sum + (l.takerFeeCost ?? 0) + (l.fillVsMarkCost ?? 0), 0)
+      : null;
   /** Deposit the new legs still need for the suggested liquidation rate,
    * after the margin the roll leaves free; null on an older server. */
   const suggestedTopUp = margin?.suggestedTopUp ?? null;
@@ -2931,6 +2935,17 @@ function RollReview({
               )
             }
           />
+          {openFees !== null && openFees > 0 && (
+            <EstimateRow
+              label={t('assetCard.review.openFees')}
+              value={
+                <>
+                  {fmtTokenQty(openFees, collateral)}
+                  {usdNote(openFees)}
+                </>
+              }
+            />
+          )}
           {availableAfter === null && availableAfterExit !== null && availableBefore !== null && (
             <EstimateRow
               label={t('assetCard.review.availNow')}
@@ -3013,7 +3028,7 @@ function RollReview({
         blockers={blockers.filter(
           (b) =>
             b.code !== 'slippage-exceeds-max' &&
-            !QUOTE_WAIT_CODES.has(b.code) &&
+            !(roll.isFetching && QUOTE_WAIT_CODES.has(b.code)) &&
             !(ackShown && b.code === 'flip-unacknowledged') &&
             !(roll.isError && b.code === 'quote-failed'),
         )}
@@ -3026,7 +3041,7 @@ function RollReview({
           <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.review.holdTitle')}>
             {busy
               ? t('assetCard.review.rolling')
-              : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+              : roll.isFetching && blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
                 ? t('common.refreshing')
                 : t('assetCard.actions.rollOver')}
           </HoldToConfirmButton>
@@ -3275,7 +3290,7 @@ function OpenOnlyReview({
         blockers={blockers.filter(
           (b) =>
             b.code !== 'slippage-exceeds-max' &&
-            !QUOTE_WAIT_CODES.has(b.code) &&
+            !(sim.isFetching && QUOTE_WAIT_CODES.has(b.code)) &&
             !(ackShown && b.code === 'flip-unacknowledged') &&
             !(sim.isError && b.code === 'quote-failed'),
         )}
@@ -3288,7 +3303,7 @@ function OpenOnlyReview({
           <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.openOnly.holdTitle')}>
             {busy
               ? t('assetCard.openOnly.opening')
-              : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+              : sim.isFetching && blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
                 ? t('common.refreshing')
                 : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
