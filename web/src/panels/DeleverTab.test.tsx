@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DeleverPlan, DeleverRequest } from '../api/types';
-import { fmtAbout, fmtUsd, sigGrouped } from '../lib/fmt';
+import { fmtAbout, fmtUsd } from '../lib/fmt';
 import { deleverPlans, openPairs } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -368,13 +368,11 @@ describe('DeleverTab plan', () => {
     expect(await screen.findByText(`Boros closes after the perps. Until then, the YU with no perp behind it grows to 180 by the end (${time}).`)).toBeInTheDocument();
   });
 
-  it('max not hedged is a quiet row in the TWAP box, not a yellow warning', async () => {
-    const plan = deleverPlans.twentyPct;
-    servePlan(plan);
+  it('Delever shows no Max not hedged and no yellow warning', async () => {
+    servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    expect(await factValue('Max not hedged')).toBe(`${sigGrouped(plan.notHedgedMaxQty)} BTC (${fmtUsd(plan.notHedgedMaxUsd, 0)})`);
-    const box = screen.getByRole('switch', { name: 'TWAP' }).closest('.rounded-md');
-    expect(within(box as HTMLElement).getByText('Max not hedged')).toBeInTheDocument();
+    await factValue('Boros not hedged');
+    expect(screen.queryByText('Max not hedged')).toBeNull();
     expect(document.querySelector('.text-gold')).toBeNull();
   });
 
@@ -424,8 +422,6 @@ describe('DeleverTab plan', () => {
     const [limit, market] = within(orders).getAllByRole('radio');
     expect(limit).toHaveTextContent(/per slice$/);
     expect(market).toHaveTextContent(/per slice$/);
-    fireEvent.mouseEnter(screen.getByText('Max not hedged'));
-    expect(await screen.findByText(/while one slice fills/)).toBeInTheDocument();
   });
 
   it('orders toggle reads per slice once TWAP is on', async () => {
@@ -619,14 +615,6 @@ describe('DeleverTab TWAP', () => {
     const last = sent[sent.length - 1]!;
     expect(last.twap).toMatchObject({ durationSec: 14_400, intervalSec: 300 });
     expect(last.sliceUsd).toBeUndefined();
-  });
-
-  it('with twap on the not hedged line shows the per slice figure', async () => {
-    servePlan(deleverPlans.twentyPct);
-    show(openPairs.btc900);
-    await turnTwapOn('4h', '5m');
-    await screen.findByText(/^Slices 48/);
-    await waitFor(async () => expect(await factValue('Max not hedged')).toMatch(/^3\.75 BTC/));
   });
 
   it('a twap refusal clears the cost box', async () => {

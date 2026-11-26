@@ -14,7 +14,6 @@ import { fmtAbout, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt'
 import { rebalanceHandler } from '../test/fixtures';
 import { RebalanceModal, RebalanceModalHost } from './RebalanceModal';
 import { RebalanceOpenerProvider, useRebalanceOpener, type RebalanceTab } from './rebalanceOpener';
-import { sizeText } from './rebalanceCopy';
 
 const NO_POSITIONS: PositionsResponse = { positions: [], exposure: [] };
 
@@ -1708,18 +1707,10 @@ describe('RebalanceModal Realize uPnL tab', () => {
     el.closest('label')?.textContent ?? '';
   const pick = ownerSlices.find((option) => option.sizeUsd === owner.realize!.defaultSliceUsd)!;
   const impactPair = () => screen.getAllByText('Price impact').map((el) => el.closest('span.ml-auto')).find((el) => el !== null) as HTMLElement;
-  const hedgeValue = (): string =>
-    screen
-      .getAllByText('Max not hedged')
-      .map((el) => el.closest('.justify-between'))
-      .find((row) => row?.parentElement?.classList.contains('border-t'))
-      ?.querySelector('.num')?.textContent ?? '';
-
-  it('the not hedged size is a quiet row in the Split box, not a yellow warning', () => {
+  it('Realize shows no Max not hedged, as a row, a column or a yellow warning', () => {
     showOn(owner);
-    const box = screen.getByRole('switch', { name: 'Split the close' }).closest('.rounded-md') as HTMLElement;
-    expect(within(box).getAllByText('Max not hedged').length).toBeGreaterThan(0);
-    expect(hedgeValue()).toBe(`${sizeText(pick.notHedgedMaxQty)} ETH (${fmtUsd(pick.notHedgedMaxUsd, 0)})`);
+    expect(screen.queryByText('Max not hedged')).toBeNull();
+    expect(screen.queryByText(/Not hedged/)).toBeNull();
     expect(document.querySelector('.text-gold')).toBeNull();
   });
 
@@ -1847,11 +1838,16 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(query.get('realizePool')).toBe('HYPERLIQUID');
   });
 
-  it('realize wallet: one wallet in profit shows the same picker, with that one wallet', () => {
+  it('realize wallet: one wallet in profit shows the same picker, with that one wallet', async () => {
     showOn(owner);
-    const picker = screen.getByRole('combobox', { name: 'Wallet' });
-    expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual([expect.stringMatching(/^USDC · Hyperliquid · uPnL [\d,]+ USDC$/)]);
-    expect(picker).toHaveValue('HYPERLIQUID');
+    const picker = screen.getByRole('button', { name: 'Wallet' });
+    expect(picker).toHaveTextContent(/^USDC · HyperliquiduPnL [\d,]+ USDC$/);
+    expect(picker.querySelector(".text-emerald-400")).not.toBeNull();
+    await userEvent.click(picker);
+    const options = within(screen.getByRole('listbox', { name: 'Wallet' })).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([expect.stringMatching(/^USDC · HyperliquiduPnL [\d,]+ USDC$/)]);
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('combobox', { name: 'Wallet' })).toBeNull();
     expect(screen.queryByText(/^Wallet: /)).toBeNull();
   });
 
@@ -1867,12 +1863,13 @@ describe('RebalanceModal Realize uPnL tab', () => {
       return HttpResponse.json(env(search.includes('realizePool=CROSSEX') ? onCrossex : twoPools));
     }));
     renderWithClient(<RebalanceModal view={twoPools} onClose={vi.fn()} holdMs={50} />);
-    const picker = screen.getByRole('combobox', { name: 'Wallet' });
-    expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual([
-      expect.stringMatching(/^USDC · Hyperliquid · uPnL [\d,]+ USDC$/),
-      expect.stringMatching(/^USDT · CrossEx · uPnL [\d,]+ USDT$/),
+    await userEvent.click(screen.getByRole('button', { name: 'Wallet' }));
+    const options = within(screen.getByRole('listbox', { name: 'Wallet' })).getAllByRole('option');
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringMatching(/^USDC · HyperliquiduPnL [\d,]+ USDC$/),
+      expect.stringMatching(/^USDT · CrossExuPnL [\d,]+ USDT$/),
     ]);
-    await userEvent.selectOptions(picker, 'CROSSEX');
+    await userEvent.click(options[1]);
     await waitFor(() => expect(asked.some((search) => search.includes('realizePool=CROSSEX'))).toBe(true));
     const chips = await waitFor(() => {
       const found = amountPresets();
@@ -1910,7 +1907,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    await screen.findAllByText('Max not hedged');
+    await screen.findByRole('switch', { name: 'Split the close' });
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
@@ -1959,7 +1956,6 @@ describe('RebalanceModal Realize uPnL tab', () => {
     const pair = impactPair();
     expect(pair.querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
     expect(orders()[0]!.textContent).not.toContain('per slice');
-    expect(hedgeValue()).toContain(fmtUsd(whole.notHedgedMaxUsd, 0));
     await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${whole.sizeUsd}`))).toBe(true));
     const hold = screen.getByRole('button', { name: 'Hold to realize' });
     await waitFor(() => expect(hold).toBeEnabled());
@@ -1992,7 +1988,8 @@ describe('RebalanceModal Realize uPnL tab', () => {
 
   it('slice columns', async () => {
     showOn(owner);
-    ['Count', 'Est. time', 'Price impact', 'Max not hedged', 'Max slippage 0.25%'].forEach((head) => expect(screen.getAllByText(head).length).toBeGreaterThan(0));
+    ['Count', 'Est. time', 'Price impact', 'Max slippage 0.25%'].forEach((head) => expect(screen.getAllByText(head).length).toBeGreaterThan(0));
+    expect(screen.queryByText('Max not hedged')).toBeNull();
     const before = nameOf(slices()[0]!);
     await userEvent.click(orders()[1]!);
     expect(nameOf(slices()[0]!)).not.toBe(before);
@@ -2006,11 +2003,11 @@ describe('RebalanceModal Realize uPnL tab', () => {
 
   it('slice row updates cost', async () => {
     showOn(owner);
-    const other = ownerSlices.find((option) => !option.custom && option.sizeUsd !== pick.sizeUsd && option.notHedgedMaxUsd !== pick.notHedgedMaxUsd)!;
+    const other = ownerSlices.find((option) => !option.custom && !option.whole && option.sizeUsd !== pick.sizeUsd)!;
     const before = totalCard().textContent;
     const row = slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!;
     await userEvent.click(row);
-    expect(hedgeValue()).toContain(fmtUsd(other.notHedgedMaxUsd, 0));
+    expect((row as HTMLInputElement).checked).toBe(true);
     if (other.impactUsd !== pick.impactUsd) expect(totalCard().textContent).not.toBe(before);
   });
 
