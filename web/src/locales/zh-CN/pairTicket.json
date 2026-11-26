@@ -316,9 +316,12 @@
     }
   },
   "orderType": {
-    "aria": "订单类型",
+    "label": "订单",
     "limitHedge": "限价 + 对冲",
     "market": "市价",
-    "limit": "限价"
+    "limit": "限价",
+    "hoverMaker": "一条腿以只做 Maker 的限价单挂单，按 Maker 费率。每次成交后，另一条腿按市价对冲。费用更低，速度更慢。超过 Taker 等待时间后，剩余部分按市价成交。",
+    "hoverMarket": "两条腿同时按市价成交，按 Taker 费率。几秒内完成。",
+    "hoverFigures": "每个选项显示其预估成本和时间。"
   }
 }

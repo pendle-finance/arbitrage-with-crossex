@@ -158,7 +158,7 @@ const stepTexts = () =>
       .filter(Boolean),
   );
 
-const moreSteps = () => screen.queryByRole('button', { name: /^\+\d+ more steps?$/ });
+const moreSteps = () => screen.queryByRole('button', { name: 'Show all steps' });
 
 async function openSteps(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement[]> {
   const more = moreSteps();
@@ -322,7 +322,7 @@ describe('RebalanceModal plan state', () => {
     expect(numbers[2]).toBe('0.00');
   });
 
-  it('shows up to three steps with no fold, over one hold to confirm button', async () => {
+  it('shows one or two steps with no fold, over one hold to confirm button', async () => {
     show(rebalanceViews.twoBorrows);
     expect(innerItems()).toHaveLength(2);
     expect(moreSteps()).toBeNull();
@@ -1055,14 +1055,14 @@ describe('RebalanceModal route and step content', () => {
     expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
   });
 
-  it('five rounds fold to the first two and a more link that opens all five', async () => {
+  it('three or more steps fold behind Show all steps, which opens all five and Hide steps folds again', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.accountA);
-    expect(innerItems()).toHaveLength(2);
-    expect(moreSteps()?.textContent).toBe('+3 more steps');
+    expect(within(dialog()).queryAllByRole('listitem')).toHaveLength(0);
+    expect(moreSteps()).toBeInTheDocument();
     expect(await openSteps(user)).toHaveLength(5);
-    await user.click(screen.getByRole('button', { name: 'Show fewer' }));
-    expect(innerItems()).toHaveLength(2);
+    await user.click(screen.getByRole('button', { name: 'Hide steps' }));
+    expect(within(dialog()).queryAllByRole('listitem')).toHaveLength(0);
   });
 
   it('round 4 text', async () => {

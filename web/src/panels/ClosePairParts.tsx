@@ -2,7 +2,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
 import { fieldValue, parseSymbol, prettyVenue, sig } from '../lib/fmt';
 import { AffixedInput, type ExecMode, LegCard } from '../trade/PairTicketBits';
-import { estFeeOf } from '../trade/previewBits';
+import { estFeeOf, legNotional } from '../trade/previewBits';
 import { PairBookImpact } from '../trade/PriceImpactGraph';
 import { FieldLabel } from '../trade/SymbolCombobox';
 import type { matchedCloseOf } from './ClosePairFormBits';
@@ -227,12 +227,6 @@ export function decorateClose(
   );
 }
 
-function notionalOf(p: PreviewResult): number | null {
-  const mid = p.fillEstimate?.midPrice;
-  const q = Number(p.qty);
-  return mid && Number.isFinite(q) ? q * mid : (p.estNotional ?? null);
-}
-
 export function closeCosts(
   previews: PreviewResult[] | undefined,
   maker: boolean,
@@ -242,11 +236,11 @@ export function closeCosts(
   const legFee = (p: PreviewResult, i: number): number | null => {
     if (!p.fees) return null;
     if (!maker || i !== makerIdx) return estFeeOf(p);
-    const n = notionalOf(p);
+    const n = legNotional(p);
     return n === null ? null : n * p.fees.makerRate;
   };
   const mp = makerIdx === null ? undefined : previews?.[makerIdx];
-  const n = mp ? notionalOf(mp) : null;
+  const n = mp ? legNotional(mp) : null;
   const makerSaving = !twapOn && mp?.fees && n !== null ? n * (mp.fees.takerRate - mp.fees.makerRate) : null;
   const fees = previews?.length === 2 ? previews.map(legFee) : [];
   const tradeCost =
