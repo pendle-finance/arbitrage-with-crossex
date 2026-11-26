@@ -216,6 +216,7 @@
     "moveTo": "划转 {{move}} USDC 至 {{wallet}}",
     "buyMoveIt": "买入 {{buy}} USDC，划转至 {{wallet}}",
     "buyMove": "买入 {{buy}} USDC，划转 {{move}} USDC 至 {{wallet}}",
+    "sellIdle": "卖出 CrossEx Gate 钱包中闲置的 {{amount}} USDC，换成 USDT",
     "stopped": "已停止",
     "elapsedOf": "{{elapsed}} / {{expected}}"
   },

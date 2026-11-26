@@ -368,6 +368,14 @@ describe('planFor Account A', () => {
     expect(plan.routes.convert.steps[0]).toMatchObject({ round: null, kind: 'convert', buy: 0, move: 175.94, seconds: 0 });
     expect(plan.routes.convert.costUsd).toBeCloseTo(0.38, 2);
   });
+
+  it('A convert sells the idle Gate USDC before its one step', () => {
+    expect(plan.routes.convert.idleSale).toEqual({ usdc: 111.96, at: 0 });
+  });
+
+  it('A loop spends the Gate USDC inside its rounds, so no idle sale', () => {
+    expect(plan.routes.loop!.idleSale).toBeNull();
+  });
 });
 
 describe('planFor Account A, round 3 in Gate spot', () => {
@@ -394,6 +402,11 @@ describe('planFor Account B', () => {
 
   it('B Gate dust stays', () => {
     expect(walletIn(plan.routes.loop!.after, 'USDC', 'GATE').cash).toBe(0.29);
+  });
+
+  it('B Gate dust has no idle sale', () => {
+    expect(plan.routes.loop!.idleSale).toBeNull();
+    expect(plan.routes.convert.idleSale).toBeNull();
   });
 
   it('B is not short of even when cash covers the move', () => {
@@ -488,6 +501,13 @@ describe('planFor Example E', () => {
     expect(plan.routes.mix!.costUsd).toBeCloseTo(2.09, 2);
     expect(plan.routes.mix!.marginFreedUsd).toBeCloseTo(122.47, 2);
     expect(plan.recommended).toBe('mix');
+  });
+
+  it('E with idle Gate USDC sells it with round 1, so the sale row sits after round 1', () => {
+    const idle = planOf({ ...EXAMPLE_E, gate: 50 });
+    expect(idle.routes.mix!.idleSale).toEqual({ usdc: 50, at: 1 });
+    expect(idle.routes.loop!.idleSale).toEqual({ usdc: 50, at: 1 });
+    expect(idle.routes.convert.idleSale).toEqual({ usdc: 50, at: 0 });
   });
 });
 

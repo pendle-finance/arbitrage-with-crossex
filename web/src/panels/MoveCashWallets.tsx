@@ -57,7 +57,7 @@ export function MoveCashWallets({
       {walletOf(pool)}
     </option>
   ));
-  const amountText = (amount: number, pool: Pool) => <span className="num text-sm font-semibold text-ink-50">{`${num(amount)} ${poolCoin(pool)}`}</span>;
+  const amountText = (amount: number, pool: Pool, size = 'text-sm') => <span className={`num ${size} font-semibold text-ink-50`}>{`${num(amount)} ${poolCoin(pool)}`}</span>;
   const fromLabel = t('accounts.moveCash.from');
   const toLabel = t('accounts.moveCash.to');
   const fromBox = custom ? (
@@ -103,7 +103,7 @@ export function MoveCashWallets({
                 {options}
               </BoxSelect>
               <div className="flex h-[35px] items-center gap-2 pl-2.5">
-                {priced ? flow.arrives.map(({ pool, amount }) => <span key={pool}>{amountText(amount, pool)}</span>) : <span className="text-ink-500">–</span>}
+                {priced ? flow.arrives.map(({ pool, amount }) => <span key={pool}>{amountText(amount, pool, 'text-xs')}</span>) : <span className="text-ink-500">–</span>}
               </div>
             </>
           ) : (
