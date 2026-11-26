@@ -1,11 +1,13 @@
-import { ChevronDown, ChevronUp } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
-import type { SliceOption } from '../api/types';
+import type { PriceImpactPreview, SliceOption } from '../api/types';
+import { HoverCard } from '../components/HoverCard';
 import { RadioRow } from '../components/RadioRow';
+import { Switch } from '../components/Switch';
 import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
-import { fmtAbout, fmtNotionalShort, fmtPct, fmtUsd, fmtUsdCompact, num } from '../lib/fmt';
+import { fmtAbout, fmtPct, fmtUsd, fmtUsdCompact, num } from '../lib/fmt';
 import type { ExecMode } from '../trade/PairTicketBits';
+import { ImpactPair } from '../trade/TwapArea';
 import { sizeText } from './rebalanceCopy';
 
 export const MAX_SLIPPAGE_RATIO = 0.0025;
@@ -40,40 +42,57 @@ interface SliceTableProps {
   customText: string;
   onCustom: (text: string) => void;
   coin?: string;
+  dedupe?: boolean;
 }
 
-export function SliceSizeRow({
-  sizeUsd,
-  count,
-  open,
+export function SplitArea({
+  on,
   onToggle,
+  canSplit,
+  hover,
+  impact,
   table,
 }: {
-  sizeUsd: number;
-  count: number;
-  open: boolean;
-  onToggle: () => void;
+  on: boolean;
+  onToggle: (on: boolean) => void;
+  canSplit: boolean;
+  hover: string;
+  impact: PriceImpactPreview | null;
   table: SliceTableProps;
 }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-3 rounded border border-ink-800 px-3 py-2 text-xs">
-        <span className="num min-w-0 flex-1 text-ink-100">{t('accounts.realizeTab.sliceSize', { size: fmtNotionalShort(sizeUsd), count })}</span>
-        <button type="button" className="btn-link inline-flex cursor-pointer items-center gap-1" aria-expanded={open} onClick={onToggle}>
-          {t('accounts.slices.change')}
-          {open ? <ChevronUp size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
-        </button>
+    <div className="flex flex-col gap-2.5 rounded-md border border-ink-700 px-3 py-2.5">
+      <div className="flex items-center gap-3">
+        <HoverCard
+          underline={false}
+          wrapsControl
+          widthPx={260}
+          label={<Switch on={on} onChange={onToggle} disabled={!canSplit} label={t('accounts.realizeTab.split')} />}
+        >
+          {hover}
+        </HoverCard>
+        {impact && <ImpactPair impact={impact} on={false} />}
       </div>
-      {open && <SliceTable {...table} />}
+      {on && <SliceTable {...table} />}
     </div>
   );
 }
 
-export function SliceTable({ options, value, exec, onPick, customText, onCustom, coin }: SliceTableProps) {
+function shownRows(options: SliceOption[], value: number, dedupe: boolean): SliceOption[] {
+  const presets = options.filter((o) => !o.custom && !o.whole).sort((a, b) => a.sizeUsd - b.sizeUsd);
+  if (!dedupe) return presets;
+  return presets.filter((o) => {
+    const same = presets.filter((other) => other.count === o.count);
+    const kept = same.find((other) => other.sizeUsd === value) ?? same[0];
+    return kept === o;
+  });
+}
+
+export function SliceTable({ options, value, exec, onPick, customText, onCustom, coin, dedupe = true }: SliceTableProps) {
   const id = useId();
-  const presets = options.filter((o) => !o.custom);
+  const presets = shownRows(options, value, dedupe);
   const custom = options.find((o) => o.custom) ?? null;
-  const presetPicked = presets.some((o) => o.sizeUsd === value);
+  const presetPicked = options.some((o) => !o.custom && !o.whole && o.sizeUsd === value);
   const customPicked = !presetPicked && custom !== null && custom.sizeUsd === value;
   const valuesOf = (o: SliceOption): ReactNode[] => [
     num(o.count, 0),

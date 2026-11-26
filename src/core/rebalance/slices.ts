@@ -7,12 +7,14 @@ export const DEFAULT_SLICE_CHOICES_USD = [25_000, 50_000, 100_000] as const;
 export const SLICE_IMPACT_BP = 5;
 export const MAKER_SLICE_SECONDS = 300;
 export const MARKET_SLICE_SECONDS = 2;
+export const ONE_ORDER_USD = 1e12;
 
 const BP_NOISE = 1e-9;
 
 export interface SliceOption {
   sizeUsd: number;
   custom: boolean;
+  whole: boolean;
   count: number;
   impactBp: number;
   impactUsd: number;
@@ -52,6 +54,8 @@ export function sliceSizeOf(input: { book: NormalizedBook | null; side: Side; mi
   return fallback;
 }
 
+export const oneOrderUsdOf = (maxUsd: number): number => (maxUsd > 0 ? Math.min(ONE_ORDER_USD, maxUsd) : ONE_ORDER_USD);
+
 function lotsOf(qty: number, step: number, lot: string): number {
   return Math.round(Number(floorToStep(qty, lot)) / step);
 }
@@ -88,7 +92,7 @@ export function sliceOptions(input: {
   const { book, side, mid, totalQty, minQty, lot, customUsd, reopenSide } = input;
   if (!book || !touchOf(book) || !(mid > 0) || !(totalQty > 0)) return [];
   const maxUsd = input.maxUsd !== undefined && input.maxUsd > 0 ? input.maxUsd : Infinity;
-  const optionFor = (sizeUsd: number, custom: boolean): SliceOption | null => {
+  const optionFor = (sizeUsd: number, custom: boolean, whole = false): SliceOption | null => {
     const qtys = sliceQtys(totalQty, Math.min(sizeUsd, maxUsd) / mid, minQty, lot);
     if (qtys.length === 0) return null;
     const walksOf = (walkSide: Side): Impact[] | null => {
@@ -108,6 +112,7 @@ export function sliceOptions(input: {
     return {
       sizeUsd,
       custom,
+      whole,
       count: qtys.length,
       impactBp: largestImpact.bp,
       impactUsd: usdOf(impacts),
@@ -123,5 +128,6 @@ export function sliceOptions(input: {
     const clamped = Math.min(Math.max(customUsd, Math.max(0, minQty) * mid), totalQty * mid, maxUsd);
     rows.push(optionFor(clamped, true));
   }
+  rows.push(optionFor(oneOrderUsdOf(maxUsd), false, true));
   return rows.filter((row): row is SliceOption => row !== null);
 }

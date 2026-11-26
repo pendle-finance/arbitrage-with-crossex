@@ -114,7 +114,7 @@ export function useTwapInput(): {
   return { on, setOn, input, setInput, startBlocked, blockedBy };
 }
 
-function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {
+export function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {
   const { t } = useTranslation();
   return (
     <span className="ml-auto flex items-center gap-1.5 text-[11px] text-ink-400">

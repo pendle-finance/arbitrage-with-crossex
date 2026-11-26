@@ -54,7 +54,9 @@ function servePlan(plan: DeleverPlan | { error: string }, twapOverride?: Delever
       if (!body.twap) return HttpResponse.json(env({ ...plan, twap: null, priceImpact: null }));
       const lead = plan.legs[plan.makerLeg]!;
       const twap = twapOverride ?? twapReply(lead.closeQty, body.twap);
-      return HttpResponse.json(env({ ...plan, twap, priceImpact: { whole: null, sliced: 1200 } }));
+      const sliceQty = twap.plan ? Math.max(Number(twap.plan.sliceQty), Number(twap.plan.lastQty)) : 0;
+      const hedged = sliceQty > 0 ? { notHedgedMaxQty: sliceQty, notHedgedMaxUsd: (plan.notHedgedMaxUsd / plan.notHedgedMaxQty) * sliceQty } : {};
+      return HttpResponse.json(env({ ...plan, ...hedged, twap, priceImpact: { whole: null, sliced: 1200 } }));
     }),
   );
   return sent;
@@ -176,39 +178,41 @@ describe('DeleverTab pair', () => {
   });
 });
 
+const sizeBox = () => screen.getByRole('textbox', { name: 'Size to delever, each leg' });
+
 describe('DeleverTab guards', () => {
-  it.each(['0', 'abc', '-5'])('custom %s shows the invalid sentence and no hold', async (typed) => {
+  it.each(['0', 'abc', '-5'])('a typed %s shows the invalid sentence and turns the hold off', async (typed) => {
     const user = userEvent.setup();
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    await user.type(screen.getByRole('textbox', { name: 'Custom' }), typed);
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), typed);
     expect(screen.getByText(/^(Not a number|Must be more than 0)$/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
   });
 
-  it('custom above the pair size names the most and shows no hold', async () => {
+  it('a size above the pair size names the most in red and turns the hold off', async () => {
     const user = userEvent.setup();
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    await user.type(screen.getByRole('textbox', { name: 'Custom' }), '900.001');
-    expect(screen.getByText('Maximum is 900')).toBeInTheDocument();
-    expect(screen.queryByText(/^100(\.0+)?%$/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), '900.001');
+    expect(screen.getByText('Maximum is 900')).toHaveClass('text-guava');
+    expect(sizeBox().nextElementSibling).toHaveTextContent(/^BTC$/);
+    expect(screen.getByRole('button', { name: 'Hold to delever 900.001 BTC' })).toBeDisabled();
   });
 
-  it('an empty custom size says why and shows no hold, as 0 does', async () => {
+  it('an empty size shows the unit only, no line, and turns the hold off', async () => {
     const user = userEvent.setup();
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    expect(screen.getByRole('textbox', { name: 'Custom' })).toHaveValue('');
+    await user.clear(sizeBox());
+    expect(sizeBox().nextElementSibling).toHaveTextContent(/^BTC$/);
+    expect(screen.queryByText('Must be more than 0')).toBeNull();
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
+    await user.type(sizeBox(), '0');
     expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
-    await user.type(screen.getByRole('textbox', { name: 'Custom' }), '0');
-    expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
   });
 
   it('the hold stays disabled until the plan for the picked size returns', async () => {
@@ -227,10 +231,9 @@ describe('DeleverTab guards', () => {
     show(openPairs.btc900);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to delever 180 BTC' })).toBeEnabled());
     await user.click(screen.getByRole('radio', { name: '30%' }));
-    const hold = screen.getByRole('button', { name: 'Hold to delever 270 BTC' });
-    expect(hold).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Pricing the move.' })).toBeDisabled();
     release();
-    await waitFor(() => expect(hold).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to delever 270 BTC' })).toBeEnabled());
   });
 
   it('a wallet that cannot trade cannot start a delever with a Boros leg', async () => {
@@ -249,16 +252,61 @@ describe('DeleverTab size', () => {
     const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
     expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%', 'Custom']);
     expect(within(group).getByRole('radio', { name: '20%' })).toHaveAttribute('aria-checked', 'true');
+    expect(sizeBox()).toHaveValue('180');
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 20%');
+    expect(sizeBox().parentElement).toHaveClass('bg-wash/[0.15]');
   });
 
-  it('custom coin size shows percent', async () => {
+  it('Custom opens a percent box; Enter fills the size box and Custom comes back', async () => {
     const user = userEvent.setup();
     const sent = servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    const field = screen.getByRole('textbox', { name: 'Custom' });
-    await user.type(field, '90');
-    expect(within(field.closest('.flex.items-center') as HTMLElement).getByText('10%')).toBeInTheDocument();
+    const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
+    await user.click(within(group).getByRole('radio', { name: 'Custom' }));
+    expect(within(group).queryByRole('radio', { name: 'Custom' })).toBeNull();
+    const pct = screen.getByRole('textbox', { name: 'Custom percent of the pair' });
+    expect(pct).toHaveFocus();
+    await user.type(pct, '150{Enter}');
+    expect(screen.getByRole('textbox', { name: 'Custom percent of the pair' })).toBeInTheDocument();
+    expect(sizeBox()).toHaveValue('180');
+    await user.clear(pct);
+    await user.type(pct, '50{Enter}');
+    expect(screen.queryByRole('textbox', { name: 'Custom percent of the pair' })).toBeNull();
+    expect(within(group).getByRole('radio', { name: 'Custom' })).toHaveAttribute('aria-checked', 'false');
+    expect(sizeBox()).toHaveValue('450');
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 50%');
+    expect(within(group).getAllByRole('radio').every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
+    await waitFor(() => expect(sent.at(-1)?.perps.map((p) => p.qty)).toEqual([450, 450]));
+  });
+
+  it('Escape closes the percent box and keeps the size', async () => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
+    await user.click(within(group).getByRole('radio', { name: 'Custom' }));
+    await user.type(screen.getByRole('textbox', { name: 'Custom percent of the pair' }), '50{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'Custom percent of the pair' })).toBeNull();
+    expect(sizeBox()).toHaveValue('180');
+  });
+
+  it('a preset is lit only while the box holds its size', async () => {
+    const user = userEvent.setup();
+    const sent = servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
+    await user.click(within(group).getByRole('radio', { name: '30%' }));
+    expect(sizeBox()).toHaveValue('270');
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), '100');
+    expect(within(group).getAllByRole('radio').every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 11.1%');
+    expect(sizeBox().parentElement).toHaveClass('bg-wash/[0.05]');
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), '90');
+    expect(within(group).getByRole('radio', { name: '10%' })).toHaveAttribute('aria-checked', 'true');
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 10%');
+    expect(sizeBox().parentElement).toHaveClass('bg-wash/[0.15]');
     await waitFor(() => expect(sent.at(-1)?.perps.map((p) => p.qty)).toEqual([90, 90]));
     expect(sent.at(-1)?.boros).toEqual([{ marketId: 101, size: 90 }]);
   });
@@ -315,11 +363,11 @@ describe('DeleverTab plan', () => {
     ).toBeInTheDocument();
   });
 
-  it('delever not hedged line', async () => {
+  it('delever not hedged line names the one order while TWAP is off', async () => {
     const plan = deleverPlans.twentyPct;
     servePlan(plan);
     show(openPairs.btc900);
-    const text = `Not hedged during each slice: max ${sigGrouped(plan.notHedgedMaxQty)} BTC (${fmtUsd(plan.notHedgedMaxUsd, 0)})`;
+    const text = `Not hedged during the order: max ${sigGrouped(plan.notHedgedMaxQty)} BTC (${fmtUsd(plan.notHedgedMaxUsd, 0)})`;
     const line = await screen.findByText(text);
     expect(line.tagName).toBe('P');
     expect(line.closest('[role="alert"], .card')).toBeNull();
@@ -337,31 +385,51 @@ describe('DeleverTab plan', () => {
     expect(card).toHaveTextContent(fmtUsd(plan.estimates.maker.totalUsd));
   });
 
-  it('slice row and orders toggle', async () => {
-    const user = userEvent.setup();
+  it('orders toggle prices one order for each mode while TWAP is off', async () => {
     const plan = deleverPlans.twentyPct;
     servePlan(plan);
     show(openPairs.btc900);
     const orders = await screen.findByRole('radiogroup', { name: 'Orders' });
     const [limit, market] = within(orders).getAllByRole('radio');
     const option = defaultOption(plan);
-    expect(limit).toHaveTextContent(`Limit + hedge ${fmtUsd(plan.estimates.maker.totalUsd, 0)} · ${fmtAbout(option.seconds.maker / option.count)} per slice`);
+    expect(option.whole).toBe(true);
+    expect(limit).toHaveTextContent(`Limit + hedge ${fmtUsd(plan.estimates.maker.totalUsd, 0)} · ${fmtAbout(option.seconds.maker)}`);
+    expect(limit).not.toHaveTextContent('per slice');
     expect(limit).toHaveAttribute('aria-checked', 'true');
-    expect(market).toHaveTextContent(`Market ${fmtUsd(plan.estimates.market.totalUsd, 0)} · ${fmtAbout(option.seconds.market / option.count)} per slice`);
-    expect(screen.getByText(new RegExp(`^Slice size \\$[\\d.]+k · ${option.count} slices?$`))).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Change' }));
-    const slices = screen.getByRole('radiogroup', { name: 'Slice size' });
-    expect(within(slices).getAllByRole('radio').length).toBe(plan.sliceOptions.filter((o) => !o.custom).length + 1);
+    expect(market).toHaveTextContent(`Market ${fmtUsd(plan.estimates.market.totalUsd, 0)} · ${fmtAbout(option.seconds.market)}`);
+    expect(market).not.toHaveTextContent('per slice');
+    expect(screen.queryByText(/^Slice size/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: 'Split the close' })).not.toBeInTheDocument();
   });
 
-  it('a slice past the book refuses in place of the hold', async () => {
+  it('with TWAP off, a close the venue cap splits reads per slice in both modes', async () => {
     const plan = deleverPlans.twentyPct;
-    servePlan({ ...plan, sliceOptions: plan.sliceOptions.map((o) => (o.sizeUsd === plan.defaultSliceUsd ? { ...o, pastBook: true } : o)) });
+    servePlan({ ...plan, sliceOptions: plan.sliceOptions.map((o) => (o.whole ? { ...o, count: 3 } : o)) });
+    show(openPairs.btc900);
+    const orders = await screen.findByRole('radiogroup', { name: 'Orders' });
+    const [limit, market] = within(orders).getAllByRole('radio');
+    expect(limit).toHaveTextContent(/per slice$/);
+    expect(market).toHaveTextContent(/per slice$/);
+    expect(screen.getByText(/^Not hedged during each slice: max /)).toBeInTheDocument();
+  });
+
+  it('orders toggle reads per slice once TWAP is on', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    const orders = await screen.findByRole('radiogroup', { name: 'Orders' });
+    await waitFor(() => expect(within(orders).getAllByRole('radio')[0]).toHaveTextContent(/per slice$/));
+  });
+
+  it('one order past the book refuses in place of the hold and points at TWAP', async () => {
+    const plan = deleverPlans.twentyPct;
+    servePlan({ ...plan, sliceOptions: plan.sliceOptions.map((o) => (o.whole ? { ...o, pastBook: true } : o)) });
     show(openPairs.btc900);
     expect(await screen.findByText('Order book too thin to price.')).toBeInTheDocument();
-    expect(screen.getByText('Pick a smaller slice size.')).toBeInTheDocument();
+    expect(screen.getByText('Turn on TWAP to close it in parts.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Change' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'TWAP' })).toBeEnabled();
   });
 
   it('short hold label', async () => {
@@ -382,6 +450,8 @@ describe('DeleverTab plan', () => {
     await waitFor(() => expect(started).toHaveBeenCalled());
     expect(starts[0]).toMatchObject({ kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { exec: 'maker' } });
     expect(starts[0]!.delever.twap).toBeUndefined();
+    expect(starts[0]).not.toHaveProperty('sliceUsd');
+    expect(starts[0]!.delever).not.toHaveProperty('sliceUsd');
   });
 
   it('a plan that fails shows the error, never a cost', async () => {
@@ -405,10 +475,11 @@ async function turnTwapOn(duration: string, interval: string) {
 }
 
 describe('DeleverTab TWAP', () => {
-  it('twap off keeps slice size row', async () => {
+  it('twap off shows no slice row', async () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    expect(await screen.findByText(/^Slice size \$[\d.]+k · \d+ slices?$/)).toBeInTheDocument();
+    expect(await screen.findByRole('switch', { name: 'TWAP' })).toBeInTheDocument();
+    expect(screen.queryByText(/^Slice size/)).not.toBeInTheDocument();
     expect(screen.queryByText('Boros close per slice')).not.toBeInTheDocument();
   });
 
