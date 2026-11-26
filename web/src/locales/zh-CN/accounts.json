@@ -293,8 +293,6 @@
   },
   "closePair": {
     "sizeLabel": "平仓规模",
-    "maxTitle": "平掉整个组合",
-    "max": "最大",
     "sizeAria": "平仓规模，同时用于两条腿",
     "sizeInvalid": "规模须大于 0 且不超过 {{max}} {{base}}",
     "priceBooked": "已结算价差盈亏",
@@ -537,7 +535,7 @@
     "pct20": "20%",
     "pct30": "30%",
     "amountAria": "每条腿减仓数量",
-    "custom": "自定义",
+    "custom": "自定义 %",
     "customPctAria": "自定义仓位百分比",
     "sizeSuffix": "{{coin}} · {{pct}}%",
     "tradingFeePerps": "交易手续费 · 永续",

@@ -5,13 +5,72 @@ import { VenueIcon } from '../components/AssetIcon';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { SignedNumber } from '../components/SignedNumber';
-import { fmtUsd, prettyVenue, qtyGrouped } from '../lib/fmt';
+import { AmountPresets } from '../components/AmountPresets';
+import { fieldValue, fmtUsd, prettyVenue, qtyGrouped } from '../lib/fmt';
 import { decimalsOf, stripZeros } from '../lib/ticks';
 import { EstimateAge, EstimateRow, LegTable, SummaryCard } from '../trade/PairTicketBits';
 import { PreviewFallback } from '../trade/previewBits';
+import { FieldLabel } from '../trade/SymbolCombobox';
 import { fmtTradeCost } from '../trade/TicketEstimateBits';
 
 const UNKNOWN_LOT_DECIMALS = 8;
+
+const CLOSE_SHARES = ['25', '50', '75', '100'] as const;
+
+type CloseShare = (typeof CLOSE_SHARES)[number];
+
+const shareText = (max: number, share: number) => fieldValue((max * share) / 100);
+
+export function CloseSizePresets({
+  label,
+  inputLabel,
+  coin,
+  max,
+  value,
+  invalid,
+  onChange,
+  children,
+}: {
+  label: string;
+  inputLabel: string;
+  coin: string;
+  max: number;
+  value: string;
+  invalid: boolean;
+  onChange: (text: string) => void;
+  children?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const typed = Number(value);
+  const typedOk = value.trim() !== '' && Number.isFinite(typed);
+  const lit: CloseShare | null = typedOk ? (CLOSE_SHARES.find((share) => Number(shareText(max, Number(share))) === typed) ?? null) : null;
+  const pct = typedOk && !invalid && max > 0 ? Math.round((typed / max) * 100) : null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <FieldLabel>{label}</FieldLabel>
+      <AmountPresets<CloseShare>
+        value={value}
+        onChange={onChange}
+        inputLabel={inputLabel}
+        suffix={pct === null ? coin : t('accounts.deleverTab.sizeSuffix', { coin, pct })}
+        bad={invalid}
+        boxClassName="w-48"
+        presetsLabel={t('assetCard.roll.shareShortcuts')}
+        preset={lit}
+        onPreset={(share) => onChange(shareText(max, Number(share)))}
+        presets={CLOSE_SHARES.map((share) => ({ value: share, label: `${share}%` }))}
+        custom={{
+          label: t('accounts.deleverTab.custom'),
+          unit: '%',
+          inputLabel: t('accounts.deleverTab.customPctAria'),
+          max: 100,
+          onApply: (share) => onChange(shareText(max, share)),
+        }}
+      />
+      {children}
+    </div>
+  );
+}
 
 function decimalText(units: bigint, decimals: number): string {
   if (decimals === 0) return String(units);

@@ -250,7 +250,7 @@ describe('DeleverTab size', () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
-    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%', 'Custom']);
+    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%', 'Custom %']);
     expect(within(group).getByRole('radio', { name: '20%' })).toHaveAttribute('aria-checked', 'true');
     expect(sizeBox()).toHaveValue('180');
     expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 20%');
@@ -262,8 +262,8 @@ describe('DeleverTab size', () => {
     const sent = servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
-    await user.click(within(group).getByRole('radio', { name: 'Custom' }));
-    expect(within(group).queryByRole('radio', { name: 'Custom' })).toBeNull();
+    await user.click(within(group).getByRole('radio', { name: 'Custom %' }));
+    expect(within(group).queryByRole('radio', { name: 'Custom %' })).toBeNull();
     const pct = screen.getByRole('textbox', { name: 'Custom percent of the pair' });
     expect(pct).toHaveFocus();
     await user.type(pct, '150{Enter}');
@@ -272,7 +272,7 @@ describe('DeleverTab size', () => {
     await user.clear(pct);
     await user.type(pct, '50{Enter}');
     expect(screen.queryByRole('textbox', { name: 'Custom percent of the pair' })).toBeNull();
-    expect(within(group).getByRole('radio', { name: 'Custom' })).toHaveAttribute('aria-checked', 'false');
+    expect(within(group).getByRole('radio', { name: 'Custom %' })).toHaveAttribute('aria-checked', 'false');
     expect(sizeBox()).toHaveValue('450');
     expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 50%');
     expect(within(group).getAllByRole('radio').every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
@@ -284,7 +284,7 @@ describe('DeleverTab size', () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
-    await user.click(within(group).getByRole('radio', { name: 'Custom' }));
+    await user.click(within(group).getByRole('radio', { name: 'Custom %' }));
     await user.type(screen.getByRole('textbox', { name: 'Custom percent of the pair' }), '50{Escape}');
     expect(screen.queryByRole('textbox', { name: 'Custom percent of the pair' })).toBeNull();
     expect(sizeBox()).toHaveValue('180');

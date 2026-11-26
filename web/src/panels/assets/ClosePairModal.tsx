@@ -94,6 +94,7 @@ export function ClosePairModal({
             base={picked.group.base}
             legs={pairPerpCloseLegs(picked.pair)}
             livePositions={livePositions}
+            allowTwap
             borosUnhedged={borosSizeOf(picked)}
             onSent={onSent}
           />

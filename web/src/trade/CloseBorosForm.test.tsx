@@ -570,6 +570,19 @@ describe('CloseBorosForm — a leg nothing can quote', () => {
   });
 });
 
+describe('CloseBorosForm — size presets', () => {
+  it('50% halves the size and 100% restores the exact whole size', async () => {
+    server.use(...ready());
+    renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 0.01234567 }]} />);
+    const input = (await screen.findByLabelText(/Close size, applied to all positions/)) as HTMLInputElement;
+    fireEvent.click(screen.getByRole('radio', { name: '50%' }));
+    expect(input.value).toBe('0.006172835');
+    expect(screen.getByText('ETH · 50%')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: '100%' }));
+    expect(input.value).toBe('0.01234567');
+  });
+});
+
 describe('CloseBorosForm — full sizes on a large book', () => {
   it.each([
     [4100, '4,100 ETH', '4,000 ETH'],
@@ -578,7 +591,7 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: size }]} />);
 
-    expect(await screen.findByRole('button', { name: `Max ${text}` })).toBeInTheDocument();
+    expect(await screen.findByRole('radio', { name: '100%' })).toBeInTheDocument();
     const input = screen.getByLabelText(/Close size, applied to all positions/) as HTMLInputElement;
     expect(input.value).not.toContain(',');
     fireEvent.change(input, { target: { value: '100' } });

@@ -296,6 +296,21 @@ describe('ClosePairForm, close perps with TWAP', () => {
     expect(screen.queryByText(/Max slippage/)).toBeNull();
   });
 
+  it('size presets fill 50% and 100% of the closable size and show the percent', async () => {
+    server.use(...baseHandlers(), previewHandler());
+    renderPlain();
+    const box = await screen.findByRole('textbox', { name: 'Close size, applied to both legs' });
+    const shortcuts = screen.getByRole('radiogroup', { name: 'Share shortcuts' });
+    expect(within(shortcuts).getAllByRole('radio').map((b) => b.textContent)).toEqual(['25%', '50%', '75%', '100%', 'Custom %']);
+    expect(within(shortcuts).getByRole('radio', { name: '100%' })).toHaveAttribute('aria-checked', 'true');
+    await userEvent.click(within(shortcuts).getByRole('radio', { name: '50%' }));
+    expect(box).toHaveValue('60');
+    expect(screen.getByText('ETH · 50%')).toBeInTheDocument();
+    await userEvent.click(within(shortcuts).getByRole('radio', { name: '100%' }));
+    expect(box).toHaveValue('120');
+    expect(screen.queryByRole('button', { name: /^Max/ })).toBeNull();
+  });
+
   it('market slippage row with market', async () => {
     server.use(...baseHandlers(), previewHandler());
     renderPlain();
