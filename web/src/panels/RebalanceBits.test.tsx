@@ -241,27 +241,38 @@ describe('the wallet hover', () => {
 
 describe('StepList', () => {
   const STEP_ROWS = [
-    { key: 'r1', label: 'Round 1', text: 'Move 100 USDC to Lighter', sub: '100 arrives', right: '01:02 of 02:00', state: 'running', progress: 0.5 },
-    { key: 'r2', label: 'Round 2', text: 'Move 50 USDC to Lighter', sub: '50 arrives', right: 'about 2 min', state: 'pending', progress: 0 },
-    { key: 'r3', label: 'Round 3', text: 'Move 25 USDC to Lighter', sub: '25 arrives', right: 'about 1 min', state: 'pending', progress: 0 },
+    { key: 'r1', coin: 'USDC', text: 'Move 100 USDC to Lighter', sub: 'Gate spot to Lighter', right: '01:02 of 02:00', state: 'running', progress: 0.5 },
+    { key: 'r2', coin: 'USDC', text: 'Move 50 USDC to Lighter', sub: '50 arrives', right: 'about 2 min', state: 'pending', progress: 0 },
+    { key: 'r3', coin: 'USDC', text: 'Move 25 USDC to Lighter', sub: '25 arrives', right: 'about 1 min', state: 'pending', progress: 0 },
   ] satisfies StepRow[];
 
-  it('clock binds to its own round', () => {
+  it('one bordered row per step with its text and time, the leg and a bar only while running', () => {
     const { container } = render(<StepList rows={STEP_ROWS} />);
 
-    const list = container.querySelector('ol');
-    expect(list?.className).toContain('gap-5');
-    expect(list?.className).not.toContain('gap-3');
-
-    const items = container.querySelectorAll('li');
-    expect(items.length).toBe(STEP_ROWS.length);
+    const items = [...container.querySelectorAll('li')];
+    expect(items).toHaveLength(STEP_ROWS.length);
     items.forEach((item, index) => {
       const row = STEP_ROWS[index];
-      expect(within(item as HTMLElement).getByText(row.sub)).toBeInTheDocument();
-      const timeRow = within(item as HTMLElement).getByText(row.right).closest('div');
-      expect(timeRow?.className).toContain('items-end');
-      expect(timeRow?.className).not.toContain('items-start');
+      expect(item.className).toContain('rounded border');
+      expect(within(item).getByText(row.text)).toBeInTheDocument();
+      expect(within(item).getByText(row.right)).toBeInTheDocument();
     });
+    expect(within(items[0]).getByText('Gate spot to Lighter')).toBeInTheDocument();
+    expect(screen.queryByText('50 arrives')).toBeNull();
+    expect(items[0].querySelector<HTMLElement>('[data-step-bar]')?.style.width).toBe('50%');
+    expect(items[1].querySelector('[data-step-bar]')).toBeNull();
+    expect(container.querySelector('[role="progressbar"]')).toBeNull();
+  });
+
+  it('a limit shows the first rows and any running row, numbered as in the full list', () => {
+    const rows: StepRow[] = [1, 2, 3, 4, 5].map((n) => ({
+      key: String(n), coin: 'USDC', text: `Round ${n}`, sub: '', right: '', state: n === 4 ? 'running' : 'pending', progress: 0,
+    }));
+    const { container } = render(<StepList rows={rows} limit={2} />);
+
+    expect([...container.querySelectorAll('[data-step-dot]')].map((dot) => dot.textContent)).toEqual(['1', '2', '']);
+    expect(screen.getByText('Round 4')).toBeInTheDocument();
+    expect(screen.queryByText('Round 3')).toBeNull();
   });
 });
 
@@ -290,35 +301,35 @@ describe('jobRows for a Convert in chunks', () => {
     updatedAt: 2_000,
   });
 
-  it('a done Convert of three chunks shows one row with the summed move and the summed arrival', () => {
+  it('a done Convert of three chunks shows one row with the summed move', () => {
     const job = jobOf(
       [chunk('Convert', 400_000, 399_200, 'done'), chunk('Convert', 400_000, 399_200, 'done'), chunk('Convert', 400_000, 399_200, 'done')],
       2,
       'done',
     );
 
-    const rows = jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000);
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ label: 'Convert', state: 'done', sub: '1,197,600.00 arrives' });
+    expect(rows[0]).toMatchObject({ coin: 'USDT', state: 'done', sub: '' });
     expect(rows[0].text).toContain('1,200,000.00');
   });
 
-  it('a running Convert of three chunks shows the summed move and no arrival', () => {
+  it('a running Convert of three chunks shows the summed move', () => {
     const job = jobOf(
       [chunk('Convert', 400_000, 399_200, 'done'), chunk('Convert', 400_000, 399_200, 'running'), chunk('Convert', 400_000, null, 'pending')],
       1,
       'running',
     );
 
-    const rows = jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000);
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ label: 'Convert', state: 'running', sub: '' });
+    expect(rows[0]).toMatchObject({ coin: 'USDT', state: 'running' });
     expect(rows[0].text).toContain('1,200,000.00');
   });
 
-  it('a done Convert of two pairs between Hyperliquid and Lighter moves the Convert to USDT sum and lands the Convert to USDC sum', () => {
+  it('a done Convert of two pairs between Hyperliquid and Lighter moves the Convert to USDT sum', () => {
     const job = jobOf(
       [
         chunk('Convert to USDT', 300_000, 299_400, 'done', 'LIGHTER'),
@@ -330,19 +341,19 @@ describe('jobRows for a Convert in chunks', () => {
       'done',
     );
 
-    const rows = jobRows(job, 3_000, null);
+    const rows = jobRows(job, 3_000);
 
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ state: 'done', sub: '597,602.40 arrives' });
+    expect(rows[0]).toMatchObject({ coin: 'USDC', state: 'done', sub: '' });
     expect(rows[0].text).toContain('600,000.00');
   });
 
   it('one Convert chunk shows the same row as before chunks existed', () => {
     const job = jobOf([chunk('Convert', 12, 11.97, 'done')], 0, 'done');
 
-    const [row] = jobRows(job, 3_000, null);
+    const [row] = jobRows(job, 3_000);
 
-    expect(row).toMatchObject({ state: 'done', sub: '11.97 arrives' });
+    expect(row).toMatchObject({ state: 'done', sub: '' });
     expect(row.text).toContain('12.00');
   });
 });
@@ -352,11 +363,11 @@ describe('StepDot', () => {
     const { container, rerender } = render(<StepDot n={2} state="pending" />);
     const dot = () => container.querySelector<HTMLElement>('[data-step-dot]')!;
     expect(dot().textContent).toBe('2');
-    expect(dot().className).toContain('border-ink-600');
+    expect(dot().className).toContain('text-ink-400');
 
     rerender(<StepDot n={2} state="running" />);
     expect(dot().querySelector('.animate-spin')).not.toBeNull();
-    expect(dot().className).toContain('border-info');
+    expect(dot().className).toContain('text-info');
 
     rerender(<StepDot n={2} state="done" />);
     expect(dot().querySelector('svg')).not.toBeNull();
@@ -365,22 +376,20 @@ describe('StepDot', () => {
 
     rerender(<StepDot n={2} state="stopped" />);
     expect(dot().textContent).toBe('2');
-    expect(dot().className).toContain('border-guava');
+    expect(dot().className).toContain('text-guava');
   });
 
   it('StepList numbers its steps in order with one dot each', () => {
     const rows: StepRow[] = [
-      { key: 'a', label: '', text: 'Close + reopen 53.8 of 66.0 ETH short', sub: '', right: '3s', state: 'done', progress: null },
-      { key: 'b', label: '', text: 'Move the other 27,228 USDC', sub: '', right: '', state: 'pending', progress: null, body: <span>route rows</span> },
+      { key: 'a', coin: 'USDC', text: 'Convert 500.00 USDC', sub: '', right: '3s', state: 'done', progress: 1 },
+      { key: 'b', coin: 'USDT', text: 'Convert 20.00 USDT', sub: '', right: 'Instant', state: 'pending', progress: 0 },
     ];
     const { container } = render(<StepList rows={rows} />);
 
     const dots = [...container.querySelectorAll('[data-step-dot]')];
     expect(dots.map((dot) => dot.getAttribute('data-step-dot'))).toEqual(['done', 'pending']);
     expect(dots[1].textContent).toBe('2');
-    expect(container.querySelector('[role="progressbar"]')).toBeNull();
-    expect(screen.getByText('route rows')).toBeInTheDocument();
-    expect(container.querySelector('.w-20')).toBeNull();
+    expect(container.querySelector('[data-step-bar]')).toBeNull();
   });
 });
 

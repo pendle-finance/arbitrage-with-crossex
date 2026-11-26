@@ -1,8 +1,8 @@
 import { ArrowRight, Check, Info, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { RouteName } from '../api/types';
+import { TokenIcon } from '../components/AssetIcon';
 import { Spinner } from '../components/Spinner';
-import { microLabelClass } from '../components/Th';
 import { num, parseSymbol } from '../lib/fmt';
 
 /** Severity of a rebalance verdict — see `VerdictTone` in RebalanceHovers. */
@@ -102,74 +102,80 @@ export type StepState = 'pending' | 'running' | 'done' | 'stopped';
 
 export interface StepRow {
   key: string;
-  label: string;
+  coin: string;
   text: ReactNode;
   sub: ReactNode;
   right: string;
   state: StepState;
   progress: number | null;
-  body?: ReactNode;
 }
 
-const STEP_DOT: Record<StepState, string> = {
-  pending: 'border-ink-600 text-ink-300',
-  running: 'border-info text-info',
-  done: 'border-grass text-grass',
-  stopped: 'border-guava text-guava',
+const STEP_MARK: Record<StepState, string> = {
+  pending: 'text-ink-400',
+  running: 'text-info',
+  done: 'text-grass',
+  stopped: 'text-guava',
 };
 
 export function StepDot({ n, state }: { n: number; state: StepState }) {
   return (
-    <div
-      aria-hidden
-      data-step-dot={state}
-      className={`num flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[11px] ${STEP_DOT[state]}`}
-    >
-      {state === 'running' ? <Spinner className="h-2.5 w-2.5" /> : state === 'done' ? <Check size={12} strokeWidth={2.5} /> : num(n, 0)}
-    </div>
+    <span aria-hidden data-step-dot={state} className={`num flex w-4 shrink-0 items-center ${STEP_MARK[state]}`}>
+      {state === 'running' ? <Spinner className="h-3 w-3" /> : state === 'done' ? <Check size={12} strokeWidth={2.5} /> : num(n, 0)}
+    </span>
   );
 }
 
-const STEP_TEXT: Record<StepRow['state'], string> = {
-  pending: 'text-ink-200',
-  running: 'text-ink-100',
-  done: 'text-ink-100',
-  stopped: 'text-ink-100',
+const STEP_EDGE: Record<StepState, string> = {
+  pending: 'border-ink-800',
+  running: 'border-info/45',
+  done: 'border-ink-800',
+  stopped: 'border-guava/45',
 };
 
-const STEP_RIGHT: Record<StepRow['state'], string> = {
+const STEP_RIGHT: Record<StepState, string> = {
   pending: 'text-ink-400',
   running: 'text-pastel-blue',
   done: 'text-grass',
   stopped: 'text-guava',
 };
 
-const STEP_BAR: Record<StepRow['state'], ProgressTone> = {
-  pending: 'running',
-  running: 'running',
-  done: 'done',
-  stopped: 'stopped',
+const STEP_BAR: Record<StepState, string> = {
+  pending: PROGRESS_FILL.running,
+  running: PROGRESS_FILL.running,
+  done: PROGRESS_FILL.done,
+  stopped: PROGRESS_FILL.stopped,
 };
 
-export function StepList({ rows }: { rows: StepRow[] }) {
+const live = (row: StepRow): boolean => row.state === 'running' || row.state === 'stopped';
+
+export function shownSteps(rows: StepRow[], limit: number | null): { row: StepRow; n: number }[] {
+  return rows.map((row, index) => ({ row, n: index + 1 })).filter(({ row, n }) => limit === null || n <= limit || live(row));
+}
+
+export function StepList({ rows, limit = null }: { rows: StepRow[]; limit?: number | null }) {
   return (
-    <ol className="flex flex-col gap-5">
-      {rows.map((row, index) => (
-        <li key={row.key} aria-current={row.state === 'running' ? 'step' : undefined} className="relative flex gap-3">
-          {index < rows.length - 1 && <span aria-hidden data-step-line="" className="absolute -bottom-5 left-2.5 top-6 w-px bg-ink-700" />}
-          <StepDot n={index + 1} state={row.state} />
-          {row.label && <span className={`w-20 shrink-0 pt-0.5 ${microLabelClass}`}>{row.label}</span>}
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="flex items-end justify-between gap-4 text-xs">
-              <div className={row.label ? 'flex min-w-0 flex-col' : 'flex min-w-0 flex-wrap items-baseline gap-x-2'}>
-                <span className={`num ${row.label ? '' : 'font-semibold'} ${STEP_TEXT[row.state]}`}>{row.text}</span>
-                <span className="text-ink-400">{row.sub}</span>
-              </div>
-              <span className={`num shrink-0 ${STEP_RIGHT[row.state]}`}>{row.right}</span>
-            </div>
-            {row.progress !== null && <ProgressBar ratio={row.progress} tone={STEP_BAR[row.state]} />}
-            {row.body}
-          </div>
+    <ol className="flex flex-col gap-1">
+      {shownSteps(rows, limit).map(({ row, n }) => (
+        <li
+          key={row.key}
+          aria-current={row.state === 'running' ? 'step' : undefined}
+          className={`relative flex items-center gap-3 overflow-hidden rounded border px-3 py-1.5 text-xs text-ink-100 ${STEP_EDGE[row.state]}`}
+        >
+          <StepDot n={n} state={row.state} />
+          <TokenIcon symbol={row.coin} size={16} />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="num">{row.text}</span>
+            {row.state === 'running' && row.sub && <span className="text-ink-400">{row.sub}</span>}
+          </span>
+          <span className={`num shrink-0 ${STEP_RIGHT[row.state]}`}>{row.right}</span>
+          {row.progress !== null && live(row) && (
+            <span
+              aria-hidden
+              data-step-bar=""
+              className={`absolute bottom-0 left-0 h-0.5 ${STEP_BAR[row.state]}`}
+              style={{ width: `${Number.isFinite(row.progress) ? Math.min(100, Math.max(0, row.progress * 100)) : 0}%` }}
+            />
+          )}
         </li>
       ))}
     </ol>
