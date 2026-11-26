@@ -29,7 +29,7 @@ import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { fmtTradeCost } from './TicketEstimateBits';
 import { useTradeFlowOptional } from './TradeFlow';
 import { TRACKED_PRICE_TOLERANCE } from './trackedPriceDrift';
-import { TwapArea, twapControlOf, useTwapInput } from './TwapArea';
+import { TwapArea, twapControlOf, useTwapDefault, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
 import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 
@@ -148,6 +148,7 @@ export function SingleTicket() {
   const ref = p?.refPrice?.value ?? book.data?.mid;
   const twapPreview = twapOn ? (preview.data?.twap ?? null) : null;
   const impact = preview.data?.priceImpact ?? null;
+  useTwapDefault(twap, type === 'LIMIT' ? impact?.twapDefault : null, 'maker');
   const twapBlocked = twapOn && twap.blockedBy(twapPreview);
   const plan = twapPreview?.plan ?? null;
 

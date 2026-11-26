@@ -1067,7 +1067,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           openGaps: gapsLeftBy(store.read(), livePerps),
           kind: 'realize',
           exec,
-          sliceUsd,
+          sliceUsd: shownSlice === undefined ? 0 : sliceUsd,
           sliceCount: twap?.plan ? twap.plan.slices : sliceCountOf(tab.sliceOptions, sliceUsd, notionalUsd),
           estimate,
           twap: twap?.plan

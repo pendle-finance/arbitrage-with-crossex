@@ -16,10 +16,10 @@ import { poolKey, sideText, sizeText } from './rebalanceCopy';
 import { Actions, haltLine, StopBox, type JobViewProps } from './RebalanceJobBits';
 import type { RebalanceTab } from './rebalanceOpener';
 import { NotHedgedLine } from './RebalancePlanBits';
-import { MAX_SLIPPAGE_RATIO } from './SliceTable';
 
 type RunProps = Parameters<typeof RunView>[0];
 const SLICE_SECONDS = { maker: 300, market: 2 } as const;
+const MAX_SLIPPAGE_RATIO = 0.0025;
 const FOLLOW_MISSES_RED = 3;
 
 const sk = (key: string, values?: Record<string, string | number>): string => t(`accounts.sliceRun.${key}` as 'accounts.sliceRun.done', values);

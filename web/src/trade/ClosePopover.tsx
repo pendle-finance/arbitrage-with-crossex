@@ -30,7 +30,7 @@ import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from '
 import { feeAmount, feeKind, PreviewFallback, ViolationList } from './previewBits';
 import { BookToggle, fmtTradeCost, OneLegBook, PlanLine } from './TicketEstimateBits';
 import { FieldLabel } from './SymbolCombobox';
-import { TwapArea, useTwapInput } from './TwapArea';
+import { TwapArea, useTwapDefault, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
 import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 
@@ -233,6 +233,7 @@ export function ClosePopover({
   const p = preview.previews?.[0];
   const estimating = preview.estimating;
   const twapPreview = preview.data?.twap ?? null;
+  useTwapDefault(twapState, preview.data?.priceImpact?.twapDefault, 'maker');
   const twapPlan = twapOn ? (twapPreview?.plan ?? null) : null;
 
   const takerAfterBad = useTwapTakerAfter(taker, twapOn, twapPlan?.takerAfterSec ?? null);
