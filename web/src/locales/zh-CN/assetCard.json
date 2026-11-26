@@ -117,6 +117,8 @@
     "estProfit": "预计收益",
     "stepClose": "平仓 {{date}}",
     "stepOpen": "开仓 {{date}}",
+    "slipClose": "平仓滑点",
+    "slipOpen": "开仓滑点",
     "matures": "到期",
     "fundYes": "是",
     "fundShort": "否，缺 {{qty}}",
