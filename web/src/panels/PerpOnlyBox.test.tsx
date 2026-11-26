@@ -260,7 +260,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
     expect(await screen.findByRole('button', { name: /Close both/ })).toBeInTheDocument();
     await twapOn();
     expect(await screen.findByRole('button', { name: /Start TWAP close/ })).toBeInTheDocument();
-    expect(screen.getByText('Reduce-only. Each fill is hedged at once.')).toBeInTheDocument();
+    expect(screen.queryByText(/Reduce-only/)).not.toBeInTheDocument();
   });
 
   it('shows the fee saved against two taker orders in maker settings', async () => {
