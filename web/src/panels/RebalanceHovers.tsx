@@ -13,7 +13,6 @@ import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
 import { ALWAYS_SHOWN, WALLET_TONE, type BarRow } from './RebalanceBars';
 import { ROUTE_ORDER } from './RebalanceBits';
-import { FeeCell } from './RebalanceRealizeBits';
 import {
   factBorrowing,
   factInterestNow,
@@ -359,6 +358,14 @@ export const realizeImpactUsd = (plan: EvenPlan): number =>
 
 export const totalCostUsd = (plan: EvenPlan, route: RoutePlan): number => realizeFeeUsd(plan) + realizeImpactUsd(plan) + route.costUsd;
 
+export const costPartsUsd = (plan: EvenPlan, route: RoutePlan): { feeUsd: number; impactUsd: number; totalUsd: number } => ({
+  feeUsd: realizeFeeUsd(plan) + routeFeeUsd(route),
+  impactUsd: realizeImpactUsd(plan) + routeImpactUsd(route),
+  totalUsd: totalCostUsd(plan, route),
+});
+
+export const ROUTE_NAME_CELL = 'w-56 shrink-0';
+
 export const hasUnknownRate = (buckets: RebalanceBucket[]): boolean => borrowingBuckets(buckets).some(isRateUnknown);
 
 /** The interest a day the route stops, from the wallets it repays. The
@@ -534,16 +541,24 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
   const convert = across ? `${HOVER.convert} ${HOVER.convertAcross}` : HOVER.convert;
   const nameText = route === 'mix' ? HOVER.mix(plan.roundCap) : route === 'loop' ? loop : convert;
   const time = routeTime(route, routePlan);
+  const { feeUsd, impactUsd, totalUsd } = costPartsUsd(plan, routePlan);
   return (
     <RadioRow name="rebalance-route" labelledBy={id} checked={checked} disabled={blocked} onPick={onPick}>
-      <span id={id} className="w-44 shrink-0">
-        <Term label={<span className="font-semibold text-ink-100">{ROUTE_LABEL[route]}</span>} text={nameText} />
-      </span>
-      <span className="flex h-4 w-28 shrink-0 items-center">
+      <span className={`flex items-center gap-2 ${ROUTE_NAME_CELL}`}>
+        <span id={id}>
+          <Term label={<span className="font-semibold text-ink-100">{ROUTE_LABEL[route]}</span>} text={nameText} />
+        </span>
         {plan.recommended === route && <Term label={<Chip tone="green" sm>{t('common.recommended')}</Chip>} text={HOVER.recommended} />}
       </span>
       <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason && localizeServerText(routePlan.reason) : time}</span>
-      {!blocked && <FeeCell feeUsd={routeFeeUsd(routePlan)} impactUsd={routeImpactUsd(routePlan)} />}
+      {!blocked && (
+        <span className="num text-right text-ink-100">
+          {fmtUsd(totalUsd)}
+          <span className="block text-[11px] text-ink-400">
+            {t('accounts.moveCash.feeImpact', { fee: fmtUsd(feeUsd), impact: fmtUsd(impactUsd) })}
+          </span>
+        </span>
+      )}
     </RadioRow>
   );
 }

@@ -144,7 +144,6 @@
       "target": "Balanced target"
     },
     "modal": {
-      "feeUsd": "Fee {{usd}}",
       "frees": "Frees initial margin",
       "interest": "Interest",
       "fee": "Fee",
@@ -154,7 +153,6 @@
       "resume": "Resume",
       "abandon": "Abandon",
       "priceImpact": "Price impact",
-      "priceImpactUsd": "+ {{usd}} price impact",
       "feePlusImpact": "{{fee}} in fees plus {{impact}} of price impact"
     },
     "waits": {
@@ -480,7 +478,8 @@
   },
   "moveCash": {
     "goal": "Goal",
-    "feeHead": "Est. fee · Price impact",
+    "feeHead": "Est. cost",
+    "feeImpact": "Fee {{fee}} · Price impact {{impact}}",
     "started": "Started {{age}} ago. You can close this. The move keeps going.",
     "from": "From",
     "to": "To",

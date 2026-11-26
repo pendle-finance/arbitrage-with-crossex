@@ -143,7 +143,6 @@
       "target": "平衡目标"
     },
     "modal": {
-      "feeUsd": "费用 {{usd}}",
       "frees": "释放初始保证金",
       "interest": "利息",
       "fee": "费用",
@@ -153,7 +152,6 @@
       "resume": "恢复",
       "abandon": "放弃",
       "priceImpact": "价格影响",
-      "priceImpactUsd": "+ {{usd}} 价格影响",
       "feePlusImpact": "{{fee}} 手续费，另有 {{impact}} 价格影响"
     },
     "waits": {
@@ -474,7 +472,8 @@
   },
   "moveCash": {
     "goal": "目标",
-    "feeHead": "预估手续费 · 价格冲击",
+    "feeHead": "预估成本",
+    "feeImpact": "费用 {{fee}} · 价格影响 {{impact}}",
     "started": "{{age}}前开始。可以关闭此窗口，移动会继续。",
     "from": "转出",
     "to": "转入",

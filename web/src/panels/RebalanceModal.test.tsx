@@ -1521,7 +1521,8 @@ describe('RebalanceModal close and reopen, before the hold', () => {
 
   it('days line says how many days of interest it saves', () => {
     show(rebalanceViews.ownerBook);
-    expect(totalCard().nextElementSibling?.textContent).toBe('Pays back in 21 days of interest');
+    const afterCard = screen.getByRole('table');
+    expect(afterCard.lastElementChild?.textContent).toBe('Pays back in 21 days of interest');
   });
 
   it('above the most shows the amber line, and above the most disables the hold', async () => {
@@ -1555,7 +1556,7 @@ function showOn(view: RebalanceView, tab?: RebalanceTab) {
 }
 
 const tabRadio = (name: string) => within(screen.getByRole('radiogroup', { name: 'Reduce borrow' })).getByRole('radio', { name });
-const boxOf = (label: string) => screen.getByText(label, { selector: 'span' }).parentElement as HTMLElement;
+const boxOf = (label: string) => screen.getByText(label, { selector: 'span' }).closest('.card') as HTMLElement;
 const owner = rebalanceViews.ownerAccount;
 const ownerSlices = owner.realize!.sliceOptions;
 

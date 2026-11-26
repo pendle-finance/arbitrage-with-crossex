@@ -26,14 +26,15 @@ function valuesOf(group: HTMLElement, label: string): [string, string] {
 const group = (name: string): HTMLElement => screen.getByRole('rowgroup', { name });
 
 describe('RebalanceBeforeAfter', () => {
-  it('columns: Before and After heads, an arrow between, every number right-aligned in its column', () => {
+  it('columns: Before and After heads, an arrow between, Before right-aligned and After left-aligned, side by side', () => {
     planCard(owner, ownerRoute({ marginFreedUsd: 5962 }));
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Before', 'After']);
     const rows = groups().flatMap(linesOf);
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
       const [before, after] = within(row).getAllByRole('cell');
-      for (const cell of [before!, after!]) expect(cell.className).toMatch(/\bw-28\b.*\btext-right\b|\btext-right\b.*\bw-28\b/);
+      expect(before!.className).toMatch(/\bw-28\b.*\btext-right\b|\btext-right\b.*\bw-28\b/);
+      expect(after!.className).toMatch(/\bw-28\b.*\btext-left\b|\btext-left\b.*\bw-28\b/);
       expect(after!.className).toContain('num');
       const arrows = row.querySelectorAll('svg.lucide-arrow-right');
       expect(arrows.length).toBe(before!.textContent === '' ? 0 : 1);

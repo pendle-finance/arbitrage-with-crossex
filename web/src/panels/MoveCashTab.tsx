@@ -22,8 +22,8 @@ import { RebalanceModalFooter } from './RebalanceModalFooter';
 import { HOLD_LABEL, HOVER, modalFeeLabel, nothingToMove, poolCoin, poolKey, waitsForDeal, waitsForTransfer } from './rebalanceCopy';
 import { crossexImFull } from './rebalanceImStop';
 import { defaultGoal, DUST, fmtCoinOrUsd, isCashLimitedEven, keyOf, movesOf, paybackDays, pickedRoute } from './RebalanceHovers';
-import { planSteps, receivingBorrow, receivingHeld, RouteRow, routeFeeUsd, routeImpactUsd, sharedCoin, SpotLines } from './RebalanceHovers';
-import { Term, totalCostUsd, worthLine } from './RebalanceHovers';
+import { costPartsUsd, planSteps, receivingBorrow, receivingHeld, ROUTE_NAME_CELL, RouteRow, sharedCoin, SpotLines } from './RebalanceHovers';
+import { Term, worthLine } from './RebalanceHovers';
 import { acceptedOf, cashLimitedText, CUSTOM_DEBOUNCE_MS, initialGoal, isStale, parsedAmount, PLAN_CHANGED_LABEL, plainOf, presetOffText, shownOrder } from './rebalanceModalPlan';
 import type { Accepted } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
@@ -165,13 +165,14 @@ export function MoveCashTab({
       </>
     );
   } else {
+    const parts = costPartsUsd(plan, route);
     const costRows: CostRow[] =
       chosen === null
         ? []
         : [
-            { label: chosen === 'convert' ? t('accounts.moveCash.convertFee') : modalFeeLabel(), usd: routeFeeUsd(route) },
-            { label: t('accounts.moveCash.priceImpact'), usd: routeImpactUsd(route), hover: HOVER.priceImpact },
-            { label: t('accounts.moveCash.totalCost'), usd: totalCostUsd(plan, route), strong: true },
+            { label: chosen === 'convert' ? t('accounts.moveCash.convertFee') : modalFeeLabel(), usd: parts.feeUsd },
+            { label: t('accounts.moveCash.priceImpact'), usd: parts.impactUsd, hover: HOVER.priceImpact },
+            { label: t('accounts.moveCash.totalCost'), usd: parts.totalUsd, strong: true },
           ];
     const clears = goal === 'repay' && flow.left < DUST;
     const holdLabel =
@@ -183,13 +184,11 @@ export function MoveCashTab({
     body = (
       <>
         <div className="flex flex-col gap-2">
-          <div className={microLabelClass}>
-            <Term label={t('accounts.rebalanceModal.route')} text={HOVER.route} />
-          </div>
-          <div aria-hidden className="flex items-center gap-3 px-3 text-[11px] text-ink-400">
+          <div className={`flex items-center gap-3 px-3 ${microLabelClass}`}>
             <span className="w-3.5 shrink-0" />
-            <span className="w-44 shrink-0" />
-            <span className="w-28 shrink-0" />
+            <span className={ROUTE_NAME_CELL}>
+              <Term label={t('accounts.rebalanceModal.route')} text={HOVER.route} />
+            </span>
             <span className="flex-1">{t('accounts.rebalanceModal.time')}</span>
             <span className="text-right">{t('accounts.moveCash.feeHead')}</span>
           </div>
@@ -207,13 +206,8 @@ export function MoveCashTab({
             />
           )}
         </div>
-        {costRows.length > 0 && (
-          <div className="flex flex-col gap-1.5">
-            <TotalCost rows={costRows} />
-            {paysBack !== null && <span className="num text-xs text-ink-400">{paysBack}</span>}
-          </div>
-        )}
-        <RebalanceBeforeAfter rows={walletChanges(view, plan, route)} mode="after" />
+        {costRows.length > 0 && <TotalCost rows={costRows} />}
+        <RebalanceBeforeAfter rows={walletChanges(view, plan, route)} mode="after" footer={paysBack} />
         {cashShort && (
           <VerdictAlert
             tone="info"
@@ -243,7 +237,7 @@ export function MoveCashTab({
             onConfirm={() => {
               if (!chosen) return;
               start.mutate(
-                { kind: 'move', goal, route: chosen, costUsd: totalCostUsd(plan, route), ...(goal === 'custom' && customMove ? customMove : {}) },
+                { kind: 'move', goal, route: chosen, costUsd: parts.totalUsd, ...(goal === 'custom' && customMove ? customMove : {}) },
                 { onSuccess: onStarted, onError: onStartError },
               );
             }}

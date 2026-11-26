@@ -98,18 +98,19 @@ export function RebalanceModal({
   return (
     <Modal
       widthClass="w-[680px]"
+      tabbed={!(shown && job.kind === 'twap')}
       onClose={onClose}
       title={
         shown && job.kind === 'twap' ? null : (
-        <span className="flex items-end gap-3">
+        <span className="flex items-center gap-3">
           <UnderlineTabs<RebalanceTab>
             ariaLabel={t('accounts.borrowCard.reduce')}
-            look="underline"
+            look="glow"
             value={tab}
             onChange={setTab}
             options={TABS.map((value) => ({ value, label: t(`accounts.rebalanceTabs.${value}`) }))}
           />
-          {shown && !twapRun && <span className="pb-2.5"><JobChip job={job} /></span>}
+          {shown && !twapRun && <JobChip job={job} />}
         </span>
         )
       }

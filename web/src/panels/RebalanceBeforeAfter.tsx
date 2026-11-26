@@ -80,7 +80,7 @@ export function walletChanges(view: RebalanceView, _plan: EvenPlan, route: Route
   return changesOf(view.buckets, route.after, route.marginFreedUsd);
 }
 
-const COLUMN = 'w-28 shrink-0 text-right';
+const COLUMN = 'w-28 shrink-0';
 
 function valueText(row: ChangeRow, value: number): string {
   if (row.coin) return `${sizeText(value)} ${row.coin}`;
@@ -108,20 +108,20 @@ function Line({ row }: { row: ChangeRow }) {
       <span role="rowheader" className="min-w-0 flex-1 pl-2.5 text-ink-300">
         {row.hover ? <Term label={row.label} text={row.hover} /> : row.label}
       </span>
-      <span role="cell" data-column="before" className={`num ${COLUMN} ${beforeTone}`}>
+      <span role="cell" data-column="before" className={`num ${COLUMN} text-right ${beforeTone}`}>
         {before}
       </span>
       <span className="flex w-4 shrink-0 justify-center text-ink-500">
-        {before !== '' && <ArrowRight size={12} aria-hidden />}
+        {before !== '' && <ArrowRight size={16} aria-hidden />}
       </span>
-      <span role="cell" data-column="after" className={`num ${numeric ? COLUMN : 'shrink-0 whitespace-nowrap text-right'} ${afterTone} ${changed ? 'font-semibold' : ''}`}>
+      <span role="cell" data-column="after" className={`num ${numeric ? COLUMN : 'shrink-0 whitespace-nowrap'} text-left ${afterTone} ${changed ? 'font-semibold' : ''}`}>
         {row.suffix ? `${after} ${row.suffix}` : after}
       </span>
     </div>
   );
 }
 
-export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mode: 'after' | 'now' }) {
+export function RebalanceBeforeAfter({ rows, mode, footer }: { rows: WalletChange[]; mode: 'after' | 'now'; footer?: string | null }) {
   if (rows.length === 0) return null;
   const afterHead = mode === 'after' ? t('accounts.rebalanceRealize.after') : t('accounts.rebalanceRealize.now');
   return (
@@ -139,9 +139,9 @@ export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mod
             </span>
             {index === 0 && (
               <>
-                <span role="columnheader" className={`${COLUMN} ${microLabelClass}`}>{t('accounts.rebalanceRealize.before')}</span>
+                <span role="columnheader" className={`${COLUMN} text-right ${microLabelClass}`}>{t('accounts.rebalanceRealize.before')}</span>
                 <span className="w-4 shrink-0" />
-                <span role="columnheader" className={`${COLUMN} ${microLabelClass}`}>{afterHead}</span>
+                <span role="columnheader" className={`${COLUMN} text-left ${microLabelClass}`}>{afterHead}</span>
               </>
             )}
           </div>
@@ -150,6 +150,7 @@ export function RebalanceBeforeAfter({ rows, mode }: { rows: WalletChange[]; mod
           ))}
         </div>
       ))}
+      {footer && <div className="num text-ink-400">{footer}</div>}
     </div>
   );
 }

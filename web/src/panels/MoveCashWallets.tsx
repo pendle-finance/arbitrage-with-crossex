@@ -9,11 +9,18 @@ import { poolCoin } from './rebalanceCopy';
 import { walletOf } from './RebalancePlanBits';
 import { AffixedInput } from '../trade/PairTicketBits';
 
-function WalletBox({ label, children }: { label: string; children: ReactNode }) {
+function WalletBox({ children }: { children: ReactNode }) {
+  return <div className="card flex min-w-0 flex-1 flex-col gap-2 px-3 py-2 text-xs">{children}</div>;
+}
+
+function WalletLine({ label, wallet, children }: { label?: string; wallet: ReactNode; children?: ReactNode }) {
   return (
-    <div className="card flex min-w-0 flex-1 flex-col gap-1.5 p-3 text-xs">
-      <span className={microLabelClass}>{label}</span>
-      {children}
+    <div className="flex flex-col gap-0.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className={microLabelClass}>{label}</span>
+        {wallet}
+      </div>
+      {children && <div className="flex items-baseline gap-2">{children}</div>}
     </div>
   );
 }
@@ -50,11 +57,17 @@ export function MoveCashWallets({
     </option>
   ));
   const amountText = (amount: number, pool: Pool) => <span className="num text-sm font-semibold text-ink-50">{`${num(amount)} ${poolCoin(pool)}`}</span>;
+  const fromLabel = t('accounts.moveCash.from');
+  const toLabel = t('accounts.moveCash.to');
   const fromBox = custom ? (
-    <>
-      <select aria-label={t('accounts.rebalanceModal.from')} className="input num h-8 !py-0 text-xs" value={from} onChange={(e) => onFrom(e.target.value as Pool)}>
-        {options}
-      </select>
+    <WalletLine
+      label={fromLabel}
+      wallet={
+        <select aria-label={t('accounts.rebalanceModal.from')} className="input num h-8 !py-0 text-xs" value={from} onChange={(e) => onFrom(e.target.value as Pool)}>
+          {options}
+        </select>
+      }
+    >
       <AffixedInput affix={poolCoin(from)}>
         <input
           aria-label={t('accounts.rebalanceModal.amount')}
@@ -64,35 +77,41 @@ export function MoveCashWallets({
           onChange={(e) => onText(e.target.value)}
         />
       </AffixedInput>
-    </>
+    </WalletLine>
   ) : (
-    flow.sent.map(({ pool, amount }) => (
-      <div key={pool} className="flex flex-col gap-0.5">
-        <span className="text-ink-300">{walletOf(pool)}</span>
+    flow.sent.map(({ pool, amount }, i) => (
+      <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={<span className="text-ink-300">{walletOf(pool)}</span>}>
         {amountText(amount, pool)}
-      </div>
+      </WalletLine>
     ))
   );
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-stretch gap-3">
-        <WalletBox label={t('accounts.moveCash.from')}>{fromBox}</WalletBox>
+        <WalletBox>{fromBox}</WalletBox>
         <span className="flex shrink-0 items-center text-ink-500">
           <ArrowRight size={16} aria-hidden />
         </span>
-        <WalletBox label={t('accounts.moveCash.to')}>
-          {custom && (
-            <select aria-label={t('accounts.rebalanceModal.to')} className="input num h-8 !py-0 text-xs" value={to} onChange={(e) => onTo(e.target.value as Pool)}>
-              {options}
-            </select>
+        <WalletBox>
+          {custom ? (
+            <WalletLine
+              label={toLabel}
+              wallet={
+                <select aria-label={t('accounts.rebalanceModal.to')} className="input num h-8 !py-0 text-xs" value={to} onChange={(e) => onTo(e.target.value as Pool)}>
+                  {options}
+                </select>
+              }
+            >
+              {flow.arrives.map(({ pool, amount }) => priced && <span key={pool}>{amountText(amount, pool)}</span>)}
+            </WalletLine>
+          ) : (
+            flow.arrives.map(({ pool, amount }, i) => (
+              <WalletLine key={pool} label={i === 0 ? toLabel : undefined} wallet={<span className="text-ink-300">{walletOf(pool)}</span>}>
+                {priced && amountText(amount, pool)}
+                {flow.hasBorrow && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
+              </WalletLine>
+            ))
           )}
-          {flow.arrives.map(({ pool, amount }) => (
-            <div key={pool} className="flex flex-col gap-0.5">
-              {!custom && <span className="text-ink-300">{walletOf(pool)}</span>}
-              {flow.hasBorrow && !custom && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
-              {priced && amountText(amount, pool)}
-            </div>
-          ))}
         </WalletBox>
       </div>
       {custom && (
