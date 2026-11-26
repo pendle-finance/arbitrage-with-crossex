@@ -8,12 +8,13 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSymbolDetail } from '../api/queries';
 import type { ActionInput, CrossexPosition, PreviewResult } from '../api/types';
-import { ExecModeToggle } from '../components/ExecModeToggle';
+import { MARKET_ORDER_SEC, OrdersGroup } from '../components/OrdersGroup';
 import { fieldValue, prettyVenue } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import type { DealOpts } from '../trade/deal';
 import { ExecuteControl } from '../trade/ExecuteControl';
 import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
+import { pairModeFees } from '../trade/previewBits';
 import { type ExecMode, storedExecMode } from '../trade/PairTicketBits';
 import { ClosePairEstimate, matchedCloseOf } from './ClosePairFormBits';
 import {
@@ -191,15 +192,13 @@ export function ClosePairForm({
         onChange={setQtyEdited}
       />
 
-      <div className="order-stack">
-        <ExecModeToggle
-          ariaLabel={t('accounts.closePair.executionAria')}
-          fill
-          value={mode}
-          onChange={setMode}
-          order={['maker', 'market']}
-          labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
-        />
+      <OrdersGroup
+        value={mode}
+        onChange={setMode}
+        cost={pairModeFees(previews, makerIdx)}
+        seconds={{ maker: twapOn ? (plan ? plan.durationSec / Math.max(1, plan.slices) : null) : takerSec, market: MARKET_ORDER_SEC }}
+        whole={{ maker: !twapOn, market: true }}
+      >
         {maker && (
           <MakerSettings
             legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
@@ -228,7 +227,7 @@ export function ClosePairForm({
             coin={base}
           />
         )}
-      </div>
+      </OrdersGroup>
       {!maker && <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />}
       <CloseRestNotes base={base} restLegs={restLegs} sideOf={sideOf} />
 

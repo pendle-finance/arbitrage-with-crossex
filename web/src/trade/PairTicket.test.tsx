@@ -193,7 +193,7 @@ describe('PairTicket size unit', () => {
 
     // Base is the DEFAULT — the label says so without anything being clicked.
     await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '0.4');
-    await userEvent.click(screen.getByRole('radio', { name: 'Market' }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
 
     await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ qty: '0.4' }), {
       timeout: 4000,
@@ -212,7 +212,7 @@ describe('PairTicket execution modes', () => {
     await setupTwoVenuePair();
 
     expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: 'Market' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /^Market/ })).toHaveAttribute('aria-checked', 'false');
   });
 
   it('starts on "2 market orders" when picked on Opportunities; it previews two plain open-market legs', async () => {
@@ -221,7 +221,7 @@ describe('PairTicket execution modes', () => {
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
     await setupTwoVenuePair();
 
-    expect(screen.getByRole('radio', { name: 'Market' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /^Market/ })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'false');
 
     await waitFor(
@@ -259,7 +259,7 @@ describe('PairTicket execution modes', () => {
     // 2 market orders: the live two-sided quote (2499/2501 from the book handler)
     // and the market-order fill (2500.5 from the preview's fillEstimate) on
     // both legs.
-    await userEvent.click(screen.getByRole('radio', { name: 'Market' }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
     expect(document.querySelector('[data-price-graph]')).not.toBeNull();
     await waitFor(() =>
       expect(
@@ -725,7 +725,7 @@ describe('PairTicket prefill', () => {
     await waitFor(() =>
       expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true'),
     );
-    expect(screen.getByRole('radio', { name: 'Market' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /^Market/ })).toHaveAttribute('aria-checked', 'false');
     expect(screen.queryByRole('button', { name: 'Use the book price again' })).toBeNull();
     await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('1000'));
   });
@@ -905,7 +905,7 @@ describe('PairTicket layout C', () => {
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [] }));
     renderWithClient(<PairTicket allowTwap={false} />);
     await fillTwoVenuePair();
-    expect(screen.getByRole('radio', { name: 'Limit + hedge' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /^Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
     expect(screen.queryByRole('switch', { name: 'TWAP' })).toBeNull();
   });
 
@@ -924,10 +924,25 @@ describe('PairTicket layout C', () => {
 
   it('order type labels', async () => {
     await ready();
-    expect(screen.getByRole('radio', { name: 'Limit + hedge' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Market' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Limit \+ hedge/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Market/ })).toBeInTheDocument();
     expect(screen.queryByText('2 market orders')).toBeNull();
     expect(screen.queryByText(/Perp entry/)).toBeNull();
+  });
+
+  it('each order choice shows its fee and time, and the Orders hover explains both', async () => {
+    const user = userEvent.setup();
+    await ready();
+    const orders = screen.getByRole('radiogroup', { name: 'Orders' });
+    expect(within(orders).getAllByRole('radio').map((r) => r.textContent)).toEqual([
+      'Limit + hedge about $0.70 · 5 min',
+      'Market about $1.00 · 2s',
+    ]);
+    const trigger = screen.getByRole('button', { name: 'Orders' });
+    await user.hover(trigger);
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent('One leg rests as a post-only limit order at the maker fee.');
+    expect(card).toHaveTextContent('Both legs fill at market at once, at the taker fee.');
   });
 
   it('maker labels renamed', async () => {
@@ -1088,8 +1103,8 @@ describe('PairTicket layout C', () => {
   it('switching to Market and back turns TWAP off', async () => {
     await ready();
     await twapOn();
-    await userEvent.click(screen.getByRole('radio', { name: 'Market' }));
-    await userEvent.click(screen.getByRole('radio', { name: 'Limit + hedge' }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
     expect(twapSwitch()).toHaveAttribute('aria-checked', 'false');
   });
 

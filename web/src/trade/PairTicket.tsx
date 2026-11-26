@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
 import type { ActionInput, DealRequest, PreviewResponse, RestEstimate } from '../api/types';
-import { ExecModeToggle } from '../components/ExecModeToggle';
+import { MARKET_ORDER_SEC, OrdersGroup } from '../components/OrdersGroup';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
@@ -15,7 +15,7 @@ import type { DealOpts } from './deal';
 import { ExecuteControl } from './ExecuteControl';
 import { LimitPriceBox } from './LimitPriceBox';
 import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
-import { estimateMargin } from './previewBits';
+import { estimateMargin, pairModeFees } from './previewBits';
 import { AffixedInput, PairEstimate, PairVenues, type ExecMode, storedExecMode } from './PairTicketBits';
 import { PairBookImpact } from './PriceImpactGraph';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
@@ -447,19 +447,17 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         )}
       </div>
 
-      <div className="order-stack">
-        <ExecModeToggle
-          ariaLabel={t('pairTicket.orderType.aria')}
-          fill
-          value={mode}
-          onChange={(m) => {
-            setMode(m);
-            if (m === 'market') twap.setOn(false);
-            setPricePinned(false);
-          }}
-          order={['maker', 'market']}
-          labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
-        />
+      <OrdersGroup
+        value={mode}
+        onChange={(m) => {
+          setMode(m);
+          if (m === 'market') twap.setOn(false);
+          setPricePinned(false);
+        }}
+        cost={pairModeFees([legLong, legShort], makerLeg !== 'auto' ? (makerLeg === 'a' ? 0 : 1) : autoPick ? (autoPick.auto === 'a' ? 0 : 1) : null)}
+        seconds={{ maker: twapOn ? (twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : null) : takerSec, market: MARKET_ORDER_SEC }}
+        whole={{ maker: !twapOn, market: true }}
+      >
         {mode === 'maker' && (
           <MakerSettings
             legs={legs}
@@ -490,7 +488,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             lot={longDetail.data?.lotSize ?? shortDetail.data?.lotSize}
           />
         )}
-      </div>
+      </OrdersGroup>
 
       {mode === 'maker' && (
         <>

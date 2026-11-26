@@ -107,27 +107,28 @@ export function stepsHoverOf(rounds: number, held: number | null): string | null
   return [HOVER.round, held === null ? HOVER.whyMoreThanOne : HOVER.whyMoreThanOneBorrow(fmtUsd(held))].join(' ');
 }
 
-const STEPS_OPEN_UP_TO = 3;
-const STEPS_FOLDED = 2;
+const STEPS_FOLD_AT = 3;
 
 export function StepsFold({ open, onToggle, hover, rows }: { open: boolean; onToggle: () => void; hover: string | null; rows: StepRow[] }) {
   const { t } = useTranslation();
-  const folds = rows.length > STEPS_OPEN_UP_TO;
-  const limit = folds && !open ? STEPS_FOLDED : null;
-  const hidden = rows.length - shownSteps(rows, limit).length;
+  const folds = rows.length >= STEPS_FOLD_AT;
+  const limit = folds && !open ? 0 : null;
+  const shown = shownSteps(rows, limit).length > 0;
   const label = t('accounts.rebalanceModal.steps');
   return (
     <div className="flex flex-col gap-1.5">
       <div className={`flex items-center justify-between gap-3 pr-3 ${microLabelClass}`}>
-        {hover === null ? <span>{label}</span> : <Term label={label} text={hover} />}
-        <span>{t('accounts.rebalanceModal.time')}</span>
+        <span className="flex items-center gap-3">
+          {hover === null ? <span>{label}</span> : <Term label={label} text={hover} />}
+          {folds && (
+            <button type="button" className="btn-link text-xs" aria-expanded={open} onClick={onToggle}>
+              {open ? t('accounts.rebalanceModal.hideSteps') : t('accounts.rebalanceModal.showSteps')}
+            </button>
+          )}
+        </span>
+        {shown && <span>{t('accounts.rebalanceModal.time')}</span>}
       </div>
-      <StepList rows={rows} limit={limit} />
-      {folds && (
-        <button type="button" className="btn-link self-start text-xs" aria-expanded={open} onClick={onToggle}>
-          {open ? t('accounts.rebalanceModal.fewerSteps') : t('accounts.rebalanceModal.moreSteps', { count: hidden, n: num(hidden, 0) })}
-        </button>
-      )}
+      {shown && <StepList rows={rows} limit={limit} />}
     </div>
   );
 }

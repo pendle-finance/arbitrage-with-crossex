@@ -5,8 +5,7 @@ import { useRealizeCustom, useStartRebalance } from '../api/queries';
 import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView, SliceOption } from '../api/types';
 import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
-import { ExecModeLabel } from '../components/Approx';
-import { ExecModeToggle } from '../components/ExecModeToggle';
+import { OrdersGroup, perMode } from '../components/OrdersGroup';
 import { TokenIcon } from '../components/AssetIcon';
 import { ListPicker } from '../components/ListPicker';
 import { SignedNumber } from '../components/SignedNumber';
@@ -14,7 +13,7 @@ import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { apiErrorText } from '../lib/apiErrorText';
-import { fmtAbout, fmtNotionalShort, fmtUsd, num } from '../lib/fmt';
+import { fmtAbout, fmtNotionalShort, num } from '../lib/fmt';
 import { useDebounced } from '../lib/useDebounced';
 import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
@@ -33,7 +32,6 @@ type AmountPick = 'clear' | 'all' | 'custom';
 
 const TARGET: Record<AmountPick, 'clear-debt' | 'all' | 'custom'> = { clear: 'clear-debt', all: 'all', custom: 'custom' };
 
-const EXEC_ORDER: RealizeExec[] = ['maker', 'market'];
 
 type TabProps = {
   view: RebalanceView;
@@ -185,9 +183,8 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const boxText = amount === 'clear' ? debtText : amount === 'all' ? allText : customText;
 
   const oneOrder = slice?.count === 1;
-  const execLabel = (mode: RealizeExec) => (
-    <ExecModeLabel mode={mode} usd={active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—'} seconds={slice ? slice.seconds[mode] / Math.max(1, slice.count) : null} whole={oneOrder} />
-  );
+  const orderCost = perMode((mode) => (active ? costFor(active, mode).totalUsd : null));
+  const orderSec = perMode((mode) => (slice ? slice.seconds[mode] / Math.max(1, slice.count) : null));
   const impactOf = (o: SliceOption): number => (exec === 'market' ? o.impactUsd : 0) + o.reopenImpactUsd;
   const wholeOption = options.find((o) => o.whole) ?? null;
   const shownOption = splitOn
@@ -321,17 +318,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
 
       {active && (!refusal || sliceRefused) && active.legs.length > 0 && (
         <>
-          <div className="flex flex-col gap-1.5">
-            <span className={microLabelClass}>{t('accounts.realizeTab.orders')}</span>
-            <div className="order-stack">
-              <ExecModeToggle
-                ariaLabel={t('accounts.realizeTab.orders')}
-                fill
-                value={exec}
-                onChange={setExec}
-                order={EXEC_ORDER}
-                labels={{ maker: execLabel('maker'), market: execLabel('market') }}
-              />
+          <OrdersGroup value={exec} onChange={setExec} cost={orderCost} seconds={orderSec} whole={perMode(() => oneOrder)}>
               {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} />}
               {wholeOption && (
                 <SplitArea
@@ -343,8 +330,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
                   table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, dedupe: active === pricedPlan }}
                 />
               )}
-            </div>
-          </div>
+          </OrdersGroup>
 
           {rows.length > 0 && <TotalCost rows={rows} />}
 
