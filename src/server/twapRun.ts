@@ -369,6 +369,7 @@ function settleEnded(deps: TwapRunDeps, job: Job & { twap: JobTwap }, child: Pai
     }
     twap.carryQty = fxStr(left);
     twap.behindQty = fxStr(left);
+    if (job.pauseRequested) return 'next';
     const word = child.a.reduceOnly ? 'closed' : 'opened';
     haltTwap(deps, job, 'capped-rest', `${fxStr(left)} ${twap.deal.coin} not ${word}`);
     return 'stop';

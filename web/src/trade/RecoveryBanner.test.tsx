@@ -114,6 +114,15 @@ describe('RecoveryBanner', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: Binance refused the hedge · ETH pair open · slice 3/12');
   });
 
+  it('a rest left after the last slice says opened for an open and closed for a close', async () => {
+    const { unmount } = renderTwap(twapJob({ status: 'halted', haltKind: 'capped-rest' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: rest not opened · ETH pair open');
+    unmount();
+    const legs = twapJob().legs!.map((leg) => ({ ...leg, reduceOnly: true }));
+    renderTwap(twapJob({ status: 'halted', haltKind: 'capped-rest', legs }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: rest not closed · ETH pair close');
+  });
+
   it('pausing reads differently from running', async () => {
     renderTwap(twapJob({ pauseRequested: true }));
     expect(await screen.findByRole('alert')).toHaveTextContent('TWAP pausing · ETH pair open · slice 3/12');
