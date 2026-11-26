@@ -495,7 +495,7 @@ export async function endHaltedChildren(deps: RunnerDeps, job: Job): Promise<voi
   const { store } = deps.twap;
   const halted = store.listPairs({ activeOnly: true }).filter((pair) => pair.mode === 'HALTED' && isChildOf(job.id, pair.id));
   for (const pair of halted) {
-    await heldSettled(deps, pair);
+    creditSliceChild(job, store, await heldSettled(deps, pair));
     store.updatePair(pair.id, { mode: 'DONE' });
   }
 }

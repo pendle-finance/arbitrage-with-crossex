@@ -16,6 +16,7 @@ function closePreviewHandler() {
     const a = actions[0];
     return HttpResponse.json(
       env<PreviewResponse>({
+        twapDefault: null,
         previews: [
           previewFor(a, {
             side: 'SELL',

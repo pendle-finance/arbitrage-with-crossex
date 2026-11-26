@@ -243,6 +243,7 @@ export function echoPreviewHandler(
       opts.calls?.push(actions);
       return HttpResponse.json(
         env<PreviewResponse>({
+          twapDefault: null,
           previews: actions.map((a, i) => previewFor(a, { index: i, ...opts.overrides })),
         }),
       );

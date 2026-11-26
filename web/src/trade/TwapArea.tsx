@@ -106,7 +106,7 @@ export interface TwapInputState {
   startBlocked: boolean;
   blockedBy: (preview: TwapPlanPreview | null | undefined) => boolean;
   suggest: (suggested: Suggested | null) => void;
-  followsSuggestion: boolean;
+  decided: boolean;
 }
 
 export function useTwapInput(): TwapInputState {
@@ -122,8 +122,7 @@ export function useTwapInput(): TwapInputState {
   const startBlocked = on && !isComplete(input);
   const blockedBy = (preview: TwapPlanPreview | null | undefined): boolean =>
     on && (startBlocked || !preview?.plan || preview.refusal !== null);
-  const followsSuggestion = suggested !== null && (picked === null || (on && typed === null));
-  return { on, setOn, input, setInput, startBlocked, blockedBy, suggest, followsSuggestion };
+  return { on, setOn, input, setInput, startBlocked, blockedBy, suggest, decided: picked !== null };
 }
 
 export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null | undefined, exec: ExecMode, landed = false): boolean {
@@ -137,7 +136,7 @@ export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null |
     if (none) suggest(null);
     else if (on !== undefined && durationSec !== undefined && intervalSec !== undefined) suggest({ on, input: { durationSec, intervalSec } });
   }, [suggest, none, on, durationSec, intervalSec]);
-  return landed && value === undefined && twap.followsSuggestion;
+  return landed && value === undefined && !twap.decided;
 }
 
 export function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {
