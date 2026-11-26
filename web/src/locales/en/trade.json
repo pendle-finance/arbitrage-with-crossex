@@ -359,7 +359,7 @@
       "onResumeValue_one": "{{count}} slice, every {{interval}}",
       "onResumeValue_other": "{{count}} slices, every {{interval}}",
       "pausing": "Pausing: cancelling the slice {{i}} limit and hedging what filled",
-      "orders": "Orders {{n}}",
+      "orders": "Orders",
       "colVenue": "Venue",
       "colOrder": "Order",
       "colSize": "Size",

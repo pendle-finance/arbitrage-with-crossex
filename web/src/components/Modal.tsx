@@ -56,21 +56,23 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
         onClick={locked ? undefined : onClose}
       />
       <div ref={panel} className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-950 ${widthClass}`}>
-        <div className={`flex items-center justify-between gap-3 ${tabbed ? 'border-b border-ink-800' : `border-b px-5 pb-4 pt-5 ${scrolled ? 'border-ink-800' : 'border-transparent'}`}`}>
-          <h2 ref={heading} className={`text-[20px] font-bold leading-[24.2px] text-ink-50 ${tabbed ? 'min-w-0 flex-1 self-stretch' : ''}`}>{title}</h2>
-          {!locked && !tabbed && (
-            <button
-              type="button"
-              onClick={onClose}
-              aria-label={t('app.closeAria')}
-              className="rounded-full p-1 text-ink-300 transition-colors hover:bg-ink-500/25 hover:text-ink-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-ink-400"
-            >
-              <X size={20} aria-hidden />
-            </button>
-          )}
-        </div>
+        {(title !== null || tabbed) && (
+          <div className={`flex items-center justify-between gap-3 ${tabbed ? 'border-b border-ink-800' : `border-b px-5 pb-4 pt-5 ${scrolled ? 'border-ink-800' : 'border-transparent'}`}`}>
+            <h2 ref={heading} className={`text-[20px] font-bold leading-[24.2px] text-ink-50 ${tabbed ? 'min-w-0 flex-1 self-stretch' : ''}`}>{title}</h2>
+            {!locked && !tabbed && (
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label={t('app.closeAria')}
+                className="rounded-full p-1 text-ink-300 transition-colors hover:bg-ink-500/25 hover:text-ink-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-ink-400"
+              >
+                <X size={20} aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
         <div
-          className={`max-h-[78vh] overflow-y-auto ${tabbed ? 'px-5 pb-5 pt-4' : 'px-5 pb-5 pt-1'}`}
+          className={`max-h-[78vh] overflow-y-auto ${tabbed ? 'px-5 pb-5 pt-4' : title === null ? 'p-5' : 'px-5 pb-5 pt-1'}`}
           onScroll={tabbed ? undefined : (e) => setScrolled(e.currentTarget.scrollTop > 0)}
         >
           {children}

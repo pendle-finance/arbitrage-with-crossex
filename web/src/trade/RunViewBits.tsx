@@ -94,8 +94,6 @@ export function SlipLabel({ label }: { label: string }) {
   );
 }
 
-export const HOLD_IN_ROW = 'h-9 !py-0 !text-[12px] !font-medium';
-
 export type RunShape = 'pairOpen' | 'pairClose' | 'singleOpen' | 'singleClose';
 
 export function runShapeOf(job: RebalanceJob) {
@@ -228,17 +226,17 @@ export function TwapActs({
           <span className="num">{borosHold}</span>
         </HoldToConfirmButton>
       )}
-      <div className="flex flex-col gap-2">
+      <div className="flex gap-2">
         {state === 'running' ? (
-          <button type="button" className="btn" disabled={pending} onClick={() => pause.mutate(jobId)}>
+          <button type="button" className="btn flex-1" disabled={pending} onClick={() => pause.mutate(jobId)}>
             {tr('trade.twap.run.pause')}
           </button>
         ) : holds === null && borosHold === null && !noResume ? (
-          <button type="button" className="btn-primary" disabled={pending} onClick={() => resume.mutate(jobId)}>
+          <button type="button" className="btn-primary flex-1" disabled={pending} onClick={() => resume.mutate(jobId)}>
             {tr('trade.twap.run.resume')}
           </button>
         ) : null}
-        <HoldToConfirmButton tone="outline" className={HOLD_IN_ROW} disabled={pending} onConfirm={() => abandon.mutate(jobId)}>
+        <HoldToConfirmButton tone="outline" compact className="flex-1" disabled={pending} onConfirm={() => abandon.mutate(jobId)}>
           {tr('trade.twap.run.holdStop')}
         </HoldToConfirmButton>
       </div>

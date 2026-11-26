@@ -46,7 +46,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
-import { AffixedInput, EstimateAge, LegHeader, ShareSlider, SummaryCard } from './PairTicketBits';
+import { AffixedInput, EstimateAge, LegHeader, ShareSlider, SlippageCostHead, SummaryCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SpreadIcon } from '../components/AssetIcon';
@@ -80,8 +80,7 @@ import {
   TradeFeeRow,
   aprCost,
   TotalCostRow,
-  usdOf,
-  UsdNote,
+  amountText,
 } from './BorosPairBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -1322,31 +1321,15 @@ export function BorosPairTicket({
           aside={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />}
         >
             <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[12px] text-ink-200">{t('pairTicket.bits.slippage')}</span>
-                <span className="num text-[12px] text-ink-400">
-                  {t('pairTicket.bits.est')}{' '}
-                  <span className="text-ink-50">
-                    {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
-                  </span>
-                  <UsdNote usd={usdOf(simulation, slip?.est ?? null)} />
-                  {' / '}{t('pairTicket.bits.max')}{' '}
-                  <button
-                    type="button"
-                    className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
-                    title={
-                      loneLeg === null
-                        ? t('pairTicket.boros.changeTolerancePair', { slip: slipStrShared })
-                        : t('pairTicket.bits.changeTolerance')
-                    }
-                    onClick={() => setSlipOpen((v) => !v)}
-                  >
-                    {fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
-                  </button>
-                  {' '}APR
-                  <UsdNote usd={usdOf(simulation, slip?.max ?? null)} />
-                </span>
-              </div>
+              <SlippageCostHead
+                name={t('pairTicket.bits.slippage')}
+                est={estSlippageApr === null ? null : `${fmtPct(estSlippageApr)} APR${slip ? ` (${amountText(simulation, slip.est)})` : ''}`}
+                max={fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
+                unit={`APR${slip?.max != null ? ` (${amountText(simulation, slip.max)})` : ''}`}
+                cost={amountText(simulation, slip?.est ?? null)}
+                title={loneLeg === null ? t('pairTicket.boros.changeTolerancePair', { slip: slipStrShared }) : undefined}
+                onToggle={() => setSlipOpen((v) => !v)}
+              />
               {slipOpen && (
                 <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
                   <span className="text-[10.5px] leading-relaxed text-ink-400">

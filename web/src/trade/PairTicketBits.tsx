@@ -240,6 +240,46 @@ export function LegCard({
  * button that reveals the tolerance editor (quick picks + a box). The same
  * shape on every close and ticket, whether the unit is % of price or APR.
  */
+export function SlippageCostHead({
+  name,
+  est,
+  max,
+  unit,
+  cost,
+  onToggle,
+  title,
+}: {
+  name: string;
+  est: string | null;
+  max: string;
+  unit?: string;
+  cost: string | null;
+  onToggle: () => void;
+  title?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-[12px] text-ink-200">
+        <HoverCard label={name} widthPx={240}>
+          <span className="num flex flex-col gap-0.5">
+            <span>{t('pairTicket.bits.est')} {est ?? '—'}</span>
+            <span>{t('pairTicket.bits.max')} {max}{unit ? ` ${unit}` : ''}</span>
+          </span>
+        </HoverCard>
+      </span>
+      <button
+        type="button"
+        className="num text-[12px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+        title={title ?? t('pairTicket.bits.changeTolerance')}
+        onClick={onToggle}
+      >
+        {cost ?? '—'}
+      </button>
+    </div>
+  );
+}
+
 export function SlippageLine({
   est,
   max,
@@ -283,24 +323,7 @@ export function SlippageLine({
   return (
     <div className="flex flex-col gap-1.5">
       {cost !== undefined ? (
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="text-[12px] text-ink-200">
-            <HoverCard label={name} widthPx={240}>
-              <span className="num flex flex-col gap-0.5">
-                <span>{t('pairTicket.bits.est')} {est ?? '—'}</span>
-                <span>{t('pairTicket.bits.max')} {max}{unit ? ` ${unit}` : ''}</span>
-              </span>
-            </HoverCard>
-          </span>
-          <button
-            type="button"
-            className="num text-[12px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
-            title={t('pairTicket.bits.changeTolerance')}
-            onClick={onToggle}
-          >
-            {cost ?? '—'}
-          </button>
-        </div>
+        <SlippageCostHead name={name} est={est} max={max} unit={unit} cost={cost} onToggle={onToggle} />
       ) : (
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-[12px] text-ink-200" title={title}>
