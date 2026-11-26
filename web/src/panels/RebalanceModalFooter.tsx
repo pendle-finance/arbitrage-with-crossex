@@ -76,10 +76,9 @@ export function RebalanceModalFooter(props: FooterProps) {
               disabled={disabled || quoteStale}
               onConfirm={onConfirm}
             >
-              {holdLabel}
+              {pricing ? t('accounts.rebalanceModal.pricing') : holdLabel}
             </HoldToConfirmButton>
           )}
-          {pricing && <span className="text-xs text-ink-500">{t('accounts.rebalanceModal.pricing')}</span>}
         </div>
       )}
     </div>

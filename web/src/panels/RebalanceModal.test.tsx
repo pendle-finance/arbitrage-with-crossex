@@ -1444,8 +1444,7 @@ describe('RebalanceModal presets and custom amount', () => {
     await user.type(screen.getByRole('textbox', { name: 'Amount' }), '60');
     // The last quote stays on screen, but it was priced for 50: the hold
     // waits rather than send it, and says why.
-    expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeDisabled();
-    expect(screen.getByText('Pricing the move.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pricing the move.' })).toBeDisabled();
     await waitFor(() => expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeEnabled(), { timeout: 3000 });
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
     expect(screen.queryByText('Pricing the move.')).toBeNull();
@@ -1868,15 +1867,18 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
   });
 
-  it('while a new custom amount prices, the hold shows the pricing label, not the old amount', async () => {
+  it('while a new custom amount prices, the hold reads Pricing and nothing above or below it moves', async () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
+    const hedged = (await screen.findByText(/^Not hedged during each slice/)).textContent;
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
     expect(screen.queryByRole('button', { name: 'Hold to realize' })).toBeNull();
-    expect(screen.getAllByText('Pricing the move.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Pricing the move.')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Pricing the move\./ })).toBeDisabled();
+    expect(screen.getByText(/^Not hedged during each slice/).textContent).toBe(hedged);
   });
 
   it('slice rows', async () => {

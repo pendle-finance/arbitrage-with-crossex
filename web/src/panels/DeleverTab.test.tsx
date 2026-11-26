@@ -229,10 +229,9 @@ describe('DeleverTab guards', () => {
     show(openPairs.btc900);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to delever 180 BTC' })).toBeEnabled());
     await user.click(screen.getByRole('radio', { name: '30%' }));
-    const hold = screen.getByRole('button', { name: 'Hold to delever 270 BTC' });
-    expect(hold).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Pricing the move.' })).toBeDisabled();
     release();
-    await waitFor(() => expect(hold).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to delever 270 BTC' })).toBeEnabled());
   });
 
   it('a wallet that cannot trade cannot start a delever with a Boros leg', async () => {
@@ -249,11 +248,44 @@ describe('DeleverTab size', () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
-    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%']);
+    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%', 'Custom']);
     expect(within(group).getByRole('radio', { name: '20%' })).toHaveAttribute('aria-checked', 'true');
     expect(sizeBox()).toHaveValue('180');
     expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 20%');
     expect(sizeBox().parentElement).toHaveClass('bg-wash/[0.15]');
+  });
+
+  it('Custom opens a percent box; Enter fills the size box and Custom comes back', async () => {
+    const user = userEvent.setup();
+    const sent = servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
+    await user.click(within(group).getByRole('radio', { name: 'Custom' }));
+    expect(within(group).queryByRole('radio', { name: 'Custom' })).toBeNull();
+    const pct = screen.getByRole('textbox', { name: 'Custom percent of the pair' });
+    expect(pct).toHaveFocus();
+    await user.type(pct, '150{Enter}');
+    expect(screen.getByRole('textbox', { name: 'Custom percent of the pair' })).toBeInTheDocument();
+    expect(sizeBox()).toHaveValue('180');
+    await user.clear(pct);
+    await user.type(pct, '50{Enter}');
+    expect(screen.queryByRole('textbox', { name: 'Custom percent of the pair' })).toBeNull();
+    expect(within(group).getByRole('radio', { name: 'Custom' })).toHaveAttribute('aria-checked', 'false');
+    expect(sizeBox()).toHaveValue('450');
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 50%');
+    expect(within(group).getAllByRole('radio').every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
+    await waitFor(() => expect(sent.at(-1)?.perps.map((p) => p.qty)).toEqual([450, 450]));
+  });
+
+  it('Escape closes the percent box and keeps the size', async () => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
+    await user.click(within(group).getByRole('radio', { name: 'Custom' }));
+    await user.type(screen.getByRole('textbox', { name: 'Custom percent of the pair' }), '50{Escape}');
+    expect(screen.queryByRole('textbox', { name: 'Custom percent of the pair' })).toBeNull();
+    expect(sizeBox()).toHaveValue('180');
   });
 
   it('a preset is lit only while the box holds its size', async () => {

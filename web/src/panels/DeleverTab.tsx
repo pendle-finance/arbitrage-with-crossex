@@ -419,6 +419,13 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           preset={litShare(pair, amountText)}
           onPreset={(share) => setTyped(shareText(pair, share))}
           presets={shareOptions}
+          custom={{
+            label: t('accounts.deleverTab.custom'),
+            unit: '%',
+            inputLabel: t('accounts.deleverTab.customPctAria'),
+            max: 100,
+            onApply: (pctPicked) => setTyped(sig((pair.size * pctPicked) / 100)),
+          }}
         />
         {amountProblem !== null && amountText.trim() !== '' && <p className="num text-xs text-guava">{amountProblem}</p>}
       </Field>

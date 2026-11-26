@@ -1,5 +1,5 @@
 import { ArrowRight } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
 import type { Pool, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView } from '../api/types';
@@ -124,6 +124,8 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const costFor = (plan: RealizePlan, mode: RealizeExec): Cost => costOf(plan, mode, sliceFor(plan));
   const allNet = shownAll ? Math.max(0, netOf(shownAll, costFor(shownAll, exec))) : 0;
 
+  const lastWarning = useRef<string | null>(null);
+
   if (!tab || (!clearDebt && !all)) {
     return (
       <EmptyState
@@ -218,6 +220,8 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   };
 
   const warning = slice && lead ? t('accounts.realizeTab.notHedged', { qty: sizeText(slice.qty), coin: lead.base, usd: fmtUsd(slice.usd, 0) }) : null;
+  if (warning !== null) lastWarning.current = warning;
+  const shownWarning = warning ?? (pricing ? lastWarning.current : null);
   const sentence: string | null = customMissing
     ? t('accounts.realizeTab.typeAmount')
     : sliceInvalid
@@ -315,7 +319,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       ) : (
         <RebalanceModalFooter
           rows={[]}
-          verdict={warning && !sentence ? <NotHedgedLine text={warning} /> : undefined}
+          verdict={shownWarning && !sentence ? <NotHedgedLine text={shownWarning} /> : undefined}
           holdLabel={pricing ? t('accounts.rebalanceModal.pricing') : t('accounts.realizeTab.holdRealize')}
           optional={false}
           stale={false}
