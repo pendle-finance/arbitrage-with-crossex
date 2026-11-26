@@ -1,4 +1,4 @@
-import { Trans, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import type { ActionInput, PreviewResult } from '../api/types';
 import { fieldValue, sig } from '../lib/fmt';
 import { AffixedInput } from '../trade/PairTicketBits';
@@ -57,25 +57,6 @@ export function CloseSizeField({
         </span>
       )}
     </div>
-  );
-}
-
-export function CloseMechanics({ maker, twapOn }: { maker: boolean; twapOn: boolean }) {
-  const { t } = useTranslation();
-  return (
-    <p
-      className="text-[11px] leading-relaxed text-ink-400"
-      title={t(maker ? 'accounts.closePair.pairNoteMaker' : 'accounts.closePair.pairNote')}
-    >
-      {twapOn ? (
-        t('accounts.closePair.twap.reduceOnly')
-      ) : (
-        <Trans
-          i18nKey={maker ? 'accounts.closePair.mechanicsMaker' : 'accounts.closePair.mechanics'}
-          components={{ b: <span className="font-medium text-ink-200" /> }}
-        />
-      )}
-    </p>
   );
 }
 

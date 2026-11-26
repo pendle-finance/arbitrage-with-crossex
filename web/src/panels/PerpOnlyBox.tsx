@@ -19,7 +19,6 @@ import { pairModeFees, ViolationList } from '../trade/previewBits';
 import { type CloseAfterRow, ClosePairAfter, ClosePairCost, matchedCloseOf } from './ClosePairFormBits';
 import {
   buildCloseActions,
-  CloseMechanics,
   CloseSizeField,
   closeCosts,
   decorateClose,
@@ -319,7 +318,6 @@ export function ClosePairForm({
           hoverCard={false}
           onSent={onSent}
         />
-        <CloseMechanics maker={maker} twapOn={twapOn} />
       </div>
     </div>
   );
