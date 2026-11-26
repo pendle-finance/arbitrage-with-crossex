@@ -624,7 +624,8 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
     intent.limitPrice !== pair.limitPrice ||
     intent.pricePolicy !== pair.pricePolicy ||
     intent.repegBehindBp !== pair.repegBehindBp ||
-    intent.repegNotBefore !== pair.repegNotBefore
+    intent.repegNotBefore !== pair.repegNotBefore ||
+    intent.hedgeNotBefore !== pair.hedgeNotBefore
   ) {
     return { type: 'idle', reason: 'intent changed mid-tick — deferring to a fresh tick' };
   }

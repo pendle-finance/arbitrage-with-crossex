@@ -11,7 +11,7 @@ import type { DealRequest } from '../../src/engine/create';
 import { Store } from '../../src/engine/db';
 import { project } from '../../src/engine/decide';
 import type { PairMode, PairRow } from '../../src/engine/types';
-import type { TwapRunDeps } from '../../src/server/twapRun';
+import { sleepHaltTwap, type TwapRunDeps } from '../../src/server/twapRun';
 import { closeBorosLegs, MAY_HAVE_FILLED, type BorosCloseDeps, type BorosCloseInput } from '../../src/server/borosClose';
 import { CoreError } from '../../src/core/errors';
 import {
@@ -6095,7 +6095,7 @@ describe('slices: a 100% Delever leaves no dust', () => {
   });
 });
 
-type ChildOutcome = { a?: string; b?: string; mode?: PairMode; haltKind?: 'hedge-margin' | null; refuse?: unknown; reason?: string };
+type ChildOutcome = { a?: string; b?: string; mode?: PairMode; haltKind?: 'hedge-margin' | null; refuse?: unknown; reason?: string; kind?: 'maker' | 'taker' };
 
 function childEngine(h: ReturnType<typeof sliceRun>, script: (req: DealRequest, index: number) => ChildOutcome = () => ({})) {
   const store = new Store(':memory:');
@@ -6104,7 +6104,7 @@ function childEngine(h: ReturnType<typeof sliceRun>, script: (req: DealRequest, 
   const settle = (id: string, out: ChildOutcome): void => {
     const pair = store.getPair(id) as PairRow;
     const a = out.a ?? pair.targetQty;
-    const orderA = store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'taker', side: pair.a.side, qty: pair.targetQty, price: null, tif: 'ioc', now: h.clock.now() });
+    const orderA = store.insertPendingOrder({ pairId: id, leg: 'A', kind: out.kind ?? 'taker', side: pair.a.side, qty: pair.targetQty, price: null, tif: 'ioc', now: h.clock.now() });
     store.updateOrder(id, 'A', orderA.seq, { state: out.reason ? 'DEAD' : 'CLOSED', cumQty: a, avgFillPrice: a === '0' ? '0' : '3000', resolvedAt: h.clock.now(), ...(out.reason ? { closeReason: out.reason } : {}) });
     if (pair.b) {
       const b = out.b ?? a;
@@ -6443,7 +6443,7 @@ describe('slices on engine children', () => {
 
   it('realize reopen retries after convert', async () => {
     const venue = sliceVenue(filled, account({ hyperliquid: 1_000 }));
-    venue.handlers.listCrossexPositions = seq({ body: [{ symbol: HL_ETH, positionQty: '-10', initialMargin: '2000', entryPrice: '2900' }] });
+    venue.handlers.listCrossexPositions = seq({ body: [{ symbol: HL_ETH, positionQty: '-10', initialMargin: '2000', entryPrice: '3100' }] });
     const h = sliceRun(venue, { exec: 'market', sliceUsd: 30_000 });
     const engine = childEngine(h, (_req, index) => (index === 0 ? { a: '10', b: '0', mode: 'HALTED', haltKind: 'hedge-margin' } : {}));
     await h.run();
@@ -6652,5 +6652,389 @@ describe('realize slices: guards before a close', () => {
     await h.run();
     expect(h.count('createCrossexConvertQuote')).toBe(0);
     expect(h.jobs.read()?.status).toBe('done');
+  });
+});
+
+function refuseReopens(h: ReturnType<typeof sliceRun>, engine: ReturnType<typeof childEngine>, refusing: () => boolean) {
+  const tick = h.clock.sleep;
+  Object.assign(h.deps, {
+    sleep: async (ms: number) => {
+      await tick(ms);
+      for (const pair of engine.store.listPairs()) {
+        if (pair.mode !== 'STOPPING' || !pair.b) continue;
+        const proj = project(pair, engine.store.listOrders(pair.id));
+        const gap = Number(proj.aFilled) - Number(proj.bFilled);
+        if (!(gap > 0)) {
+          engine.store.updatePair(pair.id, { mode: 'DONE' });
+          continue;
+        }
+        const order = engine.store.insertPendingOrder({ pairId: pair.id, leg: 'B', kind: 'taker', side: pair.b.side, qty: String(gap), price: null, tif: 'ioc', now: h.clock.now() });
+        if (refusing()) {
+          engine.store.updateOrder(pair.id, 'B', order.seq, { state: 'DEAD', cumQty: '0', avgFillPrice: '0', resolvedAt: h.clock.now(), closeReason: 'rejected:INSUFFICIENT_MARGIN' });
+          engine.store.updatePair(pair.id, { hedgeRejectStreak: pair.hedgeRejectStreak + 1 });
+        } else {
+          engine.store.updateOrder(pair.id, 'B', order.seq, { state: 'CLOSED', cumQty: String(gap), avgFillPrice: '3000', resolvedAt: h.clock.now() });
+          engine.store.updatePair(pair.id, { mode: 'DONE' });
+        }
+      }
+    },
+  });
+}
+
+const marginRefusal = () => new CoreError('Not enough free margin', 'insufficient-margin');
+
+describe('slices: a reopen Gate keeps refusing after a retry Convert', () => {
+  const refusedRun = (stillRefusing: (h: ReturnType<typeof sliceRun>) => boolean) => {
+    const h = sliceRun(sliceVenue(filled, account({ hyperliquid: 1_000 })), { exec: 'market', sliceUsd: 3_000, leg: { qty: 1 } });
+    const engine = childEngine(h, (req, index) => (index === 0 ? hedgeRefused(req) : {}));
+    refuseReopens(h, engine, () => stillRefusing(h));
+    return { h, engine };
+  };
+
+  it('gets the next retry Convert each time, then halts not hedged at the cap', async () => {
+    const { h, engine } = refusedRun(() => true);
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(h.count('createCrossexConvertOrder')).toBe(RETRY_CONVERT_CAP);
+    expect(job).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.noCash, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP, notHedgedQty: 1 });
+    expect(job.follow).toEqual({ symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SELL', qty: 1, reduceOnly: false });
+    expect(engine.requests).toHaveLength(1);
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
+  });
+
+  it('the unwind hold refuses before holding anything when the pair has no other perp', async () => {
+    const { h, engine } = refusedRun(() => true);
+    await h.run();
+    await expect(applyFix(h.deps, h.jobs.read()!, 'unwind')).rejects.toThrow(REOPEN_HALT.noHedgePerp);
+    expect(engine.requests).toHaveLength(1);
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
+    expect(engine.store.getPair(engine.requests[0].id)?.hedgeNotBefore).not.toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('the retry-reopen hold re-halts on a refusal instead of hanging', async () => {
+    const { h, engine } = refusedRun(() => true);
+    await h.run();
+    await expect(applyFix(h.deps, h.jobs.read()!, 'market')).rejects.toThrow(REOPEN_HALT.noCash);
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', notHedgedQty: 1 });
+  });
+
+  it('ends done once a later retry Convert frees enough margin', async () => {
+    const { h } = refusedRun((run) => run.count('createCrossexConvertOrder') < 2);
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 2, notHedgedQty: 0 });
+  });
+});
+
+describe('slices: margin top-up before a slice', () => {
+  const OPEN_IM_PER_COIN = 120;
+  const toppedUp = (usd: number, refusals: number) => {
+    const qty = Number((usd / 3000).toFixed(4));
+    const venue = sliceVenue(filled, account({ hyperliquid: 2 * usd + 100, availableMargin: 0 }));
+    venue.handlers.listCrossexPositions = seq({ body: [{ symbol: HL_ETH, positionQty: String(-2 * qty), initialMargin: String(2 * qty * OPEN_IM_PER_COIN) }] });
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: Math.min(usd, 100_000), leg: { qty, positionQty: 2 * qty } });
+    const engine = childEngine(h, (_req, index) => (index < refusals ? { refuse: marginRefusal() } : {}));
+    return { h, engine, qty };
+  };
+  const expectedTopUp = (tried: number, rest: number): number => {
+    const need = tried * (OPEN_IM_PER_COIN * 0.05 + 2 * 3000 * 0.001);
+    const drain = (rest * 3000 * 10) / 10_000;
+    return Math.max(11, ceilCents(((need + drain) / marginPerConvertUsdc) * 1.05));
+  };
+
+  it.each([50, 6_000_000])('sizes one top-up for the rest of the run and leaves the retry cap alone (%d USD)', async (usd) => {
+    const { h, engine, qty } = toppedUp(usd, 1);
+    await h.run();
+    const top = h.jobs.read()!.steps.find((step) => step.retry)?.retry?.convertAmount;
+    expect(top).toBe(expectedTopUp(Number(engine.requests[0].qty), qty));
+    expect(h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 0 });
+    expect(engine.requests[1].qty).toBe(engine.requests[0].qty);
+  });
+
+  it.each([50, 6_000_000])('a second refusal after the top-up halts with nothing open (%d USD)', async (usd) => {
+    const { h, engine } = toppedUp(usd, Number.POSITIVE_INFINITY);
+    await h.run();
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.marginLow, haltKind: 'margin', retryConverts: 0, notHedgedQty: 0, topUps: 1 });
+    expect(engine.requests).toHaveLength(2);
+    expect(h.jobs.read()?.slice?.index).toBe(1);
+  });
+
+  it('a refused reopen after a top-up gets its own retry Convert', async () => {
+    const h = sliceRun(sliceVenue(filled, account({ hyperliquid: 1_000 })), { exec: 'market', sliceUsd: 3_000, leg: { qty: 1 } });
+    const engine = childEngine(h, (req, index) => (index === 0 ? { refuse: marginRefusal() } : index === 1 ? hedgeRefused(req) : {}));
+    await h.run();
+    expect(h.count('createCrossexConvertOrder')).toBe(2);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 1 });
+    expect(engine.requests).toHaveLength(2);
+  });
+});
+
+describe('slices: realize TWAP', () => {
+  const twapRun = (legs: RealizeLeg[], twap: NonNullable<Job['deleverTwap']>, venue = sliceVenue()) => {
+    const h = sliceRun(venue, {
+      exec: 'market',
+      edit: (job) => {
+        Object.assign(job, newJob({ route: 'loop', steps: [], amount: 0, costUsd: 0, target: [], userId: null, kind: 'realize', exec: 'market', sliceUsd: 3_000, realize: realizeOf(...legs), twap }, job.createdAt));
+      },
+    });
+    const at: number[] = [];
+    const engine = childEngine(h, () => {
+      at.push(h.clock.now());
+      return {};
+    });
+    return { h, engine, at };
+  };
+  const gaps = (at: number[]) => at.slice(1).map((t, index) => t - at[index]);
+
+  it('waits the interval between slices', async () => {
+    const { h, engine, at } = twapRun([sliceLeg({ qty: 1 })], { durationSec: 180, intervalSec: 60, slices: 3 });
+    await h.run();
+    expect(engine.requests.map((req) => req.qty)).toEqual(['0.3333', '0.3333', '0.3334']);
+    for (const gap of gaps(at)) expect(gap).toBeGreaterThanOrEqual(60_000);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', slice: { index: 3, count: 3 } });
+  });
+
+  it('slices each leg on its own counter and keeps the interval across legs', async () => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = seq({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440' }, { symbol: GATE_ETH, positionQty: '-10', initialMargin: '2000' }] });
+    const gate = sliceLeg({ symbol: GATE_ETH, exchange: 'GATE', pool: 'CROSSEX', qty: 3, positionQty: 10 });
+    const twap = { durationSec: 300, intervalSec: 60, slices: 5, legs: [{ symbol: HL_ETH, slices: 2 }, { symbol: GATE_ETH, slices: 3 }] };
+    const { h, engine, at } = twapRun([sliceLeg({ qty: 1 }), gate], twap, venue);
+    await h.run();
+    expect(engine.requests.map((req) => [req.a.symbol, req.qty])).toEqual([
+      [HL_ETH, '0.5'],
+      [HL_ETH, '0.5'],
+      [GATE_ETH, '1'],
+      [GATE_ETH, '1'],
+      [GATE_ETH, '1'],
+    ]);
+    for (const gap of gaps(at)) expect(gap).toBeGreaterThanOrEqual(60_000);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', slice: { index: 5, count: 5 } });
+  });
+
+  it('respects the venue cap and minimum at run time', async () => {
+    const capped = sliceVenue();
+    capped.handlers.listCrossexRuleSymbols = seq({
+      body: [{ symbol: HL_ETH, state: 'live', lotSize: '0.0001', minSize: '0.0001', tickSize: '0.1', businessType: 'FUTURE', maxMarketSize: '0.2' }],
+    });
+    const cap = twapRun([sliceLeg({ qty: 1 })], { durationSec: 120, intervalSec: 60, slices: 2 }, capped);
+    await cap.h.run();
+    expect(cap.engine.requests.map((req) => req.qty)).toEqual(['0.2', '0.2', '0.2', '0.2', '0.2']);
+
+    const floored = sliceVenue();
+    floored.handlers.listCrossexRuleSymbols = seq({
+      body: [{ symbol: HL_ETH, state: 'live', lotSize: '0.0001', minSize: '0.3', tickSize: '0.1', businessType: 'FUTURE' }],
+    });
+    const min = twapRun([sliceLeg({ qty: 0.5 })], { durationSec: 120, intervalSec: 60, slices: 2 }, floored);
+    await min.h.run();
+    expect(min.engine.requests.map((req) => req.qty)).toEqual(['0.5']);
+  });
+});
+
+describe('slices: profit check before each slice', () => {
+  it('ends the leg as done once the next slice frees no cash after fees', async () => {
+    let entry = '3100';
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: entry, markPrice: '3000' }] });
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 3_000, leg: { qty: 3 } });
+    const engine = childEngine(h, () => {
+      entry = '3002.9';
+      return {};
+    });
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(engine.requests).toHaveLength(1);
+    expect(job).toMatchObject({ status: 'done', haltReason: null });
+    expect(job.profitStops).toEqual([{ symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', entry: 3002.9, mark: 3000, closedQty: 1, plannedQty: 3, at: expect.any(Number) }]);
+  });
+
+  it('keeps going while each slice still frees cash', async () => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: '3003.1', markPrice: '3000' }] });
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 3_000, leg: { qty: 3 } });
+    const engine = childEngine(h);
+    await h.run();
+    expect(engine.requests).toHaveLength(3);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', profitStops: [] });
+  });
+});
+
+describe('slices: Convert quotes used up inside a slice', () => {
+  it('halts not hedged and the holds still reach the halted child', async () => {
+    const venue = sliceVenue(filled, account({ hyperliquid: 1_000 }));
+    venue.handlers.createCrossexConvertQuote = gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests');
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 3_000, leg: { qty: 1 } });
+    const engine = childEngine(h, (req, index) => (index === 0 ? hedgeRefused(req) : {}));
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'halted', haltKind: 'not-hedged', notHedgedQty: 1 });
+    expect(job.haltReason).toContain("Gate's 100 Convert quotes for today are used up.");
+    expect(job.steps[job.stepIndex].name).not.toBe('Slices');
+    await expect(applyFix(h.deps, job, 'unwind')).rejects.toThrow(REOPEN_HALT.noHedgePerp);
+    expect(job.steps[job.stepIndex].name).toBe('Slices');
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
+  });
+});
+
+const withHedge = (job: Job): void => {
+  job.before = { buckets: [], perps: [{ symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', qty: 12.2 }] };
+  if (job.realize) job.realize.legs[0].hedge = 'GATE';
+};
+
+describe('slices: holds on a not-hedged realize', () => {
+  const gapRun = (script: (req: DealRequest, index: number) => ChildOutcome = (req, index) => (index === 0 ? hedgeRefused(req) : {})) => {
+    const h = sliceRun(sliceVenue(filled, account({ hyperliquid: 1_000 })), { exec: 'market', sliceUsd: 3_000, leg: { qty: 1 }, edit: withHedge });
+    const engine = childEngine(h, script);
+    refuseReopens(h, engine, () => true);
+    return { h, engine };
+  };
+
+  it('unwind closes the not-hedged qty on the other perp, reduce-only, at market', async () => {
+    const { h, engine } = gapRun();
+    await h.run();
+    expect(h.jobs.read()?.unwindTarget).toEqual({ symbol: GATE_ETH, exchange: 'GATE', side: 'SELL', qty: 1, reduceOnly: true });
+    const job = await applyFix(h.deps, h.jobs.read()!, 'unwind');
+    expect(engine.requests[1]).toMatchObject({ a: { symbol: GATE_ETH, side: 'SELL', reduceOnly: true }, b: null, qty: '1' });
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('DONE');
+    expect(job).toMatchObject({ paused: true, notHedgedQty: 0, follow: null, unwindTarget: null, haltKind: null });
+  });
+
+  it('a part-filled unwind keeps the rest not hedged with the holds, and the next unwind sends the rest', async () => {
+    const { h, engine } = gapRun((req, index) => (index === 0 ? hedgeRefused(req) : index === 1 ? { a: '0.4' } : {}));
+    await h.run();
+    const part = await applyFix(h.deps, h.jobs.read()!, 'unwind');
+    expect(part).toMatchObject({ status: 'halted', notHedgedQty: 0.6, follow: { qty: 0.6 }, unwindTarget: { symbol: GATE_ETH, qty: 0.6 } });
+    const rest = await applyFix(h.deps, part, 'unwind');
+    expect(engine.requests[2]).toMatchObject({ a: { symbol: GATE_ETH, side: 'SELL', reduceOnly: true }, qty: '0.6' });
+    expect(rest).toMatchObject({ paused: true, notHedgedQty: 0 });
+  });
+
+  it.each(['market', 'limit'] as const)('%s with no halted child sends a one-leg order on the follow', async (action) => {
+    const { h, engine } = gapRun((req, index) => (index === 0 ? hedgeRefused(req) : index === 1 ? { a: '0.4' } : {}));
+    await h.run();
+    const part = await applyFix(h.deps, h.jobs.read()!, 'unwind');
+    const job = await applyFix(h.deps, part, action);
+    expect(engine.requests[2]).toMatchObject({ a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: '0.6' });
+    expect(job).toMatchObject({ status: 'running', notHedgedQty: 0, follow: null });
+  });
+
+  it('a hold wait that times out halts the stuck STOPPING child again', async () => {
+    const { h, engine } = gapRun();
+    await h.run();
+    Object.assign(h.deps, { sleep: h.clock.sleep });
+    await expect(applyFix(h.deps, h.jobs.read()!, 'market')).rejects.toThrow(FIX_UNCONFIRMED);
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
+  });
+
+  const haltedButRunning = async () => {
+    const { h, engine } = gapRun();
+    await h.run();
+    const job = h.jobs.read()!;
+    Object.assign(job, { status: 'running', haltKind: null, haltReason: null, notHedgedQty: 0, follow: null, unwindTarget: null });
+    return { h, engine, job };
+  };
+
+  it('a sleep keeps the halted child and its not-hedged state, and unwind works after', async () => {
+    const { h, engine, job } = await haltedButRunning();
+    job.deleverTwap = { durationSec: 120, intervalSec: 60, slices: 2 };
+    h.jobs.write(job);
+    const slept = sleepHaltTwap((h.deps as unknown as { twap: TwapRunDeps }).twap, job, { fromMs: h.clock.now(), toMs: h.clock.now() + 60_000 });
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
+    expect(slept).toMatchObject({ status: 'halted', haltKind: 'sleep', notHedgedQty: 1, follow: { symbol: HL_ETH, qty: 1 } });
+    const fixed = await applyFix(h.deps, slept, 'unwind');
+    expect(engine.requests[1]).toMatchObject({ a: { symbol: GATE_ETH, side: 'SELL', reduceOnly: true }, qty: '1' });
+    expect(fixed).toMatchObject({ paused: true, notHedgedQty: 0 });
+  });
+
+  it('a restart keeps the halted child and its not-hedged state', async () => {
+    const { h, engine, job } = await haltedButRunning();
+    h.jobs.write(job);
+    await cancelRestingLead(h.deps, job);
+    expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'restart', notHedgedQty: 1, unwindTarget: { symbol: GATE_ETH, qty: 1 } });
+  });
+});
+
+describe('slices: Convert quote probe', () => {
+  const network = (() => {
+    try {
+      networkError();
+    } catch (err) {
+      return err;
+    }
+  })();
+  const probeRun = async (failures: number) => {
+    const h = sliceRun(sliceVenue(), { exec: 'market', sliceUsd: 3_000, leg: { qty: 1, convert: { amount: 500, count: 1, feeUsd: 1 } } });
+    const engine = childEngine(h, (_req, index) => (index < failures ? { refuse: network } : {}));
+    await h.run();
+    return { h, engine };
+  };
+
+  it('probes the quotes once per job, not on every retry of a failed first slice', async () => {
+    const clean = await probeRun(0);
+    const { h, engine } = await probeRun(4);
+    expect(engine.requests.length).toBe(5);
+    expect(clean.h.count('createCrossexConvertQuote')).toBeGreaterThan(0);
+    expect(h.count('createCrossexConvertQuote')).toBe(clean.h.count('createCrossexConvertQuote'));
+    expect(h.jobs.read()).toMatchObject({ status: 'done', quotesChecked: true });
+  });
+});
+
+describe('slices: a profit stop trims the leg Convert', () => {
+  const stopRun = (entryAtStart: string, amount: number) => {
+    let entry = entryAtStart;
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: entry, markPrice: '3000' }] });
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 3_000, leg: { qty: 3, convert: { amount, count: 1, feeUsd: amount * 0.002 } } });
+    childEngine(h, () => {
+      entry = '3002.9';
+      return {};
+    });
+    return h;
+  };
+  const converts = (job: Job) => job.steps.filter((step) => step.name.startsWith('Convert'));
+
+  it.each([50, 6_000_000])('cuts the Convert to the closed share (%d USD)', async (amount) => {
+    const h = stopRun('3100', amount * 3);
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', haltReason: null });
+    expect(job.profitStops).toHaveLength(1);
+    const planned = converts(job).reduce((total, step) => total + Math.round((step.planned ?? 0) * 100), 0) / 100;
+    expect(planned).toBe(amount);
+    for (const step of converts(job)) expect(step.planned ?? 0).toBeLessThanOrEqual(CONVERT_MAX);
+  });
+
+  it('drops the Convert when the closed share is under $11, and ends done', async () => {
+    const h = stopRun('3000', 3_000);
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(job).toMatchObject({ status: 'done', haltReason: null, profitStops: [{ closedQty: 0, plannedQty: 3 }] });
+    expect(converts(job)).toHaveLength(0);
+    expect(h.count('createCrossexConvertOrder')).toBe(0);
+  });
+});
+
+describe('slices: profit check after a Limit close fell back to market', () => {
+  const limitRun = (kind: 'maker' | 'taker') => {
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: '3002.5', markPrice: '3000' }] });
+    const h = sliceRun(venue, { exec: 'maker', sliceUsd: 3_000, leg: { qty: 3 } });
+    const engine = childEngine(h, () => ({ kind }));
+    return { h, engine };
+  };
+
+  it('keeps going at the maker fee while the close rests as a maker', async () => {
+    const { h, engine } = limitRun('maker');
+    await h.run();
+    expect(engine.requests).toHaveLength(3);
+    expect(h.jobs.read()?.profitStops).toEqual([]);
+  });
+
+  it('stops at the taker fee once the close fell back to market', async () => {
+    const { h, engine } = limitRun('taker');
+    await h.run();
+    expect(engine.requests).toHaveLength(1);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', profitStops: [{ closedQty: 1, plannedQty: 3 }] });
   });
 });

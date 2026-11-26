@@ -60,7 +60,7 @@ function lotsOf(qty: number, step: number, lot: string): number {
   return Math.round(Number(floorToStep(qty, lot)) / step);
 }
 
-export function sliceQtys(totalQty: number, sliceQty: number, minQty: number, lot: string): number[] {
+export function sliceQtys(totalQty: number, sliceQty: number, minQty: number, lot: string, capQty = Infinity): number[] {
   const step = Number(lot) > 0 ? lot : DEFAULT_STEP;
   const stepSize = Number(step);
   const decimals = decimalsOf(step);
@@ -68,14 +68,44 @@ export function sliceQtys(totalQty: number, sliceQty: number, minQty: number, lo
   const totalLots = lotsOf(Math.max(0, totalQty), stepSize, step);
   if (totalLots <= 0) return [];
   const minLots = minQty > 0 ? Math.round(Number(roundToStep(minQty, step, 'up')) / stepSize) : 0;
+  const capLots = Number.isFinite(capQty) && capQty > 0 ? lotsOf(capQty, stepSize, step) : Infinity;
   const asked = sliceQty > 0 ? lotsOf(sliceQty, stepSize, step) : totalLots;
   const sliceLots = Math.min(totalLots, Math.max(1, minLots, asked));
   const full = Math.floor(totalLots / sliceLots);
   const rest = totalLots - full * sliceLots;
   const lots = Array.from({ length: full }, () => sliceLots);
-  if (rest > 0 && rest < minLots) lots[lots.length - 1] += rest;
+  const last = lots.length - 1;
+  if (rest > 0 && rest < minLots && sliceLots + rest > capLots && sliceLots + rest - minLots >= minLots) {
+    lots[last] = sliceLots + rest - minLots;
+    lots.push(minLots);
+  } else if (rest > 0 && rest < minLots) lots[last] += rest;
   else if (rest > 0) lots.push(rest);
   return lots.map(qtyOf);
+}
+
+export function twapSliceQty(leftQty: number, k: number, slices: number, lot: string, minQty: number, capQty: number): number {
+  const step = Number(lot) > 0 ? lot : DEFAULT_STEP;
+  const stepSize = Number(step);
+  const leftLots = lotsOf(Math.max(0, leftQty), stepSize, step);
+  const lots = k >= slices ? leftLots : Math.max(1, Math.floor(leftLots / (slices - k + 1)));
+  const asked = Number((lots * stepSize).toFixed(decimalsOf(step)));
+  return sliceQtys(leftQty, Math.min(asked, capQty), minQty, step, capQty)[0] ?? 0;
+}
+
+export function twapQtysFor(totalQty: number, slices: number, lot: string, minQty: number, capQty: number): number[] {
+  const step = Number(lot) > 0 ? lot : DEFAULT_STEP;
+  const stepSize = Number(step);
+  const decimals = decimalsOf(step);
+  const qtys: number[] = [];
+  let leftLots = lotsOf(Math.max(0, totalQty), stepSize, step);
+  for (let k = 1; leftLots > 0; k += 1) {
+    const qty = twapSliceQty(Number((leftLots * stepSize).toFixed(decimals)), k, slices, step, minQty, capQty);
+    const lots = Math.round(qty / stepSize);
+    if (lots <= 0) break;
+    qtys.push(qty);
+    leftLots -= lots;
+  }
+  return qtys;
 }
 
 export function sliceOptions(input: {
@@ -93,7 +123,7 @@ export function sliceOptions(input: {
   if (!book || !touchOf(book) || !(mid > 0) || !(totalQty > 0)) return [];
   const maxUsd = input.maxUsd !== undefined && input.maxUsd > 0 ? input.maxUsd : Infinity;
   const optionFor = (sizeUsd: number, custom: boolean, whole = false): SliceOption | null => {
-    const qtys = sliceQtys(totalQty, Math.min(sizeUsd, maxUsd) / mid, minQty, lot);
+    const qtys = sliceQtys(totalQty, Math.min(sizeUsd, maxUsd) / mid, minQty, lot, maxUsd / mid);
     if (qtys.length === 0) return null;
     const walksOf = (walkSide: Side): Impact[] | null => {
       const walked = new Map<number, Impact | null>();

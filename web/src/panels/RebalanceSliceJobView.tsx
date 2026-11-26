@@ -9,6 +9,8 @@ import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
 import { fmtAbout, fmtUsd, num, prettyVenue, WALLET_SHORT } from '../lib/fmt';
 import { RunView } from '../trade/RunView';
+import { SliceGraph, SlicePriceBox } from '../trade/RunViewBits';
+import { spanText } from '../lib/span';
 import { markPriceOf, ProgressBar } from './RebalanceBits';
 import { poolKey, sideText, sizeText } from './rebalanceCopy';
 import { Actions, haltLine, StopBox, type JobViewProps } from './RebalanceJobBits';
@@ -104,16 +106,36 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   const borosRow = (value: string) => ({ label: sk('borosLabel'), value });
   const longLeg = delever?.legs.find((l) => l.side === 'LONG');
   const shortLeg = delever?.legs.find((l) => l.side === 'SHORT');
-  const title = delever
+  const twap = job.twap ?? null;
+  const headline = delever
     ? sk('deleverHeader', { coin, long: prettyVenue(longLeg?.exchange ?? ''), short: prettyVenue(shortLeg?.exchange ?? '') })
     : t('accounts.rebalanceTabs.realize');
+  const title = twap ? (
+    <div className="flex flex-col gap-0.5">
+      <span>{headline}</span>
+      <span className="num text-xs font-normal text-ink-400">{t('trade.twap.run.plan', { n: twap.of, duration: spanText(twap.durationSec) })}</span>
+    </div>
+  ) : (
+    headline
+  );
+  const child = job.child ?? null;
+  const resting = twap !== null && running && !job.pauseRequested && child !== null && child.mode === 'OPENING';
+  const twapParts: Partial<RunProps> = twap
+    ? {
+        graph: resting && child ? <SliceGraph key={`${child.id}-graph`} childId={child.id} oneLeg={false} /> : null,
+        priceBox: resting && child ? <SlicePriceBox key={`${child.id}-price`} child={child} /> : null,
+        orders: job.orders ?? [],
+        footer: running || halted,
+      }
+    : {};
   const show = (props: Partial<RunProps>) => (
-    <RunView title={title} chip={null} firstLine={null} rows={[]} graph={null} priceBox={null} orders={[]} lines={[]} acts={null} footer={false} {...props} />
+    <RunView title={title} chip={null} firstLine={null} rows={[]} graph={null} priceBox={null} orders={[]} lines={[]} acts={null} footer={false} {...twapParts} {...props} />
   );
   const totalCostRows: RunProps['rows'] =
     realCost === null ? [] : [{ label: sk('totalCostLabel'), value: sk('totalCost', { real: fmtUsd(realCost), est: fmtUsd(estCost) }) }];
 
-  const fixHolds = () => {
+  const unwind = job.unwindTarget ?? null;
+  const fixHolds = (undo: boolean) => {
     const fallback = delever ? (followLeg?.side === 'LONG' ? 'SELL' : 'BUY') : leg?.side === 'SHORT' ? 'SELL' : 'BUY';
     const side = job.follow?.side ?? fallback;
     const limit = mark === null ? null : mark * (side === 'BUY' ? 1 + MAX_SLIPPAGE_RATIO : 1 - MAX_SLIPPAGE_RATIO);
@@ -126,6 +148,16 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
         {limit !== null && (
           <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={() => press('limit')}>
             <span className="num">{sk(followKey.limit, { price: fmtUsd(limit) })}</span>
+          </HoldToConfirmButton>
+        )}
+        {undo && delever && leg && (
+          <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={() => press('unwind')}>
+            <span className="num">{sk('holdUndoClose', { venue: prettyVenue(leg.exchange), side: t(leg.side === 'LONG' ? 'common.long' : 'common.short'), qty: sizeText(open), coin })}</span>
+          </HoldToConfirmButton>
+        )}
+        {undo && !delever && unwind && (
+          <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={() => press('unwind')}>
+            <span className="num">{sk('holdCloseMarket', { venue: prettyVenue(unwind.exchange), side: t(unwind.side === 'SELL' ? 'common.long' : 'common.short'), qty: sizeText(unwind.qty), coin })}</span>
           </HoldToConfirmButton>
         )}
         {fixError}
@@ -167,7 +199,14 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     }
     return show({
       title: null,
-      firstLine: <ResultBox tone="done" title={sk('realized', { amount: num(realized, 0) })} rows={totalCostRows} />,
+      firstLine: (
+        <ResultBox
+          tone="done"
+          title={sk('realized', { amount: num(realized, 0) })}
+          lines={(job.profitStops ?? []).map((stop) => sk('profitStop', { closed: sizeText(stop.closedQty), planned: sizeText(stop.plannedQty), coin: stop.base }))}
+          rows={totalCostRows}
+        />
+      ),
       acts: nextMove(true),
     });
   }
@@ -189,7 +228,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
         feeRow,
       ]
     : [
-        { label: t('trade.twap.run.slice', { i: num(index, 0), n: num(count, 0) }), value: sk('left', { time: fmtAbout((count - index + 1) * ((job.exec ?? 'maker') === 'maker' && job.maker?.takerAfterSec ? job.maker.takerAfterSec : SLICE_SECONDS[job.exec ?? 'maker'])) }) },
+        { label: t('trade.twap.run.slice', { i: num(index, 0), n: num(count, 0) }), value: sk('left', { time: fmtAbout((count - index + 1) * (twap ? twap.intervalSec : (job.exec ?? 'maker') === 'maker' && job.maker?.takerAfterSec ? job.maker.takerAfterSec : SLICE_SECONDS[job.exec ?? 'maker'])) }) },
         { label: sk('realizedLabel'), value: sk('realizedOf', { x: num(realized, 0), y: num(job.amount, 0) }) },
         { label: t('trade.twap.run.notHedged'), value: `${sizeText(open)} ${coin} (${usdOf(open)})` },
         feeRow,
@@ -217,7 +256,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       rows: factRows,
       lines: factLines ? [factLines] : [],
       acts: missed ? (
-        fixHolds()
+        fixHolds(false)
       ) : job.pauseRequested ? (
         <p className="num flex items-center gap-2 text-xs text-ink-300">
           <Spinner className="h-3 w-3" />
@@ -295,20 +334,26 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     });
   }
 
-  if (open > 0 && halted && !paused && !margin) {
+  if (open > 0 && halted && !paused) {
     return show({
       firstLine: <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />,
       rows: borosGap ? [perpsRow, borosRow(sk('borosYu', { amount: sizeText(borosNow) }))] : [],
       acts: (
         <>
-          {fixHolds()}
+          {fixHolds(true)}
           {borosGap && (
             <>
               <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={[]} />
               {closeBorosHold}
             </>
           )}
-          {abandonBlock}
+          {margin ? (
+            <div className="border-t border-ink-800 pt-3">
+              <Actions {...props} note={abandonNote} quietResume />
+            </div>
+          ) : (
+            abandonBlock
+          )}
         </>
       ),
     });
@@ -316,15 +361,9 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
 
   const pausedLine = paused ? sliceStateLabel(job) : null;
   const status = borosGap ? (
-    <>
-      {margin && open > 0 && <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />}
-      <StopBox
-        title={dk('borosNoPerp', { amount: sizeText(gapYu) })}
-        lines={pausedLine ? [pausedLine] : margin && open > 0 ? [] : haltLine(job.haltReason)}
-      />
-    </>
+    <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={pausedLine ? [pausedLine] : haltLine(job.haltReason)} />
   ) : margin ? (
-    <StopBox title={open > 0 ? sk('notHedged', { qty: sizeText(open), coin }) : localizeServerText(job.haltReason ?? '')} lines={open > 0 ? haltLine(job.haltReason) : []} />
+    <StopBox title={localizeServerText(job.haltReason ?? '')} lines={[]} />
   ) : pausedLine ? (
     <Line tone="font-semibold text-ink-100">{pausedLine}</Line>
   ) : (

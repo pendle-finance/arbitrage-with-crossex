@@ -10,6 +10,8 @@ import {
   SLICE_SIZES_USD,
   sliceOptions,
   sliceQtys,
+  twapQtysFor,
+  twapSliceQty,
   sliceSizeOf,
 } from '../../src/core/rebalance/slices';
 
@@ -253,5 +255,20 @@ describe('sliceOptions', () => {
         expect(option.impactUsd).toBeCloseTo(Number(floorToStep(totalQty, '0.001')) * MID * 0.0004, 4);
       }
     }
+  });
+});
+
+describe('sliceQtys at the venue cap', () => {
+  it('splits a rest below the minimum off the last slice instead of passing the cap', () => {
+    expect(sliceQtys(100.002, 100, 0.003, '0.001', 100)).toEqual([99.999, 0.003]);
+    expect(sliceQtys(300.002, 100, 0.003, '0.001', 100)).toEqual([100, 100, 99.999, 0.003]);
+    expect(sliceQtys(100.002, 100, 0.003, '0.001')).toEqual([100.002]);
+    expect(sliceQtys(100.002, 50, 0.003, '0.001', 100)).toEqual([50, 50.002]);
+  });
+
+  it('keeps the last TWAP slice under the cap', () => {
+    expect(twapSliceQty(100.002, 1, 1, '0.001', 0.003, 100)).toBe(99.999);
+    expect(twapQtysFor(100.002, 1, '0.001', 0.003, 100)).toEqual([99.999, 0.003]);
+    expect(twapQtysFor(1, 3, '0.0001', 0.0001, Infinity)).toEqual([0.3333, 0.3333, 0.3334]);
   });
 });

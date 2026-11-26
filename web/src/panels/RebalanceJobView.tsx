@@ -7,10 +7,10 @@ import { MoveJobView } from './RebalanceMoveJobView';
 import { isSliceJob, SliceJobView } from './RebalanceSliceJobView';
 
 export const isTwapRun = (job: RebalanceJob): boolean =>
-  job.kind === 'twap' || (job.kind === 'delever' && job.twap != null);
+  job.kind === 'twap' || ((job.kind === 'delever' || job.kind === 'realize') && job.twap != null);
 
 export function RebalanceJobView(props: JobViewProps) {
-  if (isTwapRun(props.job)) return <RunView {...twapRunProps(props.job, props.now)} />;
+  if (isTwapRun(props.job) && props.job.kind !== 'realize') return <RunView {...twapRunProps(props.job, props.now)} />;
   if (isSliceJob(props.job)) return <SliceJobView {...props} />;
   return <MoveJobView {...props} />;
 }

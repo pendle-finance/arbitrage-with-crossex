@@ -1145,7 +1145,7 @@ describe('sliced jobs through the routes', () => {
     const res = await h.post(`/api/rebalance/${job.id}/fix`, { action: 'unwind' });
     expect(res.statusCode).toBe(200);
     expect(store.getPair(id)?.mode).toBe('DONE');
-    const unwind = store.getPair(`${job.id}-s6-2`) as PairRow;
+    const unwind = store.getPair(`${job.id}-g${h.file().tagCount - 1}`) as PairRow;
     expect(unwind).toMatchObject({ a: { contract: HL, side: 'SELL' }, b: null, targetQty: '4' });
     expect(unwind.a.reduceOnly).toBeFalsy();
     expect(h.file()).toMatchObject({ status: 'halted', paused: true, haltReason: null });

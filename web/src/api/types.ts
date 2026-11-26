@@ -292,6 +292,30 @@ export interface RealizeTab {
   defaultSliceUsd: number;
 }
 
+export interface RealizeTwap extends TwapPlanPreview {
+  price: number;
+  legs: { symbol: string; slices: number; plan: TwapPlanView | null }[];
+  estimates: { maker: RealizeEstimate; market: RealizeEstimate } | null;
+}
+
+export interface RealizeTwapTargets {
+  clearDebt: RealizeTwap | null;
+  all: RealizeTwap | null;
+  custom: RealizeTwap | null;
+}
+
+export interface ProfitStop {
+  symbol: string;
+  exchange: string;
+  base: string;
+  side: PerpSide;
+  entry: number;
+  mark: number;
+  closedQty: number;
+  plannedQty: number;
+  at: number;
+}
+
 export interface FullPlan {
   costUsd: number;
   days: number | null;
@@ -539,6 +563,7 @@ export interface RebalanceJob {
   notHedgedQty?: number;
   followMisses?: number;
   follow?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; qty: number; reduceOnly: boolean } | null;
+  unwindTarget?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; qty: number; reduceOnly: boolean } | null;
   borosGapYu?: number;
   borosLeftYu?: number;
   feeSoFarUsd?: number;
@@ -558,6 +583,7 @@ export interface RebalanceJob {
   sizeRefusal?: { slice: number; venue: string; limit: string; bound: 'min' | 'max'; wholeRest: boolean } | null;
   sleptFrom?: number | null;
   sleptTo?: number | null;
+  profitStops?: ProfitStop[];
   twap?: TwapView | null;
   child?: TwapChildView | null;
   legs?: RunLegView[];
@@ -596,6 +622,7 @@ export interface RebalanceView {
   buckets: RebalanceBucket[];
   plans: RebalancePlans;
   realize?: RealizeTab | null;
+  realizeTwap?: RealizeTwapTargets | null;
   fullPlan?: FullPlan | null;
   imUsed?: ImUsedRow[];
   job: RebalanceJob | null;
@@ -2102,4 +2129,11 @@ export interface TelegramLinkStatus {
   status: 'none' | 'pending' | 'confirmed' | 'expired';
   url: string | null;
   expiresAt: number | null;
+}
+
+export interface TwapInput {
+  durationSec?: number;
+  intervalSec?: number;
+  sliceQty?: string;
+  slices?: number;
 }

@@ -24,6 +24,7 @@ import {
   realizeEstimateOf,
   slicedEstimateOf,
 } from '../../src/core/rebalance/realize';
+import { ONE_ORDER_USD } from '../../src/core/rebalance/slices';
 import { costOf, sliceOf } from '../../web/src/panels/realizeTabCost';
 import { newJob } from '../../src/server/rebalanceJob';
 import {
@@ -41,6 +42,8 @@ import {
   realizeBook,
   twoLegs,
 } from './fixtures/realize-books';
+
+const oneOrder = (book: RealizeBook): RealizeBook => ({ ...book, inputs: { ...book.inputs, sliceUsd: ONE_ORDER_USD } });
 
 const tabOf = (book: RealizeBook) => realizeTabOf(book.buckets, book.account, book.inputs, null);
 
@@ -193,18 +196,18 @@ describe('planRealize on the owner book', () => {
 
 describe('planRealize leg order', () => {
   it('most-moved leg pays first, then the next', () => {
-    const realize = clearDebtOf(twoLegs());
+    const realize = clearDebtOf(oneOrder(twoLegs()));
     expect(realize.legs.map((leg) => leg.base)).toEqual(['ETH', 'BTC']);
     expect(realize.legs[0].qty).toBe(20);
     expect(realize.legs[1].qty).toBeLessThan(2);
   });
 
   it('two legs clear the debt', () => {
-    expect(fullOf(twoLegs())).toMatchObject({ clearsBorrow: true, needsRealize: true, refused: null });
+    expect(fullOf(oneOrder(twoLegs()))).toMatchObject({ clearsBorrow: true, needsRealize: true, refused: null });
   });
 
   it('switches leg when the first cannot fund its convert', () => {
-    const realize = clearDebtOf(bookBb43());
+    const realize = clearDebtOf(oneOrder(bookBb43()));
     expect(realize.legs[0].base).toBe('BTC');
     expect(realize.legs[0].positionQty).toBeCloseTo(92.7, 1);
     expect(Math.abs(realize.legs[0].qty - 59.07153)).toBeLessThanOrEqual(0.00001);
@@ -213,7 +216,7 @@ describe('planRealize leg order', () => {
   });
 
   it('splits a convert above 500,000', () => {
-    const convert = clearDebtOf(bookBb43()).legs[0].convert;
+    const convert = clearDebtOf(oneOrder(bookBb43())).legs[0].convert;
     expect(convert?.amount).toBeGreaterThan(CONVERT_MAX);
     expect(convert?.count).toBe(2);
   });
@@ -235,6 +238,7 @@ describe('planRealize sizes and refusals', () => {
         moveUsd: 1_917_000,
         perps: [perp(OWNER_ETH, -3_300, ETH_MARK + 639, ETH_MARK)],
         books: { [OWNER_ETH]: HL_ETH },
+        sliceUsd: ONE_ORDER_USD,
       }),
     );
     expect(realize?.legs).toHaveLength(1);
@@ -244,7 +248,7 @@ describe('planRealize sizes and refusals', () => {
   });
 
   it('no bp limit in refusals', () => {
-    const realize = clearDebtOf(bookC0df());
+    const realize = clearDebtOf(oneOrder(bookC0df()));
     expect(realize.legs[0]).toMatchObject({ exchange: 'GATE', base: 'ETH' });
     expect(Math.abs(realize.legs[0].impactBp - 52.3)).toBeLessThanOrEqual(0.1);
     expect(realize.refused).toBeNull();
@@ -324,6 +328,7 @@ describe('planRealize at size', () => {
           availableMargin: 25 - 0.1 * rung,
           perps: [perp(OWNER_ETH, -positionQty, ETH_MARK + 639, ETH_MARK)],
           books: { [OWNER_ETH]: HL_ETH },
+          sliceUsd: ONE_ORDER_USD,
         }),
       );
       expect(realize?.refused, `rung ${rung}`).toBeNull();
@@ -529,7 +534,7 @@ describe('realize fix round', () => {
 
   it('clear debt realizes at every rung when the paying wallet holds no cash', () => {
     for (const debt of LADDER) {
-      const qty = Math.max(1, (debt / 200) * 1.5);
+      const qty = Math.max(1, (debt / 200) * 3);
       const realize = clearDebtOf(realizeBookOf(debt, qty));
       expect(realize.refused, `rung ${debt}`).toBeNull();
       expect(sumNet(realize.legs), `rung ${debt}`).toBeGreaterThanOrEqual(debt - 0.02);
@@ -732,7 +737,7 @@ const depthSide = (sigFigs?: number): NormalizedBook => {
 describe('realize without a price impact cap', () => {
   it('no price impact refusal', () => {
     const deep = [4, 3].reduce((book, sigFigs) => deepenBook(book, depthSide(sigFigs), sigFigsWidth(sigFigs)), depthSide());
-    const plan = planRealize(hlShortInput(1_000_000, { books: { HYPERLIQUID_FUTURE_ETH_USDC: deep } }));
+    const plan = planRealize(hlShortInput(1_000_000, { books: { HYPERLIQUID_FUTURE_ETH_USDC: deep }, sliceUsd: ONE_ORDER_USD }));
     expect(plan?.refused).toBeNull();
     expect(plan?.legs).toHaveLength(1);
     expect(Math.round((plan?.legs[0].impactBp ?? 0) * 10) / 10).toBe(187.5);
