@@ -517,9 +517,6 @@
     "priceImpact": "Price impact",
     "totalCost": "Total cost",
     "realizedAfterCost": "Realized, after cost",
-    "notHedgedSliceHover": "The most size that can sit on one side while one slice fills, before its hedge fills.",
-    "notHedgedOrderHover": "The most size that can sit on one side while the order fills, before its hedge fills.",
-    "notHedgedValue": "{{qty}} {{coin}} ({{usd}})",
     "holdRealize": "Hold to realize",
     "amount": "Realize amount",
     "amountAria": "Amount to realize",
@@ -543,7 +540,6 @@
     "count": "Count",
     "estTime": "Est. time",
     "priceImpact": "Price impact",
-    "maxNotHedged": "Max not hedged",
     "maxSlippage": "Max slippage {{pct}}"
   },
   "deleverTab": {

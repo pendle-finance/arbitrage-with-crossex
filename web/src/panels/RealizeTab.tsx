@@ -1,5 +1,5 @@
 import { ArrowRight } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
 import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView, SliceOption } from '../api/types';
@@ -18,7 +18,7 @@ import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './Rebalance
 import { VerdictAlert } from './RebalanceBits';
 import { keyOf, SLICE_HOVER, Term } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { ExecFacts, realizeText, refusalOf, TotalCost, type CostRow, type ExecFact } from './RebalancePlanBits';
+import { realizeText, refusalOf, TotalCost, type CostRow } from './RebalancePlanBits';
 import { CONVERT_TO, execModeLabel, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
@@ -135,7 +135,6 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const costFor = (plan: RealizePlan, mode: RealizeExec): Cost => costOf(plan, mode, sliceFor(plan));
   const allNet = shownAll ? Math.max(0, netOf(shownAll, costFor(shownAll, exec))) : 0;
 
-  const lastFact = useRef<ExecFact | null>(null);
 
   if (!tab || (!clearDebt && !all)) {
     return (
@@ -159,7 +158,6 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const slice = active ? sliceFor(active) : null;
   const cost = active ? costFor(active, exec) : null;
   const net = active && cost ? netOf(active, cost) : 0;
-  const lead = active?.legs[0];
   const slicePastBook = options.find((o) => o.sizeUsd === shownSliceUsd)?.pastBook === true;
   const otherRefusal = active?.refused && active.refused.reason !== 'past-book' ? active.refused : null;
   const sliceRefused = !otherRefusal && (slicePastBook || active?.refused?.reason === 'past-book');
@@ -248,16 +246,6 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
     );
   };
 
-  const hedgeFact: ExecFact | null =
-    slice && lead
-      ? {
-          label: t('accounts.slices.maxNotHedged'),
-          hover: t(oneOrder ? 'accounts.realizeTab.notHedgedOrderHover' : 'accounts.realizeTab.notHedgedSliceHover'),
-          value: t('accounts.realizeTab.notHedgedValue', { qty: sizeText(slice.qty), coin: lead.base, usd: fmtUsd(slice.usd, 0) }),
-        }
-      : null;
-  if (hedgeFact !== null) lastFact.current = hedgeFact;
-  const shownFact = hedgeFact ?? (pricing ? lastFact.current : null);
   const sentence: string | null = customMissing
     ? t('accounts.realizeTab.typeAmount')
     : sliceInvalid
@@ -341,8 +329,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
               canSplit={canSplit}
               hover={splitHover}
               impact={impact}
-              table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, coin: lead?.base, dedupe: active === pricedPlan }}
-              facts={<ExecFacts rows={shownFact ? [shownFact] : []} />}
+              table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, dedupe: active === pricedPlan }}
             />
           )}
 

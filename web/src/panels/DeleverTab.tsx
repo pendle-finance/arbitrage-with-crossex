@@ -250,15 +250,6 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
     const borosGapValues = { amount: qtyText(borosGapYu), time: fmtAbout(twapPlan ? twapPlan.durationSec : (option?.seconds[exec] ?? 0)) };
     const facts: ExecFact[] = [
-      ...(plan.notHedgedMaxQty > 0
-        ? [
-            {
-              label: t('accounts.slices.maxNotHedged'),
-              hover: t(oneOrder ? 'accounts.realizeTab.notHedgedOrderHover' : 'accounts.realizeTab.notHedgedSliceHover'),
-              value: t('accounts.realizeTab.notHedgedValue', { qty: qtyText(plan.notHedgedMaxQty), coin: pair.base, usd: fmtUsd(plan.notHedgedMaxUsd, 0) }),
-            },
-          ]
-        : []),
       ...(borosGapYu > 0
         ? [{ label: t('accounts.deleverTab.borosGapLabel'), hover: t('accounts.deleverTab.borosGap', borosGapValues), value: t('accounts.deleverTab.borosGapValue', borosGapValues) }]
         : []),

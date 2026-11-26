@@ -510,9 +510,6 @@
     "priceImpact": "价格冲击",
     "totalCost": "总成本",
     "realizedAfterCost": "已兑现，扣除成本后",
-    "notHedgedSliceHover": "一片成交时、对冲成交前，单边最多持有的数量。",
-    "notHedgedOrderHover": "订单成交时、对冲成交前，单边最多持有的数量。",
-    "notHedgedValue": "{{qty}} {{coin}}（{{usd}}）",
     "holdRealize": "长按兑现",
     "amount": "兑现金额",
     "amountAria": "要兑现的金额",
@@ -536,7 +533,6 @@
     "count": "数量",
     "estTime": "预计时间",
     "priceImpact": "价格冲击",
-    "maxNotHedged": "最大未对冲",
     "maxSlippage": "最大滑点 {{pct}}"
   },
   "deleverTab": {

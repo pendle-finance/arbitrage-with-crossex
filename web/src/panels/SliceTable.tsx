@@ -8,11 +8,10 @@ import { t } from '../i18n';
 import { fmtAbout, fmtPct, fmtUsd, fmtUsdCompact, num } from '../lib/fmt';
 import type { ExecMode } from '../trade/PairTicketBits';
 import { ImpactPair } from '../trade/TwapArea';
-import { sizeText } from './rebalanceCopy';
 
 export const MAX_SLIPPAGE_RATIO = 0.0025;
 
-const COLS = ['w-14', 'w-28', 'w-24', 'w-28'] as const;
+const COLS = ['w-14', 'w-28', 'w-24'] as const;
 
 function presetLabel(sizeUsd: number): string {
   if (sizeUsd === 25_000) return t('accounts.slices.row25');
@@ -41,7 +40,6 @@ interface SliceTableProps {
   onPick: (sizeUsd: number) => void;
   customText: string;
   onCustom: (text: string) => void;
-  coin?: string;
   dedupe?: boolean;
 }
 
@@ -52,7 +50,6 @@ export function SplitArea({
   hover,
   impact,
   table,
-  facts,
 }: {
   on: boolean;
   onToggle: (on: boolean) => void;
@@ -60,7 +57,6 @@ export function SplitArea({
   hover: string;
   impact: PriceImpactPreview | null;
   table: SliceTableProps;
-  facts?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-2.5 rounded-md border border-ink-700 px-3 py-2.5">
@@ -76,7 +72,6 @@ export function SplitArea({
         {impact && <ImpactPair impact={impact} on={false} />}
       </div>
       {on && <SliceTable {...table} />}
-      {facts}
     </div>
   );
 }
@@ -91,7 +86,7 @@ function shownRows(options: SliceOption[], value: number, dedupe: boolean): Slic
   });
 }
 
-export function SliceTable({ options, value, exec, onPick, customText, onCustom, coin, dedupe = true }: SliceTableProps) {
+export function SliceTable({ options, value, exec, onPick, customText, onCustom, dedupe = true }: SliceTableProps) {
   const id = useId();
   const presets = shownRows(options, value, dedupe);
   const custom = options.find((o) => o.custom) ?? null;
@@ -101,7 +96,6 @@ export function SliceTable({ options, value, exec, onPick, customText, onCustom,
     num(o.count, 0),
     fmtAbout(o.seconds[exec]),
     fmtUsd((exec === 'market' ? o.impactUsd : 0) + o.reopenImpactUsd, 0),
-    coin ? `${sizeText(o.notHedgedMaxQty)} ${coin}` : fmtUsd(o.notHedgedMaxUsd, 0),
   ];
   return (
     <div className="flex flex-col gap-1.5 text-xs">
@@ -112,7 +106,7 @@ export function SliceTable({ options, value, exec, onPick, customText, onCustom,
       <div className="flex items-center gap-3 px-3 text-pp-sm2 text-ink-400">
         <span className="w-3.5 shrink-0" />
         <span className="min-w-0 flex-1">{t('accounts.slices.title')}</span>
-        {[t('accounts.slices.count'), t('accounts.slices.estTime'), t('accounts.slices.priceImpact'), t('accounts.slices.maxNotHedged')].map(
+        {[t('accounts.slices.count'), t('accounts.slices.estTime'), t('accounts.slices.priceImpact')].map(
           (head, i) => (
             <span key={head} className={`${COLS[i]} shrink-0 text-right`}>
               {head}
@@ -155,7 +149,7 @@ export function SliceTable({ options, value, exec, onPick, customText, onCustom,
               onChange={(e) => onCustom(e.target.value)}
             />
           </span>
-          <Cells values={custom === null ? ['', '', '', ''] : valuesOf(custom)} />
+          <Cells values={custom === null ? ['', '', ''] : valuesOf(custom)} />
         </RadioRow>
       </div>
     </div>
