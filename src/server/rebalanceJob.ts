@@ -1005,7 +1005,7 @@ function isMakerOpts(value: unknown): value is MakerOpts {
     typeof maker === 'object' &&
     maker !== null &&
     (maker.takerAfterSec === null || (typeof maker.takerAfterSec === 'number' && Number.isFinite(maker.takerAfterSec) && maker.takerAfterSec > 0)) &&
-    [null, 2, 5, 10].includes(maker.repegBehindBp ?? -1)
+    (maker.repegBehindBp === null || [2, 5, 10].includes(maker.repegBehindBp as number))
   );
 }
 

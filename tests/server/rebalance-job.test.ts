@@ -1005,11 +1005,11 @@ describe('sliced jobs through the routes', () => {
     expect(h.file().realize!.legs[0].filledQty).toBe(33);
   });
 
-  it('a Limit + hedge slice uses the job maker settings for its wait before taker and its re-peg', async () => {
+  it.each([2, null] as const)('a Limit + hedge slice uses the job maker settings for its wait before taker and its re-peg %s, also after the job is read back from disk', async (repegBehindBp) => {
     sliceVenue();
     const job = unfilled();
     job.exec = 'maker';
-    job.maker = { takerAfterSec: 600, repegBehindBp: 2 };
+    job.maker = { takerAfterSec: 600, repegBehindBp };
     auto = false;
     const h = boot({ job, extra: borosDeps() });
 
@@ -1017,7 +1017,8 @@ describe('sliced jobs through the routes', () => {
     await waitFor(() => h.store!.listPairs().length === 1, 'the child');
     const child = h.store!.listPairs()[0];
 
-    expect(child.repegBehindBp).toBe(2);
+    expect(h.file().maker).toEqual({ takerAfterSec: 600, repegBehindBp });
+    expect(child.repegBehindBp).toBe(repegBehindBp);
     expect(child.deadlineAt! - child.createdAt).toBe(600_000);
     expect((await h.post(`/api/rebalance/${job.id}/pause`)).statusCode).toBe(200);
     auto = true;
