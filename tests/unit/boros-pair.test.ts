@@ -636,9 +636,10 @@ describe('borosSuggestedTopUp', () => {
     expect(borosSuggestedTopUp([legOf(1, 4), legOf(2, 7)], 1.5)).toBeCloseTo(3.5, 12);
   });
 
-  it('is 0 when free margin covers it, and treats a short account as having none', () => {
+  it('is 0 when free margin covers it, and a short account first needs its shortfall', () => {
     expect(borosSuggestedTopUp([legOf(1, 4)], 10)).toBe(0);
-    expect(borosSuggestedTopUp([legOf(1, 4)], -2)).toBe(3);
+    expect(borosSuggestedTopUp([legOf(1, 4)], -2)).toBe(5);
+    expect(borosSuggestedTopUp([legOf(1, null)], -2)).toBe(2);
   });
 
   it('is null without a free-margin figure, and ignores a leg with no suggestion', () => {

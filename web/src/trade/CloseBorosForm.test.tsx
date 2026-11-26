@@ -584,8 +584,10 @@ describe('CloseBorosForm — size presets', () => {
     fireEvent.click(screen.getByRole('radio', { name: '50%' }));
     expect(input.value).toBe('0.006172835');
     expect(screen.getByText('ETH · 50%')).toBeInTheDocument();
+    expect(screen.getByRole('listitem')).toHaveTextContent(/^1Close0\.0061728\d* ETH/);
     fireEvent.click(screen.getByRole('radio', { name: '100%' }));
     expect(input.value).toBe('0.01234567');
+    expect(screen.getByRole('listitem')).toHaveTextContent(/^1Close0\.01234567 ETH/);
   });
 });
 
@@ -967,7 +969,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     expect(screen.queryByText('Perps')).toBeNull();
   });
 
-  it('shows each leg as one step row, and under the pair picker drops the size and date facts', async () => {
+  it('shows each leg as one step row with its close size, and under the pair picker drops the date facts', async () => {
     server.use(...ready());
     const leg = { ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] as ['HYPERLIQUID', 'GATE'] };
     const full = renderWithClient(<CloseBorosForm legs={[leg]} />);
@@ -975,14 +977,16 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     const fullRow = screen.getByText('ETH Spread HL-GATE').closest('li') as HTMLElement;
     expect(fullRow.closest('ol')).not.toBeNull();
     expect(fullRow).toHaveTextContent('SHORT');
-    expect(fullRow).toHaveTextContent(/0\.255 ETH · /);
+    expect(fullRow).toHaveTextContent(/^1Close0\.255 ETH/);
+    expect(fullRow).toHaveTextContent(/ · \d+d/);
     const fullText = fullRow.textContent ?? '';
     full.unmount();
     renderWithClient(<CloseBorosForm legs={[leg]} underPicker />);
     await screen.findByText('ETH Spread HL-GATE');
     const row = screen.getByText('ETH Spread HL-GATE').closest('li') as HTMLElement;
     expect((row.textContent ?? '').length).toBeLessThan(fullText.length);
-    expect(row).not.toHaveTextContent(/0\.255 ETH/);
+    expect(row).toHaveTextContent(/^1Close0\.255 ETH/);
+    expect(row).not.toHaveTextContent(/ · \d+d/);
     expect(row).toHaveTextContent(/mark/);
     expect(row).toHaveAttribute('class', expect.stringContaining('border-ink-800'));
   });

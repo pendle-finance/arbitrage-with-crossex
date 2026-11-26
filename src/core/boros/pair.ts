@@ -1114,7 +1114,7 @@ export function borosSuggestedTopUp(legs: SimulatedLeg[], availableAfter: number
     0,
     ...legs.map((l) => (l.suggestedMargin === null || l.marginRequired === null ? 0 : l.suggestedMargin - l.marginRequired)),
   );
-  return Math.max(0, extra - Math.max(0, availableAfter));
+  return Math.max(0, extra - availableAfter);
 }
 
 /**
