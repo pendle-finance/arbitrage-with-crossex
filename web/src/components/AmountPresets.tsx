@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { amountError } from '../lib/amount';
 import { AmountBox } from './AmountBox';
 import { SegmentedToggle } from './SegmentedToggle';
@@ -45,6 +45,8 @@ export function AmountPresets<T extends string>({
   custom?: CustomEntry;
 }) {
   const [editing, setEditing] = useState(false);
+  const segRef = useRef<HTMLDivElement>(null);
+  const [customWidth, setCustomWidth] = useState<number | null>(null);
   const [customText, setCustomText] = useState('');
   const customError = custom && customText.trim() !== '' ? amountError(customText, { max: custom.max }) : null;
   const close = () => {
@@ -74,21 +76,25 @@ export function AmountPresets<T extends string>({
         onFocus={onFocus}
         onBlur={onBlur}
       />
-      <div className="flex flex-auto">
+      <div ref={segRef} className="flex flex-auto">
         <SegmentedToggle<T | typeof CUSTOM | ''>
           className={`seg-info seg-lg max-sm:[&_.seg-btn]:px-3${editing ? ' [&_.seg-btn:last-child]:rounded-r-none' : ''}`}
           fill
           ariaLabel={presetsLabel}
           value={preset ?? ''}
           onChange={(next) => {
-            if (next === CUSTOM) setEditing(true);
+            if (next === CUSTOM) {
+              setCustomWidth([...(segRef.current?.querySelectorAll('button') ?? [])].at(-1)?.offsetWidth || null);
+              setEditing(true);
+            }
             else if (next !== '') onPreset(next);
           }}
           options={options}
         />
         {custom && editing && (
           <span
-            className={`-ml-px flex h-[35px] w-24 shrink-0 items-center gap-1 rounded-r border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
+            style={customWidth !== null ? { width: customWidth } : undefined}
+            className={`-ml-px flex h-[35px] ${customWidth === null ? 'w-24' : ''} shrink-0 items-center gap-1 rounded-r border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
               customError ? 'border-guava/60' : 'border-ink-700'
             }`}
           >

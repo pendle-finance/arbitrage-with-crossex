@@ -117,6 +117,8 @@
     "estProfit": "Est. profit",
     "stepClose": "Close {{date}}",
     "stepOpen": "Open {{date}}",
+    "slipClose": "Close slippage",
+    "slipOpen": "Open slippage",
     "matures": "Matures",
     "fundYes": "Yes",
     "fundShort": "No, {{qty}} short",
