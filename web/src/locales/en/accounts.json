@@ -308,7 +308,7 @@
       "boros": "Boros",
       "perps": "Perps",
       "borosUnhedged": "{{qty}} {{coin}} fixed rate · not hedged",
-      "openFloating": "Open, floating funding"
+      "openFloating": "Open, not hedged, floating funding"
     },
     "head": {
       "leg": "Leg",

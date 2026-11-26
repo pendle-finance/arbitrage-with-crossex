@@ -90,8 +90,6 @@
     "oppChip": "Roll opportunity",
     "readyTitle": "Matures {{date}}, inside the {{days}}-day roll window.",
     "readyChip": "Ready to roll",
-    "openOnly2": "Until then: rate moves on the {{old}} positions hit your PnL, and about 2× Boros margin.",
-    "openOnly3": "To end the overlap sooner: close the {{old}} positions.",
     "modeAria": "Roll mode",
     "modeReopen": "Close & reopen",
     "modeOpenOnly": "Open only (keep old positions)",
@@ -120,12 +118,9 @@
     "stepOpen": "Open {{date}}",
     "slipClose": "Close slippage",
     "slipOpen": "Open slippage",
-    "matures": "Matures",
     "openOrders": "Open orders · {{date}}",
     "cancelled": "Cancelled",
-    "cancelledPart": "Cancelled, also on the part kept",
-    "oldPositions": "{{date}} positions",
-    "oldStayOpen": "Stay open, no perps"
+    "cancelledPart": "Cancelled, also on the part kept"
   },
   "pair": {
     "maturityTitle": "Every position in this pair settles here",

@@ -1422,6 +1422,7 @@ export interface BorosPairMarketRow {
    * current rate plus the taker fee, both linear in size. Null when the market
    * carries no margin inputs. Optional: an older server does not send it. */
   openCostPerSize?: number | null;
+  settleFeeApr?: number;
 }
 
 /** GET /api/boros/pair/context */

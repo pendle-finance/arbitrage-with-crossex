@@ -74,8 +74,6 @@
     "daysShort": "{{n}} 天",
     "locked": "固定{{rate}}",
     "mark": "标记利率 {{rate}}",
-    "bundles": "分组",
-    "leavesBundles": "退出 <i0/>{{a}} 和 <i1/>{{b}}",
     "closeSizeAll": "平仓规模 · 所有仓位",
     "closeSizeBoth": "平仓规模 · 两个仓位",
     "closeSize": "平仓规模",

@@ -40,7 +40,7 @@ import {
   useBorosPairSimulation,
   useExecuteBorosPair,
 } from '../api/queries';
-import { Trans, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
@@ -531,7 +531,6 @@ export function CloseBorosForm({
     return open > 0 ? wholeOf(l) < open : (l.share ?? 1) < 0.9995;
   });
   const flatAfter = atMax && !sharedLeg;
-  const soleSpread = closable.length === 1 ? spreadOf(closable[0]) : null;
   const leftOf = (l: CloseLeg): number => {
     const left = heldWei(l) - toWei(sizeOf(l));
     return left > 0n ? fromWei(left) : 0;
@@ -698,7 +697,8 @@ export function CloseBorosForm({
           </table>
         )}
         <SlippageLine
-          est={estSlippageApr !== null ? `${fmtPct(estSlippageApr)}${usdNote(estSlipCost)}` : null}
+          est={estSlippageApr !== null ? `${fmtPct(estSlippageApr)} APR${usdNote(estSlipCost)}` : null}
+          cost={estSlipCost === null ? null : inUsd ? fmtUsd(estSlipCost * (px as number), Math.abs(estSlipCost * (px as number)) < 100 ? 2 : 0) : fmtTokenQty(estSlipCost, unit0)}
           max={`${slipStr}%`}
           unit={`APR${usdNote(maxSlipCost)}`}
           open={slipOpen}
@@ -753,20 +753,6 @@ export function CloseBorosForm({
           <EstimateRow
             label={t('accounts.closePair.after.perps')}
             value={<span className="text-rose-400">{t('accounts.closePair.after.openFloating')}</span>}
-          />
-        )}
-        {soleSpread && (
-          <EstimateRow
-            label={t('pairTicket.closeBoros.bundles')}
-            value={
-              <span className="inline-flex items-center gap-1.5">
-                <Trans
-                  i18nKey="pairTicket.closeBoros.leavesBundles"
-                  values={{ a: prettyVenue(soleSpread[0]), b: prettyVenue(soleSpread[1]) }}
-                  components={{ i0: <VenueIcon venue={soleSpread[0]} size={14} />, i1: <VenueIcon venue={soleSpread[1]} size={14} /> }}
-                />
-              </span>
-            }
           />
         )}
       </SummaryCard>
