@@ -53,7 +53,7 @@ export function MoveCashWallets({
   onText: (text: string) => void;
 }) {
   const { t } = useTranslation();
-  const rows = pools.map((pool) => ({ key: pool, icon: poolCoin(pool), name: walletOf(pool) }));
+  const rows = pools.map((pool) => ({ key: pool, icon: <TokenIcon symbol={poolCoin(pool)} size={16} />, name: walletOf(pool) }));
   const amountText = (amount: number, pool: Pool) => <span className="num text-sm font-semibold text-ink-50">{`${num(amount)} ${poolCoin(pool)}`}</span>;
   const walletName = (pool: Pool) => (
     <span className="flex items-center gap-1.5 font-medium text-ink-50">

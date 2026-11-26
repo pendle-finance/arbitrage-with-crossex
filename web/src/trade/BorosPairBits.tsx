@@ -23,11 +23,11 @@ import type {
   BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
+import { ListPicker } from '../components/ListPicker';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { fmtDateShort, fmtDateUtc, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
 import { spreadName, type SpreadVenues } from '../lib/spread';
 import { SpreadName } from '../components/SpreadName';
-import { ChevronDown } from 'lucide-react';
 import { localizeServerText } from '../i18n/serverMessages';
 
 /** Was this leg actually sent to the venue? A not-submitted sentinel is
@@ -258,6 +258,11 @@ export function MarketSelect({
 }) {
   const eligible = markets.filter((m) => reasonFor(m) === null);
   const { t } = useTranslation();
+  const rows = eligible.map((m) => ({
+    key: String(m.marketId),
+    icon: m.spreadVenues ? <SpreadIcon venues={m.spreadVenues} size={16} /> : <VenueIcon venue={m.venue} size={16} />,
+    name: marketLabel(m),
+  }));
   return (
     <div className="flex flex-col gap-1">
       {label ? (
@@ -265,26 +270,15 @@ export function MarketSelect({
           {label}
         </label>
       ) : null}
-      <div className="relative">
-        <select
-          id={id}
-          className="select"
-          aria-label={label ? undefined : ariaLabel}
-          value={value ?? ''}
-          disabled={disabled}
-          onChange={(e) => onPick(e.target.value === '' ? null : Number(e.target.value))}
-        >
-          <option value="">{t('pairTicket.borosBits.selectMarket')}</option>
-          {eligible.map((m) => (
-            <option key={m.marketId} value={m.marketId}>
-              {marketLabel(m)}
-            </option>
-          ))}
-        </select>
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
-          <ChevronDown size={14} aria-hidden />
-        </span>
-      </div>
+      <ListPicker
+        id={id}
+        label={label || ariaLabel || ''}
+        value={value === null ? '' : String(value)}
+        onChange={(key) => onPick(Number(key))}
+        rows={rows}
+        placeholder={t('pairTicket.borosBits.selectMarket')}
+        disabled={disabled}
+      />
     </div>
   );
 }

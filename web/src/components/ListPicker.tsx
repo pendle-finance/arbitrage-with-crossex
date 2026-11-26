@@ -1,12 +1,11 @@
 import { Check, ChevronDown } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { TokenIcon } from './AssetIcon';
 import { usePopoverPlacement } from './usePopoverPlacement';
 
 export interface ListPickerRow<K extends string> {
   key: K;
-  icon?: string;
+  icon?: ReactNode;
   name: ReactNode;
   value?: ReactNode;
 }
@@ -16,11 +15,17 @@ export function ListPicker<K extends string>({
   value,
   onChange,
   label,
+  placeholder,
+  disabled = false,
+  id,
 }: {
   rows: ListPickerRow<K>[];
   value: K;
   onChange: (key: K) => void;
   label: string;
+  placeholder?: ReactNode;
+  disabled?: boolean;
+  id?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -91,12 +96,14 @@ export function ListPicker<K extends string>({
     <>
       <button
         ref={button}
+        id={id}
         type="button"
+        disabled={disabled}
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        className={`flex h-[35px] w-full cursor-pointer items-center gap-2 rounded border bg-wash/[0.05] pl-2.5 pr-2.5 text-left text-sm font-medium transition-colors hover:bg-wash/[0.08] ${
+        className={`flex h-[35px] w-full cursor-pointer items-center gap-2 rounded border bg-wash/[0.05] pl-2.5 pr-2.5 text-left text-sm font-medium transition-colors hover:bg-wash/[0.08] disabled:cursor-not-allowed disabled:opacity-50 ${
           open ? 'border-info/70' : 'border-ink-700'
         }`}
         onClick={() => (open ? hide(false) : show())}
@@ -105,10 +112,11 @@ export function ListPicker<K extends string>({
           if (e.key === ' ') e.preventDefault();
         }}
       >
+        {!picked && <span className="flex-1 truncate font-normal text-ink-400">{placeholder}</span>}
         {picked && (
           <span className={`${line} flex-1`}>
             <span className="flex min-w-0 items-center gap-2">
-              {picked.icon && <TokenIcon symbol={picked.icon} size={16} />}
+              {picked.icon}
               <span className="truncate text-ink-50">{picked.name}</span>
             </span>
             {picked.value && <span className="num shrink-0 text-xs font-normal text-ink-300">{picked.value}</span>}
@@ -149,7 +157,7 @@ export function ListPicker<K extends string>({
                 <span className="flex w-3.5 shrink-0 text-info">{row.key === value && <Check size={14} aria-hidden />}</span>
                 <span className={`${line} flex-1`}>
                   <span className="flex min-w-0 items-center gap-2">
-                    {row.icon && <TokenIcon symbol={row.icon} size={16} />}
+                    {row.icon}
                     <span className="truncate text-ink-50">{row.name}</span>
                   </span>
                   {row.value && <span className="num shrink-0 text-ink-300">{row.value}</span>}
