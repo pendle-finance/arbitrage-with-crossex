@@ -363,6 +363,19 @@ describe('RunView, TWAP paused and ended', () => {
     expect(screen.getByText('Hold to stop')).toBeTruthy();
   });
 
+  it('one slice left on resume says "1 slice", not "1 slices"', () => {
+    renderRun(job({ status: 'halted', paused: true, child: null }, { slice: 11, of: 12, nextAt: null }));
+    expect(within(rowOf('On Resume')).getByText('1 slice, every 5m')).toBeTruthy();
+  });
+
+  it('before the first fill there is no average price, and no empty dollar brackets', () => {
+    const { container } = renderRun(
+      job({ legs: [leg('Gate', 'LONG', '0', null), leg('Hyperliquid', 'SHORT', '0', null)], orders: [] }),
+    );
+    expect(container.textContent).toContain('0.00 / 693.64 ETH');
+    expect(container.textContent).not.toContain('()');
+  });
+
   it('restart line', () => {
     renderRun(paused({ paused: false, haltKind: 'restart', updatedAt: at(14, 13) }));
     expect(document.querySelector('.alert-amber')).not.toBeNull();

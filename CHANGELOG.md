@@ -132,6 +132,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **A Market deal's title says "market"**, not "limit + hedge". After a part close, Close Boros
   says what each leg keeps, and the Delever plan says "0.03 YU each" for its Boros legs. A
   25% Close perps rounds both legs to the same lot, so it no longer blocks as "not one deal".
+- **Run views show no empty "()"** before the first fill. A paused TWAP with one slice left
+  says "1 slice". The Move cash done view says "Done." above its facts.
 
 ## 1.7.9 — 2026-11-10
 
