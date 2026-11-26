@@ -362,7 +362,7 @@ export function SpreadReadout({
           t('pairTicket.borosBits.estimatedSpread')
         )
       }
-      value={<span className={`text-[14px] ${negative ? 'text-rose-300' : 'text-emerald-400'}`}>{pct(headline)}</span>}
+      value={<span className={negative ? 'text-rose-300' : 'text-emerald-400'}>{pct(headline)}</span>}
       strong
     />
   );
