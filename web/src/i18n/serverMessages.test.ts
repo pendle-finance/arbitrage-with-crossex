@@ -488,6 +488,12 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
     "保证金不足，且没有可兑换的现金。请把 USDT 转入 USDT · CrossEx，然后点击恢复。",
   ],
   [
+    "Not enough free margin for the next slice. Nothing is open. Add margin, then Resume.",
+    "可用保证金不足以执行下一片。目前没有未对冲的仓位。请补充保证金，然后点击恢复。",
+  ],
+  ["Could not find the other perp of this pair. Close the gap in Positions.", "找不到此组合的另一条永续合约。请在持仓中补平差额。"],
+  ["Gate refused the hedge again. Nothing else changed.", "Gate 再次拒绝了对冲单。其他均未变动。"],
+  [
     "Gate's 100 Convert quotes for today are used up. The Hyperliquid short is 53.8 ETH smaller than the Gate long. Resume after Gate's count clears, within 24 hours, or close 53.8 ETH of the Gate long in Positions.",
     "Gate 今天的 100 次兑换报价已用完。Hyperliquid 空头比 Gate 多头少 53.8 ETH。请等 Gate 的计数清零（24 小时内）后点击恢复，或在持仓中平掉 Gate 多头的 53.8 ETH。",
   ],

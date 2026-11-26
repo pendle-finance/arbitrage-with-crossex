@@ -1,4 +1,4 @@
-import type { RealizeEstimate, RealizeExec, RealizeLeg, RealizePlan, SliceOption } from '../api/types';
+import type { RealizeEstimate, RealizeExec, RealizeLeg, RealizePlan, SliceOption, TwapInput } from '../api/types';
 
 export interface Slice {
   count: number;
@@ -71,3 +71,25 @@ export function legCostsOf(plan: RealizePlan, exec: RealizeExec, cost: Cost): nu
 }
 
 export const hasPlan = (plan: RealizePlan | null): plan is RealizePlan => plan !== null && (plan.legs.length > 0 || plan.refused !== null);
+
+export interface TwapQuery {
+  durationSec: number;
+  slices: number;
+}
+
+const countAtSize = (leadQty: number, sliceQty: string | undefined): number | undefined => {
+  const size = Number(sliceQty);
+  if (!(size > 0) || !(leadQty > 0)) return undefined;
+  const ratio = leadQty / size;
+  return Math.ceil(ratio - ratio * 1e-12);
+};
+
+export function twapQueryOf(input: TwapInput, leadQty: number): TwapQuery | null {
+  const { durationSec, intervalSec } = input;
+  const spanned = durationSec !== undefined && intervalSec !== undefined ? (intervalSec > 0 ? Math.floor(durationSec / intervalSec) : 0) : undefined;
+  const slices = input.slices ?? spanned ?? countAtSize(leadQty, input.sliceQty);
+  if (slices === undefined) return null;
+  const duration = durationSec ?? (intervalSec !== undefined ? slices * intervalSec : undefined);
+  if (duration === undefined) return null;
+  return { durationSec: Math.max(1, Math.round(duration)), slices: Math.max(1, slices) };
+}

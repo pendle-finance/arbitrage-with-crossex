@@ -14,9 +14,12 @@ import {
   positiveOf,
   type PerpRule,
   type PerpSide,
+  twapEstimateOf,
+  type RealizeEstimate,
   type RealizeExec,
   type RealizeLeg,
   type RealizePerp,
+  type RealizePlan,
 } from '../../core/rebalance/realize';
 import type { SliceOption } from '../../core/rebalance/slices';
 import {
@@ -44,7 +47,7 @@ import {
 } from '../../core/rebalance/plan';
 import { touchOf } from '../../core/estimate/books';
 import { depthOf, makerLegOf, priceImpactOf, TWAP_DEFAULT_INPUT, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
-import { planSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult } from '../../core/twap';
+import { planSlices, splitFixOf, type SplitLeg, splitPlans, splitSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult, type TwapRefusal } from '../../core/twap';
 import type { Store } from '../../engine/db';
 import { fx, FX_ZERO, type Fx } from '../../engine/fx';
 import { type DealRequest, REPEG_CHOICES_BP, REPEG_DEFAULT_BP, takerAfterCapText, TIMEOUT_MAX_S, TIMEOUT_MIN_S, TIMEOUT_RANGE_TEXT } from '../../engine/create';
@@ -54,7 +57,7 @@ import { TTL } from '../cache';
 import { accountFeeRowsOf, cachedTradesOf, feeReadWithin, feeRowsWithin } from '../dealFees';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { catchRateLimit, refuse, sendError } from '../errorReply';
-import { loadTwapChildren, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
+import { isSlicedTwap, loadTwapChildren, markOpenGap, stopLiveChild, twapViewOf, type TwapRunDeps } from '../twapRun';
 import { createDeal, type DealBody } from './deals';
 import { INTEREST_OVERFLOW, INTEREST_PAGE_SIZE, InterestFile, syncInterest } from '../interestLedger';
 import {
@@ -221,6 +224,24 @@ function twapInputOf(value: unknown): TwapInput | null {
   };
   if (Object.values(input).some((field) => field === undefined)) throw new CoreError('twap needs numbers for durationSec, intervalSec and slices');
   return input;
+}
+
+function realizeTwapQueryOf(durationSec: unknown, slices: unknown): TwapInput | null {
+  if (durationSec === undefined && slices === undefined) return null;
+  const duration = Number(durationSec);
+  const count = Number(slices);
+  if (!Number.isInteger(duration) || !Number.isInteger(count) || duration <= 0 || count <= 0) {
+    throw new CoreError('twapDurationSec and twapSlices must be whole numbers');
+  }
+  return { durationSec: duration, slices: count };
+}
+
+interface RealizeTwap {
+  plan: TwapPlan | null;
+  refusal: TwapRefusal | null;
+  price: number;
+  legs: { symbol: string; slices: number; plan: TwapPlan | null }[];
+  estimates: Record<RealizeExec, RealizeEstimate> | null;
 }
 
 const isDecimalQty = (value: string): boolean => /^\d+(\.\d{1,12})?$/.test(value) && fx(value) > FX_ZERO;
@@ -494,8 +515,9 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!(refPrice > 0)) throw new CoreError(`No price for ${lead.symbol}, so the TWAP is not planned. Try again.`);
       const legBooks = legs.map((leg) => legBookOf(leg, books[leg.symbol]));
       const depths = legBooks.map(depthOf).filter((depth): depth is number => depth !== null);
-      const result = planOr400(totalQty, input, twapRules, refPrice, depths.length ? qtyText(Math.min(...depths)) : null);
-      return { result, price: refPrice, rules: twapRules, priceImpact: result.plan ? priceImpactOf(legBooks, Number(totalQty), result.plan) : null };
+      const bookQty = depths.length ? qtyText(Math.min(...depths)) : null;
+      const result = planOr400(totalQty, input, twapRules, refPrice, bookQty);
+      return { result, price: refPrice, rules: twapRules, bookQty, priceImpact: result.plan ? priceImpactOf(legBooks, Number(totalQty), result.plan) : null };
     };
 
     const makerSymbolOf = (req: DealRequest): OrderLeg => (req.makerLeg === 'b' && req.b ? req.b : req.a);
@@ -550,9 +572,14 @@ export function rebalanceRoutes(deps: AppDeps) {
       bootJob !== null &&
       bootStep !== undefined &&
       (bootStep.venueId !== null || bootStep.text !== null);
-    if (jobs && deps.engine && bootJob?.kind === 'delever' && bootJob.deleverTwap && bootJob.status === 'running') {
-      void stopLiveChild(twapDeps(jobs), bootJob);
-      if (jobs.haltIfRunning()) onHalt(bootJob);
+    if (jobs && deps.engine && bootJob && isSlicedTwap(bootJob) && bootJob.status === 'running') {
+      void stopLiveChild(twapDeps(jobs), bootJob, true);
+      if (jobs.haltIfRunning()) {
+        const halted = jobs.read() ?? bootJob;
+        markOpenGap(deps.engine.store, halted);
+        jobs.write(halted);
+        onHalt(halted);
+      }
     } else if (jobs && bootJob && bootStep?.name === SLICE_STEP) {
       inflight = cancelRestingLead(runnerDeps(jobs), bootJob)
         .then(() => {
@@ -609,7 +636,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         ),
       );
 
-    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, sliceUsd?: number, realizePool?: Pool) => {
+    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, sliceUsd?: number, realizePool?: Pool, twapSlices?: number) => {
       const account = await readAccount(fresh);
       const userId = account.value.userId ? String(account.value.userId) : null;
       const [positions, rates, paid, coins, rules, fees, tickers, depth] = await Promise.all([
@@ -661,11 +688,11 @@ export function rebalanceRoutes(deps: AppDeps) {
         repay: planFor(buckets, account.value, inputs, REPAY_GOAL),
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
-      const realize = realizeTabOf(buckets, account.value, inputs, realizeUsd, sliceUsd, realizePool);
+      const realize = realizeTabOf(buckets, account.value, twapSlices === undefined ? inputs : { ...inputs, twapSlices }, realizeUsd, sliceUsd, realizePool);
       const fullPlan = fullPlanOf(buckets, account.value, inputs);
       const imUsed = imUsedOf(account.value);
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
-      return { buckets, plans, realize, fullPlan, imUsed, stale, userId, perpRules, perps };
+      return { buckets, plans, realize, fullPlan, imUsed, stale, userId, perpRules, perps, books };
     };
 
     const borosLegsOf = async (request: DeleverRequest, fresh: boolean): Promise<DeleverInput['boros']> => {
@@ -782,16 +809,19 @@ export function rebalanceRoutes(deps: AppDeps) {
     };
 
     app.get('/rebalance', async (req, reply) => {
-      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; sliceUsd?: unknown; realizePool?: unknown };
+      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; sliceUsd?: unknown; realizePool?: unknown; twapDurationSec?: unknown; twapSlices?: unknown };
       const custom = customGoalOf(query);
       const realizeUsd = positiveQueryOf(query.realizeUsd, 'realizeUsd') ?? null;
       const sliceUsd = positiveQueryOf(query.sliceUsd, 'sliceUsd');
       const realizePool = poolQueryOf(query.realizePool);
-      const { buckets, plans, realize, fullPlan, imUsed, stale } = await loadView(false, custom, realizeUsd, sliceUsd, realizePool);
+      const twapInput = realizeTwapQueryOf(query.twapDurationSec, query.twapSlices);
+      const { buckets, plans, realize, fullPlan, imUsed, stale, perps, books } = await loadView(false, custom, realizeUsd, sliceUsd, realizePool, twapInput?.slices);
+      const twapOf = (plan: RealizePlan | null) => (twapInput ? realizeTwapOf(plan, perps, books, twapInput, false).catch(() => null) : null);
+      const realizeTwap = twapInput && realize ? { clearDebt: await twapOf(realize.clearDebt), all: await twapOf(realize.all), custom: await twapOf(realize.custom) } : null;
       const job = jobs?.read() ?? null;
-      const twapView = job && jobs && (job.kind === 'twap' || (job.kind === 'delever' && job.deleverTwap)) ? await twapViewFor(jobs, job) : {};
+      const twapView = job && jobs && (job.kind === 'twap' || isSlicedTwap(job)) ? await twapViewFor(jobs, job) : {};
       return reply.ok(
-        { buckets, plans, realize, fullPlan, imUsed, job: job ? { ...job, inTransit: await loadInTransit(job), ...twapView } : null },
+        { buckets, plans, realize, realizeTwap, fullPlan, imUsed, job: job ? { ...job, inTransit: await loadInTransit(job), ...twapView } : null },
         { stale },
       );
     });
@@ -808,6 +838,56 @@ export function rebalanceRoutes(deps: AppDeps) {
         twap: { plan: result.plan, refusal: result.ok ? null : result.refusal, price: planned.price },
         priceImpact: planned.priceImpact,
       };
+    };
+
+    const realizeTwapOf = async (
+      plan: RealizePlan | null,
+      perps: RealizePerp[],
+      books: Record<string, NormalizedBook | null>,
+      input: TwapInput,
+      fresh: boolean,
+    ): Promise<RealizeTwap | null> => {
+      const legs = (plan?.legs ?? []).filter((leg) => leg.qty > 0);
+      if (!plan || plan.refused || legs.length === 0) return null;
+      const live = livePerpsOf(perps);
+      const markOf = (symbol: string): number | null => live.find((perp) => perp.symbol === symbol)?.markPrice ?? null;
+      const orderLeg = (leg: RealizeLeg): OrderLeg => ({ symbol: leg.symbol, side: leg.side === 'LONG' ? 'SELL' : 'BUY' });
+      const usd = legs.map((leg) => leg.qty * (markOf(leg.symbol) ?? 0));
+      const lead = usd.indexOf(Math.max(...usd));
+      const whole = await twapPlanFor([orderLeg(legs[lead])], qtyText(legs[lead].qty), input, fresh, markOf(legs[lead].symbol));
+      const refusalOf = (result: TwapPlanResult): TwapRefusal | null => (result.ok ? null : result.refusal);
+      const estimatesOf = (rows: RealizeTwap['legs']): RealizeTwap['estimates'] => {
+        const qtys = Object.fromEntries(rows.flatMap((row) => (row.plan ? [[row.symbol, twapQtysOf(row.plan)]] : [])));
+        return { maker: twapEstimateOf(plan, 'maker', books, qtys), market: twapEstimateOf(plan, 'market', books, qtys) };
+      };
+      if (legs.length === 1) {
+        const { plan: one } = whole.result;
+        const refusal = refusalOf(whole.result);
+        const rows = [{ symbol: legs[0].symbol, slices: one?.slices ?? 0, plan: one }];
+        return { plan: one, refusal, price: whole.price, legs: rows, estimates: one && !refusal ? estimatesOf(rows) : null };
+      }
+      const shape = whole.result.plan;
+      const shapeRefusal = refusalOf(whole.result);
+      if (!shape || (shapeRefusal && shapeRefusal.field !== 'sliceSize')) return { plan: null, refusal: shapeRefusal, price: whole.price, legs: [], estimates: null };
+      if (legs.length > shape.slices) {
+        const fix = { label: `Use ${legs.length} slices`, patch: { ...input, slices: legs.length } };
+        return { plan: null, refusal: { field: 'sliceSize', text: `Use at least ${legs.length} slices, one for each perp.`, fix }, price: whole.price, legs: [], estimates: null };
+      }
+      const counts = splitSlices(shape.slices, usd);
+      const split: SplitLeg[] = [];
+      for (const [index, leg] of legs.entries()) {
+        const planned = await twapPlanFor([orderLeg(leg)], qtyText(leg.qty), { intervalSec: shape.intervalSec, slices: Math.max(2, counts[index]) }, fresh, markOf(leg.symbol));
+        split.push({ qty: qtyText(leg.qty), rules: planned.rules, mark: planned.price, bookQty: planned.bookQty });
+      }
+      const planned = splitPlans(shape.intervalSec, counts, split);
+      const rows: RealizeTwap['legs'] = legs.map((leg, index) => ({ symbol: leg.symbol, slices: planned[index].plan?.slices ?? counts[index], plan: planned[index].plan }));
+      const failed = planned.find((row) => row.refusal)?.refusal ?? null;
+      const leadLeg: SplitLeg = { qty: qtyText(legs[lead].qty), rules: whole.rules, mark: whole.price, bookQty: whole.bookQty };
+      const offFix = failed?.fix && Object.keys(failed.fix.patch).length === 0 ? failed.fix : null;
+      const refusal: TwapRefusal | null = failed ? { ...failed, fix: splitFixOf(input, leadLeg, split, usd) ?? offFix } : null;
+      const slices = rows.reduce((total, row) => total + row.slices, 0);
+      const joined: TwapPlan = { ...shape, slices, durationSec: slices === shape.slices ? shape.durationSec : slices * shape.intervalSec };
+      return { plan: refusal ? null : joined, refusal, price: whole.price, legs: rows, estimates: refusal ? null : estimatesOf(rows) };
     };
 
     app.post('/rebalance/delever/plan', async (req, reply) => {
@@ -845,6 +925,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       intervalSec?: unknown;
       sliceQty?: unknown;
       maker?: unknown;
+      twap?: unknown;
     }
 
     const refuse400 = (reply: FastifyReply, message: string): FastifyReply =>
@@ -943,12 +1024,14 @@ export function rebalanceRoutes(deps: AppDeps) {
       const realizeUsd = target !== 'custom' ? null : isPositive(body.realizeUsd) ? body.realizeUsd : undefined;
       if (realizeUsd === undefined) return conflict(reply, RELOAD_TEXT);
       const realizePool = poolQueryOf(body.realizePool);
-      const maker = exec === 'maker' ? makerOf(body.maker) : null;
+      const askedTwap = body.twap as { takerAfterSec?: number | null; repegBehindBp?: 2 | 5 | 10 | null } | null | undefined;
+      const twapInput = twapInputOf(askedTwap);
+      const maker = exec === 'maker' && twapInput === null ? makerOf(body.maker) : null;
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
       const shownSlice = isPositive(body.sliceUsd) ? body.sliceUsd : undefined;
-      const view = await catchRateLimit(loadView(true, null, realizeUsd, shownSlice, realizePool));
+      const view = await catchRateLimit(loadView(true, null, realizeUsd, shownSlice, realizePool, twapInput?.slices));
       if (!view) return conflict(reply, STALE_TEXT);
       const tab = view.realize;
       if (tab && realizePool !== undefined && tab.pool !== realizePool) return conflict(reply, WALLET_HAS_NO_UPNL, PLAN_CHANGED_LABEL);
@@ -956,9 +1039,14 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!tab || !plan) return conflict(reply, NOTHING_TO_REALIZE);
       if (plan.refused) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (plan.legs.length === 0) return conflict(reply, NOTHING_TO_REALIZE);
+      const twap = twapInput ? await realizeTwapOf(plan, view.perps, view.books, twapInput, true) : null;
+      if (twap?.refusal) return refuse400(reply, twap.refusal.text);
+      if (twapInput && !twap?.plan) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const sliceUsd = cappedSliceOf(tab.sliceOptions, shownSlice ?? tab.defaultSliceUsd);
-      if (tab.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
-      const estimate = realizeTabEstimateOf(tab, plan, exec, sliceUsd);
+      if (!twap?.plan && tab.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      const takerAfterSec = twap?.plan ? takerAfterOf({ timeoutSec: askedTwap?.takerAfterSec }, twap.plan) : null;
+      const repegBehindBp = repegOf({ repegBehindBp: askedTwap?.repegBehindBp });
+      const estimate = twap?.estimates ? twap.estimates[exec] : realizeTabEstimateOf(tab, plan, exec, sliceUsd);
       if (costRoseTooMuch(estimate.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
@@ -980,8 +1068,18 @@ export function rebalanceRoutes(deps: AppDeps) {
           kind: 'realize',
           exec,
           sliceUsd,
-          sliceCount: sliceCountOf(tab.sliceOptions, sliceUsd, notionalUsd),
+          sliceCount: twap?.plan ? twap.plan.slices : sliceCountOf(tab.sliceOptions, sliceUsd, notionalUsd),
           estimate,
+          twap: twap?.plan
+            ? {
+                durationSec: twap.plan.durationSec,
+                intervalSec: twap.plan.intervalSec,
+                slices: twap.plan.slices,
+                takerAfterSec,
+                repegBehindBp,
+                legs: twap.legs.map(({ symbol, slices }) => ({ symbol, slices })),
+              }
+            : null,
           maker,
         },
         now(),
@@ -1148,7 +1246,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const fixable =
         job.status === 'halted' || (follow && missed) || (action === 'boros-retry' && job.status === 'abandoned' && job.delever !== null);
       if (!fixable) return conflict(reply, `rebalance ${job.id} is ${job.status}`);
-      const hedgeRefused = job.status === 'halted' && job.haltKind === 'hedge-margin';
+      const hedgeRefused = job.status === 'halted' && (job.haltKind === 'hedge-margin' || job.notHedgedQty > 0);
       const open = action === 'unwind'
         ? hedgeRefused
         : follow
@@ -1214,6 +1312,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         return reply.ok(current);
       }
       current.steps[current.stepIndex].startedAt = now();
+      current.retryConverts = 0;
       store.write(current);
       start(store);
       return reply.ok(current);

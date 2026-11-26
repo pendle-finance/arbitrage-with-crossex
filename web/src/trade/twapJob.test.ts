@@ -29,6 +29,8 @@ describe('liveTwapJob', () => {
   it('takes a TWAP and a Delever TWAP while running or halted', () => {
     expect(liveTwapJob(job({ kind: 'twap' }))).not.toBeNull();
     expect(liveTwapJob(job({ kind: 'delever', status: 'halted' }))).not.toBeNull();
+    expect(liveTwapJob(job({ kind: 'realize' }))).not.toBeNull();
+    expect(liveTwapJob(job({ kind: 'realize', twap: undefined }))).toBeNull();
   });
 
   it('skips a Delever without TWAP and an ended run', () => {

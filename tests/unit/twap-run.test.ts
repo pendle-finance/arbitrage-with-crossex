@@ -863,6 +863,25 @@ describe('delever twap', () => {
     expect((w.jobs.read() as Job).status).toBe('halted');
   });
 
+  it('sleep stops the live slice and halts a realize twap', async () => {
+    const job = deleverJob({ durationSec: 4 * 3600, intervalSec: 300, slices: 48 });
+    const id = await deleverChild(job, 1);
+    const realize = { ...(w.jobs.read() as Job), kind: 'realize' as const, delever: null };
+    w.jobs.write(realize);
+    const slept = sleepHaltTwap(w.deps, w.jobs.read() as Job, { fromMs: T0 + MIN, toMs: T0 + 41 * MIN });
+    expect(w.store.getPair(id)?.mode).toBe('STOPPING');
+    expect(slept).toMatchObject({ kind: 'realize', status: 'halted', haltKind: 'sleep' });
+    expect(twapViewOf(slept, await loadTwapChildren(w.deps, slept)).twap).toMatchObject({ slice: 1, of: 48, intervalSec: 300 });
+  });
+
+  it('sleep leaves a realize without twap alone', async () => {
+    const job = deleverJob(null);
+    const id = await deleverChild(job, 1);
+    w.jobs.write({ ...(w.jobs.read() as Job), kind: 'realize', delever: null });
+    expect(sleepHaltTwap(w.deps, w.jobs.read() as Job, { fromMs: T0, toMs: T0 + 41 * MIN }).status).toBe('running');
+    expect(w.store.getPair(id)?.mode).toBe('OPENING');
+  });
+
   it('sleep leaves a delever without twap alone', async () => {
     const job = deleverJob(null);
     const id = await deleverChild(job, 1);

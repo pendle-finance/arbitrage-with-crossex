@@ -10,7 +10,7 @@ import type { NormalizedBook } from '../../src/core/estimate/books';
 import type { AccountLike, EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
 import type { RealizeLeg, RealizePerp, RealizePlan } from '../../src/core/rebalance/realize';
 import type { SliceOption } from '../../src/core/rebalance/slices';
-import { FEE_ROWS, GATE_ETH, OWNER_HL_ETH, ownerBook, perp, PERP_RULES, realizeBook, type RealizeBook } from '../unit/fixtures/realize-books';
+import { FEE_ROWS, GATE_ETH, HL_BTC, HL_ETH as HL_ETH_BOOK, OWNER_HL_ETH, ownerBook, perp, PERP_RULES, realizeBook, twoLegs, type RealizeBook } from '../unit/fixtures/realize-books';
 import { Store } from '../../src/engine/db';
 import { closeBorosLegs } from '../../src/server/borosClose';
 import { marketAcc, raw } from '../helpers/boros-fixtures';
@@ -894,6 +894,170 @@ describe('POST /api/rebalance with a close and reopen', () => {
     boros: [],
     exec: 'maker',
   };
+
+  const REALIZE_TWAP = { durationSec: 3600, slices: 12 };
+  const TWAP_QUERY = '/api/rebalance?twapDurationSec=3600&twapSlices=12';
+  const twapQtys = (plan: { slices: number; sliceQty: string; lastQty: string }) => Number(plan.sliceQty) * (plan.slices - 1) + Number(plan.lastQty);
+
+  function mockTwoLegs(): void {
+    const book = twoLegs();
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    for (const [coin, levelBook] of [['ETH', HL_ETH_BOOK], ['BTC', HL_BTC]] as const) {
+      nock('https://api.hyperliquid.xyz')
+        .persist()
+        .post('/info', (body) => body.type === 'l2Book' && body.coin === coin)
+        .reply(200, { coin, levels: [levels(levelBook.bids), levels(levelBook.asks)] });
+    }
+  }
+
+  it('GET /rebalance plans a one-leg realize TWAP with its cost', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const res = await h.get(TWAP_QUERY);
+
+    expect(res.statusCode, res.body).toBe(200);
+    const { realize, realizeTwap } = res.json().data;
+    const twap = realizeTwap.clearDebt;
+    expect(twap.refusal).toBeNull();
+    expect(twap.plan).toMatchObject({ slices: 12, intervalSec: 300, durationSec: 3600 });
+    expect(twap.legs).toEqual([{ symbol: HL_ETH, slices: 12, plan: twap.plan }]);
+    expect(twapQtys(twap.plan)).toBeCloseTo(realize.clearDebt.legs[0].qty, 8);
+    for (const exec of ['maker', 'market'] as const) {
+      expect(twap.estimates[exec].feeUsd).toBeCloseTo(realize.clearDebt.estimates[exec].feeUsd, 6);
+      expect(twap.estimates[exec].impactUsd).toBeLessThanOrEqual(realize.clearDebt.estimates[exec].impactUsd + 1e-9);
+      expect(twap.estimates[exec].totalUsd).toBeCloseTo(twap.estimates[exec].feeUsd + twap.estimates[exec].impactUsd, 9);
+    }
+    expect((await h.get('/api/rebalance')).json().data.realizeTwap).toBeNull();
+  });
+
+  it('GET /rebalance splits a two-leg realize TWAP by notional on one interval', async () => {
+    mockTwoLegs();
+    const h = boot();
+
+    const res = await h.get(TWAP_QUERY);
+
+    expect(res.statusCode, res.body).toBe(200);
+    const { realize, realizeTwap } = res.json().data;
+    const twap = realizeTwap.all;
+    expect(realize.all.legs).toHaveLength(2);
+    expect(twap.refusal).toBeNull();
+    expect(twap.legs.map((leg: { symbol: string }) => leg.symbol)).toEqual(realize.all.legs.map((leg: RealizeLeg) => leg.symbol));
+    const counts = twap.legs.map((leg: { slices: number }) => leg.slices);
+    expect(counts.reduce((sum: number, count: number) => sum + count, 0)).toBe(twap.plan.slices);
+    expect(Math.min(...counts)).toBeGreaterThanOrEqual(1);
+    const usd = realize.all.legs.map((leg: RealizeLeg) => leg.qty * (leg.symbol.includes('BTC') ? 64_394.5 : 1_821.7));
+    expect(counts[usd[0] > usd[1] ? 0 : 1]).toBeGreaterThanOrEqual(counts[usd[0] > usd[1] ? 1 : 0]);
+    for (const [index, leg] of twap.legs.entries()) {
+      expect(leg.plan.intervalSec).toBe(twap.plan.intervalSec);
+      expect(twapQtys(leg.plan)).toBeCloseTo(realize.all.legs[index].qty, 8);
+    }
+    expect(twap.estimates.market.totalUsd).toBeGreaterThan(0);
+  });
+
+  it('GET /rebalance returns the TWAP refusal and refuses a bad TWAP query', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const refused = (await h.get('/api/rebalance?twapDurationSec=3600&twapSlices=500')).json().data.realizeTwap.clearDebt;
+    expect(refused.refusal).toMatchObject({ text: expect.any(String) });
+    expect(refused.estimates).toBeNull();
+    expect((await h.get('/api/rebalance?twapDurationSec=3600&twapSlices=abc')).statusCode).toBe(400);
+  });
+
+  it('a realize start with a TWAP stores the plan with its legs, ignores maker, and checks the TWAP cost', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const twap = (await h.get(TWAP_QUERY)).json().data.realizeTwap.clearDebt;
+    const ask = { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', twap: { ...REALIZE_TWAP, takerAfterSec: 120, repegBehindBp: 2 }, maker: { takerAfterSec: 600, repegBehindBp: 5 } };
+
+    const res = await h.post('/api/rebalance', { ...ask, costUsd: twap.estimates.maker.totalUsd });
+
+    expect(res.statusCode, res.body).toBe(202);
+    const job = h.file();
+    expect(job.deleverTwap).toEqual({ durationSec: 3600, intervalSec: 300, slices: 12, takerAfterSec: 120, repegBehindBp: 2, legs: [{ symbol: HL_ETH, slices: 12 }] });
+    expect(job.maker ?? null).toBeNull();
+    expect(job.slice).toMatchObject({ count: 12 });
+    expect(job.estimate?.totalUsd).toBeCloseTo(twap.estimates.maker.totalUsd, 6);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize start with a TWAP that cannot be planned returns 400 and starts nothing', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd: 1_000_000, twap: { durationSec: 3600, slices: 500 } });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toEqual(expect.any(String));
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+  });
+
+  it('a running realize TWAP is stopped and halted at boot', async () => {
+    mockView();
+    const base = slicedJob({ status: 'running' });
+    const id = `${base.id}-s1-1`;
+    const job: Job = {
+      ...base,
+      kind: 'realize',
+      delever: null,
+      deleverTwap: { durationSec: 3600, intervalSec: 300, slices: 12, legs: [{ symbol: HL_ETH, slices: 12 }] },
+    };
+    Object.assign(job.steps[0], {
+      status: 'running',
+      startedAt: t,
+      lead: { text: id, venueId: null, sentAt: t, credited: 0, poc: true, price: null, side: 'BUY', mid: 2500, entry: null },
+      cut: { qty: 1, from: 0, at: t, ioc: false, n: 1 },
+    });
+    const h = boot({ job });
+    const leg = (contract: string, side: 'BUY' | 'SELL', reduceOnly: boolean) => ({ contract, side, lot: '0.0001', minSize: '0', minNotional: '0', tick: '0.1', reduceOnly });
+    h.store.createPair({
+      id,
+      mode: 'OPENING',
+      a: leg(HL_ETH, 'BUY', true),
+      b: leg(HL_ETH, 'SELL', false),
+      targetQty: '1',
+      limitPrice: '2500',
+      pricePolicy: 'touch',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: null,
+      haltReason: null,
+      reportJson: null,
+      createdAt: t,
+    });
+
+    await h.ready();
+
+    expect(h.file()).toMatchObject({ kind: 'realize', status: 'halted', haltKind: 'restart' });
+    expect(h.store.getPair(id)?.mode).not.toBe('OPENING');
+  });
+
+  it('Resume resets the retry Convert count', async () => {
+    mockView();
+    refuseQuotes();
+    const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 12, arrives: 11.97, borrowLeft: 0, seconds: 0, from: 'CROSSEX', to: 'HYPERLIQUID' };
+    const job = newJob({ route: 'convert', steps: [convert], amount: 12, costUsd: 0, target: [], userId: '1' }, t);
+    Object.assign(job, { status: 'halted', haltReason: 'Gate took too long on this step.', retryConverts: 3 });
+    const h = boot({ job });
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data.retryConverts).toBe(0);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    expect(h.file().retryConverts).toBe(0);
+  });
 
   it('full plan priced at limit + hedge', async () => {
     mockAccount(ownerAccount());

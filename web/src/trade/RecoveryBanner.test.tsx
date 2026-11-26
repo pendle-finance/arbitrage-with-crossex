@@ -61,6 +61,32 @@ function renderTwap(job: RebalanceJob, deals: ReturnType<typeof makeDealView>[] 
 }
 
 describe('RecoveryBanner', () => {
+  it('a realize TWAP shows its own band and hides its child deals', async () => {
+    const realize = twapJob({
+      kind: 'realize',
+      legs: [],
+      realize: { legs: [{ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', base: 'ETH' }] },
+      steps: [{ name: 'Slices', status: 'running', perp: { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC' } }],
+    } as unknown as Partial<RebalanceJob>);
+    const child = makeDealView();
+    renderTwap(realize, [{ ...child, pair: { ...child.pair, id: 'job1-s3-1' } }]);
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP · Realize uPnL · ETH · slice 3/12');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('a realize TWAP that a venue halted names the venue of its leg', async () => {
+    const realize = twapJob({
+      kind: 'realize',
+      status: 'halted',
+      haltKind: 'hedge-margin',
+      legs: [],
+      realize: { legs: [{ symbol: 'GATE_FUTURE_BTC_USDT', exchange: 'GATE', base: 'BTC' }] },
+      steps: [],
+    } as unknown as Partial<RebalanceJob>);
+    renderTwap(realize);
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: Gate refused the hedge · Realize uPnL · BTC · slice 3/12');
+  });
+
   it('twap band', async () => {
     renderTwap(twapJob());
     expect(await screen.findByRole('alert')).toHaveTextContent('TWAP · ETH pair open · slice 3/12');
