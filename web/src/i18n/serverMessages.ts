@@ -186,6 +186,7 @@ const RULES: readonly Rule[] = [
   [/^(.+) has a TP\/SL order set — if it triggers, this pair stops being hedged\.$/, 'tpSl', ['market']],
   [/^(.+) is isolated-only\. You need (\S+) (\S+) in its account to open this position\.$/, 'isolatedShort', ['market', 'size', 'coin']],
   [/^Cross margin is short (\S+) (\S+) to open (all positions|both positions|this position)\.$/, 'crossShort', ['size', 'coin', 'legsWord']],
+  [/^Cross margin is short (\S+) (\S+) to roll this position\.$/, 'crossShortRoll', ['size', 'coin']],
   [/^Prepaid gas on this Boros account could not be read, so this order may still be refused for gas\.$/, 'gasUnread'],
   [/^This is gas, not trading collateral: topping up your margin will not fix it\.$/, 'gasNotCollateral'],
   [/^Boros gas is empty and the (\S+) price is unknown, so this order can't top it up\. It may be refused\.$/, 'gasEmptyNoPrice', ['coin']],

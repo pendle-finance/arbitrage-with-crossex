@@ -151,7 +151,7 @@
     "availableMarginOf": "Available margin · {{account}}",
     "availableMarginHint": "Free margin in this Boros account, before → after this trade.",
     "suggestedTopUp": "Suggested top-up amount",
-    "suggestedTopUpHint": "Deposit this to Boros so the position liquidates no closer than the suggested liquidation APR. Free margin left after the trade is already counted.",
+    "suggestedTopUpHint": "Deposit this to Boros so the position liquidates no closer than the suggested liquidation APR. Free margin left after the trade is already counted, and any shortfall is included.",
     "crossAccount": "Cross",
     "position": "Position",
     "positionOf": "Position · {{venue}}",

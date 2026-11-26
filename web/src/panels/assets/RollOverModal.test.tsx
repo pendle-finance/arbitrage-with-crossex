@@ -951,6 +951,16 @@ describe('RollOverModal — the review page', () => {
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
   });
 
+  it('a failed quote names the action on the disabled button, not Refreshing', async () => {
+    install();
+    server.use(http.post('/api/boros/roll/simulate', () => HttpResponse.json({ ok: false, error: { message: 'boom' } }, { status: 500 })));
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' }, { timeout: 4_000 });
+    expect(confirm).toBeDisabled();
+    expect(within(dialog).queryByRole('button', { name: 'Refreshing…' })).not.toBeInTheDocument();
+  });
+
   it('the exit shows the PnL of closing, not a spread: (locked − exec) × size × years, per leg', async () => {
     const user = userEvent.setup();
     install();
