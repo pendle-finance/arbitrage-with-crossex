@@ -461,8 +461,11 @@ describe('RebalanceModal run states', () => {
     expect(
       within(dialog()).getByText('Started 4m 58s ago. You can close this. The move keeps going.'),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'close' })).not.toBeInTheDocument();
+    expect(within(tabRadio('Move cash')).getByText('Running')).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('shows a halted state: the reason, where the money is, then Resume and Abandon', async () => {
@@ -1555,7 +1558,7 @@ function showOn(view: RebalanceView, tab?: RebalanceTab) {
   renderWithClient(<RebalanceModal view={view} tab={tab} onClose={vi.fn()} />);
 }
 
-const tabRadio = (name: string) => within(screen.getByRole('radiogroup', { name: 'Reduce borrow' })).getByRole('radio', { name });
+const tabRadio = (name: string) => within(screen.getByRole('radiogroup', { name: 'Reduce borrow' })).getByRole('radio', { name: new RegExp(`^${name}`) });
 const boxOf = (label: string) => screen.getByText(label, { selector: 'span' }).closest('.card') as HTMLElement;
 const owner = rebalanceViews.ownerAccount;
 const ownerSlices = owner.realize!.sliceOptions;

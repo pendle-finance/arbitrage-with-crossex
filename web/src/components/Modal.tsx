@@ -55,9 +55,9 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
         onClick={locked ? undefined : onClose}
       />
       <div ref={panel} className={`relative mt-12 max-w-[95vw] rounded-xl border border-ink-700 bg-ink-950 ${widthClass}`}>
-        <div className={`flex items-center justify-between gap-3 ${tabbed ? 'border-b border-ink-800 pr-3' : 'px-5 pt-5'}`}>
+        <div className={`flex items-center justify-between gap-3 ${tabbed ? 'border-b border-ink-800' : 'px-5 pt-5'}`}>
           <h2 ref={heading} className={`text-[20px] font-bold leading-[24.2px] text-ink-50 ${tabbed ? 'min-w-0 flex-1 self-stretch' : ''}`}>{title}</h2>
-          {!locked && (
+          {!locked && !tabbed && (
             <button
               type="button"
               onClick={onClose}

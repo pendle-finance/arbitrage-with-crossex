@@ -109,9 +109,12 @@ export function RebalanceModal({
             className="flex-1"
             value={tab}
             onChange={setTab}
-            options={TABS.map((value) => ({ value, label: t(`accounts.rebalanceTabs.${value}`) }))}
+            options={TABS.map((value) => ({
+              value,
+              label: t(`accounts.rebalanceTabs.${value}`),
+              badge: shown && !twapRun && jobTab(job) === value ? <JobChip job={job} /> : undefined,
+            }))}
           />
-          {shown && !twapRun && <span className="self-center"><JobChip job={job} /></span>}
         </span>
         )
       }

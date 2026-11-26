@@ -1,4 +1,4 @@
-import { useRef, type KeyboardEvent } from 'react';
+import { useRef, type KeyboardEvent, type ReactNode } from 'react';
 
 /**
  * Radio semantics, not tablist: the panel is a sibling rather than a labelled
@@ -50,7 +50,7 @@ export function UnderlineTabs<T extends string>({
   ariaLabel: string;
   value: T;
   onChange: (next: T) => void;
-  options: ReadonlyArray<{ value: T; label: string }>;
+  options: ReadonlyArray<{ value: T; label: string; badge?: ReactNode }>;
   className?: string;
   look?: keyof typeof LOOK;
 }) {
@@ -87,6 +87,7 @@ export function UnderlineTabs<T extends string>({
             className={`${style.tab} ${active ? style.active : style.idle}`}
           >
             {o.label}
+            {o.badge}
           </button>
         );
       })}
