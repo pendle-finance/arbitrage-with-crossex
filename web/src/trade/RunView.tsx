@@ -5,6 +5,7 @@ import { useBorosAgent } from '../api/queries';
 import { useActiveWallet } from '../panels/trackedAddress';
 import type { RebalanceJob, RunLegView, RunOrderView } from '../api/types';
 import { Chip } from '../components/Chip';
+import { ResultBox, type ResultRow } from '../components/ResultBox';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
 import { fmtAbout, fmtClock, fmtDateShort, fmtPct, sigGrouped } from '../lib/fmt';
@@ -62,6 +63,9 @@ const TITLE_KEY = {
   singleOpen: 'titleSingleOpen',
   singleClose: 'titleSingleClose',
 } as const;
+
+const toResultRows = (rows: RunRow[]): ResultRow[] =>
+  rows.map((row) => ({ label: row.label, value: row.tone ? <span className={TONE_CLASS[row.tone]}>{row.value}</span> : row.value }));
 
 const TONE_CLASS = { gain: 'text-emerald-400', loss: 'text-rose-400' } as const;
 
@@ -228,17 +232,15 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
 
   const chip = running ? (
     <Chip tone="info">{t('common.running')}</Chip>
-  ) : job.status === 'done' ? (
-    <Chip>{t('common.done')}</Chip>
-  ) : job.status === 'abandoned' ? (
+  ) : job.status === 'done' ? null : job.status === 'abandoned' ? (
     <Chip>{t('common.stopped')}</Chip>
   ) : (
     <Chip tone={redHalt ? 'red' : 'amber'}>{t('common.paused')}</Chip>
   );
 
   const progress =
-    total > 0
-      ? { ratio: makerFilled / total, tone: job.status === 'done' ? 'done' : job.status === 'abandoned' || redHalt ? 'stopped' : 'running' } as const
+    total > 0 && job.status !== 'done'
+      ? { ratio: makerFilled / total, tone: job.status === 'abandoned' || redHalt ? 'stopped' : 'running' } as const
       : null;
   const resting = running && !pausing && child !== null && child.mode === 'OPENING';
   const graph = resting && child ? <SliceGraph key={`${child.id}-graph`} childId={child.id} oneLeg={!pair} /> : null;
@@ -257,27 +259,32 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   const base = { title, chip, progress, graph, priceBox, orders: job.orders ?? [], lines, footer: running || halted, ownAccount: true };
   const sliceLabel = t('trade.twap.run.slice', { i: slice, n: of });
 
-  if (job.status === 'done' || job.status === 'abandoned') {
+  if (job.status === 'done') {
+    const usd = usdOf(makerFilled);
+    const doneTitle = t(`trade.twap.run.${close ? 'doneClosed' : 'doneOpened'}${usd ? '' : 'NoUsd'}`, { qty: qtyText(makerFilled), coin, usd });
+    const doneRows: RunRow[] = [
+      ...avgRows(),
+      ...slippageRow(t('trade.deal.slippage')),
+      { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
+      { label: t('trade.twap.run.took'), value: clockSpan((job.updatedAt - (twap?.startedAt ?? job.createdAt)) / 1000) },
+    ];
+    const firstLine = <ResultBox tone="done" title={doneTitle} rows={toResultRows(doneRows)} />;
+    return { ...base, firstLine, rows: [], acts: null };
+  }
+
+  if (job.status === 'abandoned') {
     const doneKey = close ? 'closedEach' : 'openedEach';
     const leftKey = close ? 'notClosedEach' : 'notOpenedEach';
-    const rows: RunRow[] =
-      job.status === 'done'
-        ? [
-            { label: t(`trade.twap.run.${doneKey}`), value: t(usdOf(makerFilled) ? 'trade.twap.run.openedValue' : 'trade.twap.run.openedValueNoUsd', { qty: qtyText(makerFilled), coin, usd: usdOf(makerFilled) }) },
-            ...avgRows(),
-            ...slippageRow(t('trade.deal.slippage')),
-            { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
-            { label: t('trade.twap.run.took'), value: clockSpan((job.updatedAt - (twap?.startedAt ?? job.createdAt)) / 1000) },
-          ]
-        : [
-            { label: t('trade.twap.run.stopped', { i: slice, n: of }), value: fmtClock(job.updatedAt) },
-            { label: t(`trade.twap.run.${doneKey}`), value: t('trade.twap.run.qtyValue', { qty: `${qtyText(makerFilled)} / ${qtyText(total)}`, coin }) },
-            { label: t(`trade.twap.run.${leftKey}`), value: t('trade.twap.run.qtyValue', { qty: qtyText(Math.max(0, total - makerFilled)), coin }) },
-            ...avgRows(),
-            ...slippageRow(t('trade.deal.slippage')),
-            { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
-          ];
-    return { ...base, firstLine: null, rows, acts: null };
+    const stopRows: RunRow[] = [
+      { label: t('common.stopped'), value: fmtClock(job.updatedAt) },
+      { label: t(`trade.twap.run.${doneKey}`), value: t('trade.twap.run.qtyValue', { qty: `${qtyText(makerFilled)} / ${qtyText(total)}`, coin }) },
+      { label: t(`trade.twap.run.${leftKey}`), value: t('trade.twap.run.qtyValue', { qty: qtyText(Math.max(0, total - makerFilled)), coin }) },
+      ...avgRows(),
+      ...slippageRow(t('trade.deal.slippage')),
+      { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
+    ];
+    const firstLine = <ResultBox tone="stop" title={t('trade.twap.run.stopped', { i: slice, n: of })} rows={toResultRows(stopRows)} />;
+    return { ...base, firstLine, rows: [], acts: null };
   }
 
   if (pausing) {

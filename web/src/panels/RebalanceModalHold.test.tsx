@@ -63,7 +63,7 @@ describe('RebalanceModal hold', () => {
     renderWithClient(<Polled views={[{ ...done, job: { ...done.job!, status: 'running' } }, done]} />);
     await act(async () => poll());
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
-    expect(screen.getByText('Done.')).toBeInTheDocument();
+    expect(screen.getByText(/^Moved \$/)).toBeInTheDocument();
     expect(screen.queryByText(/what each wallet holds/)).toBeNull();
   });
 
@@ -73,7 +73,7 @@ describe('RebalanceModal hold', () => {
     await act(async () => poll());
     expect(screen.queryByRole('radio', { name: 'Custom amount' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
-    expect(screen.getByText('Done.')).toBeInTheDocument();
+    expect(screen.getByText(/^Moved \$/)).toBeInTheDocument();
     expect(screen.queryByText(/what each wallet holds/)).toBeNull();
   });
 });
