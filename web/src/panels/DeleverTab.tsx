@@ -408,22 +408,19 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         />
       </Field>
       <Field label={t('accounts.deleverTab.reduceBy')}>
-        <div className="flex flex-wrap items-center gap-3">
-          <AmountPresets<Share>
-            value={amountText}
-            onChange={setTyped}
-            inputLabel={t('accounts.deleverTab.amountAria')}
-            suffix={pair.base}
-            bad={amountProblem !== null && amountText.trim() !== ''}
-            boxClassName="w-40"
-            presetsLabel={t('accounts.deleverTab.reduceBy')}
-            preset={litShare(pair, amountText)}
-            onPreset={(share) => setTyped(shareText(pair, share))}
-            presets={shareOptions}
-          />
-          {close !== null && <span className="num text-xs text-ink-100">{t('accounts.deleverTab.customPct', { pct: pctText(pct) })}</span>}
-        </div>
-        {amountProblem !== null && <p className="num text-xs text-guava">{amountProblem}</p>}
+        <AmountPresets<Share>
+          value={amountText}
+          onChange={setTyped}
+          inputLabel={t('accounts.deleverTab.amountAria')}
+          suffix={close !== null ? t('accounts.deleverTab.sizeSuffix', { coin: pair.base, pct: pctText(pct) }) : pair.base}
+          bad={amountProblem !== null && amountText.trim() !== ''}
+          boxClassName="w-60"
+          presetsLabel={t('accounts.deleverTab.reduceBy')}
+          preset={litShare(pair, amountText)}
+          onPreset={(share) => setTyped(shareText(pair, share))}
+          presets={shareOptions}
+        />
+        {amountProblem !== null && amountText.trim() !== '' && <p className="num text-xs text-guava">{amountProblem}</p>}
       </Field>
       {planBody()}
     </div>

@@ -39,9 +39,9 @@ export function AmountPresets<T extends string>({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span
-        className={`flex h-[35px] ${boxClassName} items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
+        className={`flex h-[35px] ${boxClassName} items-center gap-1 rounded border px-2.5 focus-within:border-info/70 ${
           bad ? 'border-guava/60' : 'border-ink-700'
-        }`}
+        } ${preset === null ? 'bg-wash/[0.05]' : 'bg-wash/[0.15]'}`}
       >
         {prefix !== undefined && <span className="text-[11.5px] text-ink-400">{prefix}</span>}
         <input
@@ -55,7 +55,9 @@ export function AmountPresets<T extends string>({
           onFocus={onFocus}
           onBlur={onBlur}
           title={title}
-          className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
+          className={`num w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-ink-500 ${
+            preset === null ? 'font-semibold text-ink-50' : 'font-medium text-ink-200'
+          }`}
         />
         {suffix !== undefined && <span className="shrink-0 text-[11.5px] text-ink-400">{suffix}</span>}
       </span>

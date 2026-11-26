@@ -556,7 +556,7 @@
     "pct20": "20%",
     "pct30": "30%",
     "amountAria": "Size to delever, each leg",
-    "customPct": "= {{pct}}%",
+    "sizeSuffix": "{{coin}} · {{pct}}%",
     "tradingFeePerps": "Trading fee · perps",
     "tradingFeeBoros": "Trading fee · Boros",
     "priceImpact": "Price impact",

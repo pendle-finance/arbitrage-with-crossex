@@ -549,7 +549,7 @@
     "pct20": "20%",
     "pct30": "30%",
     "amountAria": "每条腿减仓数量",
-    "customPct": "= {{pct}}%",
+    "sizeSuffix": "{{coin}} · {{pct}}%",
     "tradingFeePerps": "交易手续费 · 永续",
     "tradingFeeBoros": "交易手续费 · Boros",
     "priceImpact": "价格冲击",

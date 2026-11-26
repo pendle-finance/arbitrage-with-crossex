@@ -196,16 +196,17 @@ describe('DeleverTab guards', () => {
     await user.clear(sizeBox());
     await user.type(sizeBox(), '900.001');
     expect(screen.getByText('Maximum is 900')).toHaveClass('text-guava');
-    expect(screen.queryByText(/^= 100(\.0+)?%$/)).not.toBeInTheDocument();
+    expect(sizeBox().nextElementSibling).toHaveTextContent(/^BTC$/);
     expect(screen.getByRole('button', { name: 'Hold to delever 900.001 BTC' })).toBeDisabled();
   });
 
-  it('an empty size says why and turns the hold off, as 0 does', async () => {
+  it('an empty size shows the unit only, no line, and turns the hold off', async () => {
     const user = userEvent.setup();
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     await user.clear(sizeBox());
-    expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
+    expect(sizeBox().nextElementSibling).toHaveTextContent(/^BTC$/);
+    expect(screen.queryByText('Must be more than 0')).toBeNull();
     expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
     await user.type(sizeBox(), '0');
     expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
@@ -251,7 +252,8 @@ describe('DeleverTab size', () => {
     expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%']);
     expect(within(group).getByRole('radio', { name: '20%' })).toHaveAttribute('aria-checked', 'true');
     expect(sizeBox()).toHaveValue('180');
-    expect(screen.getByText('= 20%')).toBeInTheDocument();
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 20%');
+    expect(sizeBox().parentElement).toHaveClass('bg-wash/[0.15]');
   });
 
   it('a preset is lit only while the box holds its size', async () => {
@@ -264,11 +266,13 @@ describe('DeleverTab size', () => {
     await user.clear(sizeBox());
     await user.type(sizeBox(), '100');
     expect(within(group).getAllByRole('radio').every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
-    expect(screen.getByText('= 11.1%')).toBeInTheDocument();
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 11.1%');
+    expect(sizeBox().parentElement).toHaveClass('bg-wash/[0.05]');
     await user.clear(sizeBox());
     await user.type(sizeBox(), '90');
     expect(within(group).getByRole('radio', { name: '10%' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByText('= 10%')).toBeInTheDocument();
+    expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 10%');
+    expect(sizeBox().parentElement).toHaveClass('bg-wash/[0.15]');
     await waitFor(() => expect(sent.at(-1)?.perps.map((p) => p.qty)).toEqual([90, 90]));
     expect(sent.at(-1)?.boros).toEqual([{ marketId: 101, size: 90 }]);
   });
