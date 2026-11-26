@@ -188,6 +188,12 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   past-book check judges the TWAP slice that is sent.
 - **The TWAP suggestion stays on when a TWAP plan is refused or a book read fails.** It turns on
   only when slices save at least 1 bp, and slices are sized to the book.
+- **Abandon ends a halted Realize reopen.** Before, the reopen kept retrying every 3 s after
+  Abandon, so a later fill could open an unhedged position. The gap shown after Abandon counts
+  the fills that landed while the halted slice settled.
+- **The hold waits for the order book.** When a book read fails and no TWAP suggestion comes, the
+  TWAP row says "Reading the order book… Turn TWAP on or off to go on." on the pair, single,
+  close, perp-only close and Delever tickets. One click on the TWAP switch ends the wait.
 
 ## 1.7.9 — 2026-11-10
 
