@@ -236,11 +236,13 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
       />,
     );
     const shortcuts = await screen.findByRole('radiogroup', { name: 'Share shortcuts' });
+    expect(screen.queryByText(/Rounded to the lot/)).not.toBeInTheDocument();
     await userEvent.click(within(shortcuts).getByRole('radio', { name: '25%' }));
     await waitFor(() => expect(bodies[bodies.length - 1].actions.map((a) => ('qty' in a ? a.qty : undefined))).toEqual(['0.017', '0.017']), {
       timeout: 4000,
     });
     expect(bodies[bodies.length - 1].twap).toBeUndefined();
+    expect(await screen.findByText('Rounded to the lot: 0.017 ETH each')).toBeInTheDocument();
   });
 
   it('equal legs with twap on send no size and show no rest', async () => {

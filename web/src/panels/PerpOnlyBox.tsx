@@ -205,6 +205,11 @@ export function ClosePairForm({
             {t('accounts.closePair.sizeInvalid', { max: sig(maxCloseQty), base })}
           </span>
         )}
+        {matched && !atMax && Number(matched.qty) < qtyNum - qtyEps && (
+          <span className="text-[11px] text-ink-400">
+            {t('accounts.closePair.lotRounded', { qty: matched.qty, base })}
+          </span>
+        )}
       </CloseSizePresets>
 
       <OrdersGroup

@@ -299,6 +299,7 @@
     "sizeLabel": "Close size",
     "sizeAria": "Close size, applied to both legs",
     "sizeInvalid": "Size must be above 0 and at most {{max}} {{base}}.",
+    "lotRounded": "Rounded to the lot: {{qty}} {{base}} each",
     "priceBooked": "Realized price PnL",
     "priceBookedHover": "The price gain or loss on each leg, realized when it closes. Before fees.",
     "priceBookedSince": "Price gain or loss on both perps since the pair opened on {{date}}: what this close realizes on each leg, plus what earlier closes realized. Before fees.",
