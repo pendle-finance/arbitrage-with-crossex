@@ -18,6 +18,7 @@ import { useOwnAccountNote } from './RunView';
 import { runShapeOf } from './RunViewBits';
 import { isTwapChildId, liveTwapJob } from './twapJob';
 import { localizeServerText } from '../i18n/serverMessages';
+import { prettyVenue } from '../lib/fmt';
 
 type StripKey = 'running' | 'pausing' | 'paused' | 'restart' | 'sleep' | 'refused' | 'hedge' | 'error' | 'capped' | 'boros';
 type StripTone = 'cyan' | 'amber' | 'rose';
@@ -58,6 +59,13 @@ function stripToneOf(key: StripKey): StripTone {
 }
 
 function runLabelOf(job: RebalanceJob, t: TFunction) {
+  if (job.kind === 'realize') {
+    const legs = job.realize?.legs ?? [];
+    const step = job.steps.find((s) => s.name === 'Slices' && s.status !== 'done') ?? job.steps.filter((s) => s.name === 'Slices').at(-1);
+    const leg = legs.find((l) => l.symbol === step?.perp?.symbol) ?? legs[0];
+    const venue = prettyVenue(leg?.exchange ?? '');
+    return { what: t('accounts.realizeTab.stripWhat', { coin: leg?.base ?? '' }), makerVenue: venue, hedgeVenue: venue };
+  }
   const { maker, hedge, coin, shape, side } = runShapeOf(job);
   const what = t(`trade.twap.strip.what.${shape}`, { coin, side, venue: maker?.name ?? '' });
   return { what, makerVenue: maker?.name ?? '', hedgeVenue: (hedge ?? maker)?.name ?? '' };

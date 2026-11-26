@@ -447,7 +447,7 @@ describe('DealModal', () => {
         endedAt: created + 220_000,
       }),
     );
-    expect(await screen.findByText('Opened · each leg')).toBeInTheDocument();
+    expect(await screen.findByText(/^Opened 0\.05 ETH each/)).toBeInTheDocument();
     expect(screen.getByText('Avg price · Gate')).toBeInTheDocument();
     expect(screen.getByText('Avg price · Binance')).toBeInTheDocument();
     expect(screen.getByText(/^\+0\.33 USDT per coin \(\+0\.013%\) Favorable$/)).toBeInTheDocument();
@@ -524,7 +524,7 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0', unhedged: '0.05' },
       }),
     );
-    expect(await screen.findByText('Opened · each leg')).toBeInTheDocument();
+    expect(await screen.findByText(/^Opened 0\.05 ETH each/)).toBeInTheDocument();
     expect(screen.queryByText('Slippage')).not.toBeInTheDocument();
   });
 
@@ -560,7 +560,7 @@ describe('DealModal', () => {
     expect(screen.queryByText(/Deal/)).not.toBeInTheDocument();
   });
 
-  it('done: Close button, no stray Done line, slippage carries its unit', async () => {
+  it('done: a green result box, no Close button, no stray Done line, slippage carries its unit', async () => {
     renderModal(
       makeDealView({
         pair: {
@@ -570,7 +570,9 @@ describe('DealModal', () => {
         projection: { aFilled: '0.05', bFilled: '0.05', unhedged: '0' },
       }),
     );
-    expect(await screen.findByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(await screen.findByText(/^Opened 0\.05 ETH each/)).toBeInTheDocument();
+    expect(screen.getByText(/^Opened 0\.05 ETH each/).closest('.alert-green')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
     expect(screen.queryByText('Target reached')).not.toBeInTheDocument();
     expect(screen.getByText(/^\+0\.33 USDT per coin \(\+0\.013%\) Favorable$/)).toBeInTheDocument();
   });

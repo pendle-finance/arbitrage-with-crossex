@@ -91,11 +91,44 @@ describe('RebalanceJobView, sliced runs', () => {
     await waitFor(() => expect(posts[1]).toEqual({ path: 'acct0001/fix', body: { action: 'limit' } }));
   });
 
-  it('margin halt shows today\'s text', () => {
-    show(rebalanceViews.realizeStoppedMargin);
+  it('margin halt while not hedged shows the holds, Resume and abandon', async () => {
+    const { posts } = show(rebalanceViews.realizeStoppedMargin);
     const box = screen.getByRole('alert');
+    expect(box.className).toContain('alert-red');
+    expect(within(box).getByText('3.9 ETH not hedged')).toBeInTheDocument();
     expect(within(box).getByText('Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
+    hold('Hold to reopen Hyperliquid Short 3.9 ETH at market');
+    await waitFor(() => expect(posts).toEqual([{ path: 'acct0001/fix', body: { action: 'market' } }]));
+    expect(screen.queryByRole('button', { name: /^Hold to undo the close/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to close/ })).not.toBeInTheDocument();
+  });
+
+  it('a realize not-hedged halt with an unwind target closes the other perp at market', async () => {
+    const unwindTarget = { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', side: 'SELL' as const, qty: 3.9, reduceOnly: true };
+    const { posts } = show(rebalanceViews.realizeStoppedMargin, { unwindTarget });
+    expect(screen.getByRole('alert').className).toContain('alert-red');
+    expect(screen.getByRole('button', { name: 'Hold to reopen Hyperliquid Short 3.9 ETH at market' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Hold to reopen at limit $3,192.00' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to abandon' })).toBeInTheDocument();
+    hold('Hold to close Gate Long 3.9 ETH at market');
+    await waitFor(() => expect(posts).toEqual([{ path: 'acct0001/fix', body: { action: 'unwind' } }]));
+  });
+
+  it('a realize unwind target reads the short side and a $6M size', () => {
+    const unwindTarget = { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', side: 'BUY' as const, qty: 1_875, reduceOnly: true };
+    show(rebalanceViews.realizeStoppedNotHedged, { unwindTarget, notHedgedQty: 1_875 });
+    expect(screen.getByRole('button', { name: 'Hold to close Hyperliquid Short 1,875.0 ETH at market' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+  });
+
+  it('margin halt with nothing open shows the reason and Resume, no holds', () => {
+    show(rebalanceViews.realizeStoppedMargin, { notHedgedQty: 0, follow: null });
+    expect(within(screen.getByRole('alert')).getByText('Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to reopen/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to undo/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
   });
 
@@ -303,12 +336,42 @@ describe('RebalanceJobView, sliced runs', () => {
 
   it('margin halt reads the halt kind', async () => {
     show(rebalanceViews.realizeStoppedNotHedged, { haltKind: 'margin' });
-    expect(screen.queryByRole('button', { name: /^Hold to reopen/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to reopen Hyperliquid Short 3.9 ETH at market' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
     cleanup();
     show(rebalanceViews.realizeStoppedMargin, { haltKind: 'not-hedged' });
     expect(await screen.findByRole('button', { name: 'Hold to reopen at limit $3,192.00' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+  });
+
+  it('a done realize with a profit stop names the leg that ended early', () => {
+    show(rebalanceViews.ownerRealizeDone, {
+      profitStops: [{ symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', entry: 3_210, mark: 3_200, closedQty: 2, plannedQty: 3.9, at: REBALANCE_NOW }],
+    });
+    const box = screen.getByRole('status');
+    expect(box.className).toContain('alert-green');
+    expect(within(box).getByText('Stopped early: 2.0 of 3.9 ETH. The next slice frees no cash after fees.')).toBeInTheDocument();
+    cleanup();
+    show(rebalanceViews.ownerRealizeDone, { profitStops: [] });
+    expect(screen.queryByText(/^Stopped early/)).not.toBeInTheDocument();
+  });
+
+  it('a profit stop at $6M reads the whale size', () => {
+    show(rebalanceViews.ownerRealizeDone, {
+      profitStops: [{ symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', base: 'ETH', side: 'LONG', entry: 3_000, mark: 3_001, closedQty: 1_250.5, plannedQty: 1_875, at: REBALANCE_NOW }],
+    });
+    expect(screen.getByText('Stopped early: 1,250.5 of 1,875.0 ETH. The next slice frees no cash after fees.')).toBeInTheDocument();
+  });
+
+  it('a realize TWAP run shows the plan, the awake line and the realize facts', () => {
+    const twap = { slice: 3, of: 12, nextAt: REBALANCE_NOW + 120_000, durationSec: 3_600, intervalSec: 300, startedAt: REBALANCE_NOW - 600_000, carryQty: '0', behindQty: '0', makerLeg: 'a' as const, repegBehindBp: null, takerAfterSec: 240 };
+    show(rebalanceViews.ownerRealizeRunning, { kind: 'realize', twap, child: null, orders: [], slice: { index: 3, count: 12, sizeUsd: 0 } });
+    expect(screen.getByText('12 slices over 1h')).toBeInTheDocument();
+    expect(screen.getByText(/awake until it ends/)).toBeInTheDocument();
+    expect(screen.getByText('Slice 3 of 12')).toBeInTheDocument();
+    expect(screen.getByText('Est. about 50 min left')).toBeInTheDocument();
+    expect(screen.getByText('Realized')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause after this slice' })).toBeInTheDocument();
   });
 
   it('realized and total cost come from the job', () => {

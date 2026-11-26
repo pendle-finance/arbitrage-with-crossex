@@ -346,6 +346,22 @@ function planOf(ctx: Context, shape: Shape): TwapPlan | null {
   };
 }
 
+export function splitSlices(total: number, weights: number[]): number[] {
+  const sum = weights.reduce((acc, weight) => acc + Math.max(0, weight), 0);
+  const raw = weights.map((weight) => (sum > 0 ? (total * Math.max(0, weight)) / sum : total / weights.length));
+  const counts = raw.map((share) => Math.max(1, Math.floor(share)));
+  const counted = (): number => counts.reduce((acc, count) => acc + count, 0);
+  while (counted() < total) {
+    const at = raw.reduce((best, share, index) => (Math.round((share - counts[index]) * 1000) > Math.round((raw[best] - counts[best]) * 1000) ? index : best), 0);
+    counts[at] += 1;
+  }
+  while (counted() > total && counts.some((count) => count > 1)) {
+    const at = counts.reduce((best, count, index) => (count > counts[best] ? index : best), 0);
+    counts[at] -= 1;
+  }
+  return counts;
+}
+
 export function restPlan(restQty: string, slicesLeft: number, intervalSec: number, legs: TwapLegRule[], mark: number): TwapPlan | null {
   const ctx = contextOf(restQty, legs, mark, null);
   const total = ctx.totalLots;
@@ -361,6 +377,37 @@ export function restPlan(restQty: string, slicesLeft: number, intervalSec: numbe
   }
   const slices = Number(count);
   return planOf(ctx, { mode: 'interval-slices', slices, intervalSec, durationSec: slices * intervalSec, baseLots: total / count, lastLots: lastOf(count) });
+}
+
+export interface SplitLeg {
+  qty: string;
+  rules: TwapLegRule[];
+  mark: number;
+  bookQty: string | null;
+}
+
+export function splitPlans(intervalSec: number, counts: number[], legs: SplitLeg[]): { plan: TwapPlan | null; refusal: TwapRefusal | null }[] {
+  return legs.map((leg, index) => {
+    if ((counts[index] ?? 1) <= 1) return { plan: restPlan(leg.qty, 1, intervalSec, leg.rules, leg.mark), refusal: null };
+    const result = planSlices(leg.qty, { intervalSec, slices: counts[index] }, leg.rules, leg.mark, leg.bookQty);
+    return { plan: result.plan, refusal: result.ok ? null : result.refusal };
+  });
+}
+
+export function splitFixOf(input: TwapInput, lead: SplitLeg, legs: SplitLeg[], weights: number[]): TwapRefusal['fix'] {
+  if (input.durationSec === undefined) return null;
+  const asked = input.slices ?? legs.length;
+  for (const total of countsNear(asked).filter((count) => count !== asked && count >= legs.length)) {
+    try {
+      const shape = planSlices(lead.qty, { durationSec: input.durationSec, slices: total }, lead.rules, lead.mark, lead.bookQty);
+      if (!shape.plan || (!shape.ok && shape.refusal.field !== 'sliceSize')) continue;
+      const rows = splitPlans(shape.plan.intervalSec, splitSlices(total, weights), legs);
+      if (rows.every((row) => row.plan && !row.refusal)) return { label: `Use ${total} slices`, patch: { durationSec: input.durationSec, slices: total } };
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 export function planSlices(

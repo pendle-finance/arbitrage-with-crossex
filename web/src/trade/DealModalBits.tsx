@@ -3,6 +3,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { useDealCommand, useVenueBook } from '../api/queries';
 import type { DealPair, DealReport, DealView, RunOrderView } from '../api/types';
 import { Chip } from '../components/Chip';
+import { ResultBox } from '../components/ResultBox';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { Spinner } from '../components/Spinner';
 import { fmtPct, num, parseSymbol, prettyVenue, sigGrouped } from '../lib/fmt';
@@ -12,7 +13,7 @@ import { localizeServerText } from '../i18n/serverMessages';
 import { dealSlippage } from './dealSlippage';
 import { LimitPriceBox } from './LimitPriceBox';
 import { DealBookImpact } from './PriceImpactGraph';
-import type { RunRow, RunViewProps } from './RunView';
+import { toResultRows, type RunRow, type RunViewProps } from './RunView';
 import { clockSpan, feeText, padTwo, qtyText, sideWord, SideText, SlipLabel, usdText } from './RunViewBits';
 
 function venueReasonText(raw: string | null): string | null {
@@ -144,7 +145,6 @@ export function dealRunProps(
   report: DealReport | null,
   now: number,
   extraLines: ReactNode[],
-  onClose: () => void,
 ): RunViewProps {
   const { pair, projection: proj, orders } = view;
   const { b } = pair;
@@ -256,15 +256,17 @@ export function dealRunProps(
   const base = { title, chip, progress, orders: runOrders, lines };
 
   if (done) {
+    const usd = usdOf(aFilled);
+    const doneTitle = t(`trade.twap.run.${close ? 'doneClosed' : 'doneOpened'}${b ? '' : 'One'}${usd ? '' : 'NoUsd'}`, { qty: qtyText(aFilled), coin, usd });
     const rows: RunRow[] = [
-      { label: t(close ? 'trade.twap.run.closedEach' : 'trade.twap.run.openedEach'), value: t(usdOf(aFilled) ? 'trade.twap.run.openedValue' : 'trade.twap.run.openedValueNoUsd', { qty: qtyText(aFilled), coin, usd: usdOf(aFilled) }) },
       ...avgRows(),
       ...slippageRow(t('trade.deal.slippage')),
       ...(unhedged > 0 ? gapRow(unhedged) : []),
       { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
       { label: t('trade.twap.run.took'), value: clockSpan(Math.max(0, (view.endedAt ?? pair.createdAt) - pair.createdAt) / 1000) },
     ];
-    return { ...base, firstLine: null, rows, graph: null, priceBox: null, acts: <button type="button" className="btn-primary" onClick={onClose}>{t('common.close')}</button>, footer: false };
+    const firstLine = <ResultBox tone={unhedged > 0 ? 'part' : 'done'} title={doneTitle} rows={toResultRows(rows)} />;
+    return { ...base, chip: null, progress: null, firstLine, rows: [], graph: null, priceBox: null, acts: null, footer: false };
   }
 
   const rows: RunRow[] = [];

@@ -11,12 +11,9 @@ import { sectionHeadClass } from './FoldRow';
 import { AffixedInput } from './PairTicketBits';
 import { ViolationList } from './previewBits';
 
-export interface TwapInput {
-  durationSec?: number;
-  intervalSec?: number;
-  sliceQty?: string;
-  slices?: number;
-}
+import type { TwapInput } from '../api/types';
+
+export type { TwapInput };
 
 type Box = 'durationSec' | 'intervalSec' | 'sliceQty';
 

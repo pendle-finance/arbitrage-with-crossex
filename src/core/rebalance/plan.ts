@@ -261,6 +261,7 @@ export interface PlanInputs {
   perpRules?: Record<string, PerpRule>;
   availableMargin?: number;
   sliceUsd?: number;
+  twapSlices?: number;
 }
 
 export type BookLevel = [price: number, size: number];
@@ -1045,6 +1046,7 @@ function realizeInput(
     feeRows: inputs.feeRows ?? [],
     rules: inputs.perpRules ?? {},
     sliceUsd: inputs.sliceUsd,
+    twapSlices: inputs.twapSlices,
   };
 }
 
