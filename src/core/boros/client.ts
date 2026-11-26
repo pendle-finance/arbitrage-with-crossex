@@ -206,6 +206,7 @@ export interface BorosMarketPosition {
    * response. Feeds the bucket health factor (equity / maintenance). */
   maintMargin?: string;
   hasRestingOrders?: boolean;
+  restingOrderMargin?: { long: string; short: string };
 }
 
 /** A margin group: the cross account or one isolated position bucket. */
@@ -682,6 +683,7 @@ export async function fetchBorosCollaterals(
       positionInitialMargin: positionOnlyInitialMargin(p, marketById.get(Number(p.marketId)), nowSec),
       initialMargin: p.initialMargin as string | undefined,
       hasRestingOrders: Array.isArray(p.orders) && p.orders.length > 0,
+      restingOrderMargin: restingOrderMarginOf(p),
     };
   };
 
@@ -744,6 +746,16 @@ const toBig = (v: unknown): bigint => {
  * Both branches fit the combined number, so the whitepaper IM at mark picks the
  * right one.
  */
+function restingOrderMarginOf(p: Record<string, unknown>): { long: string; short: string } {
+  let long = 0n;
+  let short = 0n;
+  for (const o of Array.isArray(p.orders) ? (p.orders as Array<Record<string, unknown>>) : []) {
+    if (Number(o.side) === 0) long += toBig(o.initialMargin);
+    else short += toBig(o.initialMargin);
+  }
+  return { long: long.toString(), short: short.toString() };
+}
+
 function positionOnlyInitialMargin(
   p: Record<string, unknown>,
   market: BorosMarket | undefined,

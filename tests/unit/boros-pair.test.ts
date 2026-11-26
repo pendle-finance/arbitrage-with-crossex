@@ -767,6 +767,26 @@ describe('evaluatePairGate', () => {
     expect(blocker!.shortfall).toBeCloseTo(total - available, 6);
   });
 
+  it('an open counts what resting orders hold: a same-side order adds its margin, an opposite one covers the new position', () => {
+    const sim = gateInput().simulation;
+    const needA = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost + sim.legs[0].fillVsMarkCost;
+    const needB = sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost + sim.legs[1].fillVsMarkCost;
+    const hold = sim.legs[0].marginRequired!;
+    const sameSide = sim.legs[0].sizing.resultingSize > 0 ? { long: hold, short: 0 } : { long: 0, short: hold };
+    const otherSide = { long: sameSide.short, short: sameSide.long };
+    const cross = { available: needA + needB + hold, availableWithOrders: needA + needB - hold / 2, hasPositionOrOrders: true };
+
+    const same = evaluatePairGate(gateInput({ legA: leg({ restingOrderMargin: sameSide }), account: account({ cross }) }));
+    expect(same.blockers.find((b) => b.code === 'cross-short-margin')!.shortfall).toBeCloseTo(hold / 2, 9);
+    expect(same.funding[0].availableBefore).toBeCloseTo(needA + needB - hold / 2, 9);
+
+    const unknown = evaluatePairGate(gateInput({ legA: leg({ restingOrderMargin: sameSide }), account: account({ cross: { ...cross, availableWithOrders: undefined } }) }));
+    expect(codes(unknown)).not.toContain('cross-short-margin');
+
+    const other = evaluatePairGate(gateInput({ legA: leg({ restingOrderMargin: otherSide }), account: account({ cross }) }));
+    expect(codes(other)).not.toContain('cross-short-margin');
+  });
+
   it('charges only the INCREMENTAL margin when a leg already posts some', () => {
     // Adding to an existing position: `available` is already net of the margin
     // that position posts, so charging the full resulting margin again would
