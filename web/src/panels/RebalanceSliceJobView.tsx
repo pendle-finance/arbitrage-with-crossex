@@ -21,7 +21,7 @@ const FOLLOW_MISSES_RED = 3;
 
 const sk = (key: string, values?: Record<string, string | number>): string => t(`accounts.sliceRun.${key}` as 'accounts.sliceRun.done', values);
 const dk = (key: string, values?: Record<string, string | number>): string => t(`accounts.deleverTab.${key}` as 'accounts.deleverTab.pair', values);
-export function sliceStateLabel(job: RebalanceJob): string {
+function sliceStateLabel(job: RebalanceJob): string {
   const slice = { i: num(job.slice?.index ?? 1, 0), n: num(Math.max(1, job.slice?.count ?? 1), 0) };
   if (job.status === 'halted' && job.paused === true) return sk('paused', slice);
   return job.pauseRequested ? sk('pausing', slice) : sk('slice', slice);
@@ -93,10 +93,14 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     qty: perpNow + (addedLegs.find((row) => row.symbol === l.symbol)?.filled ?? 0),
   }));
   const [perpA, perpB] = perpSizes;
-  const perpsBoros =
-    perpA && perpB && perpA.qty !== perpB.qty
-      ? sk('perpsSplitBorosNow', { venueA: perpA.venue, a: sizeText(perpA.qty), venueB: perpB.venue, b: sizeText(perpB.qty), coin, boros: sizeText(borosNow) })
-      : sk('perpsBorosNow', { perps: sizeText(perpA?.qty ?? perpNow), coin, boros: sizeText(borosNow) });
+  const perpsRow = {
+    label: sk('perpsRow'),
+    value:
+      perpA && perpB && perpA.qty !== perpB.qty
+        ? sk('perpsSplit', { venueA: perpA.venue, a: sizeText(perpA.qty), venueB: perpB.venue, b: sizeText(perpB.qty), coin })
+        : sk('perpsEach', { qty: sizeText(perpA?.qty ?? perpNow), coin }),
+  };
+  const borosRow = (value: string) => ({ label: sk('borosLabel'), value });
   const longLeg = delever?.legs.find((l) => l.side === 'LONG');
   const shortLeg = delever?.legs.find((l) => l.side === 'SHORT');
   const title = delever
@@ -269,9 +273,13 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       firstLine: (
         <StopBox
           title={sk('borosNotHedged', { amount: sizeText(left) })}
-          lines={[perpsBoros, sk('borosFilled', { filled: sizeText(Math.max(0, borosTarget - left)), target: sizeText(borosTarget) }), ...haltLine(job.haltReason)]}
+          lines={haltLine(job.haltReason)}
         />
       ),
+      rows: [
+        perpsRow,
+        borosRow(sk('borosYuFilled', { amount: sizeText(borosNow), filled: sizeText(Math.max(0, borosTarget - left)), target: sizeText(borosTarget) })),
+      ],
       acts: (
         <>
         <div className="flex flex-col gap-2">
@@ -294,12 +302,13 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   if (open > 0 && halted && !paused && !margin) {
     return show({
       firstLine: <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />,
+      rows: borosGap ? [perpsRow, borosRow(sk('borosYu', { amount: sizeText(borosNow) }))] : [],
       acts: (
         <>
           {fixHolds()}
           {borosGap && (
             <>
-              <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={[perpsBoros]} />
+              <StopBox title={dk('borosNoPerp', { amount: sizeText(gapYu) })} lines={[]} />
               {closeBorosHold}
             </>
           )}
@@ -315,7 +324,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       {margin && open > 0 && <StopBox title={sk('notHedged', { qty: sizeText(open), coin })} lines={haltLine(job.haltReason)} />}
       <StopBox
         title={dk('borosNoPerp', { amount: sizeText(gapYu) })}
-        lines={[...(pausedLine ? [pausedLine] : margin && open > 0 ? [] : haltLine(job.haltReason)), perpsBoros]}
+        lines={pausedLine ? [pausedLine] : margin && open > 0 ? [] : haltLine(job.haltReason)}
       />
     </>
   ) : margin ? (

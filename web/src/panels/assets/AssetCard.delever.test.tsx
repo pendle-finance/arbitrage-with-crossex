@@ -184,32 +184,24 @@ describe('AssetCard — Delever on the pair row', () => {
     expect(screen.getByLabelText('opener')).toHaveTextContent(`delever|${openPairKey('ETH', derived.pairs[0])}`);
   });
 
-  it('pill shows the running job', async () => {
-    withJob(deleverJob({}));
-    renderCard(derivedOf());
-    const panel = await openPair();
-    expect(await within(panel).findByRole('button', { name: 'Slice 3 of 7' })).toBeEnabled();
-    expect(within(panel).queryByRole('button', { name: 'Delever' })).toBeNull();
-  });
-
-  it('pill shows pausing, paused and stopped', async () => {
-    withJob(deleverJob({ pauseRequested: true }));
-    const view = renderCard(derivedOf());
-    const panel = await openPair();
-    expect(await within(panel).findByRole('button', { name: 'Pausing after slice 3 of 7' })).toBeInTheDocument();
-    view.unmount();
-
-    withJob(deleverJob({ status: 'halted', paused: true }));
-    renderCard(derivedOf());
-    const paused = await openPair();
-    expect(await within(paused).findByRole('button', { name: 'Paused after slice 3 of 7' })).toBeInTheDocument();
-  });
-
-  it('pill shows stopped for a halted job with no slice', async () => {
-    withJob(deleverJob({ status: 'halted', slice: null, haltReason: 'Boros filled only part of the close.' }));
-    renderCard(derivedOf());
-    const panel = await openPair();
-    expect(await within(panel).findByRole('button', { name: 'Stopped' })).toBeInTheDocument();
+  it('a running, pausing, paused or stopped delever keeps the pill as Delever, and the pill opens the run', async () => {
+    const jobs: RebalanceJob[] = [
+      deleverJob({}),
+      deleverJob({ pauseRequested: true }),
+      deleverJob({ status: 'halted', paused: true }),
+      deleverJob({ status: 'halted', slice: null, haltReason: 'Boros filled only part of the close.' }),
+    ];
+    for (const job of jobs) {
+      withJob(job);
+      const derived = derivedOf();
+      const view = renderCard(derived);
+      const panel = await openPair();
+      const pill = await within(panel).findByRole('button', { name: 'Delever' });
+      expect(within(panel).queryByRole('button', { name: /Slice|Stopped/ })).toBeNull();
+      await userEvent.click(pill);
+      expect(screen.getByLabelText('opener')).toHaveTextContent(`delever|${openPairKey('ETH', derived.pairs[0])}`);
+      view.unmount();
+    }
   });
 
   it('a delever on another pair, a done job or a move job leaves the pill as Delever', async () => {

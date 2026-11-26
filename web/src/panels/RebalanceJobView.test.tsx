@@ -264,20 +264,24 @@ describe('RebalanceJobView, sliced runs', () => {
           : step,
       );
     show(view, { steps: withFills(36, 12) });
-    const split = screen.getByText(/^Perps \S+ [\d,.]+ BTC, \S+ [\d,.]+ BTC · Boros [\d,.]+ YU$/);
+    const split = screen.getByText(/^\S+ [\d,.]+ BTC · \S+ [\d,.]+ BTC$/);
+    expect(within(screen.getByRole('alert')).queryByText(/BTC/)).toBeNull();
     const sizes = [...split.textContent!.matchAll(/([\d,.]+) BTC/g)].map((m) => Number(m[1].replace(/,/g, '')));
     expect(Math.abs(sizes[0] - sizes[1])).toBeCloseTo(24, 6);
-    expect(screen.queryByText(/ each · Boros/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ each$/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Hold to add back Hyperliquid 24(\.0+)? BTC$/ })).toBeInTheDocument();
     cleanup();
     show(view, { steps: withFills(12, 12) });
-    expect(screen.getByText(/^Perps [\d,.]+ BTC each · Boros [\d,.]+ YU$/)).toBeInTheDocument();
+    expect(screen.getByText(/^[\d,.]+ BTC each$/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Hold to add 24(\.0+)? BTC back on both perps$/ })).toBeInTheDocument();
   });
 
-  it('boros part fill shows the filled-of line', () => {
+  it('boros part fill: the alert holds the title and reason, the sizes sit in Perps and Boros rows below', () => {
     show(rebalanceViews.deleverStoppedBoros);
-    expect(within(screen.getByRole('alert')).getByText(/^Boros filled \S+ of \S+ YU$/)).toBeInTheDocument();
+    const alert = screen.getByRole('alert');
+    expect(within(alert).queryByText(/filled|each/)).toBeNull();
+    expect(screen.getByText('Perps')).toBeInTheDocument();
+    expect(screen.getByText(/^[\d,.]+ YU · filled \S+ of \S+$/)).toBeInTheDocument();
   });
 
   it('pause and not-hedged chips', () => {

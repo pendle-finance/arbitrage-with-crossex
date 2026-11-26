@@ -16,9 +16,9 @@ export function RebalanceJobView(props: JobViewProps) {
 }
 
 export function JobChip({ job }: { job: RebalanceJob }) {
-  if (job.status === 'running') return <Chip tab tone="info">{t('common.running')}</Chip>;
-  if (job.status === 'done') return <Chip tab>{t('accounts.sliceRun.done')}</Chip>;
+  if (job.status === 'running') return <Chip tone="info">{t('common.running')}</Chip>;
+  if (job.status === 'done') return <Chip>{t('accounts.sliceRun.done')}</Chip>;
   const notHedged = (job.notHedgedQty ?? 0) > 0 || (job.borosLeftYu ?? 0) > 0 || (job.borosGapYu ?? 0) > 0;
-  if (job.status === 'halted' && job.paused === true) return <Chip tab tone={notHedged ? 'red' : 'amber'}>{t('accounts.sliceRun.chipPaused')}</Chip>;
-  return <Chip tab tone="red">{t(notHedged ? 'accounts.sliceRun.chipNotHedged' : 'common.stopped')}</Chip>;
+  if (job.status === 'halted' && job.paused === true) return <Chip tone={notHedged ? 'red' : 'amber'}>{t('accounts.sliceRun.chipPaused')}</Chip>;
+  return <Chip tone="red">{t(notHedged ? 'accounts.sliceRun.chipNotHedged' : 'common.stopped')}</Chip>;
 }

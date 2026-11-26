@@ -448,12 +448,12 @@ describe('RollOverModal — the pick page', () => {
     expect(await within(dialog).findByRole('button', { name: 'Roll over' })).toBeDisabled();
   });
 
-  it('the header names the two venues without LONG or SHORT tags', async () => {
+  it('the header is the title alone; the venues sit in the steps below', async () => {
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
-    const heading = within(await screen.findByRole('dialog')).getByRole('heading');
-    await waitFor(() => expect(heading.textContent).toMatch(/Gate.*Hyperliquid/));
-    expect(heading.textContent).not.toMatch(/LONG|SHORT/);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading').textContent).toBe('Roll over Boros position');
+    await waitFor(() => expect(within(dialog).getAllByText(/Gate/).length).toBeGreaterThan(0));
   });
 
   it('with no ladder reported, or one that holds the position many times over, the whole position is the default', async () => {
