@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { Pool } from '../api/types';
 import { AmountBox } from '../components/AmountBox';
 import { TokenIcon } from '../components/AssetIcon';
-import { BoxSelect } from '../components/BoxSelect';
+import { ListPicker } from '../components/ListPicker';
 import { microLabelClass } from '../components/Th';
 import { num } from '../lib/fmt';
 import type { MoveFlow } from './moveCashPlan';
@@ -53,11 +53,7 @@ export function MoveCashWallets({
   onText: (text: string) => void;
 }) {
   const { t } = useTranslation();
-  const options = pools.map((pool) => (
-    <option key={pool} value={pool}>
-      {walletOf(pool)}
-    </option>
-  ));
+  const rows = pools.map((pool) => ({ key: pool, icon: poolCoin(pool), name: walletOf(pool) }));
   const amountText = (amount: number, pool: Pool) => <span className="num text-sm font-semibold text-ink-50">{`${num(amount)} ${poolCoin(pool)}`}</span>;
   const walletName = (pool: Pool) => (
     <span className="flex items-center gap-1.5 font-medium text-ink-50">
@@ -83,9 +79,7 @@ export function MoveCashWallets({
           </button>
         }
       />
-      <BoxSelect<Pool> ariaLabel={t('accounts.rebalanceModal.from')} value={from} onChange={onFrom}>
-        {options}
-      </BoxSelect>
+      <ListPicker label={t('accounts.rebalanceModal.from')} value={from} onChange={onFrom} rows={rows} />
       <AmountBox className="w-full" inputLabel={t('accounts.rebalanceModal.amount')} value={text} onChange={onText} suffix={poolCoin(from)} />
     </>
   ) : (
@@ -106,9 +100,7 @@ export function MoveCashWallets({
           {custom ? (
             <>
               <WalletLine label={toLabel} />
-              <BoxSelect<Pool> ariaLabel={t('accounts.rebalanceModal.to')} value={to} onChange={onTo}>
-                {options}
-              </BoxSelect>
+              <ListPicker label={t('accounts.rebalanceModal.to')} value={to} onChange={onTo} rows={rows} />
               <div className="flex h-[35px] items-center gap-2 pl-2.5">
                 {priced ? flow.arrives.map(({ pool, amount }) => <span key={pool}>{amountText(amount, pool)}</span>) : <span className="text-ink-500">–</span>}
               </div>
