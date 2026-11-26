@@ -52,6 +52,10 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   Each route shows its fee and price impact under the cost. The After card ends with "Pays back
   in N days". Realize uPnL picks its wallet and takes an amount box with Debt and All presets.
   The hold buttons read "Hold to move" and "Hold to realize".
+- **Delever picks its size in the same amount box,** with 10%, 20% and 30% presets and the percent
+  inside the box. A preset value has its own fill, so it reads apart from a typed one. With TWAP
+  off, Delever sends one order in the mode you pick and splits only at a venue's order cap.
+  Realize uPnL can split the close into slices.
 
 ## 1.7.9 — 2026-11-10
 

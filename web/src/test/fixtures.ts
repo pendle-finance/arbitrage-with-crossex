@@ -2433,12 +2433,12 @@ function acctRealize(realized: number, refused: RealizeRefusal | null = null, sl
   };
 }
 
-function sliceRow(totalUsd: number, mid: number, sizeUsd: number, custom: boolean): SliceOption {
+function sliceRow(totalUsd: number, mid: number, sizeUsd: number, custom: boolean, whole = false): SliceOption {
   const count = Math.ceil(totalUsd / sizeUsd);
   const lead = Math.min(sizeUsd, totalUsd);
   const impactBp = r2((0.9 * lead) / totalUsd);
   return {
-    sizeUsd, custom, count, impactBp, impactUsd: r2((totalUsd * impactBp) / 10_000), reopenImpactUsd: r2((totalUsd * impactBp) / 10_000), pastBook: false, notHedgedMaxQty: r2(lead / mid),
+    sizeUsd, custom, whole, count, impactBp, impactUsd: r2((totalUsd * impactBp) / 10_000), reopenImpactUsd: r2((totalUsd * impactBp) / 10_000), pastBook: false, notHedgedMaxQty: r2(lead / mid),
     notHedgedMaxUsd: lead, seconds: { maker: count * 300, market: count * 2 },
   };
 }
@@ -2447,7 +2447,8 @@ const SLICE_SIZES = [25_000, 50_000, 100_000, 250_000];
 
 function sliceRowsOf(totalUsd: number, mid: number, custom: number | null = null): SliceOption[] {
   const rows = SLICE_SIZES.map((size) => sliceRow(totalUsd, mid, size, false));
-  return custom === null ? rows : [...rows, sliceRow(totalUsd, mid, custom, true)];
+  const whole = sliceRow(totalUsd, mid, 1e12, false, true);
+  return custom === null ? [...rows, whole] : [...rows, sliceRow(totalUsd, mid, custom, true), whole];
 }
 
 function acctTab(b: BorrowBook, refused: RealizeRefusal | null, custom: number | null): RealizeTab {

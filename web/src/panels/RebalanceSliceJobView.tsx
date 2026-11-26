@@ -199,7 +199,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
       const leadClose = leg?.qty ?? 0;
       const size = job.slice?.sizeUsd ?? 0;
       const qty = job.slice?.qty ?? (mark !== null && size > 0 ? Math.min(size / mark, leadClose) : leadClose / count);
-      const usd = mark !== null ? fmtUsd(qty * mark, 0) : fmtUsd(size, 0);
+      const usd = mark !== null ? fmtUsd(qty * mark, 0) : size > 0 && count > 1 ? fmtUsd(size, 0) : '—';
       return <NotHedgedLine text={sk('notHedgedMax', { qty: sizeText(qty), coin, usd })} />;
     })()
   ) : null;
