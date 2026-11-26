@@ -376,14 +376,6 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           setNotionalStr('');
           setMakerLeg('auto');
         }}
-        onClear={() => {
-          setBase(null);
-          setLongSym(null);
-          setShortSym(null);
-          setUnitPinned(false);
-          setNotionalStr('');
-          setMakerLeg('auto');
-        }}
       />
 
       {base && (
@@ -500,7 +492,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
 
       {mode === 'maker' && (
         <>
-          {!twapOn && (
+          {!twapOn && makerSym && (
             <>
             <LimitPriceBox
               bookPrice={makerTick !== null && touchPx !== undefined ? String(touchPx) : null}
