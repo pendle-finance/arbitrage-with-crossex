@@ -148,7 +148,12 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const pct = close === null ? 0 : (close / pair.size) * 100;
   const option = plan ? (withMakerWait(plan.sliceOptions, maker.taker.sec).find((o) => o.whole) ?? null) : null;
   const estimate = plan?.estimates[exec] ?? null;
-  const borosYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
+  const borosSizes = plan ? plan.boros.map((b) => b.closeSize).filter((s) => s > 0) : [];
+  const borosYu = borosSizes.reduce((sum, s) => sum + s, 0);
+  const borosEach = borosSizes.length > 1 && borosSizes.every((s) => qtyText(s) === qtyText(borosSizes[0]));
+  const borosStep = borosEach
+    ? t('accounts.deleverTab.stepBorosEach', { qty: qtyText(borosSizes[0]) })
+    : t('accounts.deleverTab.stepBoros', { qty: borosSizes.map(qtyText).join(' + ') });
   const needsBoros = pair.boros.length > 0;
   const walletBlocked = needsBoros && wallet.state !== null && !wallet.canTrade;
   const walletReady = !needsBoros || wallet.canTrade;
@@ -252,7 +257,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
               }),
               usd: estimate && borosUsd !== null ? estimate.totalUsd - (borosYu > 0 ? borosUsd : 0) : null,
             },
-            ...(borosYu > 0 ? [{ key: 'boros', icon: pair.base, text: t('accounts.deleverTab.stepBoros', { qty: qtyText(borosYu) }), usd: borosUsd }] : []),
+            ...(borosYu > 0 ? [{ key: 'boros', icon: pair.base, text: borosStep, usd: borosUsd }] : []),
           ];
     return (
       <>

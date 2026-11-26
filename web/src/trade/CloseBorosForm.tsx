@@ -298,8 +298,17 @@ export function CloseBorosForm({
    * sole-owned 0.01 announced that the remaining 0.006 was "another position's
    * share, not yours".
    */
-  const residualYours = done.reduce((sum, d) => sum + d.yours, 0);
-  const residualOthers = done.reduce((sum, d) => sum + d.others, 0);
+  const residualLines = (pick: (d: (typeof done)[number]) => number): { key: string; prefix: string; amount: number }[] => {
+    const open = done.filter((d) => pick(d) > 0);
+    const same = open.length === closable.length && open.every((d) => sigGrouped(pick(d)) === sigGrouped(pick(open[0])));
+    if (same) return [{ key: 'all', prefix: '', amount: pick(open[0]) }];
+    return open.map((d) => {
+      const leg = closable.find((l) => l.marketId === d.marketId);
+      return { key: String(d.marketId), prefix: closable.length > 1 && leg ? `${venueLabel(leg)}: ` : '', amount: pick(d) };
+    });
+  };
+  const residualYours = residualLines((d) => d.yours);
+  const residualOthers = residualLines((d) => d.others);
 
   /**
    * One leg's venue answer, folded into the form's outcomes.
@@ -462,16 +471,18 @@ export function CloseBorosForm({
             as an amber warning: nothing went wrong. But the two halves are
             not interchangeable — one is the user's to close whenever they
             like, the other is not theirs at all. */}
-        {residualYours > 0 && (
-          <p className="text-[11px] leading-relaxed text-ink-400">
-            {t('pairTicket.closeBoros.residualYours', { amount: `${sigGrouped(residualYours)} ${unit}` })}
+        {residualYours.map((r) => (
+          <p key={`yours-${r.key}`} className="text-[11px] leading-relaxed text-ink-400">
+            {r.prefix}
+            {t('pairTicket.closeBoros.residualYours', { amount: `${sigGrouped(r.amount)} ${unit}` })}
           </p>
-        )}
-        {residualOthers > 0 && (
-          <p className="text-[11px] leading-relaxed text-ink-400">
-            {t('pairTicket.closeBoros.residualOthers', { amount: `${sigGrouped(residualOthers)} ${unit}` })}
+        ))}
+        {residualOthers.map((r) => (
+          <p key={`others-${r.key}`} className="text-[11px] leading-relaxed text-ink-400">
+            {r.prefix}
+            {t('pairTicket.closeBoros.residualOthers', { amount: `${sigGrouped(r.amount)} ${unit}` })}
           </p>
-        )}
+        ))}
         <button type="button" className="btn-primary w-full" onClick={onDone}>
           {t('common.done')}
         </button>

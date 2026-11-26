@@ -540,6 +540,20 @@ describe('DealModal', () => {
     expect(legs).toBe('Gate Short / Binance Long');
   });
 
+  it('a Market deal has no limit price and its title says market, open and close', async () => {
+    const base = makeDealView();
+    const { unmount } = renderModal(makeDealView({ pair: { limitPrice: null } }));
+    expect(await screen.findByText('ETH pair open · market')).toBeInTheDocument();
+    expect(screen.queryByText(/limit \+ hedge/)).not.toBeInTheDocument();
+    unmount();
+    renderModal(
+      makeDealView({
+        pair: { limitPrice: null, a: { ...base.pair.a, reduceOnly: true }, b: base.pair.b && { ...base.pair.b, reduceOnly: true } },
+      }),
+    );
+    expect(await screen.findByText('ETH pair close · market')).toBeInTheDocument();
+  });
+
   it('open: title from the job and no raw id', async () => {
     renderModal();
     expect(await screen.findByText('ETH pair open · limit + hedge')).toBeInTheDocument();
