@@ -944,6 +944,40 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
+  it('a Limit + hedge realize keeps the maker settings it is sent, and fills the defaults when none are sent', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const costUsd = realize.clearDebt.estimates.maker.totalUsd;
+    const ask = { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd };
+
+    const res = await h.post('/api/rebalance', { ...ask, maker: { takerAfterSec: 600, repegBehindBp: 2 } });
+
+    expect(res.statusCode).toBe(202);
+    expect(h.file().maker).toEqual({ takerAfterSec: 600, repegBehindBp: 2 });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize refuses a wait before taker outside 30s to 24h, and Market keeps no maker settings', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const ask = { kind: 'realize', realizeTarget: 'clear-debt', costUsd: realize.clearDebt.estimates.maker.totalUsd };
+
+    const short = await h.post('/api/rebalance', { ...ask, exec: 'maker', maker: { takerAfterSec: 10, repegBehindBp: 5 } });
+    const repeg = await h.post('/api/rebalance', { ...ask, exec: 'maker', maker: { takerAfterSec: 300, repegBehindBp: 3 } });
+    expect(short.statusCode).toBe(400);
+    expect(short.json().error.message).toBe('Taker after must be 30s to 24h.');
+    expect(repeg.statusCode).toBe(400);
+
+    const market = await h.post('/api/rebalance', { ...ask, exec: 'market', costUsd: realize.clearDebt.estimates.market.totalUsd, maker: { takerAfterSec: 600, repegBehindBp: 2 } });
+    expect(market.statusCode).toBe(202);
+    expect(h.file().maker ?? null).toBeNull();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
   it('a realize job needs the picked target', async () => {
     mockAccount(ownerAccount());
     refuseSends();
@@ -1200,6 +1234,29 @@ describe('POST /api/rebalance with a close and reopen', () => {
     const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'market', costUsd: twapped.estimates.market.totalUsd, delever: { ...ask, twap } });
     expect(res.statusCode, res.body).toBe(202);
     expect(h.file().costUsd).toBeCloseTo(twapped.estimates.market.totalUsd, 6);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever with TWAP off keeps the maker settings it is sent; with TWAP on the TWAP keeps its own', async () => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const maker = { takerAfterSec: null, repegBehindBp: 10 };
+
+    const off = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: ask, maker });
+    expect(off.statusCode, off.body).toBe(202);
+    expect(h.file().maker).toEqual(maker);
+    expect(h.file().deleverTwap ?? null).toBeNull();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever TWAP start ignores a top-level maker setting', async () => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const twap = { durationSec: 3600, slices: 2, takerAfterSec: 600, repegBehindBp: 2 };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap }, maker: { takerAfterSec: 10, repegBehindBp: 5 } });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().maker ?? null).toBeNull();
+    expect(h.file().deleverTwap).toMatchObject({ takerAfterSec: 600, repegBehindBp: 2 });
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 

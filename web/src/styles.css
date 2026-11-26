@@ -109,6 +109,23 @@
     @apply py-[7px] text-[12px];
   }
 
+  .order-stack {
+    @apply flex flex-col;
+  }
+
+  .order-stack > :nth-child(n) {
+    @apply rounded;
+  }
+
+  .order-stack > :not(:first-child) {
+    @apply rounded-t-none border-t-0;
+  }
+
+  .order-stack > :not(:last-child),
+  .order-stack > .seg:not(:last-child) > .seg-btn {
+    @apply rounded-b-none;
+  }
+
   /* The first styled checkbox in the app: native input, house colours. Native
      keeps keyboard + screen-reader behaviour for free, which a div-based
      lookalike would have to rebuild. */

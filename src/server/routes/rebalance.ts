@@ -43,11 +43,11 @@ import {
   type RouteName,
 } from '../../core/rebalance/plan';
 import { touchOf } from '../../core/estimate/books';
-import { depthOf, makerLegOf, priceImpactOf, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
+import { depthOf, makerLegOf, priceImpactOf, TWAP_DEFAULT_INPUT, type TwapLegBook, twapRuleOf, type TwapRuleRow } from '../../core/preview';
 import { planSlices, takerAfterCapSec, type TwapInput, type TwapLegRule, type TwapPlan, type TwapPlanResult } from '../../core/twap';
 import type { Store } from '../../engine/db';
 import { fx, FX_ZERO, type Fx } from '../../engine/fx';
-import { type DealRequest, REPEG_CHOICES_BP, REPEG_DEFAULT_BP, takerAfterCapText, TIMEOUT_MIN_S } from '../../engine/create';
+import { type DealRequest, REPEG_CHOICES_BP, REPEG_DEFAULT_BP, takerAfterCapText, TIMEOUT_MAX_S, TIMEOUT_MIN_S, TIMEOUT_RANGE_TEXT } from '../../engine/create';
 import { deepBookOf } from '../deepBook';
 import type { AppDeps } from '../app';
 import { TTL } from '../cache';
@@ -68,6 +68,7 @@ import {
   inTransitOf,
   isChildOf,
   LOCK_TEXT,
+  MAKER_REST_MS,
   moneyLockFor,
   newJob,
   newTwapJob,
@@ -78,6 +79,7 @@ import {
   type JobFile,
   type JobKind,
   type JobPerp,
+  type MakerOpts,
   type MoneyLock,
   type StepName,
   twapLockText,
@@ -814,10 +816,11 @@ export function rebalanceRoutes(deps: AppDeps) {
       const twapInput = twapInputOf((req.body as { twap?: unknown } | undefined)?.twap);
       const { input, plan: whole, perps } = await loadDelever(request, false);
       const twapped = await deleverTwapOf(whole, perps, twapInput, false);
+      const offImpact = twapInput === null ? (await deleverTwapOf(whole, perps, TWAP_DEFAULT_INPUT, false)).priceImpact : null;
       const plan = twapped.twap?.plan ? planDelever(input, twapQtysOf(twapped.twap.plan)) : whole;
       const borosCloses = twapped.twap?.plan ? twapped.twap.plan.slices * plan.boros.filter((row) => row.closeSize > 0).length : 0;
       const perCloseUsd = borosCloses > 0 ? await borosOrderGasUsd() : 0;
-      return reply.ok({ ...plan, ...twapped, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
+      return reply.ok({ ...plan, ...twapped, priceImpact: twapped.priceImpact ?? offImpact, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
     });
 
     interface StartBody {
@@ -841,6 +844,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       slices?: unknown;
       intervalSec?: unknown;
       sliceQty?: unknown;
+      maker?: unknown;
     }
 
     const refuse400 = (reply: FastifyReply, message: string): FastifyReply =>
@@ -859,6 +863,13 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (deal.repegBehindBp === undefined) return REPEG_DEFAULT_BP;
       if (!REPEG_OR_OFF.includes(deal.repegBehindBp)) throw new CoreError('repegBehindBp must be 2, 5, 10 or null');
       return deal.repegBehindBp;
+    };
+
+    const makerOf = (asked: unknown): MakerOpts => {
+      const maker = (asked ?? {}) as { takerAfterSec?: unknown; repegBehindBp?: unknown };
+      const sec = maker.takerAfterSec === undefined ? MAKER_REST_MS / 1000 : maker.takerAfterSec === null ? null : Number(maker.takerAfterSec);
+      if (sec !== null && (!Number.isFinite(sec) || sec < TIMEOUT_MIN_S || sec > TIMEOUT_MAX_S)) throw new CoreError(TIMEOUT_RANGE_TEXT);
+      return { takerAfterSec: sec, repegBehindBp: repegOf({ repegBehindBp: maker.repegBehindBp as DealBody['repegBehindBp'] }) };
     };
 
     const sameTwap = (store: JobFile, clientId: string): Job | null => {
@@ -932,6 +943,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const realizeUsd = target !== 'custom' ? null : isPositive(body.realizeUsd) ? body.realizeUsd : undefined;
       if (realizeUsd === undefined) return conflict(reply, RELOAD_TEXT);
       const realizePool = poolQueryOf(body.realizePool);
+      const maker = exec === 'maker' ? makerOf(body.maker) : null;
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
@@ -970,6 +982,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           sliceUsd,
           sliceCount: sliceCountOf(tab.sliceOptions, sliceUsd, notionalUsd),
           estimate,
+          maker,
         },
         now(),
       );
@@ -998,6 +1011,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const plan = twap?.plan ? planDelever(loaded.input, twapQtysOf(twap.plan)) : loaded.plan;
       const takerAfterSec = twap?.plan ? takerAfterOf({ timeoutSec: askedTwap?.takerAfterSec }, twap.plan) : null;
       const repegBehindBp = repegOf({ repegBehindBp: askedTwap?.repegBehindBp });
+      const maker = exec === 'maker' && !twap?.plan ? makerOf(body.maker) : null;
       const cost = plan.estimates[exec];
       if (costRoseTooMuch(cost.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const [rates, paid] = await Promise.all([readRates(), interestPaid(userId)]);
@@ -1028,6 +1042,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           twap: twap?.plan
             ? { durationSec: twap.plan.durationSec, intervalSec: twap.plan.intervalSec, slices: twap.plan.slices, takerAfterSec, repegBehindBp }
             : null,
+          maker,
         },
         now(),
       );

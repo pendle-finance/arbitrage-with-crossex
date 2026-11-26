@@ -3,11 +3,13 @@ export function Switch({
   onChange,
   label,
   disabled = false,
+  heading = false,
 }: {
   on: boolean;
   onChange: (next: boolean) => void;
   label: string;
   disabled?: boolean;
+  heading?: boolean;
 }) {
   return (
     <button
@@ -16,7 +18,7 @@ export function Switch({
       aria-checked={on}
       disabled={disabled}
       onClick={() => onChange(!on)}
-      className="flex w-fit cursor-pointer items-center gap-2 text-left text-xs text-ink-200 disabled:cursor-not-allowed disabled:opacity-50"
+      className={`flex w-fit cursor-pointer items-center gap-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-50 ${heading && on ? 'font-medium text-ink-50' : 'text-ink-200'}`}
     >
       <span
         aria-hidden="true"

@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
@@ -85,16 +85,23 @@ describe('RebalanceModalFooter', () => {
       />,
     );
 
-  it('a stale quote disables the hold and says why', () => {
-    footer({ quoteStale: true });
-    expect(screen.getByText('The quote is out of date. Waiting for a fresh one.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Hold to move 3,000 USDC' })).toBeDisabled();
+  it('a stale quote turns the hold into Refresh quote', () => {
+    const onRefresh = vi.fn();
+    renderWithClient(
+      <RebalanceModalFooter
+        rows={[]} holdLabel="Hold to move 3,000 USDC" optional={false} stale={false} pricing={false} disabled={false}
+        lock={null} quoteStale onRefresh={onRefresh} onConfirm={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Hold to move 3,000 USDC' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh quote' }));
+    expect(onRefresh).toHaveBeenCalledOnce();
   });
 
   it('a running job draws the waits line in place of the hold', () => {
     footer({ lock: 'New deals and transfers wait until it ends.', quoteStale: true });
     expect(screen.getByText('New deals and transfers wait until it ends.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to/ })).toBeNull();
-    expect(screen.queryByText('The quote is out of date. Waiting for a fresh one.')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Refresh quote' })).toBeNull();
   });
 });

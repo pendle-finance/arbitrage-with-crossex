@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useDeleverPlan, useStartRebalance } from '../api/queries';
 import type { DeleverPlan, DeleverRequest, RealizeExec } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
-import { HoverCard } from '../components/HoverCard';
+import { ExecModeLabel } from '../components/Approx';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { PairPicker, type PairPickerRow } from '../components/PairPicker';
 import { AmountPresets } from '../components/AmountPresets';
@@ -11,21 +11,21 @@ import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
 import { amountError } from '../lib/amount';
-import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
+import { fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
-import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
 import { TwapArea, useTwapInput } from '../trade/TwapArea';
-import { useTakerAfter, useTwapTakerAfter } from '../trade/useTwapTakerAfter';
+import { useTwapTakerAfter } from '../trade/useTwapTakerAfter';
 import { daysLeftText, useOpenPairs, type OpenPair } from './assets/pairs';
+import { CloseMakerSettings, type MakerOpts, useCloseMaker, withMakerWait } from './closeMaker';
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
 import { spanText } from '../lib/span';
-import { execModeLabel, poolKey } from './rebalanceCopy';
+import { poolKey } from './rebalanceCopy';
 import { SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { NotHedgedLine, realizeText, TotalCost, type CostRow } from './RebalancePlanBits';
+import { PlanSteps, realizeText, TotalCost, type CostRow, type PlanStep } from './RebalancePlanBits';
 import { useActiveWallet } from './trackedAddress';
 
 type Share = '10' | '20' | '30';
@@ -71,14 +71,13 @@ function closeOf(pair: OpenPair, raw: string): { close: number | null; error: st
   return { close, error: null };
 }
 
-type MakerOpts = { takerAfterSec?: number | null; repegBehindBp?: number | null };
 type BorosGas = { borosCloses?: number; borosGasUsd?: number | null };
 
 function requestOf(
   pair: OpenPair,
   close: number,
   exec: RealizeExec,
-  twap: (DeleverRequest['twap'] & MakerOpts) | undefined,
+  twap: (DeleverRequest['twap'] & Partial<MakerOpts>) | undefined,
 ): DeleverRequest {
   return {
     perps: pair.perps.map((p) => ({ symbol: p.symbol, qty: close })),
@@ -135,16 +134,13 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const amountText = typed ?? (pair ? shareText(pair, '20') : '');
   const { close, error: amountProblem } = pair ? closeOf(pair, amountText) : { close: null, error: null };
   const twap = useTwapInput();
-  const taker = useTakerAfter();
-  const [repegBp, setRepegBp] = useState<number | null>(REPEG_DEFAULT_BP);
-  const makerOpts: MakerOpts = {
-    takerAfterSec: taker.sec,
-    repegBehindBp: repegBp,
-  };
+  const maker = useCloseMaker();
+  const makerOpts = maker.opts;
   const twapSent = twap.on && !twap.startBlocked ? { ...twap.input, ...(exec === 'maker' ? makerOpts : {}) } : undefined;
   const request = pair !== null && close !== null ? requestOf(pair, close, exec, twapSent) : null;
   const query = useDeleverPlan(request);
-  const takerBad = useTwapTakerAfter(taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
+  const takerOff = useTwapTakerAfter(maker.taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
+  const takerBad = exec === 'maker' && takerOff;
 
   if (loading) return <Skeleton className="h-40 w-full" />;
   if (failed) {
@@ -163,10 +159,9 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
 
   const plan = request !== null ? (query.data ?? null) : null;
   const pct = close === null ? 0 : (close / pair.size) * 100;
-  const option = plan?.sliceOptions.find((o) => o.whole) ?? null;
+  const option = plan ? (withMakerWait(plan.sliceOptions, maker.taker.sec).find((o) => o.whole) ?? null) : null;
   const estimate = plan?.estimates[exec] ?? null;
-  const borosGapYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
-  const leadClose = plan?.legs[plan.makerLeg]?.closeQty ?? 0;
+  const borosYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
   const needsBoros = pair.boros.length > 0;
   const walletBlocked = needsBoros && wallet.state !== null && !wallet.canTrade;
   const walletReady = !needsBoros || wallet.canTrade;
@@ -197,7 +192,9 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const oneOrder = !twapPlan && option?.count === 1;
   const orderSec = (mode: RealizeExec): number =>
     twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : option ? option.seconds[mode] / Math.max(1, option.count) : 0;
-  const modeLabel = (mode: RealizeExec): string => execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(orderSec(mode)), oneOrder);
+  const modeLabel = (mode: RealizeExec) => (
+    <ExecModeLabel mode={mode} usd={fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0)} seconds={orderSec(mode)} whole={oneOrder} />
+  );
 
   const costRows: CostRow[] = estimate
     ? [
@@ -220,7 +217,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     if (request === null || estimate === null || close === null) return;
     const delever = twapBody ? requestOf(pair, close, exec, twapBody) : request;
     start.mutate(
-      { kind: 'delever', exec, delever, costUsd: estimate.totalUsd },
+      { kind: 'delever', exec, delever, costUsd: estimate.totalUsd, ...(exec === 'maker' && !twapBody ? { maker: makerOpts } : {}) },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
     );
   };
@@ -253,64 +250,51 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     if (plan === null) return <Skeleton className="h-48 w-full" />;
     const costBox = costRows.length > 0 && !twapBlocked && !plan.refused && !slicePastBook ? <TotalCost rows={costRows} /> : null;
     const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
+    const lead = plan.legs[0];
+    const borosUsd = estimate ? estimate.feeBorosUsd + (gasRow[0]?.usd ?? 0) : null;
+    const steps: PlanStep[] =
+      plan.refused || !lead
+        ? []
+        : [
+            {
+              key: 'perps',
+              icon: pair.base,
+              text: t('accounts.deleverTab.stepPerps', {
+                pair: t('accounts.deleverTab.perpsLabel', { longVenue: prettyVenue(pair.longVenue), shortVenue: prettyVenue(pair.shortVenue) }),
+                qty: qtyText(lead.closeQty),
+                coin: pair.base,
+              }),
+              usd: estimate && borosUsd !== null ? estimate.totalUsd - (borosYu > 0 ? borosUsd : 0) : null,
+            },
+            ...(borosYu > 0 ? [{ key: 'boros', icon: pair.base, text: t('accounts.deleverTab.stepBoros', { qty: qtyText(borosYu) }), usd: borosUsd }] : []),
+          ];
     return (
       <>
+        <PlanSteps label={t('accounts.deleverTab.steps')} rows={steps} />
         <Field label={t('accounts.realizeTab.orders')}>
-          <ExecModeToggle
-            ariaLabel={t('accounts.realizeTab.orders')}
-            fill
-            value={exec}
-            onChange={setExec}
-            order={['maker', 'market']}
-            labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
-          />
-        </Field>
-        <TwapArea
-          on={twap.on}
-          onToggle={twap.setOn}
-          input={twap.input}
-          onInput={twap.setInput}
-          preview={plan.twap ?? null}
-          impact={twapBlocked ? null : (plan.priceImpact ?? null)}
-          coin={pair.base}
-        />
-        {twap.on && exec === 'maker' && (
-          <MakerSettings
-            legs={null}
-            makerLeg="auto"
-            autoPick={null}
-            onMakerLeg={() => undefined}
-            takerAfter={taker.takerAfter}
-            onTakerAfter={taker.pick}
-            takerCapSec={twapPlan?.takerAfterSec ?? null}
-            repegBehindBp={repegBp}
-            repegLocked={false}
-            onRepeg={setRepegBp}
-          />
-        )}
-        {twapPlan && borosGapYu > 0 && leadClose > 0 && (
-          <div className="flex items-center justify-between gap-3 px-1 text-xs text-ink-300">
-            <HoverCard label={t('accounts.delever.borosPerSlice')} widthPx={260}>
-              {t('accounts.delever.borosPerSliceHover')}
-            </HoverCard>
-            <span className="num text-ink-100">
-              {t('accounts.delever.borosPerSliceValue', { amount: qtyText((borosGapYu * Number(twapPlan.sliceQty)) / leadClose) })}
-            </span>
+          <div className="order-stack">
+            <ExecModeToggle
+              ariaLabel={t('accounts.realizeTab.orders')}
+              fill
+              value={exec}
+              onChange={setExec}
+              order={['maker', 'market']}
+              labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
+            />
+            {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
+            <TwapArea
+              on={twap.on}
+              onToggle={twap.setOn}
+              input={twap.input}
+              onInput={twap.setInput}
+              preview={plan.twap ?? null}
+              impact={twapBlocked ? null : (plan.priceImpact ?? null)}
+              coin={pair.base}
+            />
           </div>
-        )}
-        <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
-        {plan.notHedgedMaxQty > 0 && (
-          <NotHedgedLine
-            text={t(oneOrder ? 'accounts.realizeTab.notHedgedWhole' : 'accounts.deleverTab.notHedged', { qty: qtyText(plan.notHedgedMaxQty), coin: pair.base, usd: fmtUsd(plan.notHedgedMaxUsd, 0) })}
-          />
-        )}
-        {borosGapYu > 0 && (
-          <VerdictAlert
-            tone="warn"
-            text={t('accounts.deleverTab.borosGap', { amount: qtyText(borosGapYu), time: fmtAbout(option?.seconds[exec] ?? 0) })}
-          />
-        )}
+        </Field>
         {costBox}
+        <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {walletBlocked && !wallet.loginLabel && (
           <p className="text-xs text-gold">{t('pairTicket.closeBoros.agentReason')}</p>
         )}

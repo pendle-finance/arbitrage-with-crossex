@@ -3,7 +3,8 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Pool } from '../api/types';
 import { AmountBox } from '../components/AmountBox';
-import { BoxSelect } from '../components/BoxSelect';
+import { TokenIcon } from '../components/AssetIcon';
+import { ListPicker } from '../components/ListPicker';
 import { microLabelClass } from '../components/Th';
 import { num } from '../lib/fmt';
 import type { MoveFlow } from './moveCashPlan';
@@ -52,12 +53,14 @@ export function MoveCashWallets({
   onText: (text: string) => void;
 }) {
   const { t } = useTranslation();
-  const options = pools.map((pool) => (
-    <option key={pool} value={pool}>
-      {walletOf(pool)}
-    </option>
-  ));
+  const rows = pools.map((pool) => ({ key: pool, icon: <TokenIcon symbol={poolCoin(pool)} size={16} />, name: walletOf(pool) }));
   const amountText = (amount: number, pool: Pool, size = 'text-sm') => <span className={`num ${size} font-semibold text-ink-50`}>{`${num(amount)} ${poolCoin(pool)}`}</span>;
+  const walletName = (pool: Pool) => (
+    <span className="flex items-center gap-1.5 font-medium text-ink-50">
+      <TokenIcon symbol={poolCoin(pool)} size={16} />
+      {walletOf(pool)}
+    </span>
+  );
   const fromLabel = t('accounts.moveCash.from');
   const toLabel = t('accounts.moveCash.to');
   const fromBox = custom ? (
@@ -76,14 +79,12 @@ export function MoveCashWallets({
           </button>
         }
       />
-      <BoxSelect<Pool> ariaLabel={t('accounts.rebalanceModal.from')} value={from} onChange={onFrom}>
-        {options}
-      </BoxSelect>
+      <ListPicker label={t('accounts.rebalanceModal.from')} value={from} onChange={onFrom} rows={rows} />
       <AmountBox className="w-full" inputLabel={t('accounts.rebalanceModal.amount')} value={text} onChange={onText} suffix={poolCoin(from)} />
     </>
   ) : (
     flow.sent.map(({ pool, amount }, i) => (
-      <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={<span className="font-medium text-ink-50">{walletOf(pool)}</span>}>
+      <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={walletName(pool)}>
         {amountText(amount, pool)}
       </WalletLine>
     ))
@@ -99,18 +100,16 @@ export function MoveCashWallets({
           {custom ? (
             <>
               <WalletLine label={toLabel} />
-              <BoxSelect<Pool> ariaLabel={t('accounts.rebalanceModal.to')} value={to} onChange={onTo}>
-                {options}
-              </BoxSelect>
+              <ListPicker label={t('accounts.rebalanceModal.to')} value={to} onChange={onTo} rows={rows} />
               <div className="flex h-[35px] items-center gap-2 pl-2.5">
                 {priced ? flow.arrives.map(({ pool, amount }) => <span key={pool}>{amountText(amount, pool, 'text-xs')}</span>) : <span className="text-ink-500">–</span>}
               </div>
             </>
           ) : (
             flow.arrives.map(({ pool, amount }, i) => (
-              <WalletLine key={pool} label={i === 0 ? toLabel : undefined} wallet={<span className="font-medium text-ink-50">{walletOf(pool)}</span>}>
+              <WalletLine key={pool} label={i === 0 ? toLabel : undefined} wallet={walletName(pool)}>
                 {priced && amountText(amount, pool)}
-                {flow.hasBorrow && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
+                {flow.hasBorrow && <span className="ml-auto text-ink-400">{t('accounts.moveCash.repays')}</span>}
               </WalletLine>
             ))
           )}

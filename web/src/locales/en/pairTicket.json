@@ -242,6 +242,7 @@
     "marketReceiveFixed": "Market · receive fixed",
     "noSharedMaturity": "{{a}} and {{b}} share no maturity, so they can't be paired.",
     "tradeOn": "Trade on",
+    "openOnBoros": "Open on Boros",
     "maxReduceHint": "Largest size reduce-only can close: the smaller position.",
     "maxOpenHint": "Largest size your collateral can open (margin + taker fee, at the current rate).",
     "maxOpenBothHint": "Largest size your collateral can open on both markets (margin + taker fee, at the current rate).",

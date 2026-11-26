@@ -167,7 +167,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
     }
     return show({
       lines: [<Line key="realized" tone="font-semibold text-ink-100">{sk('realized', { amount: num(realized, 0) })}</Line>],
-      rows: [...totalCostRows, { label: sk('pairPnl'), value: sk('pairPnlValue') }],
+      rows: totalCostRows,
       acts: nextOrClose(true),
     });
   }
@@ -189,7 +189,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
         feeRow,
       ]
     : [
-        { label: t('trade.twap.run.slice', { i: num(index, 0), n: num(count, 0) }), value: sk('left', { time: fmtAbout((count - index + 1) * SLICE_SECONDS[job.exec ?? 'maker']) }) },
+        { label: t('trade.twap.run.slice', { i: num(index, 0), n: num(count, 0) }), value: sk('left', { time: fmtAbout((count - index + 1) * ((job.exec ?? 'maker') === 'maker' && job.maker?.takerAfterSec ? job.maker.takerAfterSec : SLICE_SECONDS[job.exec ?? 'maker'])) }) },
         { label: sk('realizedLabel'), value: sk('realizedOf', { x: num(realized, 0), y: num(job.amount, 0) }) },
         { label: t('trade.twap.run.notHedged'), value: `${sizeText(open)} ${coin} (${usdOf(open)})` },
         feeRow,

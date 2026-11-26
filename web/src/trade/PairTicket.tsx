@@ -359,6 +359,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           ) : undefined
         }
         onSelect={(b) => {
+          if (b === base) return;
           setBase(b);
           setLongSym(null);
           setShortSym(null);
@@ -372,14 +373,6 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           // `notional` to `qty` — the exact factor-of-the-coin-price mis-size
           // that key pair exists to prevent. The size belonged to the old
           // coin; it does not survive the switch.
-          setUnitPinned(false);
-          setNotionalStr('');
-          setMakerLeg('auto');
-        }}
-        onClear={() => {
-          setBase(null);
-          setLongSym(null);
-          setShortSym(null);
           setUnitPinned(false);
           setNotionalStr('');
           setMakerLeg('auto');
@@ -453,22 +446,36 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         )}
       </div>
 
-      <ExecModeToggle
-        ariaLabel={t('pairTicket.orderType.aria')}
-        fill
-        value={mode}
-        onChange={(m) => {
-          setMode(m);
-          if (m === 'market') twap.setOn(false);
-          setPricePinned(false);
-        }}
-        order={['maker', 'market']}
-        labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
-      />
-
-      {mode === 'maker' && (
-        <>
-          {allowTwap && <TwapArea
+      <div className="order-stack">
+        <ExecModeToggle
+          ariaLabel={t('pairTicket.orderType.aria')}
+          fill
+          value={mode}
+          onChange={(m) => {
+            setMode(m);
+            if (m === 'market') twap.setOn(false);
+            setPricePinned(false);
+          }}
+          order={['maker', 'market']}
+          labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
+        />
+        {mode === 'maker' && (
+          <MakerSettings
+            legs={legs}
+            makerLeg={makerLeg}
+            autoPick={autoPick ?? null}
+            saving={makerSaving}
+            onMakerLeg={setMakerLeg}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            takerCapSec={twapOn ? (twapPreview?.plan?.takerAfterSec ?? null) : null}
+            repegBehindBp={repegBp}
+            repegLocked={pinned}
+            onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}
+          />
+        )}
+        {mode === 'maker' && allowTwap && (
+          <TwapArea
             on={twap.on}
             onToggle={(on) => {
               twap.setOn(on);
@@ -480,8 +487,13 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             impact={previewData?.priceImpact ?? null}
             coin={base ?? ''}
             lot={longDetail.data?.lotSize ?? shortDetail.data?.lotSize}
-          />}
-          {!twapOn && (
+          />
+        )}
+      </div>
+
+      {mode === 'maker' && (
+        <>
+          {!twapOn && makerSym && (
             <>
             <LimitPriceBox
               bookPrice={makerTick !== null && touchPx !== undefined ? String(touchPx) : null}
@@ -504,19 +516,6 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             )}
             </>
           )}
-          <MakerSettings
-            legs={legs}
-            makerLeg={makerLeg}
-            autoPick={autoPick ?? null}
-            saving={makerSaving}
-            onMakerLeg={setMakerLeg}
-            takerAfter={taker.takerAfter}
-            onTakerAfter={taker.pick}
-            takerCapSec={twapOn ? (twapPreview?.plan?.takerAfterSec ?? null) : null}
-            repegBehindBp={repegBp}
-            repegLocked={pinned}
-            onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}
-          />
         </>
       )}
 
