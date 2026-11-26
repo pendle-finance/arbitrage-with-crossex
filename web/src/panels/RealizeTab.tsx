@@ -107,7 +107,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const sliceQueried = sliceUsd > 0 && sliceUsd !== tab?.defaultSliceUsd;
   const debouncedSlice = useDebounced(sliceUsd, CUSTOM_DEBOUNCE_MS);
   const baseAllNet = all ? Math.max(0, netOf(all, costOf(all, exec, sliceOf(presetOptions, sliceUsd, all.legs[0], all === basePriced)))) : 0;
-  const typedUsd = parsedAmount(customText.replaceAll(',', ''));
+  const typedUsd = parsedAmount(customText);
   const customUsd = typedUsd !== null && typedUsd > 0 ? Math.min(typedUsd, baseAllNet) : null;
   const debouncedUsd = useDebounced(customUsd, CUSTOM_DEBOUNCE_MS);
   const queried = (amount === 'custom' && debouncedUsd !== null) || sliceQueried;
@@ -159,7 +159,9 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const cashNow = bucket?.cash ?? 0;
   const clearNet = shownClear ? netOf(shownClear, costFor(shownClear, exec)) : 0;
   const debtNet = clearDebt ? Math.max(0, clearNet) : 0;
-  const boxText = amount === 'clear' ? num(debtNet, 0) : amount === 'all' ? num(allNet, 0) : customText;
+  const debtText = String(Math.round(debtNet));
+  const allText = String(Math.round(allNet));
+  const boxText = amount === 'clear' ? debtText : amount === 'all' ? allText : customText;
 
   const execLabel = (mode: RealizeExec): string =>
     execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode] / Math.max(1, slice.count)) : '—');
@@ -232,7 +234,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
           value={boxText}
           onChange={(text) => {
             setCustomText(text);
-            setAmount('custom');
+            setAmount(text.trim() === debtText && Math.round(debtNet) > 0 ? 'clear' : text.trim() === allText && all ? 'all' : 'custom');
           }}
           inputLabel={t('accounts.realizeTab.amountAria')}
           suffix={poolCoin(tab.pool)}

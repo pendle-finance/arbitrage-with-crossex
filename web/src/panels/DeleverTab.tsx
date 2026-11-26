@@ -5,20 +5,19 @@ import { EmptyState } from '../components/EmptyState';
 import { HoverCard } from '../components/HoverCard';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { PairPicker, type PairPickerRow } from '../components/PairPicker';
-import { SegmentedToggle } from '../components/SegmentedToggle';
+import { AmountPresets } from '../components/AmountPresets';
 import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
 import { amountError } from '../lib/amount';
-import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sigGrouped, WALLET_SHORT } from '../lib/fmt';
+import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
 import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
 import { TwapArea, useTwapInput } from '../trade/TwapArea';
 import { useTakerAfter, useTwapTakerAfter } from '../trade/useTwapTakerAfter';
-import { AffixedInput } from '../trade/PairTicketBits';
 import { daysLeftText, useOpenPairs, type OpenPair } from './assets/pairs';
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
@@ -31,7 +30,8 @@ import { NotHedgedLine, realizeText, TotalCost, type CostRow } from './Rebalance
 import { SliceSizeRow } from './SliceTable';
 import { useActiveWallet } from './trackedAddress';
 
-type Share = '10' | '20' | '30' | 'custom';
+type Share = '10' | '20' | '30';
+const SHARES: Share[] = ['10', '20', '30'];
 type SlicePick = { kind: 'preset'; usd: number } | { kind: 'custom' } | null;
 
 const largestIm = (pairs: OpenPair[]): OpenPair | null =>
@@ -53,9 +53,19 @@ function rowOf(pair: OpenPair, now: number): PairPickerRow {
   };
 }
 
-function closeOf(pair: OpenPair, share: Share, customText: string): { close: number | null; error: string | null } {
-  if (share !== 'custom') return { close: (pair.size * Number(share)) / 100, error: null };
-  const text = customText.trim();
+const shareQty = (pair: OpenPair, share: Share): number => (pair.size * Number(share)) / 100;
+const shareText = (pair: OpenPair, share: Share): string => sig(shareQty(pair, share));
+
+function litShare(pair: OpenPair, text: string): Share | null {
+  const trimmed = text.trim();
+  if (trimmed === '' || amountError(trimmed) !== null) return null;
+  return SHARES.find((share) => Number(shareText(pair, share)) === Number(trimmed)) ?? null;
+}
+
+function closeOf(pair: OpenPair, raw: string): { close: number | null; error: string | null } {
+  const lit = litShare(pair, raw);
+  if (lit !== null) return { close: shareQty(pair, lit), error: null };
+  const text = raw.trim();
   if (text === '') return { close: null, error: t('app.amount.notPositive') };
   const error = amountError(text);
   if (error !== null) return { close: null, error };
@@ -135,15 +145,15 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const wallet = useActiveWallet();
   const { pairs: open, loading, failed, retry } = useOpenPairs();
   const [picked, setPicked] = useState<string | null>(pairKey);
-  const [share, setShare] = useState<Share>('20');
-  const [customText, setCustomText] = useState('');
+  const [typed, setTyped] = useState<string | null>(null);
   const [exec, setExec] = useState<RealizeExec>('maker');
   const [slicePick, setSlicePick] = useState<SlicePick>(null);
   const [sliceText, setSliceText] = useState('');
   const [slicesOpen, setSlicesOpen] = useState(false);
   const pairs = open.filter((p) => p.unit === 'base');
   const pair = pairs.find((p) => p.key === picked) ?? largestIm(pairs);
-  const { close, error: amountText } = pair ? closeOf(pair, share, customText) : { close: null, error: null };
+  const amountText = typed ?? (pair ? shareText(pair, '20') : '');
+  const { close, error: amountProblem } = pair ? closeOf(pair, amountText) : { close: null, error: null };
   const twap = useTwapInput();
   const sliceUsd = sliceUsdOf(slicePick, sliceText);
   const taker = useTakerAfter();
@@ -218,10 +228,12 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
       ]
     : [];
 
+  const typedQty = Number(amountText.trim());
+  const holdQty = close ?? (Number.isFinite(typedQty) ? typedQty : 0);
   const holdLabel =
     twapPlan
-      ? t('accounts.delever.holdTwap', { coin: pair.base, qty: qtyText(close ?? 0), duration: spanText(twapPlan.durationSec) })
-      : t('accounts.deleverTab.hold', { coin: pair.base, qty: qtyText(close ?? 0) });
+      ? t('accounts.delever.holdTwap', { coin: pair.base, qty: qtyText(holdQty), duration: spanText(twapPlan.durationSec) })
+      : t('accounts.deleverTab.hold', { coin: pair.base, qty: qtyText(holdQty) });
 
   const confirm = () => {
     if (request === null || estimate === null || close === null) return;
@@ -236,11 +248,26 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     { value: '10', label: t('accounts.deleverTab.pct10') },
     { value: '20', label: t('accounts.deleverTab.pct20') },
     { value: '30', label: t('accounts.deleverTab.pct30') },
-    { value: 'custom', label: t('accounts.deleverTab.custom') },
   ];
 
   const planBody = (): ReactNode => {
-    if (request === null) return null;
+    if (request === null) {
+      return (
+        <RebalanceModalFooter
+          rows={[]}
+          holdLabel={holdLabel}
+          optional={false}
+          stale={false}
+          quoteStale={false}
+          lock={lock}
+          pricing={false}
+          disabled
+          holdMs={holdMs}
+          onRefresh={() => undefined}
+          onConfirm={() => undefined}
+        />
+      );
+    }
     if (query.isError && plan === null) return <VerdictAlert tone="warn" text={query.error.message} />;
     if (plan === null) return <Skeleton className="h-48 w-full" />;
     const hedgeGapQty = twapPlan ? Number(twapPlan.sliceQty) : plan.notHedgedMaxQty;
@@ -369,8 +396,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           rows={pairs.map((p) => rowOf(p, now))}
           value={pair.key}
           onChange={(key) => {
+            const next = pairs.find((p) => p.key === key);
+            const lit = litShare(pair, amountText);
             setPicked(key);
-            setCustomText('');
+            setTyped(next && lit ? shareText(next, lit) : '');
           }}
           label={t('accounts.deleverTab.pair')}
           searchLabel={t('accounts.deleverTab.search')}
@@ -379,24 +408,22 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         />
       </Field>
       <Field label={t('accounts.deleverTab.reduceBy')}>
-        <SegmentedToggle<Share> ariaLabel={t('accounts.deleverTab.reduceBy')} fill value={share} onChange={setShare} options={shareOptions} />
-        {share === 'custom' && (
-          <div className="flex items-center gap-3">
-            <div className="w-48">
-              <AffixedInput affix={pair.base}>
-                <input
-                  className="input num h-8 w-full pr-12"
-                  inputMode="decimal"
-                  aria-label={t('accounts.deleverTab.custom')}
-                  value={customText}
-                  onChange={(e) => setCustomText(e.target.value)}
-                />
-              </AffixedInput>
-            </div>
-            {close !== null && <span className="num text-xs text-ink-100">{t('accounts.deleverTab.customPct', { pct: pctText(pct) })}</span>}
-          </div>
-        )}
-        {share === 'custom' && amountText !== null && <p className="text-xs text-gold">{amountText}</p>}
+        <div className="flex flex-wrap items-center gap-3">
+          <AmountPresets<Share>
+            value={amountText}
+            onChange={setTyped}
+            inputLabel={t('accounts.deleverTab.amountAria')}
+            suffix={pair.base}
+            bad={amountProblem !== null && amountText.trim() !== ''}
+            boxClassName="w-40"
+            presetsLabel={t('accounts.deleverTab.reduceBy')}
+            preset={litShare(pair, amountText)}
+            onPreset={(share) => setTyped(shareText(pair, share))}
+            presets={shareOptions}
+          />
+          {close !== null && <span className="num text-xs text-ink-100">{t('accounts.deleverTab.customPct', { pct: pctText(pct) })}</span>}
+        </div>
+        {amountProblem !== null && <p className="num text-xs text-guava">{amountProblem}</p>}
       </Field>
       {planBody()}
     </div>

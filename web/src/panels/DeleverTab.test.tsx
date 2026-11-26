@@ -176,39 +176,40 @@ describe('DeleverTab pair', () => {
   });
 });
 
+const sizeBox = () => screen.getByRole('textbox', { name: 'Size to delever, each leg' });
+
 describe('DeleverTab guards', () => {
-  it.each(['0', 'abc', '-5'])('custom %s shows the invalid sentence and no hold', async (typed) => {
+  it.each(['0', 'abc', '-5'])('a typed %s shows the invalid sentence and turns the hold off', async (typed) => {
     const user = userEvent.setup();
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    await user.type(screen.getByRole('textbox', { name: 'Custom' }), typed);
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), typed);
     expect(screen.getByText(/^(Not a number|Must be more than 0)$/)).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
   });
 
-  it('custom above the pair size names the most and shows no hold', async () => {
+  it('a size above the pair size names the most in red and turns the hold off', async () => {
     const user = userEvent.setup();
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    await user.type(screen.getByRole('textbox', { name: 'Custom' }), '900.001');
-    expect(screen.getByText('Maximum is 900')).toBeInTheDocument();
-    expect(screen.queryByText(/^100(\.0+)?%$/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), '900.001');
+    expect(screen.getByText('Maximum is 900')).toHaveClass('text-guava');
+    expect(screen.queryByText(/^= 100(\.0+)?%$/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to delever 900.001 BTC' })).toBeDisabled();
   });
 
-  it('an empty custom size says why and shows no hold, as 0 does', async () => {
+  it('an empty size says why and turns the hold off, as 0 does', async () => {
     const user = userEvent.setup();
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    expect(screen.getByRole('textbox', { name: 'Custom' })).toHaveValue('');
+    await user.clear(sizeBox());
     expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
-    await user.type(screen.getByRole('textbox', { name: 'Custom' }), '0');
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
+    await user.type(sizeBox(), '0');
     expect(screen.getByText('Must be more than 0')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /^Hold to delever/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Hold to delever/ })).toBeDisabled();
   });
 
   it('the hold stays disabled until the plan for the picked size returns', async () => {
@@ -247,18 +248,27 @@ describe('DeleverTab size', () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
-    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%', 'Custom']);
+    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['10%', '20%', '30%']);
     expect(within(group).getByRole('radio', { name: '20%' })).toHaveAttribute('aria-checked', 'true');
+    expect(sizeBox()).toHaveValue('180');
+    expect(screen.getByText('= 20%')).toBeInTheDocument();
   });
 
-  it('custom coin size shows percent', async () => {
+  it('a preset is lit only while the box holds its size', async () => {
     const user = userEvent.setup();
     const sent = servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await user.click(screen.getByRole('radio', { name: 'Custom' }));
-    const field = screen.getByRole('textbox', { name: 'Custom' });
-    await user.type(field, '90');
-    expect(within(field.closest('.flex.items-center') as HTMLElement).getByText('10%')).toBeInTheDocument();
+    const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
+    await user.click(within(group).getByRole('radio', { name: '30%' }));
+    expect(sizeBox()).toHaveValue('270');
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), '100');
+    expect(within(group).getAllByRole('radio').every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
+    expect(screen.getByText('= 11.1%')).toBeInTheDocument();
+    await user.clear(sizeBox());
+    await user.type(sizeBox(), '90');
+    expect(within(group).getByRole('radio', { name: '10%' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText('= 10%')).toBeInTheDocument();
     await waitFor(() => expect(sent.at(-1)?.perps.map((p) => p.qty)).toEqual([90, 90]));
     expect(sent.at(-1)?.boros).toEqual([{ marketId: 101, size: 90 }]);
   });

@@ -1793,13 +1793,15 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(chips.map((chip) => chip.textContent)).toEqual([expect.stringMatching(/^Debt \([\d,]+ USDC\)$/), expect.stringMatching(/^All \([\d,]+ USDC\)$/)]);
     expect(chips[0]).toHaveAttribute('aria-checked', 'true');
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
-    expect(box).toHaveValue(chips[0]!.textContent!.match(/[\d,]+/)![0]);
+    expect(box).toHaveValue(chips[0]!.textContent!.match(/[\d,]+/)![0].replaceAll(',', ''));
     await userEvent.click(chips[1]!);
-    const allText = chips[1]!.textContent!.match(/[\d,]+/)![0];
+    const allText = chips[1]!.textContent!.match(/[\d,]+/)![0].replaceAll(',', '');
     expect(box).toHaveValue(allText);
-    expect(allText).toContain(',');
     await userEvent.type(box, '{backspace}');
+    expect(amountPresets().every((chip) => chip.getAttribute('aria-checked') === 'false')).toBe(true);
     expect(screen.queryByText('Type an amount to realize.')).toBeNull();
+    await userEvent.type(box, allText.slice(-1));
+    expect(amountPresets()[1]).toHaveAttribute('aria-checked', 'true');
     await userEvent.clear(box);
     await userEvent.type(box, '999999999');
     expect(amountPresets().every((chip) => chip.getAttribute('aria-checked') === 'false')).toBe(true);
