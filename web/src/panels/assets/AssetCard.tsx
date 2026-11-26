@@ -2383,7 +2383,19 @@ export function RollOverModal({
                 onChange={setMode}
                 options={[
                   { value: 'reopen', label: t('assetCard.roll.modeReopen') },
-                  { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
+                  {
+                    value: 'openOnly',
+                    label: (
+                      <HoverCard
+                        wrapsControl
+                        widthPx={320}
+                        label={<span className="underline decoration-dotted underline-offset-4">{t('assetCard.roll.modeOpenOnly')}</span>}
+                      >
+                        <span>{t('assetCard.roll.modeOpenOnlyHedge')}</span>
+                        <span>{t('assetCard.roll.modeOpenOnlyOld', { date: fmtDateLocal(soonest) })}</span>
+                      </HoverCard>
+                    ),
+                  },
                 ]}
               />
               <div
