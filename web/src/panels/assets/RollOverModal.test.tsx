@@ -11,9 +11,11 @@ import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { AssetBorosOpen, AssetGroup, AssetPerpOpen, BorosRollGate } from '../../api/types';
+import type { AssetBorosOpen, AssetGroup, AssetPerpOpen, BorosRollGate, PreviewResult } from '../../api/types';
+import { previewFor } from '../../test/fixtures';
 import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
+import { OPPORTUNITIES_STORAGE_KEY } from '../../lib/storage';
 import { STRATEGY_STORAGE_KEY } from '../HomeControls';
 import { RollOverModal } from './AssetCard';
 import { deriveAsset } from './assetModel';
@@ -911,6 +913,7 @@ describe('RollOverModal — the review page', () => {
   });
 
   it('one panel: the picker stays above the two numbered steps, and the cost shows the slippage of each step in dollars', async () => {
+    const user = userEvent.setup();
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} picker={<div>Pair picker</div>} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
@@ -922,10 +925,14 @@ describe('RollOverModal — the review page', () => {
     expect(steps.map((li) => li.textContent?.match(/^\d(Close|Open)/)?.[0])).toEqual(['1Close', '2Open']);
     const cost = within(dialog).getByRole('region', { name: 'Cost' });
     for (const label of ['Close slippage', 'Open slippage']) {
-      const line = within(cost).getByText(label).parentElement as HTMLElement;
-      expect(line.textContent).toMatch(/Est\.\s*\d[\d.,]*% \(\$[\d,.]+\)/);
-      expect(line.textContent).toMatch(/APR \(\$[\d,.]+\)/);
+      const line = within(cost).getByText(label).closest('.justify-between') as HTMLElement;
+      expect(within(line).getByTitle('Change max slippage').textContent).toMatch(/^\$[\d,.]+$/);
+      expect(line.textContent).not.toMatch(/Est\.|Max/);
     }
+    await user.hover(within(cost).getByText('Close slippage'));
+    const card = await screen.findByRole('tooltip');
+    expect(card.textContent).toMatch(/Est\.\s*\d[\d.,]*% APR \(\$[\d,.]+\)/);
+    expect(card.textContent).toMatch(/Max\s*\d[\d.,]*% APR \(\$[\d,.]+\)/);
     expect(within(cost).getByText('Total cost')).toBeInTheDocument();
   });
 
@@ -1014,7 +1021,8 @@ describe('RollOverModal — open only (keep old legs)', () => {
     // The review has NO exit batch — just the new legs.
     expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Re-entry')).not.toBeInTheDocument();
-    expect(within(dialog).getByText('Stay open, no perps')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Stay open, no perps')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Matures')).not.toBeInTheDocument();
 
     const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
@@ -1034,6 +1042,53 @@ describe('RollOverModal — open only (keep old legs)', () => {
     expect(rolls).toBe(0);
 
     expect(await within(dialog).findByText(/Opened 100 ETH/)).toBeInTheDocument();
+  });
+
+  it('with "close the perps at maturity" chosen in Opportunities, the option APR pays the perp close', async () => {
+    install();
+    const aprOf = async () => {
+      renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+      const dialog = await screen.findByRole('dialog');
+      const [option] = await within(dialog).findAllByRole('radio', { name: /2026|2027/ });
+      let text = '';
+      await waitFor(
+        () => {
+          text = option.children[1].textContent ?? '';
+          expect(text).toMatch(/%/);
+        },
+        { timeout: 4_000 },
+      );
+      cleanup();
+      return Number.parseFloat(text.replace(/[^\d.-]/g, ''));
+    };
+    const rolled = await aprOf();
+
+    const bodies: { actions: { kind: string; symbol: string }[] }[] = [];
+    server.use(
+      http.post('/api/preview', async ({ request }) => {
+        const body = (await request.json()) as { actions: { kind: 'close-position'; symbol: string }[] };
+        bodies.push(body);
+        return HttpResponse.json(
+          env({
+            makerLeg: null,
+            previews: body.actions.map((a) =>
+              previewFor(a, {
+                qty: '30',
+                estNotional: 60_000,
+                fees: { takerRate: 0.0005, makerRate: 0.0002, specialOverride: false, quote: 'USDT', est: { taker: 30 } },
+                fillEstimate: { midPrice: 2000, avgPrice: 2001, slippagePct: 0.05 } as PreviewResult['fillEstimate'],
+              }),
+            ),
+          }),
+        );
+      }),
+    );
+    localStorage.setItem(OPPORTUNITIES_STORAGE_KEY, JSON.stringify({ exitMode: 'close', entryMode: 'both-market' }));
+    const closed = await aprOf();
+
+    expect(bodies.length).toBeGreaterThan(0);
+    expect(bodies[0].actions.every((a) => a.kind === 'close-position')).toBe(true);
+    expect(closed).toBeLessThan(rolled);
   });
 
   it('prices the options without an exit: the cost is the opening batch alone', async () => {

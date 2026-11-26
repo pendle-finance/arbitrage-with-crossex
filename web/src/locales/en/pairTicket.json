@@ -75,8 +75,6 @@
     "daysShort": "{{n}}d",
     "locked": "{{rate}} fixed",
     "mark": "mark {{rate}}",
-    "bundles": "Bundles",
-    "leavesBundles": "Leaves <i0/>{{a}} and <i1/>{{b}}",
     "closeSizeAll": "Close size · all positions",
     "closeSizeBoth": "Close size · both positions",
     "closeSize": "Close size",

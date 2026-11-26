@@ -304,7 +304,7 @@
       "boros": "Boros",
       "perps": "永续",
       "borosUnhedged": "{{qty}} {{coin}} 固定利率 · 未对冲",
-      "openFloating": "仍持仓，资金费率浮动"
+      "openFloating": "仍持仓，未对冲，资金费率浮动"
     },
     "head": {
       "leg": "腿",

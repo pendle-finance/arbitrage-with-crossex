@@ -263,8 +263,7 @@ describe('CloseBorosForm — saying that it landed', () => {
     // quoted number went blank and the hold still sent that bound.
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
-    // The tolerance box sits behind the "Max: X%" toggle.
-    fireEvent.click(await screen.findByRole('button', { name: /%$/ }));
+    fireEvent.click(await screen.findByTitle('Change max slippage'));
     const slip = await screen.findByLabelText(/Close max slippage/);
     fireEvent.change(slip, { target: { value: '20' } });
     expect(await screen.findByText(/Must be above 0 and at most 10%/)).toBeInTheDocument();
@@ -963,8 +962,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     );
     expect(await screen.findByText('ETH Spread HL-GATE')).toBeInTheDocument();
     expect(screen.queryByText('Hyperliquid')).toBeNull();
-    expect(screen.getByText('Bundles')).toBeInTheDocument();
-    expect(screen.getByText(/Leaves/)).toHaveTextContent(/Leaves .*Hyperliquid and .*Gate$/);
+    expect(screen.queryByText('Bundles')).toBeNull();
     expect(screen.queryByText(/perps stay open/)).toBeNull();
     expect(screen.queryByText('Perps')).toBeNull();
   });
@@ -996,6 +994,6 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     );
     const after = await screen.findByRole('region', { name: 'After' });
     expect(within(after).getByText('Perps')).toBeInTheDocument();
-    expect(within(after).getByText('Open, floating funding')).toBeInTheDocument();
+    expect(within(after).getByText('Open, not hedged, floating funding')).toBeInTheDocument();
   });
 });
