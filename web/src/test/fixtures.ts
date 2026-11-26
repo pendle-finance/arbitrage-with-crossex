@@ -2715,7 +2715,7 @@ function deleverTwapOf(plan: DeleverPlan, price: number, input: DeleverTwapBody,
   const planView = refusal
     ? null
     : { slices, sliceQty: String(sliceQty), lastQty: String(sliceQty), intervalSec, durationSec, takerAfterSec: Math.floor(intervalSec * 0.8) };
-  return { ...plan, twap: { plan: planView, refusal, price }, priceImpact: { whole: null, sliced: 1200, twapDefault: TWAP_OFF } };
+  return { ...plan, twap: { plan: planView, refusal, price }, priceImpact: { whole: null, sliced: 1200 }, twapDefault: TWAP_OFF };
 }
 
 export const deleverTwapPlans = {

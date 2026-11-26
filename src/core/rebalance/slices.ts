@@ -11,6 +11,7 @@ export const MARKET_SLICE_SECONDS = 2;
 export const ONE_ORDER_USD = 1e12;
 
 const BP_NOISE = 1e-9;
+const TWAP_MIN_SAVING_BP = 1;
 
 export interface SliceOption {
   sizeUsd: number;
@@ -69,7 +70,7 @@ export function needsTwap(order: WholeOrder): boolean {
   if (!(whole.bp > SLICE_IMPACT_BP + BP_NOISE)) return false;
   const sliceUsd = sliceSizeOf({ book: order.book, side: order.side, mid, totalUsd: order.qty * mid });
   const slice = impactOf(order.book, order.side, mid, sliceUsd / mid);
-  return slice !== null && slice.bp < whole.bp - BP_NOISE;
+  return slice !== null && slice.bp <= whole.bp - TWAP_MIN_SAVING_BP;
 }
 
 export function twapSlicesOf(order: WholeOrder): number {
@@ -97,12 +98,20 @@ export function sliceSizeOf(input: { book: NormalizedBook | null; side: Side; mi
   const fallback = Math.min(DEFAULT_SLICE_CHOICES_USD[0], totalUsd);
   if (!book || !(mid > 0) || !(totalUsd > 0)) return fallback;
   const largestFirst = [...DEFAULT_SLICE_CHOICES_USD].sort((a, b) => b - a);
-  for (const choice of largestFirst) {
+  const inBook = largestFirst.flatMap((choice) => {
     const sizeUsd = Math.min(choice, totalUsd);
     const impact = impactOf(book, side, mid, sizeUsd / mid);
-    if (impact && !impact.pastBook && impact.bp <= SLICE_IMPACT_BP + BP_NOISE) return sizeUsd;
+    return impact && !impact.pastBook ? [{ sizeUsd, bp: impact.bp }] : [];
+  });
+  const fit = inBook.find((row) => row.bp <= SLICE_IMPACT_BP + BP_NOISE);
+  if (fit) return fit.sizeUsd;
+  if (inBook.length > 0) {
+    const cheapest = Math.min(...inBook.map((row) => row.bp));
+    return inBook.find((row) => row.bp <= cheapest + TWAP_MIN_SAVING_BP)?.sizeUsd ?? fallback;
   }
-  return fallback;
+  const levels = side === 'BUY' ? book.asks : book.bids;
+  const depthUsd = levels.reduce((total, [, size]) => (size > 0 ? total + size : total), 0) * mid;
+  return depthUsd > 0 ? Math.min(fallback, depthUsd / 2) : fallback;
 }
 
 export const oneOrderUsdOf = (maxUsd: number): number => (maxUsd > 0 ? Math.min(ONE_ORDER_USD, maxUsd) : ONE_ORDER_USD);
