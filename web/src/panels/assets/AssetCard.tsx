@@ -1721,6 +1721,20 @@ function AfterRates({ sim, legs, liqWarn }: { sim: BorosPairSimulation | null; l
   );
 }
 
+function RollFixedAprRow({ rate }: { rate: number | null }) {
+  return (
+    <EstimateRow
+      label={
+        <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
+          {t('assetCard.roll.fixedAprHint')}
+        </HoverCard>
+      }
+      value={rate !== null ? <SignedNumber value={rate} format={fmtPct} /> : '—'}
+      strong
+    />
+  );
+}
+
 interface RollBatch {
   key: string;
   title: string;
@@ -2279,18 +2293,23 @@ export function RollOverModal({
         {!sent && (
           <fieldset disabled={busy} className="flex min-w-0 flex-col gap-4">
             {picker}
-            <SegmentedToggle<'reopen' | 'openOnly'>
-              className="seg-info"
-              fill
-              ariaLabel={t('assetCard.roll.modeAria')}
-              value={mode}
-              onChange={setMode}
-              options={[
-                { value: 'reopen', label: t('assetCard.roll.modeReopen') },
-                { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
-              ]}
-            />
-            <div ref={setStepsSlot} className="empty:hidden" />
+            <div className="order-stack">
+              <SegmentedToggle<'reopen' | 'openOnly'>
+                className="seg-info"
+                fill
+                ariaLabel={t('assetCard.roll.modeAria')}
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { value: 'reopen', label: t('assetCard.roll.modeReopen') },
+                  { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
+                ]}
+              />
+              <div
+                ref={setStepsSlot}
+                className="overflow-hidden border border-ink-700 empty:hidden [&_li]:rounded-none [&_li]:border-x-0 [&_li]:border-b-0 [&_ol]:gap-0"
+              />
+            </div>
 
             <div className="flex flex-col gap-1.5">
               <span className={microLabelClass}>{sizeLabel}</span>
@@ -2384,6 +2403,7 @@ export function RollOverModal({
               collateral={collateral}
               address={address}
               nowSec={nowSec}
+              perpImUsd={perpImUsd}
               markets={markets ?? []}
               entrySeedPct={seeds?.entry}
               settling={size !== simSize || seeds === null}
@@ -2403,6 +2423,7 @@ export function RollOverModal({
               ctx={ctx.data}
               oldMaturity={soonest}
               nowSec={nowSec}
+              perpImUsd={perpImUsd}
               exitSeedPct={seeds?.exit}
               entrySeedPct={seeds?.entry}
               settling={size !== simSize || seeds === null}
@@ -2413,11 +2434,7 @@ export function RollOverModal({
             />
           )
         ) : (
-          <div className="flex items-center justify-end gap-2">
-            <button type="button" className="btn" onClick={onClose}>
-              {t('common.cancel')}
-            </button>
-          </div>
+          null
         )}
       </div>
     </Modal>
@@ -2496,6 +2513,7 @@ function RollReview({
   ctx,
   oldMaturity,
   nowSec,
+  perpImUsd,
   exitSeedPct,
   entrySeedPct,
   settling,
@@ -2513,6 +2531,7 @@ function RollReview({
   ctx: BorosPairContext;
   oldMaturity: number;
   nowSec: number;
+  perpImUsd: number;
   /** The tolerance the pick page settled on for each batch at this size, in
    * % APR — wider than the per-market seed when the size needed it. Absent
    * (no ladder quoted yet) falls back to the seed. */
@@ -2586,6 +2605,15 @@ function RollReview({
   const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null, ROLL_POLL_MS);
   const exitSim = roll.data?.exit.simulation ?? null;
   const entrySim = roll.data?.entry.simulation ?? null;
+  const fixedApr = rollFigures({
+    entrySim: entrySim ?? undefined,
+    exitSim: exitSim ?? undefined,
+    size,
+    perpImUsd,
+    maturity: target.maturity,
+    heldLegs: yuLegs,
+    nowSec,
+  }).netRate;
   const ackShown = roll.data?.entry.gate.requiresAcknowledgement === true;
   const pending = roll.isPending;
 
@@ -2789,6 +2817,7 @@ function RollReview({
 
       <SummaryCard title={t('accounts.moveCash.after')}>
         <div className="flex flex-col gap-1.5">
+          <RollFixedAprRow rate={fixedApr} />
           <EstimateRow
             label={
               <HoverCard label={t('assetCard.review.exitPnl')} widthPx={300}>
@@ -2820,6 +2849,17 @@ function RollReview({
               )
             }
           />
+          {availableAfter === null && availableAfterExit !== null && availableBefore !== null && (
+            <EstimateRow
+              label={t('assetCard.review.availNow')}
+              value={
+                <>
+                  {fmtTokenQty(availableBefore, collateral)}
+                  {usdNote(availableBefore)}
+                </>
+              }
+            />
+          )}
           <EstimateRow
             label={
               availableAfter === null && availableAfterExit !== null ? (
@@ -2893,14 +2933,11 @@ function RollReview({
         )}
       />
 
-      <div className="mt-1 flex items-center justify-end gap-2">
-        <button type="button" className="btn" onClick={onClose} disabled={busy}>
-          {t('common.cancel')}
-        </button>
+      <div className="mt-1 flex flex-col">
         {loginLabel ? (
           <BorosLogInButton />
         ) : (
-          <HoldToConfirmButton tone="cyan" disabled={!canConfirm} onConfirm={run} title={t('assetCard.review.holdTitle')}>
+          <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.review.holdTitle')}>
             {busy ? t('assetCard.review.rolling') : t('assetCard.actions.rollOver')}
           </HoldToConfirmButton>
         )}
@@ -2928,6 +2965,7 @@ function OpenOnlyReview({
   collateral,
   address,
   nowSec,
+  perpImUsd,
   markets,
   entrySeedPct,
   settling,
@@ -2944,6 +2982,7 @@ function OpenOnlyReview({
   collateral: string;
   address: string;
   nowSec: number;
+  perpImUsd: number;
   markets: ReadonlyArray<BorosPairMarketRow>;
   /** The tolerance the pick page settled on for the entry at this size, in %
    * APR — wider than the per-market seed when the size needed it. */
@@ -2980,6 +3019,16 @@ function OpenOnlyReview({
   useEffect(() => onResult(out !== null), [out, onResult]);
   const sim = useBorosPairSimulation(req, req !== null && out === null, { refetchInterval: ROLL_POLL_MS });
   const simulation = sim.data?.simulation ?? null;
+  const fixedApr = rollFigures({
+    entrySim: simulation ?? undefined,
+    exitSim: undefined,
+    size,
+    perpImUsd,
+    maturity: target.maturity,
+    heldLegs: yuLegs,
+    nowSec,
+    keepOld: true,
+  }).netRate;
   const ackShown = sim.data?.gate.requiresAcknowledgement === true;
   /** Names a margin account when the new legs draw on more than one. */
   const nameOfAccount = (id: number | null): string =>
@@ -3109,6 +3158,7 @@ function OpenOnlyReview({
 
       <SummaryCard title={t('accounts.moveCash.after')}>
         <div className="flex flex-col gap-1.5">
+          <RollFixedAprRow rate={fixedApr} />
           <AfterRates sim={simulation} legs={openRows} liqWarn={liqWarnOf(sim.data?.gate.funding)} />
           <EstimateRow label={t('assetCard.roll.matures')} value={`${fmtDateLocal(target.maturity)} · ${daysLeftText(target.maturity, nowSec)}`} />
           <EstimateRow
@@ -3148,14 +3198,11 @@ function OpenOnlyReview({
         )}
       />
 
-      <div className="mt-1 flex items-center justify-end gap-2">
-        <button type="button" className="btn" onClick={onClose} disabled={busy}>
-          {t('common.cancel')}
-        </button>
+      <div className="mt-1 flex flex-col">
         {loginLabel ? (
           <BorosLogInButton />
         ) : (
-          <HoldToConfirmButton tone="cyan" disabled={!canConfirm} onConfirm={run} title={t('assetCard.openOnly.holdTitle')}>
+          <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.openOnly.holdTitle')}>
             {busy ? t('assetCard.openOnly.opening') : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
         )}
@@ -3301,7 +3348,7 @@ function RollOption({
           </span>
         </span>
       </span>
-      <span className={`num text-right text-[15px] font-semibold ${settling}`}>
+      <span className={`num text-right text-[12.5px] ${settling}`}>
         {v.netRate !== null ? <SignedNumber value={v.netRate} format={fmtPct} /> : blank}
       </span>
       <span className={`num text-right text-[12.5px] ${settling}`}>

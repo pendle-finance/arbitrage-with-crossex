@@ -151,7 +151,7 @@ describe('AssetCard — roll over', () => {
     // No maturity lists a market at BOTH venues, so there is nothing to roll
     // into -- the table says so rather than inventing a target.
     expect(await within(dialog).findByText(/No later maturity on both venues yet/)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'close' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
@@ -359,8 +359,9 @@ describe('AssetCard — roll over', () => {
     );
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
     const dialog = screen.getByRole('dialog');
-    const headline = await within(dialog).findByText(
-      (_, el) => el?.classList.contains('text-[15px]') === true && /^\+?\d+\.\d+%$/.test(el.textContent ?? ''),
+    const options = await within(dialog).findByRole('radiogroup', { name: 'Roll into' });
+    const [headline] = await within(options).findAllByText(
+      (_, el) => el?.classList.contains('text-right') === true && /^\+?\d+\.\d+%$/.test(el.textContent ?? ''),
       undefined,
       { timeout: 10_000 },
     );

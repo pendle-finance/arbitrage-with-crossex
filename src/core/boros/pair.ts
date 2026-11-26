@@ -326,6 +326,22 @@ export interface BorosPairLegInput {
    * to 0, which is exactly right for a leg opening from flat.
    */
   committedMargin?: number;
+  restingOrderMargin?: RestingOrderMargin;
+}
+
+export interface RestingOrderMargin {
+  long: number;
+  short: number;
+  longSize: number;
+  shortSize: number;
+}
+
+function marketMarginWithOrders(positionMargin: number, size: number, orders: RestingOrderMargin): number {
+  if (size === 0) return Math.max(orders.long, orders.short);
+  const same = positionMargin + (size > 0 ? orders.long : orders.short);
+  const oppositeSize = size > 0 ? orders.shortSize : orders.longSize;
+  const opposite = oppositeSize <= Math.abs(size) ? 0 : Math.max(0, (size > 0 ? orders.short : orders.long) - positionMargin);
+  return Math.max(same, opposite);
 }
 
 export interface SimulatedLeg {
@@ -445,9 +461,19 @@ export interface SimulatedLeg {
  * send order. They part in one case: an Open's gas top-up is paid before any
  * leg frees margin, so it can block while "after" stays positive. Null when
  * the margin is unpriced. */
-export function legMarginNeed(leg: SimulatedLeg, committedMargin: number | undefined): number | null {
+export function legMarginNeed(
+  leg: SimulatedLeg,
+  committedMargin: number | undefined,
+  orders?: RestingOrderMargin,
+): number | null {
   if (leg.marginRequired === null) return null;
-  return leg.marginRequired - (committedMargin ?? 0) + (leg.takerFeeCost + leg.fillVsMarkCost);
+  const before = committedMargin ?? 0;
+  const delta =
+    orders === undefined
+      ? leg.marginRequired - before
+      : marketMarginWithOrders(leg.marginRequired, leg.sizing.resultingSize, orders) -
+        marketMarginWithOrders(before, leg.sizing.currentSize, orders);
+  return delta + (leg.takerFeeCost + leg.fillVsMarkCost);
 }
 
 export interface BorosPairSimulation {
@@ -900,6 +926,7 @@ export interface BorosMarginBucket {
    * committed. Bonds and pending withdrawals must be excluded UPSTREAM — this
    * module trusts the number it is handed (§6). */
   available: number;
+  availableWithOrders?: number;
   /** Whether the bucket holds any position or resting order right now. */
   hasPositionOrOrders: boolean;
 }
@@ -1102,6 +1129,11 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   const { simulation: sim, account } = input;
   const blockers: PairBlocker[] = [];
   const warnings: string[] = [];
+  const opening = sim.intent !== 'close';
+  const ordersKnown = opening && account.cross?.availableWithOrders !== undefined;
+  const ordersOf = (leg: BorosPairLegInput): RestingOrderMargin | undefined =>
+    ordersKnown && !leg.isolatedOnly ? leg.restingOrderMargin : undefined;
+  const crossAvailable = (opening ? account.cross?.availableWithOrders : undefined) ?? account.cross?.available ?? 0;
 
   const spreadLegs = input.legs.filter((l) => isSpreadMarket(l.market)).length;
   if (sim.intent !== 'close' && spreadLegs > 0 && spreadLegs < input.legs.length) {
@@ -1260,7 +1292,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     // (MarketHub.orderAndOtc), so margin one leg frees backs another only
     // because the batch sends the freeing legs first (submitBorosPair
     // `sendFirst`). Unclamped for that reason.
-    const required = legMarginNeed(leg, legIn.committedMargin);
+    const required = legMarginNeed(leg, legIn.committedMargin, ordersOf(legIn));
     if (legIn.isolatedOnly) {
       const bucket = account.isolatedByMarket.get(leg.marketId);
       const available = bucket?.available ?? 0;
@@ -1303,7 +1335,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     autoTopUpUsd > 0 &&
     autoTopUpToken > 0 &&
     crossKnown &&
-    Math.max(0, crossRequired) + autoTopUpToken > (account.cross?.available ?? 0) &&
+    Math.max(0, crossRequired) + autoTopUpToken > crossAvailable &&
     (input.account.gasFallbackFreeUsd ?? 0) >= autoTopUpUsd;
   // A close's top-up runs after its closes and may come from another coin.
   const topUpHere = sim.intent !== 'close' && !openTopUpElsewhere ? autoTopUpToken : 0;
@@ -1311,7 +1343,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     // The top-up is checked alone, before any leg has freed margin, so legs
     // that free margin on balance do not pay for it.
     crossRequired = Math.max(0, crossRequired) + topUpHere;
-    const available = account.cross?.available ?? 0;
+    const available = crossAvailable;
     if (crossRequired > available) {
       blockers.push({
         code: 'cross-short-margin',
@@ -1398,7 +1430,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
     const availableAfter = group.some((l) => l.sim.marginRequired === null)
       ? null
       : group.reduce(
-          (left, l) => left - (legMarginNeed(l.sim, l.input.committedMargin) ?? 0),
+          (left, l) => left - (legMarginNeed(l.sim, l.input.committedMargin, ordersOf(l.input)) ?? 0),
           availableBefore - extra,
         );
     return {
@@ -1411,7 +1443,7 @@ export function evaluatePairGate(input: EvaluatePairInput): PairGate {
   const crossTraded = traded.filter((l) => !l.input.isolatedOnly);
   const funding: PairFunding[] = [
     ...(crossTraded.length > 0
-      ? [fundingOf(null, account.cross, crossTraded, sim.intent !== 'close' && !openTopUpElsewhere ? autoTopUpToken : 0)]
+      ? [fundingOf(null, account.cross ? { ...account.cross, available: crossAvailable } : null, crossTraded, sim.intent !== 'close' && !openTopUpElsewhere ? autoTopUpToken : 0)]
       : []),
     ...traded
       .filter((l) => l.input.isolatedOnly)
