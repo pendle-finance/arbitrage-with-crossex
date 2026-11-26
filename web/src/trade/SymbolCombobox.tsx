@@ -28,11 +28,8 @@ export function PickChip({
       disabled={disabled}
       title={title}
       onClick={onClick}
-      className={`inline-flex items-center gap-1 rounded border px-2.5 py-[3px] text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
-        active
-          ? 'border-ink-200/70 bg-wash/[0.08] text-ink-50'
-          : 'border-ink-600 text-ink-300 hover:border-ink-400 hover:text-ink-100'
-      }`}
+      data-active={active ? true : false}
+      className="pick-chip"
     >
       {children}
     </button>
@@ -66,17 +63,17 @@ export function CoinCombobox({ value, coins: offered = QUICK_PICK_COINS, onSelec
   const coins = value && !offered.some(isValue) ? [...offered, value] : offered;
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <FieldLabel>{t('common.coin')}</FieldLabel>
-        {aside}
-      </div>
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.coin')}>
-        {coins.map((coin) => (
-          <PickChip key={coin} active={isValue(coin)} onClick={() => onSelect(coin)}>
-            <TokenIcon symbol={coin} size={14} />
-            {coin}
-          </PickChip>
-        ))}
+      <FieldLabel>{t('common.coin')}</FieldLabel>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.coin')}>
+          {coins.map((coin) => (
+            <PickChip key={coin} active={isValue(coin)} onClick={() => onSelect(coin)}>
+              <TokenIcon symbol={coin} size={14} />
+              {coin}
+            </PickChip>
+          ))}
+        </div>
+        {aside && <span className="ml-1.5">{aside}</span>}
       </div>
     </div>
   );
