@@ -56,7 +56,7 @@ export function ClosePairForm({
   legs,
   livePositions,
   allowTwap = false,
-  borosUnhedged = false,
+  borosUnhedged = null,
   onSent,
 }: {
   base: string;
@@ -66,7 +66,7 @@ export function ClosePairForm({
   /** symbol → live position, for the uPnL each close realises. */
   livePositions?: Map<string, CrossexPosition>;
   allowTwap?: boolean;
-  borosUnhedged?: boolean;
+  borosUnhedged?: { qty: number; coin: string } | null;
   onSent?: () => void;
 }) {
   const { t } = useTranslation();
@@ -184,6 +184,11 @@ export function ClosePairForm({
     if (l.partial && held - l.qty > eps) rows.push({ ...shown, kind: 'notInPair', qty: sig(held - l.qty) });
     return rows;
   });
+  const legPnl = (previews ?? []).map((p, i) => ({
+    venue: legs.find((l) => l.symbol === p.symbol)?.venue ?? legs[i]?.venue ?? '',
+    side: sideOf(p.symbol),
+    pnl: realized[i] ?? null,
+  }));
   const bandLeg = previews?.[0]?.fillEstimate;
   const decorate = (acts: ActionInput[]) => decorateClose(acts, previews, makerIdx, maker);
 
@@ -265,7 +270,9 @@ export function ClosePairForm({
         base={base}
         twapOn={twapOn}
         totalPnl={totalPnl}
+        legPnl={legPnl}
         rows={afterRows}
+        flat={!qtyInvalid && !afterRows.some((r) => r.kind === 'left')}
         borosUnhedged={borosUnhedged}
       />
 
