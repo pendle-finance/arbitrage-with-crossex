@@ -3,7 +3,7 @@ import { classifyGateError, CoreError } from '../core/errors';
 import { parseSymbol } from '../core/numbers';
 import { dealSlippage } from '../../web/src/trade/dealSlippage';
 import { resolveFeeRates, type VenueFeeRow } from '../core/estimate/fees';
-import { restPlan, sliceBoundsOf, takerAfterCapSec, type TwapLegRule, usdText } from '../core/twap';
+import { restPlan, sliceBoundsOf, takerAfterCapSec, TWAP_LIMITS, type TwapLegRule, usdText } from '../core/twap';
 import type { DealRequest } from '../engine/create';
 import type { Store } from '../engine/db';
 import { hasMarginRefusalLabel, project } from '../engine/decide';
@@ -359,7 +359,7 @@ async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: 
   }
   const { lot, maxQty } = sliceBoundsOf(twap.deal.rules);
   const rest = fxFloorToStep(restOf(deps.store, job), lot);
-  if (slice >= twap.slices && maxQty !== null && rest > maxQty) twap.slices = slice + 1;
+  if (slice >= twap.slices && slice < TWAP_LIMITS.maxSlices && maxQty !== null && rest > maxQty) twap.slices = slice + 1;
   const asked = slice >= twap.slices ? rest : fxMin(fxFloorToStep(fx(twap.sliceQty) + fx(twap.carryQty), lot), rest);
   const qty = maxQty === null ? asked : fxMin(asked, maxQty);
   if (qty <= FX_ZERO) return finishTwap(deps, job);

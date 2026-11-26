@@ -193,6 +193,21 @@ describe('twap resume re-plans the rest', () => {
     expect((await advance(job, T0 + 65 * MIN)).status).toBe('done');
   });
 
+  it('slices that fill nothing over the venue max stop at 100 slices with the rest not opened', async () => {
+    const job = startJob(ethDeal('6000'), { durationSec: 3600, slices: 12 }, 3000, null);
+    let last = read();
+    for (let slice = 1; slice <= 101 && last.status === 'running'; slice += 1) {
+      last = await advance(job, T0 + (slice - 1) * 5 * MIN);
+      if (last.status !== 'running') break;
+      fill(childIdFor(job.id, slice, 1), '0', '3000');
+    }
+    last = await advance(job, T0 + 101 * 5 * MIN);
+    expect(last).toMatchObject({ status: 'halted', haltKind: 'capped-rest', haltReason: '6000 ETH not opened' });
+    expect(last.twap?.sliceIndex).toBe(100);
+    expect(w.requests.length).toBe(100);
+    expect(w.requests.every((req) => Number(req.qty) <= 2000)).toBe(true);
+  });
+
   it('a rest under the venue min at $50 joins fewer slices on resume', async () => {
     const job = startJob(btcDeal('0.012'), { durationSec: 3600, slices: 12 }, 90_000);
     for (let slice = 1; slice <= 6; slice += 1) {
