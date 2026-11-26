@@ -368,6 +368,27 @@ describe('twap pause and resume', () => {
     expect(ids()).toHaveLength(1);
   });
 
+  it('a pause in the last slice is a pause, and resume posts the rest slice', async () => {
+    const job = startJob(ethOpen('60'));
+    for (let slice = 1; slice <= 12; slice += 1) {
+      await advance(job, T0 + (slice - 1) * 5 * MIN);
+      if (slice < 12) fill(childIdFor(job.id, slice, 1), '5', '3000');
+    }
+    const read = w.jobs.read() as Job;
+    w.jobs.write(requestPause(read));
+    await stopLiveChild(w.deps, read);
+    fill(childIdFor(job.id, 12, 1), '2', '3000', { mode: 'DONE' });
+    const paused = await pass(job);
+    expect(paused).toMatchObject({ status: 'halted', paused: true, pauseRequested: false, haltKind: null, haltReason: null });
+    expect(paused.twap?.behindQty).toBe('3');
+    paused.status = 'running';
+    paused.paused = false;
+    w.jobs.write(paused);
+    at(T0 + 60 * MIN);
+    await pass(job);
+    expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-s13-1`, qty: '3' });
+  });
+
   it('resume replans the rest and slice numbers keep counting', async () => {
     const job = startJob(ethOpen('693.64'));
     for (let slice = 1; slice <= 3; slice += 1) {

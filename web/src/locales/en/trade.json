@@ -299,6 +299,7 @@
       "hedge": "TWAP paused: {{venue}} refused the hedge · {{what}} · slice {{i}}/{{n}}",
       "error": "TWAP paused: error · {{what}} · slice {{i}}/{{n}}",
       "capped": "TWAP paused: rest not closed · {{what}}",
+      "cappedOpen": "TWAP paused: rest not opened · {{what}}",
       "boros": "TWAP paused: Boros close refused · {{what}}",
       "done": "TWAP done · {{what}}",
       "stopped": "TWAP stopped at slice {{i}} of {{n}} · {{what}}",
