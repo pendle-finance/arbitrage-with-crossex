@@ -8,6 +8,7 @@ export interface ListPickerRow<K extends string> {
   icon?: ReactNode;
   name: ReactNode;
   value?: ReactNode;
+  disabled?: boolean;
 }
 
 export function ListPicker<K extends string>({
@@ -55,7 +56,7 @@ export function ListPicker<K extends string>({
   }, [open, place]);
 
   const select = (row: ListPickerRow<K>) => {
-    if (fired.current) return;
+    if (fired.current || row.disabled) return;
     fired.current = true;
     hide(true);
     if (row.key !== value) onChange(row.key);
@@ -149,10 +150,11 @@ export function ListPicker<K extends string>({
                 role="option"
                 tabIndex={-1}
                 aria-selected={row.key === value}
+                aria-disabled={row.disabled || undefined}
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActive(at)}
                 onClick={() => select(row)}
-                className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${at === active ? 'bg-info/15' : ''}`}
+                className={`flex items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${row.disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'} ${at === active ? 'bg-info/15' : ''}`}
               >
                 <span className="flex w-3.5 shrink-0 text-info">{row.key === value && <Check size={14} aria-hidden />}</span>
                 <span className={`${line} flex-1`}>

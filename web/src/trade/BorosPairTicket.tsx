@@ -22,7 +22,7 @@
  * distance on the book; "0.25% of the rate" would be a different number of
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
-import { ArrowLeftRight, ChevronRight } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sigFigsDirectional } from '../lib/ticks';
@@ -59,7 +59,8 @@ import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 import { maxOpenSize } from './borosMaxSize';
-import { FieldLabel, PickChip } from './SymbolCombobox';
+import { CoinCombobox, FieldLabel, PickChip } from './SymbolCombobox';
+import { SwapButton } from '../components/SwapButton';
 import {
   AvailableMarginLines,
   BlockerList,
@@ -1010,18 +1011,7 @@ export function BorosPairTicket({
       {/* The coin as chips — the perp ticket's coin row — then the markets,
           then a maturity they share (below the legs). The wizard fixes both
           markets, so it has nothing to choose. */}
-      {!guided && (
-        <div className="flex flex-col gap-2">
-          <FieldLabel>{t('common.coin')}</FieldLabel>
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.coin')}>
-            {coins.map((c) => (
-              <PickChip key={c} active={coin !== null && sameCoin(c, coin)} onClick={() => pickCoin(c)}>
-                {c}
-              </PickChip>
-            ))}
-          </div>
-        </div>
-      )}
+      {!guided && <CoinCombobox value={coin} coins={coins} onSelect={pickCoin} />}
       {isSpread && !behind ? (
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
@@ -1041,15 +1031,7 @@ export function BorosPairTicket({
               )}
             </div>
             {!guided && (
-              <button
-                type="button"
-                aria-label={t('pairTicket.boros.swapSides')}
-                title={t('pairTicket.boros.swapSidesHint')}
-                onClick={swapSpread}
-                className="mb-[2px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50"
-              >
-                <ArrowLeftRight size={12} aria-hidden />
-              </button>
+              <SwapButton label={t('pairTicket.boros.swapSides')} title={t('pairTicket.boros.swapSidesHint')} onClick={swapSpread} className="mb-[2px]" />
             )}
           </div>
         </div>
@@ -1085,9 +1067,8 @@ export function BorosPairTicket({
           {guided ? (
             <span aria-hidden className="w-2" />
           ) : (
-          <button
-            type="button"
-            aria-label={t('pairTicket.boros.swapMarkets')}
+          <SwapButton
+            label={t('pairTicket.boros.swapMarkets')}
             title={t('pairTicket.boros.swapMarketsHint')}
             disabled={slotA === null && slotB === null}
             onClick={() => {
@@ -1095,10 +1076,7 @@ export function BorosPairTicket({
               setMarketA(marketB);
               setMarketB(marketA);
             }}
-            className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <ArrowLeftRight size={12} aria-hidden />
-          </button>
+          />
           )}
           <div className="relative min-w-0">
             <MarketCard label={t(guided ? 'pairTicket.boros.borosMarketLetter' : 'pairTicket.boros.marketLetter', { letter: 'B' })} row={slotB} side={slotDirA === 'short' ? 'long' : 'short'} locked={guided}>
