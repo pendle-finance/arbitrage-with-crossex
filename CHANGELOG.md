@@ -138,6 +138,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   until a size is typed.
 - **Transfer opens on the wallet you picked** from its first frame, with no flash of the
   default wallet.
+- **Close perps says when a part close is rounded to the lot**, with the size each leg
+  will close.
 
 ## 1.7.9 — 2026-11-10
 
