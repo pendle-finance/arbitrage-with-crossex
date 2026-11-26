@@ -154,8 +154,10 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   };
   const filledRows = (): RunRow[] => {
     if (perpsSet) return perpsRows();
-    const withUsd = (qty: number) =>
-      t('trade.twap.run.filledEachValue', { done: qtyText(qty), total: qtyText(total), coin, usd: usdOf(qty) });
+    const withUsd = (qty: number) => {
+      const usd = usdOf(qty);
+      return t(usd ? 'trade.twap.run.filledEachValue' : 'trade.twap.run.filledEachValueNoUsd', { done: qtyText(qty), total: qtyText(total), coin, usd });
+    };
     if (pair && filled[0] === filled[1]) return [{ label: t(close ? 'trade.twap.run.closedEach' : 'trade.twap.run.filledEach'), value: withUsd(makerFilled) }];
     const venueKey = close ? 'trade.twap.run.closedVenue' : 'trade.twap.run.filledVenue';
     return legs.map((leg, i) => ({ label: t(venueKey, { venue: leg.name }), value: withUsd(filled[i] ?? 0) }));
@@ -183,7 +185,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
   };
   const notHedgedRow = (): RunRow[] =>
     pair
-      ? [{ label: t('trade.twap.run.notHedged'), value: gap > 0 ? `${qtyText(gap)} ${coin} (${usdOf(gap)})` : `0 ${coin}` }]
+      ? [{ label: t('trade.twap.run.notHedged'), value: gap > 0 ? `${qtyText(gap)} ${coin}${usdOf(gap) ? ` (${usdOf(gap)})` : ''}` : `0 ${coin}` }]
       : [];
   const feeRow: RunRow = {
     label: t('trade.twap.run.feeSoFar'),
@@ -194,7 +196,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
     boros ? [{ label: t('trade.twap.run.boros'), value: t('trade.twap.run.borosValue', { before: qtyText(boros.beforeYu), now: qtyText(boros.nowYu) }) }] : [];
   const resumeRow: RunRow = {
     label: t('trade.twap.run.onResume'),
-    value: t('trade.twap.run.onResumeValue', { n: Math.max(0, of - slice), interval: spanText(twap?.intervalSec ?? 0) }),
+    value: t('trade.twap.run.onResumeValue', { count: Math.max(0, of - slice), interval: spanText(twap?.intervalSec ?? 0) }),
   };
 
   const titleKey = TITLE_KEY[shape];
@@ -255,7 +257,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
     const rows: RunRow[] =
       job.status === 'done'
         ? [
-            { label: t(`trade.twap.run.${doneKey}`), value: t('trade.twap.run.openedValue', { qty: qtyText(makerFilled), coin, usd: usdOf(makerFilled) }) },
+            { label: t(`trade.twap.run.${doneKey}`), value: t(usdOf(makerFilled) ? 'trade.twap.run.openedValue' : 'trade.twap.run.openedValueNoUsd', { qty: qtyText(makerFilled), coin, usd: usdOf(makerFilled) }) },
             ...avgRows(),
             ...slippageRow(t('trade.deal.slippage')),
             { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },

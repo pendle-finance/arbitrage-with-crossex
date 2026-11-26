@@ -177,7 +177,7 @@
     "waitsLine": "New deals and transfers wait until it ends.",
     "refreshQuote": "Refresh quote",
     "started": "Started {{age}} ago. You can close this. The rebalance keeps going.",
-    "finishedLead": "Done. This is what each wallet holds now.",
+    "finishedLead": "Done.",
     "abandonTransit": "Abandon leaves {{qty}} {{coin}} in transit. It is not margin until it lands.",
     "abandonSpot": "Abandon leaves the {{qty}} {{coin}} in Gate spot.",
     "abandonSpotNoRead": "Abandon leaves the {{qty}} {{coin}} in Gate spot. This key cannot read Gate spot.",

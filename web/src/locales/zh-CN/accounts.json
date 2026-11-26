@@ -176,7 +176,7 @@
     "waitsLine": "新交易任务和划转将等待其完成。",
     "refreshQuote": "刷新报价",
     "started": "{{age}} 前开始。可关闭此窗口，再平衡会继续。",
-    "finishedLead": "已完成。以下为各钱包当前余额。",
+    "finishedLead": "已完成。",
     "abandonTransit": "放弃后，{{qty}} {{coin}} 将留在途中，到账前不计为保证金。",
     "abandonSpot": "放弃后，这 {{qty}} {{coin}} 将留在 Gate 现货。",
     "abandonSpotNoRead": "放弃后，这 {{qty}} {{coin}} 将留在 Gate 现货。此密钥无法读取 Gate 现货。",
