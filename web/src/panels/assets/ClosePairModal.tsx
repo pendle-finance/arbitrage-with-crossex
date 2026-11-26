@@ -17,6 +17,8 @@ const borosLegsOf = (e: PairEntry) =>
     spreadVenues: e.group.borosOpen.find((b) => b.marketId === l.marketId)?.spreadVenues ?? null,
   }));
 
+const borosSizeOf = (e: PairEntry) => ({ qty: e.pair.size, coin: e.group.base });
+
 function usePairChoice(
   pair: PairEstimate,
   group: AssetGroup,
@@ -92,11 +94,11 @@ export function ClosePairModal({
             base={picked.group.base}
             legs={pairPerpCloseLegs(picked.pair)}
             livePositions={livePositions}
-            borosUnhedged
+            borosUnhedged={borosSizeOf(picked)}
             onSent={onSent}
           />
         ) : (
-          <CloseBorosForm key={picked.open.key} legs={borosLegs} perpsUnhedged onDone={onClose} onSent={onSent} />
+          <CloseBorosForm key={picked.open.key} legs={borosLegs} perpsUnhedged underPicker onDone={onClose} onSent={onSent} />
         )}
       </div>
     </Modal>

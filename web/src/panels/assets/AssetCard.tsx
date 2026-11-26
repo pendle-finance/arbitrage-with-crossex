@@ -2314,6 +2314,13 @@ export function RollOverModal({
               preset={litShare}
               onPreset={(share) => setSize(fmtSize(heldSize * (Number(share) / 100)))}
               presets={ROLL_SHARES.map((share) => ({ value: share, label: `${share}%` }))}
+              custom={{
+                label: t('accounts.deleverTab.custom'),
+                unit: '%',
+                inputLabel: t('accounts.deleverTab.customPctAria'),
+                max: 100,
+                onApply: (share) => setSize(fmtSize(heldSize * (share / 100))),
+              }}
             />
           </div>
 
@@ -2324,7 +2331,7 @@ export function RollOverModal({
           ) : (
             <div className="flex flex-col gap-1.5">
               <div className={`${ROLL_OPTION_GRID} px-3 ${microLabelClass}`}>
-                <span>{t('assetCard.roll.rollInto')}</span>
+                <span className="pl-[26px]">{t('assetCard.roll.rollInto')}</span>
                 <span className="text-right">
                   <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
                     {t('assetCard.roll.fixedAprHint')}
@@ -3288,24 +3295,30 @@ function RollOption({
       }`}
       onClick={onSelect}
     >
-      <span className="flex min-w-0 flex-col gap-1">
-        <span className="num text-[13px] font-semibold text-ink-50">
-          {fmtDateLocal(target.maturity)}
-          <span className="ml-1.5 text-[11.5px] font-normal text-ink-400">{daysLeftText(target.maturity, nowSec)}</span>
-        </span>
-        <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-300">
-          {'spreadMarketId' in target ? (
-            <>
-              <SpreadIcon venues={target.spreadVenues} size={14} />
-              <SpreadName base={base} venues={target.spreadVenues} />
-            </>
-          ) : (
-            <>
-              <VenueIcon venue={pair.longVenue} size={14} />
-              <VenueIcon venue={pair.shortVenue} size={14} />
-              <span className="truncate">{t('assetCard.roll.twoMarkets', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}</span>
-            </>
-          )}
+      <span className="flex min-w-0 items-center gap-3">
+        <span
+          aria-hidden
+          className={`h-3.5 w-3.5 shrink-0 rounded-full border ${selected ? 'border-info bg-info ring-2 ring-inset ring-ink-900' : 'border-ink-500'}`}
+        />
+        <span className="flex min-w-0 flex-col gap-1">
+          <span className="num text-[13px] font-semibold text-ink-50">
+            {fmtDateLocal(target.maturity)}
+            <span className="ml-1.5 text-[11.5px] font-normal text-ink-400">{daysLeftText(target.maturity, nowSec)}</span>
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-300">
+            {'spreadMarketId' in target ? (
+              <>
+                <SpreadIcon venues={target.spreadVenues} size={14} />
+                <SpreadName base={base} venues={target.spreadVenues} />
+              </>
+            ) : (
+              <>
+                <VenueIcon venue={pair.longVenue} size={14} />
+                <VenueIcon venue={pair.shortVenue} size={14} />
+                <span className="truncate">{t('assetCard.roll.twoMarkets', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}</span>
+              </>
+            )}
+          </span>
         </span>
       </span>
       <span className={`num text-right text-[15px] font-semibold ${settling}`}>

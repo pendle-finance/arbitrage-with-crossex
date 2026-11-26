@@ -350,7 +350,7 @@ describe('RollOverModal — the pick page', () => {
     // The four grips: each sets the share and counts as the trader's choice,
     // so the default's note goes and no later quote moves the size back.
     const shortcuts = within(dialog).getByRole('radiogroup', { name: 'Share shortcuts' });
-    expect(within(shortcuts).getAllByRole('radio').map((b) => b.textContent)).toEqual(['25%', '50%', '75%', '100%']);
+    expect(within(shortcuts).getAllByRole('radio').map((b) => b.textContent)).toEqual(['25%', '50%', '75%', '100%', 'Custom']);
     await user.click(within(shortcuts).getByRole('radio', { name: '75%' }));
     expect(box).toHaveValue('75');
     await user.click(within(shortcuts).getByRole('radio', { name: '25%' }));
