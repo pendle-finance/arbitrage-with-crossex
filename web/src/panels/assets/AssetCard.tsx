@@ -1777,7 +1777,10 @@ function RollStep({
         </p>
       )}
       <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value={usdOrDash(cost.feeUsd)} />
-      {footer}
+      <div className="mt-auto flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+        <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={usdOrDash(cost.totalUsd)} strong />
+        {footer}
+      </div>
     </section>
   );
 }
@@ -3098,7 +3101,6 @@ function OpenOnlyReview({
     apr: slipApr,
   };
   const openRows = rollLegsOf(openLegs, markets, openSide, () => '');
-  const totalUsd = batchCost(simulation, slipApr).totalUsd;
   const blank = <span className="text-ink-500">{sim.isPending ? '…' : '—'}</span>;
   const old = fmtDateLocal(pair.soonestMaturitySec);
 
@@ -3114,12 +3116,7 @@ function OpenOnlyReview({
         slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
         slipAria={t('assetCard.openOnly.slipAria')}
         slipHint={t('assetCard.openOnly.slipHint')}
-        footer={
-          <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
-            <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={totalUsd !== null ? fmtUsd(totalUsd) : blank} strong />
-            <EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />
-          </div>
-        }
+        footer={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />}
       />
 
       <SummaryCard title={t('accounts.moveCash.after')}>
