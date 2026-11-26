@@ -6509,16 +6509,14 @@ export function AssetCard({
           onClose={() => setCloseBoros(null)}
           widthClass="w-[620px]"
         >
-          <div className="flex flex-col gap-3">
-            <p className="text-[11.5px] text-ink-400">{t('assetCard.closeModal.perpsStayOpen')}</p>
-            <CloseBorosForm
-              legs={pairBorosCloseLegs(closeBoros, group).map((l) => ({
-                ...l,
-                spreadVenues: group.borosOpen.find((b) => b.marketId === l.marketId)?.spreadVenues ?? null,
-              }))}
-              onDone={() => setCloseBoros(null)}
-            />
-          </div>
+          <CloseBorosForm
+            legs={pairBorosCloseLegs(closeBoros, group).map((l) => ({
+              ...l,
+              spreadVenues: group.borosOpen.find((b) => b.marketId === l.marketId)?.spreadVenues ?? null,
+            }))}
+            perpsUnhedged
+            onDone={() => setCloseBoros(null)}
+          />
         </Modal>
       )}
       {closeBorosOnly !== null && (

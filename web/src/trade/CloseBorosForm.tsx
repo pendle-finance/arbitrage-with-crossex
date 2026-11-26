@@ -80,10 +80,12 @@ const FALLBACK_SLIPPAGE_PCT = 1;
 
 export function CloseBorosForm({
   legs,
+  perpsUnhedged = false,
   onClosed,
   onDone,
 }: {
   legs: CloseLeg[];
+  perpsUnhedged?: boolean;
   /**
    * What actually came off each market, so the caller can shrink a claim that
    * states an absolute size.
@@ -751,6 +753,12 @@ export function CloseBorosForm({
               <span className="num text-[12px] text-ink-300">{`${sigGrouped(leftOf(f.l))} ${f.l.collateral ?? ''}`}</span>
             </div>
           ))}
+        {perpsUnhedged && (
+          <EstimateRow
+            label={t('accounts.closePair.after.perps')}
+            value={<span className="text-rose-400">{t('accounts.closePair.after.openFloating')}</span>}
+          />
+        )}
         {soleSpread && (
           <EstimateRow
             label={t('pairTicket.closeBoros.bundles')}

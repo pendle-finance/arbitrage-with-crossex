@@ -453,8 +453,7 @@
   "closeModal": {
     "noRateLegs": "无 Boros 仓位",
     "closeName": "平掉 {{name}}",
-    "noPerps": "无永续",
-    "perpsStayOpen": "永续仍会持有。"
+    "noPerps": "无永续"
   },
   "breakdown": {
     "title": "{{base}} — 盈亏明细",

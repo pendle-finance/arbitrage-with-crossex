@@ -138,7 +138,7 @@ export function ClosePairAfter({
           {borosUnhedged && (
             <EstimateRow
               label={t('accounts.closePair.after.boros')}
-              value={<span className="text-rose-400">{t('accounts.closePair.after.borosUnhedged')}</span>}
+              value={<span className="text-rose-400">{t('accounts.closePair.after.openUnhedged')}</span>}
             />
           )}
         </div>

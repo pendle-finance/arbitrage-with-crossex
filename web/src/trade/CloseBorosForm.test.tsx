@@ -7,7 +7,7 @@
  * ACCEPTED), this route answers with the fill, so the number reported here is
  * what actually closed.
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BorosCancelAndCloseResult, BorosPairRequest, StrategyLeg } from '../api/types';
@@ -938,5 +938,16 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     expect(screen.getByText('Bundles')).toBeInTheDocument();
     expect(screen.getByText(/Leaves/)).toHaveTextContent(/Leaves .*Hyperliquid and .*Gate$/);
     expect(screen.queryByText(/perps stay open/)).toBeNull();
+    expect(screen.queryByText('Perps')).toBeNull();
+  });
+
+  it('shows the perps left on floating funding in After when the pair keeps its perps', async () => {
+    server.use(...ready());
+    renderWithClient(
+      <CloseBorosForm legs={[{ ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] }]} perpsUnhedged />,
+    );
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(within(after).getByText('Perps')).toBeInTheDocument();
+    expect(within(after).getByText('Open, floating funding')).toBeInTheDocument();
   });
 });

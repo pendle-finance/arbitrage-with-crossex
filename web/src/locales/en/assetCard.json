@@ -458,8 +458,7 @@
   "closeModal": {
     "noRateLegs": "no Boros positions",
     "closeName": "Close {{name}}",
-    "noPerps": "no perps",
-    "perpsStayOpen": "The perps stay open."
+    "noPerps": "no perps"
   },
   "breakdown": {
     "title": "{{base}} — PnL breakdown",

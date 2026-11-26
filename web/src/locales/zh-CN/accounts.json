@@ -302,7 +302,9 @@
       "left": "剩余",
       "notInPair": "不属于此组合",
       "boros": "Boros",
-      "borosUnhedged": "仍持仓，未对冲"
+      "perps": "永续",
+      "openUnhedged": "仍持仓，未对冲",
+      "openFloating": "仍持仓，资金费率浮动"
     },
     "head": {
       "leg": "腿",

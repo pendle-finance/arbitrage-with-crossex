@@ -306,7 +306,9 @@
       "left": "left",
       "notInPair": "not in this pair",
       "boros": "Boros",
-      "borosUnhedged": "Open, not hedged"
+      "perps": "Perps",
+      "openUnhedged": "Open, not hedged",
+      "openFloating": "Open, floating funding"
     },
     "head": {
       "leg": "Leg",
