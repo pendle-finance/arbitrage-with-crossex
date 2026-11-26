@@ -10,7 +10,7 @@ import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW,
 import { extraRebalanceViews, transferHandler, transferViews, twapFixtures } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { fmtAbout, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
+import { fmtApprox, fmtNotionalShort, fmtUsd, num, sigGrouped } from '../lib/fmt';
 import { rebalanceHandler } from '../test/fixtures';
 import { RebalanceModal, RebalanceModalHost } from './RebalanceModal';
 import { RebalanceOpenerProvider, useRebalanceOpener, type RebalanceTab } from './rebalanceOpener';
@@ -1734,20 +1734,20 @@ describe('RebalanceModal Realize uPnL tab', () => {
     showOn(owner);
     fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
     fireEvent.click(await screen.findByRole('radio', { name: '10m' }));
-    expect(orders()[0]).toHaveTextContent(/· about 10 min per slice$/);
+    expect(orders()[0]).toHaveTextContent(/· 10 min per slice$/);
   });
 
   it('limit + hedge first and default', () => {
     showOn(owner);
-    expect(orders()[0]!.textContent).toMatch(/^Limit \+ hedge \$[\d,]+ · /);
-    expect(orders()[0]!.textContent).toContain(`${fmtAbout(pick.seconds.maker / pick.count)} per slice`);
+    expect(orders()[0]!.textContent).toMatch(/^Limit \+ hedge about \$[\d,]+ · /);
+    expect(orders()[0]!.textContent).toContain(`· ${fmtApprox(pick.seconds.maker / pick.count)} per slice`);
     expect(orders()[0]).toHaveAttribute('aria-checked', 'true');
   });
 
   it('market second', () => {
     showOn(owner);
-    expect(orders()[1]!.textContent).toMatch(/^Market \$[\d,]+ · /);
-    expect(orders()[1]!.textContent).toContain(`${fmtAbout(pick.seconds.market / pick.count)} per slice`);
+    expect(orders()[1]!.textContent).toMatch(/^Market about \$[\d,]+ · /);
+    expect(orders()[1]!.textContent).toContain(`· ${fmtApprox(pick.seconds.market / pick.count)} per slice`);
   });
 
   it('a $6M realize at $50k slices reads about 5 min per slice', () => {
@@ -1757,8 +1757,8 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(tab.clearDebt!.legs[0]!.realizedUsd).toBeGreaterThan(5_900_000);
     expect(option.count).toBeGreaterThan(100);
     showOn(view, 'realize');
-    expect(orders()[0]!.textContent).toContain(`${fmtAbout(300)} per slice`);
-    expect(orders()[0]!.textContent).not.toContain(fmtAbout(option.seconds.maker));
+    expect(orders()[0]!.textContent).toContain(`· ${fmtApprox(300)} per slice`);
+    expect(orders()[0]!.textContent).not.toContain(fmtApprox(option.seconds.maker));
     expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'true');
     expect(nameOf(slices().find((radio) => (radio as HTMLInputElement).checked)!)).toContain(fmtNotionalShort(50_000));
   });
