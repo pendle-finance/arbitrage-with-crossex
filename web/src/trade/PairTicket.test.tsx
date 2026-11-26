@@ -250,39 +250,23 @@ describe('PairTicket execution modes', () => {
     expect(actions[1].pairGroupId).toBe(actions[0].pairGroupId);
   });
 
-  it('shows the book + market-impact graph, and a limit line only in maker mode', async () => {
+  it('Cost lists both legs with their fill price and no book graph; the maker chip shows only in maker mode', async () => {
     const calls: ActionInput[][] = [];
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
     await setupTwoVenuePair();
     await waitForFirstPreview();
 
-    // 2 market orders: the live two-sided quote (2499/2501 from the book handler)
-    // and the market-order fill (2500.5 from the preview's fillEstimate) on
-    // both legs.
     await userEvent.click(screen.getByRole('radio', { name: 'Market' }));
-    expect(document.querySelector('[data-price-graph]')).not.toBeNull();
-    await waitFor(() =>
-      expect(
-        document.querySelector('[data-leg="long"] [data-mark="fill"]')?.getAttribute('data-price'),
-      ).toBe('2500.5'),
-    );
-    expect(
-      document.querySelector('[data-leg="short"] [data-mark="fill"]')?.getAttribute('data-price'),
-    ).toBe('2500.5');
-    expect(document.querySelector('[data-leg="long"] [data-mark="bid"]')?.getAttribute('data-price')).toBe('2499');
-    // The redundant per-leg footer rows are gone — exact numbers live on the
-    // axis gutter and the marks' hover titles.
-    expect(screen.queryByText('2499 / 2501')).toBeNull();
-    // Both-market mode has no resting limit.
-    expect(document.querySelector('[data-mark="limit"]')).toBeNull();
+    const legRows = () => within(screen.getByRole('region', { name: 'Cost' })).getAllByRole('row').slice(1);
+    await waitFor(() => expect(legRows()[0]).toHaveTextContent('2,500.5'));
+    expect(legRows()[1]).toHaveTextContent('2,500.5');
+    expect(legRows().some((row) => /Maker/.test(row.textContent ?? ''))).toBe(false);
+    expect(document.querySelector('[data-price-graph]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
 
-    // Limit + hedge (equal fees → the long leg rests): a cyan limit line appears
-    // on the maker leg once the price auto-tracks the touch.
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
-    await waitFor(() =>
-      expect(document.querySelector('[data-leg="long"] [data-mark="limit"]')).not.toBeNull(),
-    );
-    expect(document.querySelector('[data-leg="short"] [data-mark="limit"]')).toBeNull();
+    await waitFor(() => expect(legRows()[0]).toHaveTextContent(/LONG\s*Gate\s*Maker/));
+    expect(legRows()[1]).not.toHaveTextContent('Maker');
   });
 
   it('leverage is PER LEG at each venue max (never min of the two, no input)', async () => {
@@ -1062,10 +1046,12 @@ describe('PairTicket layout C', () => {
     expect(screen.getByRole('button', { name: 'Start TWAP' })).toBeInTheDocument();
   });
 
-  it("estimate opens with each leg's role", async () => {
+  it("the Cost card's leg rows mark the maker leg", async () => {
     await ready();
-    await waitFor(() => expect(document.body).toHaveTextContent(/LONG\s*Gate · rests as maker\s*0\.4 ETH/), { timeout: 4000 });
-    expect(document.body).toHaveTextContent(/SHORT\s*OKX · hedges\s*0\.4 ETH/);
+    const legRows = () => within(screen.getByRole('region', { name: 'Cost' })).getAllByRole('row').slice(1);
+    await waitFor(() => expect(legRows()[0]).toHaveTextContent(/LONG\s*Gate\s*Maker/), { timeout: 4000 });
+    expect(legRows()[1]).toHaveTextContent(/SHORT\s*OKX/);
+    expect(legRows()[1]).not.toHaveTextContent('Maker');
   });
 
   it('auto-chooses the cheaper maker venue and shows the saving', async () => {

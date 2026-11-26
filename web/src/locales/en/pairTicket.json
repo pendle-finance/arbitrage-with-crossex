@@ -133,7 +133,6 @@
     "pegNote": "Limit price pegs to the best price when sent"
   },
   "borosBits": {
-    "directionAria": "{{prefix}} direction",
     "longRateHint": "Long the rate — pay fixed, receive floating",
     "shortRateHint": "Short the rate — receive fixed, pay floating",
     "selectMarket": "Select market",

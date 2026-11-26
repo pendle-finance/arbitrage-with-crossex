@@ -130,7 +130,6 @@
     "pegNote": "限价在发送时对齐最优价"
   },
   "borosBits": {
-    "directionAria": "{{prefix}} 方向",
     "longRateHint": "做多利率 — 支付固定，收取浮动",
     "shortRateHint": "做空利率 — 收取固定，支付浮动",
     "selectMarket": "选择市场",

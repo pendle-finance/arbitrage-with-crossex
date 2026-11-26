@@ -1,6 +1,6 @@
-import { ChevronRight, TriangleAlert } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import {
   useAccount,
   usePositions,
@@ -10,25 +10,23 @@ import {
 } from '../api/queries';
 import type { ActionInput, Side } from '../api/types';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped } from '../lib/fmt';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
 import { formatRestPrice } from '../lib/ticks';
-import { EstimateHeadline } from './EstimateHeadline';
 import { ExecuteControl } from './ExecuteControl';
 import { LimitPriceBox } from './LimitPriceBox';
 import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
-import { AffixedInput, EstimateCard, EstimateRow, LeverageValue, VenueSelect } from './PairTicketBits';
+import { AffixedInput, EstimateAge, EstimateRow, LegTable, LeverageValue, SummaryCard, VenueSelect } from './PairTicketBits';
 import {
   estimateMargin,
   PREFLIGHT_MARGIN_BUFFER,
   PreviewFallback,
-  SlippageBadge,
   TAKER_FEE_RESERVE,
   ViolationList,
 } from './previewBits';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
-import { BookToggle, fmtTradeCost, OneLegBook, PlanLine } from './TicketEstimateBits';
+import { fmtTradeCost } from './TicketEstimateBits';
 import { useTradeFlowOptional } from './TradeFlow';
 import { TRACKED_PRICE_TOLERANCE } from './trackedPriceDrift';
 import { TwapArea, twapControlOf, useTwapInput } from './TwapArea';
@@ -49,7 +47,6 @@ export function SingleTicket() {
   const [sizeStr, setSizeStr] = useState('');
   const [typedPrice, setTypedPrice] = useState<string | null>(null);
   const [reduceOnly, setReduceOnly] = useState(false);
-  const [showBook, setShowBook] = useState(false);
   const taker = useTakerAfter();
   const [repeg, setRepeg] = useState<Repeg>(REPEG_DEFAULT_BP);
   const twap = useTwapInput();
@@ -217,32 +214,15 @@ export function SingleTicket() {
         }}
       />
 
-      <div className="grid grid-cols-2 items-end gap-3">
-        <div className="flex flex-col gap-1.5">
-          <FieldLabel>{t('trade.single.side')}</FieldLabel>
-          <SegmentedToggle<Side>
-            ariaLabel={t('trade.single.side')}
-            fill
-            className={isLong ? 'seg-grass' : 'seg-rose'}
-            value={side}
-            onChange={setSide}
-            options={[
-              { value: 'BUY', label: t('trade.single.long') },
-              { value: 'SELL', label: t('trade.single.short') },
-            ]}
-          />
-        </div>
-        {base && (
-          <VenueSelect
-            tone={isLong ? 'long' : 'short'}
-            value={symbol}
-            otherValue={null}
-            onPick={(next) => setSymbol(next || null)}
-            venues={venueRules}
-            loading={venues.isPending}
-          />
-        )}
-      </div>
+      <VenueSelect
+        tone={isLong ? 'long' : 'short'}
+        onTone={(d) => setSide(d === 'long' ? 'BUY' : 'SELL')}
+        value={symbol}
+        otherValue={null}
+        onPick={(next) => setSymbol(next || null)}
+        venues={venueRules}
+        loading={base !== null && venues.isPending}
+      />
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-2">
@@ -363,85 +343,46 @@ export function SingleTicket() {
       )}
 
       {action && (
-        <EstimateCard
-          dataUpdatedAt={preview.dataUpdatedAt}
-          estimating={estimating}
-          isError={preview.isError}
-          sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
-          aside={<BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} />}
-        >
-          {p ? (
-            <>
-              {type === 'LIMIT' ? (
-                <EstimateHeadline
-                  label={t('pairTicket.bits.tradeCost')}
-                  sub={t('pairTicket.bits.maker')}
-                  value={fmtTradeCost(p.fees?.est.maker ?? p.fees?.est.taker ?? null, p.fees?.quote)}
-                />
-              ) : (
-                <EstimateHeadline
-                  label={t('pairTicket.bits.tradeCost')}
-                  sub={t('trade.ticketEstimate.taker')}
-                  value={fmtTradeCost(p.fees?.est.taker ?? p.fees?.est.maker ?? null, p.fees?.quote)}
-                />
-              )}
-              <div className="flex flex-col gap-1.5">
-                <PlanLine
-                  side={isLong ? 'LONG' : 'SHORT'}
-                  symbol={p.symbol}
-                  role={type === 'LIMIT' ? 'rests' : 'market'}
-                  qty={p.qty}
-                />
+        <>
+          <SummaryCard
+            title={t('accounts.moveCash.cost')}
+            sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
+            aside={<EstimateAge dataUpdatedAt={preview.dataUpdatedAt} estimating={estimating} isError={preview.isError} />}
+          >
+            {p ? (
+              <>
+                <LegTable rows={[{ side: isLong ? 'LONG' : 'SHORT', p, rests: type === 'LIMIT' }]} />
                 {sizeMode === 'usdt' && p.estNotional > 0 && p.estNotional < sizeNum - 1e-9 && (
                   <span className="text-[11px] text-amber-400">
                     {t('trade.single.realNotional', { amount: fmtUsd(p.estNotional) })}
                   </span>
                 )}
-                {type === 'MARKET' && p.fillEstimate && (
+                <div className="mt-0.5 border-t border-ink-800 pt-1.5">
                   <EstimateRow
-                    label={t('trade.single.tentativeFill')}
-                    sub={t('trade.single.fillMeta', {
-                      source: t(`trade.single.source.${p.fillEstimate.source}` as const),
-                      confidence: t(`trade.single.confidence.${p.fillEstimate.confidence}` as const),
-                    })}
-                    value={
-                      <span className="flex items-baseline gap-1.5">
-                        {sigGrouped(p.fillEstimate.avgPrice)}
-                        <SlippageBadge est={p.fillEstimate} />
-                      </span>
-                    }
+                    label={t('pairTicket.bits.tradeCost')}
+                    sub={type === 'LIMIT' ? t('pairTicket.bits.maker') : t('trade.ticketEstimate.taker')}
+                    value={fmtTradeCost(
+                      type === 'LIMIT' ? (p.fees?.est.maker ?? p.fees?.est.taker ?? null) : (p.fees?.est.taker ?? p.fees?.est.maker ?? null),
+                      p.fees?.quote,
+                    )}
+                    strong
                   />
-                )}
+                </div>
+              </>
+            ) : (
+              <div className="text-[11px]">
+                <PreviewFallback isError={preview.isError} error={preview.error} />
               </div>
-              {showBook && symbol && (
-                <div className="pt-1">
-                  <OneLegBook
-                    symbol={symbol}
-                    side={side}
-                    limitPx={type === 'LIMIT' && p.price ? Number(p.price) : null}
-                    fill={type === 'MARKET' ? p.fillEstimate : undefined}
-                    estimating={estimating}
-                  />
-                </div>
-              )}
-              {type === 'MARKET' && p.fillEstimate?.partialDepth && (
-                <div
-                  role="status"
-                  className="flex items-start gap-2 rounded border border-dashed border-amber-500/50 bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] text-amber-200"
-                >
-                  <span aria-hidden className="text-amber-400">
-                    <TriangleAlert size={12} aria-hidden />
-                  </span>
-                  <span>
-                    <Trans i18nKey="trade.single.partialDepth" components={{ b: <span className="font-medium" /> }} />
-                  </span>
-                </div>
-              )}
-              <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
-                <EstimateRow
-                  label={t('trade.single.leverage')}
-                  value={<LeverageValue text={levMax > 0 ? `${levMax}x` : symbol ? t('common.loading') : null} />}
-                />
+            )}
+          </SummaryCard>
+          {p && (
+            <SummaryCard title={t('accounts.moveCash.after')}>
+              <EstimateRow label={t('common.size')} value={p.qty ? `${qtyGrouped(p.qty)} ${parseSymbol(p.symbol).base}` : '—'} />
+              <EstimateRow
+                label={t('trade.single.leverage')}
+                value={<LeverageValue text={levMax > 0 ? `${levMax}x` : symbol ? t('common.loading') : null} />}
+              />
+              <div className="mt-0.5 border-t border-ink-800 pt-1.5">
                 <EstimateRow
                   label={t('common.margin')}
                   title={t('trade.single.marginTitle')}
@@ -449,14 +390,12 @@ export function SingleTicket() {
                   strong
                 />
               </div>
-              <ViolationList violations={sliceMin ? p.violations.filter((v) => !/rounds down to zero/.test(v.message)) : p.violations} warnings={p.warnings} />
-            </>
-          ) : (
-            <div className="text-[11px]">
-              <PreviewFallback isError={preview.isError} error={preview.error} />
-            </div>
+            </SummaryCard>
           )}
-        </EstimateCard>
+          {p && (
+            <ViolationList violations={sliceMin ? p.violations.filter((v) => !/rounds down to zero/.test(v.message)) : p.violations} warnings={p.warnings} />
+          )}
+        </>
       )}
 
       <div className="flex flex-col gap-1.5">
