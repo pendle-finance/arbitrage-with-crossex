@@ -1350,7 +1350,7 @@ export function BorosPairTicket({
               {slipOpen && (
                 <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
                   <span className="text-[10.5px] leading-relaxed text-ink-400">
-                    {t('trade.close.bandHint')}
+                    <span className="text-ink-200">{t('pairTicket.bits.thisTradeOnly')}</span> {t('trade.close.bandHint')}
                   </span>
                   <div className="flex items-center gap-1.5">
                     {['0.2', '0.4', '1', '2'].map((q) => (
