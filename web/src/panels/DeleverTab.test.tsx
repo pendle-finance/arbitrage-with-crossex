@@ -51,12 +51,12 @@ function servePlan(plan: DeleverPlan | { error: string }, twapOverride?: Delever
       const body = (await request.json()) as DeleverRequest;
       sent.push(body);
       if ('error' in plan) return HttpResponse.json({ ok: false, error: { category: 'unknown', message: plan.error } }, { status: 400 });
-      if (!body.twap) return HttpResponse.json(env({ ...plan, twap: null, priceImpact: null }));
+      if (!body.twap) return HttpResponse.json(env({ ...plan, twap: null, priceImpact: null, twapDefault: null }));
       const lead = plan.legs[plan.makerLeg]!;
       const twap = twapOverride ?? twapReply(lead.closeQty, body.twap);
       const sliceQty = twap.plan ? Math.max(Number(twap.plan.sliceQty), Number(twap.plan.lastQty)) : 0;
       const hedged = sliceQty > 0 ? { notHedgedMaxQty: sliceQty, notHedgedMaxUsd: (plan.notHedgedMaxUsd / plan.notHedgedMaxQty) * sliceQty } : {};
-      return HttpResponse.json(env({ ...plan, ...hedged, twap, priceImpact: { whole: null, sliced: 1200 } }));
+      return HttpResponse.json(env({ ...plan, ...hedged, twap, priceImpact: { whole: null, sliced: 1200 }, twapDefault: null }));
     }),
   );
   return sent;
@@ -225,7 +225,7 @@ describe('DeleverTab guards', () => {
       http.post('/api/rebalance/delever/plan', async ({ request }) => {
         const body = (await request.json()) as DeleverRequest;
         if (body.perps[0]?.qty === 270) await gate;
-        return HttpResponse.json(env(deleverPlans.twentyPct));
+        return HttpResponse.json(env({ ...deleverPlans.twentyPct, twapDefault: null }));
       }),
     );
     show(openPairs.btc900);
