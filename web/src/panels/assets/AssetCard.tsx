@@ -1746,7 +1746,7 @@ function RollStep({
   footer?: ReactNode;
 }) {
   const cost = batchCost(sim, slip.apr);
-  const est = sim?.slippageApr != null ? fmtPct(sim.slippageApr) : null;
+  const est = sim?.slippageApr != null ? `${fmtPct(sim.slippageApr)}${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null;
   const overVenues = sim ? sim.legs.filter((l) => l.slippageExceeded).map((l) => prettyVenue(l.venue)) : [];
   return (
     <section aria-label={title} className="card flex flex-col gap-1.5 px-3.5 py-3">
@@ -1761,7 +1761,7 @@ function RollStep({
       <SlippageLine
         est={est}
         max={fmtPct(slip.apr * Math.max(1, legs.length))}
-        unit="APR"
+        unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
         open={slip.open}
         onToggle={slip.onToggle}
         value={slip.str}
@@ -2235,7 +2235,7 @@ export function RollOverModal({
   return (
     <Modal
       title={
-        picker !== null ? (
+        picker !== null && step === 'pick' ? (
           t('assetCard.actions.rollOver')
         ) : (
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">

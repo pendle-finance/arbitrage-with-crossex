@@ -9,7 +9,7 @@ import { FieldLabel } from '../../trade/SymbolCombobox';
 import { ClosePairForm } from '../PerpOnlyBox';
 import { RollOverModal } from './AssetCard';
 import { pairBorosCloseLegs, pairCanRoll, pairPerpCloseLegs, type PairEstimate } from './assetModel';
-import { openPairKey, openPairOf, pairPickerRowOf, useOpenPairs, type PairEntry } from './pairs';
+import { openPairOf, pairPickerRowOf, useOpenPairs, type PairEntry } from './pairs';
 
 const borosLegsOf = (e: PairEntry) =>
   pairBorosCloseLegs(e.pair, e.group).map((l) => ({
@@ -17,23 +17,28 @@ const borosLegsOf = (e: PairEntry) =>
     spreadVenues: e.group.borosOpen.find((b) => b.marketId === l.marketId)?.spreadVenues ?? null,
   }));
 
-function usePairChoice(pair: PairEstimate, group: AssetGroup, keep: (e: PairEntry) => boolean): { picked: PairEntry; picker: ReactNode } {
+function usePairChoice(
+  pair: PairEstimate,
+  group: AssetGroup,
+  keep: (e: PairEntry) => boolean,
+  locked = false,
+): { picked: PairEntry; picker: ReactNode } {
   const { t } = useTranslation();
   const own: PairEntry = { open: openPairOf(group.base, pair), pair, group };
-  const ownKey = openPairKey(group.base, pair);
-  const [key, setKey] = useState(ownKey);
+  const [chosen, setChosen] = useState<PairEntry | null>(null);
+  const picked = chosen ?? own;
   const { entries } = useOpenPairs();
   const nowSec = Math.floor(useNow(60_000) / 1000);
-  const all = entries.some((e) => e.open.key === ownKey) ? entries.map((e) => (e.open.key === ownKey ? own : e)) : [own, ...entries];
-  const list = all.filter((e) => e === own || keep(e));
-  const picked = list.find((e) => e.open.key === key) ?? own;
+  const live = entries.filter((e) => e.open.key !== own.open.key && e.open.key !== picked.open.key && keep(e));
+  const list = picked === own ? [own, ...live] : [own, picked, ...live];
   const picker = (
     <div className="flex flex-col gap-1.5">
       <FieldLabel>{t('accounts.deleverTab.pair')}</FieldLabel>
       <PairPicker
         rows={list.map((e) => pairPickerRowOf(e.open, nowSec))}
         value={picked.open.key}
-        onChange={setKey}
+        onChange={(key) => setChosen(key === own.open.key ? null : (list.find((e) => e.open.key === key) ?? chosen))}
+        disabled={locked}
         label={t('accounts.deleverTab.pair')}
         searchLabel={t('accounts.deleverTab.search')}
         columns={{ pair: t('accounts.deleverTab.pair'), size: t('accounts.deleverTab.size'), im: t('accounts.deleverTab.initialMargin') }}
@@ -58,9 +63,17 @@ export function ClosePairModal({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const { picked, picker } = usePairChoice(pair, group, (e) =>
-    kind === 'perps' ? pairPerpCloseLegs(e.pair).length > 0 : pairBorosCloseLegs(e.pair, e.group).length > 0,
+  const [sent, setSent] = useState(false);
+  const { picked, picker } = usePairChoice(
+    pair,
+    group,
+    (e) =>
+      kind === 'perps'
+        ? e.pair.unit === 'base' && pairPerpCloseLegs(e.pair).length > 0
+        : pairBorosCloseLegs(e.pair, e.group).length > 0,
+    sent,
   );
+  const onSent = () => setSent(true);
   const borosLegs = kind === 'boros' ? borosLegsOf(picked) : [];
   const title =
     kind === 'perps'
@@ -80,9 +93,10 @@ export function ClosePairModal({
             legs={pairPerpCloseLegs(picked.pair)}
             livePositions={livePositions}
             borosUnhedged
+            onSent={onSent}
           />
         ) : (
-          <CloseBorosForm key={picked.open.key} legs={borosLegs} perpsUnhedged onDone={onClose} />
+          <CloseBorosForm key={picked.open.key} legs={borosLegs} perpsUnhedged onDone={onClose} onSent={onSent} />
         )}
       </div>
     </Modal>

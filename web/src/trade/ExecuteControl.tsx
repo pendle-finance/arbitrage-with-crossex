@@ -83,6 +83,7 @@ interface Props {
   detail?: ReactNode;
   /** Fired after a successful 202 (e.g. bump the ticket's pairGroup nonce). */
   onExecuted?: () => void;
+  onSent?: () => void;
   /** Stable identity of the USER'S intent — a change to it mints a fresh
    * basketId (so an edited order after a lost response isn't deduped against the
    * original). Defaults to the serialized actions. Callers whose `actions`
@@ -121,6 +122,7 @@ export function ExecuteControl({
   decorate,
   detail,
   onExecuted,
+  onSent,
   intentKey,
   extraDisabled = false,
   previewOpts,
@@ -343,6 +345,7 @@ export function ExecuteControl({
       const clientId = basketIdRef.current;
       setPlacedResting(null);
       setReplayedDeal(null);
+      onSent?.();
       startTwap.mutate(twapStartFrom(deal, twap.plan, clientId), {
         onSuccess: () => {
           basketIdRef.current = null;
@@ -365,6 +368,7 @@ export function ExecuteControl({
       placedSummaryRef.current = null;
       setPlacedResting(null);
       setReplayedDeal(null);
+      onSent?.();
       executeSplit.mutate([a, b]);
       return;
     }
@@ -381,6 +385,7 @@ export function ExecuteControl({
       : null;
     setPlacedResting(null);
     setReplayedDeal(null);
+    onSent?.();
     execute.mutate(deal);
   };
 

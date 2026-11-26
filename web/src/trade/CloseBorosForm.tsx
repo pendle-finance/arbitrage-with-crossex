@@ -83,9 +83,11 @@ export function CloseBorosForm({
   perpsUnhedged = false,
   onClosed,
   onDone,
+  onSent,
 }: {
   legs: CloseLeg[];
   perpsUnhedged?: boolean;
+  onSent?: () => void;
   /**
    * What actually came off each market, so the caller can shrink a claim that
    * states an absolute size.
@@ -378,6 +380,7 @@ export function CloseBorosForm({
     setPartial([]);
     setBatchError(null);
     if (legsBlocked) return;
+    onSent?.();
 
     if (atomic && closeReq) {
       try {

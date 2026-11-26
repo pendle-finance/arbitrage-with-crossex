@@ -854,6 +854,28 @@ describe('RollOverModal — the review page', () => {
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('a picker on the pick step leaves the review titled with the pair, and each step shows slippage in dollars', async () => {
+    const user = userEvent.setup();
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} picker={<div>Pair picker</div>} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Roll over' })).toBeInTheDocument();
+    expect(within(dialog).getByText('Pair picker')).toBeInTheDocument();
+    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
+    await user.click(next);
+    await within(dialog).findByText('Margin required');
+    expect(within(dialog).getByRole('heading', { name: /Roll over.*Gate.*LONG.*Hyperliquid.*SHORT/ })).toBeInTheDocument();
+    expect(within(dialog).queryByText('Pair picker')).not.toBeInTheDocument();
+    const close = within(dialog).getByRole('region', { name: /^Close / });
+    const open = within(dialog).getByRole('region', { name: /^Open / });
+    for (const step of [close, open]) {
+      expect(step.textContent).toMatch(/Est\.\s*\d[\d.,]*% \(\$[\d,.]+\)/);
+      expect(step.textContent).toMatch(/APR \(\$[\d,.]+\)/);
+      expect(within(step).getByText('Total cost')).toBeInTheDocument();
+    }
+  });
+
   it('the confirm stays disabled until a fresh quote lands', async () => {
     const user = userEvent.setup();
     let release!: () => void;
