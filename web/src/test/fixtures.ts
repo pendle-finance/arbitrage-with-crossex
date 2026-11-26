@@ -2685,6 +2685,7 @@ export const deleverPlans = {
   })),
   sameSide: withTotals(deleverPlanOf(900, [900], 20, { refused: { reason: 'same-side', coin: 'BTC' } })),
   twoBoros: withTotals(deleverPlanOf(900, [500, 400], 20)),
+  twoBorosEqual: withTotals(deleverPlanOf(900, [450, 450], 20)),
   noBoros: withTotals(deleverPlanOf(900, [], 20)),
   whale: withTotals(deleverPlanOf(4100, [4100], 20, {}, WHALE_ETH_DELEVER)),
 } satisfies Record<string, DeleverPlan>;

@@ -129,6 +129,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   quote that failed keeps the action's name on the disabled button. A roll refused for margin
   lists its open fees, so the figures add up to the shortfall.
 - **Step rows keep equal gaps around the coin icon** and line up as each step runs.
+- **A Market deal's title says "market"**, not "limit + hedge". After a part close, Close Boros
+  says what each leg keeps, and the Delever plan says "0.03 YU each" for its Boros legs. A
+  25% Close perps rounds both legs to the same lot, so it no longer blocks as "not one deal".
 
 ## 1.7.9 — 2026-11-10
 

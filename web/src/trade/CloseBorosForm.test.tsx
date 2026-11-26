@@ -503,6 +503,34 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     ]);
   });
 
+  it('a 50% close of a pair says what each leg keeps, not the two legs added', async () => {
+    const sent: unknown[] = [];
+    server.use(
+      ...quoted(),
+      executeReturns([legFill(MARKET, 'short', { filledSize: 0.005 }), legFill(OTHER, 'long', { filledSize: 0.005 })], sent),
+    );
+    renderWithClient(<CloseBorosForm legs={pairLegs()} />);
+    fireEvent.click(await screen.findByRole('radio', { name: '50%' }));
+    await holdBoth();
+    expect(await screen.findByText(/2 positions closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(screen.getAllByText(/of this position is still open/)).toHaveLength(1);
+    expect(screen.getByText('0.005 ETH of this position is still open. You closed part of it.')).toBeInTheDocument();
+  });
+
+  it('a pair whose legs keep different sizes names each leg', async () => {
+    const sent: unknown[] = [];
+    server.use(
+      ...quoted(),
+      executeReturns([legFill(MARKET, 'short', { filledSize: 0.005 }), legFill(OTHER, 'long', { filledSize: 0.006 })], sent),
+    );
+    renderWithClient(<CloseBorosForm legs={[pairLegs()[0], { ...pairLegs()[1], notionalToken: 0.012 }]} />);
+    fireEvent.click(await screen.findByRole('radio', { name: '50%' }));
+    await holdBoth();
+    expect(await screen.findByText(/2 positions closed/, {}, { timeout: 3_000 })).toBeInTheDocument();
+    expect(screen.getAllByText(/of this position is still open/)).toHaveLength(2);
+    expect(screen.queryByText(/0\.011 ETH/)).toBeNull();
+  });
+
   it('a full close of two legs shows each leg going to zero, not one shared size', async () => {
     server.use(...quoted());
     renderWithClient(<CloseBorosForm legs={pairLegs()} />);
