@@ -14,6 +14,7 @@ import {
   realizeTabOf,
 } from '../../src/core/rebalance/plan';
 import {
+  capsUsdOf,
   convertFor,
   marginPerConvertUsdc,
   planRealize,
@@ -24,6 +25,7 @@ import {
   realizeEstimateOf,
   slicedEstimateOf,
 } from '../../src/core/rebalance/realize';
+import { ONE_ORDER_USD } from '../../src/core/rebalance/slices';
 import { costOf, sliceOf } from '../../web/src/panels/realizeTabCost';
 import { newJob } from '../../src/server/rebalanceJob';
 import {
@@ -41,6 +43,8 @@ import {
   realizeBook,
   twoLegs,
 } from './fixtures/realize-books';
+
+const oneOrder = (book: RealizeBook): RealizeBook => ({ ...book, inputs: { ...book.inputs, sliceUsd: ONE_ORDER_USD } });
 
 const tabOf = (book: RealizeBook) => realizeTabOf(book.buckets, book.account, book.inputs, null);
 
@@ -193,18 +197,28 @@ describe('planRealize on the owner book', () => {
 
 describe('planRealize leg order', () => {
   it('most-moved leg pays first, then the next', () => {
-    const realize = clearDebtOf(twoLegs());
+    const realize = clearDebtOf(oneOrder(twoLegs()));
     expect(realize.legs.map((leg) => leg.base)).toEqual(['ETH', 'BTC']);
     expect(realize.legs[0].qty).toBe(20);
     expect(realize.legs[1].qty).toBeLessThan(2);
   });
 
   it('two legs clear the debt', () => {
-    expect(fullOf(twoLegs())).toMatchObject({ clearsBorrow: true, needsRealize: true, refused: null });
+    expect(fullOf(oneOrder(twoLegs()))).toMatchObject({ clearsBorrow: true, needsRealize: true, refused: null });
+  });
+
+  it('two legs are priced at the one slice size the job sends for both', () => {
+    const book = twoLegs();
+    const tab = tabOf(book);
+    expect(tab?.clearDebt?.legs).toHaveLength(2);
+    const sent = realizeTabOf(book.buckets, book.account, book.inputs, null, tab!.defaultSliceUsd);
+    const shape = (plan: RealizePlan | null | undefined) => plan?.legs.map((leg) => [leg.symbol, leg.qty, leg.realizedUsd]);
+    expect(shape(tab?.clearDebt)).toEqual(shape(sent?.clearDebt));
+    expect(shape(tab?.all)).toEqual(shape(sent?.all));
   });
 
   it('switches leg when the first cannot fund its convert', () => {
-    const realize = clearDebtOf(bookBb43());
+    const realize = clearDebtOf(oneOrder(bookBb43()));
     expect(realize.legs[0].base).toBe('BTC');
     expect(realize.legs[0].positionQty).toBeCloseTo(92.7, 1);
     expect(Math.abs(realize.legs[0].qty - 59.07153)).toBeLessThanOrEqual(0.00001);
@@ -213,7 +227,7 @@ describe('planRealize leg order', () => {
   });
 
   it('splits a convert above 500,000', () => {
-    const convert = clearDebtOf(bookBb43()).legs[0].convert;
+    const convert = clearDebtOf(oneOrder(bookBb43())).legs[0].convert;
     expect(convert?.amount).toBeGreaterThan(CONVERT_MAX);
     expect(convert?.count).toBe(2);
   });
@@ -235,6 +249,7 @@ describe('planRealize sizes and refusals', () => {
         moveUsd: 1_917_000,
         perps: [perp(OWNER_ETH, -3_300, ETH_MARK + 639, ETH_MARK)],
         books: { [OWNER_ETH]: HL_ETH },
+        sliceUsd: ONE_ORDER_USD,
       }),
     );
     expect(realize?.legs).toHaveLength(1);
@@ -244,7 +259,7 @@ describe('planRealize sizes and refusals', () => {
   });
 
   it('no bp limit in refusals', () => {
-    const realize = clearDebtOf(bookC0df());
+    const realize = clearDebtOf(oneOrder(bookC0df()));
     expect(realize.legs[0]).toMatchObject({ exchange: 'GATE', base: 'ETH' });
     expect(Math.abs(realize.legs[0].impactBp - 52.3)).toBeLessThanOrEqual(0.1);
     expect(realize.refused).toBeNull();
@@ -324,6 +339,7 @@ describe('planRealize at size', () => {
           availableMargin: 25 - 0.1 * rung,
           perps: [perp(OWNER_ETH, -positionQty, ETH_MARK + 639, ETH_MARK)],
           books: { [OWNER_ETH]: HL_ETH },
+          sliceUsd: ONE_ORDER_USD,
         }),
       );
       expect(realize?.refused, `rung ${rung}`).toBeNull();
@@ -437,14 +453,39 @@ describe('realize fix round', () => {
     expect(planRealize(gate('100000'))?.refused).toBeNull();
   });
 
-  it('past-book judges one slice: a $1M order on a 30 ETH book is fine in 50k slices, refused in 100k ones', () => {
+  it('past-book judges one slice: a $1M order on a 30 ETH book is refused as one order, fine in 50k slices, refused in 100k ones', () => {
     const thin = { books: { HYPERLIQUID_FUTURE_ETH_USDC: evenBook(2800, 3, 10) } };
     const plan = planRealize(hlShortInput(1_000_000, thin));
     expect((plan?.legs[0].qty ?? 0) * 2800).toBeGreaterThan(1_000_000);
-    expect(plan?.refused).toBeNull();
+    expect(plan?.refused).toEqual({ reason: 'past-book', bp: null });
     expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 50_000 }))?.refused).toBeNull();
     expect(planRealize(hlShortInput(1_000_000, { ...thin, sliceUsd: 100_000 }))?.refused).toEqual({ reason: 'past-book', bp: null });
     expect(planRealize(hlShortInput(50, thin))?.refused).toBeNull();
+  });
+
+  it('past-book judges the TWAP slice: a 150 ETH close on a 30 ETH book is refused as one order and in 4 slices, fine in 10', () => {
+    const thin = { books: { HYPERLIQUID_FUTURE_ETH_USDC: evenBook(2800, 3, 10) } };
+    const planOf = (twapSlices?: number) => planRealize(hlShortInput(20_000, { ...thin, twapSlices }));
+    expect(planOf()?.refused).toEqual({ reason: 'past-book', bp: null });
+    expect(planOf(4)?.legs[0].qty).toBeGreaterThan(4 * 30);
+    expect(planOf(4)?.refused).toEqual({ reason: 'past-book', bp: null });
+    expect(planOf(10)?.legs[0].qty).toBe(150);
+    expect(planOf(10)?.refused).toBeNull();
+    expect(planOf(40)?.refused).toBeNull();
+  });
+
+  it('stores each perp cap: Hyperliquid by max leverage, Gate by its max market size', () => {
+    const caps = capsUsdOf(
+      [
+        { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', markPrice: '3000', maxLeverage: '10' },
+        { symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', markPrice: '60000', maxLeverage: '40' },
+        { symbol: 'GATE_FUTURE_ETH_USDT', markPrice: '3000', maxLeverage: '25' },
+        { symbol: 'GATE_FUTURE_BTC_USDT', markPrice: '60000' },
+        { symbol: 'LIGHTER_FUTURE_ETH_USDC', markPrice: '0' },
+      ],
+      { GATE_FUTURE_ETH_USDT: { maxMarketSize: '100' } },
+    );
+    expect(caps).toEqual({ HYPERLIQUID_FUTURE_ETH_USDC: 2_000_000, HYPERLIQUID_FUTURE_BTC_USDC: 30_000_000, GATE_FUTURE_ETH_USDT: 300_000 });
   });
 
   it('caps the custom slice row at the venue max order size', () => {
@@ -529,7 +570,7 @@ describe('realize fix round', () => {
 
   it('clear debt realizes at every rung when the paying wallet holds no cash', () => {
     for (const debt of LADDER) {
-      const qty = Math.max(1, (debt / 200) * 1.5);
+      const qty = Math.max(1, (debt / 200) * 3);
       const realize = clearDebtOf(realizeBookOf(debt, qty));
       expect(realize.refused, `rung ${debt}`).toBeNull();
       expect(sumNet(realize.legs), `rung ${debt}`).toBeGreaterThanOrEqual(debt - 0.02);
@@ -732,10 +773,36 @@ const depthSide = (sigFigs?: number): NormalizedBook => {
 describe('realize without a price impact cap', () => {
   it('no price impact refusal', () => {
     const deep = [4, 3].reduce((book, sigFigs) => deepenBook(book, depthSide(sigFigs), sigFigsWidth(sigFigs)), depthSide());
-    const plan = planRealize(hlShortInput(1_000_000, { books: { HYPERLIQUID_FUTURE_ETH_USDC: deep } }));
+    const plan = planRealize(hlShortInput(1_000_000, { books: { HYPERLIQUID_FUTURE_ETH_USDC: deep }, sliceUsd: ONE_ORDER_USD }));
     expect(plan?.refused).toBeNull();
     expect(plan?.legs).toHaveLength(1);
     expect(Math.round((plan?.legs[0].impactBp ?? 0) * 10) / 10).toBe(187.5);
     expect(plan?.estimates.market.impactUsd).toBeGreaterThan(plan?.estimates.maker.impactUsd ?? Infinity);
+  });
+});
+
+describe('realize TWAP default', () => {
+  it('a $1M realize on a deep book stays one order', () => {
+    const book = realizeBookOf(1_000_000, 7_500);
+    const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    expect(tab?.twapDefault.clearDebt.on).toBe(false);
+    expect(tab?.twapDefault.all.on).toBe(false);
+  });
+
+  it('a $1M realize on thin bids turns TWAP on, sized from the book, with slices summed over the legs', () => {
+    const book = lopsidedOf(realizeBookOf(1_000_000, 7_500));
+    const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    const twap = tab!.twapDefault.clearDebt;
+    expect(twap.on).toBe(true);
+    expect(twap.maker.intervalSec).toBe(300);
+    expect(twap.market.intervalSec).toBe(60);
+    expect(twap.maker.durationSec / twap.maker.intervalSec).toBeGreaterThanOrEqual(2);
+    expect(twap.maker.durationSec).toBeLessThanOrEqual(86_400);
+  });
+
+  it('no plan gives the off default', () => {
+    const book = realizeBookOf(1_000_000, 7_500);
+    const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    expect(tab?.twapDefault.custom.on).toBe(false);
   });
 });

@@ -15,7 +15,7 @@ import { estimateFees, resolveFeeRates, type VenueFeeRow } from './estimate/fees
 import { pickMakerLeg, type MakerLegPick } from './estimate/makerLeg';
 import { DEFAULT_STEP, parseSymbol } from './numbers';
 import { marketableClosePrice } from './orders';
-import { impactOf } from './rebalance/slices';
+import { impactOf, pairTwapDefaultOf, type TwapDefault } from './rebalance/slices';
 import { planSlices, type TwapInput, type TwapLegRule, type TwapPlan, type TwapRefusal } from './twap';
 
 interface PreviewDeps {
@@ -112,6 +112,7 @@ export interface TwapPreview {
   makerLeg: MakerLegPreview | null;
   priceImpact: PriceImpactPreview | null;
   twap: TwapPlanPreview | null;
+  twapDefault?: TwapDefault | null;
 }
 
 interface TwapPreviewDeps {
@@ -204,12 +205,18 @@ export function priceImpactOf(legs: TwapLegBook[], qty: number, plan: TwapPlan):
   return { whole, sliced };
 }
 
+export function legsTwapDefaultOf(legs: TwapLegBook[], qty: number): TwapDefault | null | undefined {
+  if (!(qty > 0) || legs.length === 0) return null;
+  if (legs.some((leg) => !leg.book || !leg.mid)) return undefined;
+  return pairTwapDefaultOf(legs.map((leg) => ({ book: leg.book, side: leg.side, mid: leg.mid, qty })));
+}
+
 export async function previewTwap(
   deps: TwapPreviewDeps,
   previews: PreviewResult[],
   input: TwapInput,
 ): Promise<TwapPreview> {
-  const none: TwapPreview = { makerLeg: null, priceImpact: null, twap: null };
+  const none: TwapPreview = { makerLeg: null, priceImpact: null, twap: null, twapDefault: null };
   if (previews.length === 0 || previews.length > 2) return none;
   const coins = new Set(previews.map((preview) => parseSymbol(preview.symbol).base));
   const isPair = previews.length === 2;
@@ -228,5 +235,5 @@ export async function previewTwap(
   const makerLeg = isPair
     ? makerLegOf(deps.feeRows, { ...legs[0], qty: Number(previews[0].qty) }, { ...legs[1], qty: Number(previews[1].qty) })
     : null;
-  return { makerLeg, priceImpact, twap };
+  return { makerLeg, priceImpact, twap, twapDefault: sameQty ? legsTwapDefaultOf(legs, Number(qty)) : null };
 }

@@ -1,17 +1,17 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useEffect, useRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { PriceImpactPreview, TwapPlanPreview, TwapPlanView } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
-import { baseHandlers, ETH_GATE, symbolHandlers } from '../test/fixtures';
+import { baseHandlers, ETH_GATE, symbolHandlers, TWAP_OFF } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { PairTicket } from './PairTicket';
 import { StrategyWizard } from './StrategyWizard';
 import { useTradeFlow, type StrategyWizardIntent } from './TradeFlow';
-import { TwapArea, useTwapInput, type TwapInput } from './TwapArea';
+import { TwapArea, useTwapDefault, useTwapInput, type TwapInput } from './TwapArea';
 
 const ETH_PLAN: TwapPlanView = {
   slices: 12,
@@ -342,5 +342,60 @@ describe('TwapArea', () => {
     );
     await screen.findByLabelText(/Size per leg/, undefined, { timeout: 4000 });
     await waitFor(() => expect(screen.queryByRole('switch', { name: 'TWAP' })).not.toBeInTheDocument());
+  });
+});
+
+describe('useTwapDefault', () => {
+  const ON = { on: true, maker: { durationSec: 3_000, intervalSec: 300 }, market: { durationSec: 600, intervalSec: 60 } };
+
+  function Probe({ value, exec }: { value: typeof ON; exec: 'maker' | 'market' }) {
+    const twap = useTwapInput();
+    useTwapDefault(twap, value, exec);
+    return (
+      <div>
+        <button type="button" onClick={() => twap.setOn(!twap.on)}>
+          {twap.on ? 'on' : 'off'}
+        </button>
+        <button type="button" onClick={() => twap.setInput({ durationSec: 900, intervalSec: 300 })}>
+          type
+        </button>
+        <span data-testid="span">{`${twap.input.durationSec}/${twap.input.intervalSec}`}</span>
+      </div>
+    );
+  }
+
+  it('the server suggestion sets the switch and the span for the order type', () => {
+    const { rerender } = render(<Probe value={ON} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'on' })).toBeInTheDocument();
+    expect(screen.getByTestId('span')).toHaveTextContent('3000/300');
+    rerender(<Probe value={ON} exec="market" />);
+    expect(screen.getByTestId('span')).toHaveTextContent('600/60');
+    rerender(<Probe value={TWAP_OFF} exec="market" />);
+    expect(screen.getByRole('button', { name: 'off' })).toBeInTheDocument();
+  });
+
+  it('a trader pick and a typed span win over the suggestion', async () => {
+    const { rerender } = render(<Probe value={ON} exec="maker" />);
+    await userEvent.click(screen.getByRole('button', { name: 'on' }));
+    await userEvent.click(screen.getByRole('button', { name: 'type' }));
+    rerender(<Probe value={{ ...ON, maker: { durationSec: 6_000, intervalSec: 300 } }} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'off' })).toBeInTheDocument();
+    expect(screen.getByTestId('span')).toHaveTextContent('900/300');
+  });
+
+  it('typing a span keeps a suggested TWAP on when the suggestion later turns off', async () => {
+    const { rerender } = render(<Probe value={ON} exec="maker" />);
+    await userEvent.click(screen.getByRole('button', { name: 'type' }));
+    rerender(<Probe value={TWAP_OFF} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'on' })).toBeInTheDocument();
+    expect(screen.getByTestId('span')).toHaveTextContent('900/300');
+  });
+
+  it('a preview with no price impact clears an old suggestion; one still loading keeps it', () => {
+    const { rerender } = render(<Probe value={ON} exec="maker" />);
+    rerender(<Probe value={undefined as unknown as typeof ON} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'on' })).toBeInTheDocument();
+    rerender(<Probe value={null as unknown as typeof ON} exec="maker" />);
+    expect(screen.getByRole('button', { name: 'off' })).toBeInTheDocument();
   });
 });

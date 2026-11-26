@@ -126,6 +126,20 @@ export interface SliceCut {
   from: number;
   at: number;
   ioc: boolean;
+  n?: number;
+  taker?: boolean;
+}
+
+export interface ProfitStop {
+  symbol: string;
+  exchange: string;
+  base: string;
+  side: PerpSide;
+  entry: number;
+  mark: number;
+  closedQty: number;
+  plannedQty: number;
+  at: number;
 }
 
 export interface JobSlice {
@@ -133,6 +147,7 @@ export interface JobSlice {
   count: number;
   sizeUsd: number;
   qty?: number;
+  capsUsd?: Record<string, number>;
 }
 
 export interface JobFollow {
@@ -268,6 +283,11 @@ export interface Job {
   twap?: JobTwap | null;
   sizeRefusal?: SizeRefusal | null;
   deleverTwap?: DeleverTwap | null;
+  profitStops?: ProfitStop[];
+  unwindTarget?: JobFollow | null;
+  topUps?: number;
+  topUpPending?: boolean;
+  quotesChecked?: boolean;
   maker?: MakerOpts | null;
   sleptFrom?: number | null;
   sleptTo?: number | null;
@@ -284,6 +304,7 @@ export interface DeleverTwap {
   slices: number;
   takerAfterSec?: number | null;
   repegBehindBp?: 2 | 5 | 10 | null;
+  legs?: { symbol: string; slices: number }[];
 }
 
 export const TO_VENUE_STEP = { HYPERLIQUID: 'To Hyperliquid', LIGHTER: 'To Lighter' } as const;
@@ -471,6 +492,9 @@ export const REOPEN_HALT = {
       ? `Gate CrossEx takes no new orders on this contract. Resume when it does, or ${closeOtherText(leg, open)}.`
       : 'Gate CrossEx takes no new orders on this contract. Resume when it does.',
   noCash: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
+  marginLow: 'Not enough free margin for the next slice. Nothing is open. Add margin, then Resume.',
+  noHedgePerp: 'Could not find the other perp of this pair. Close the gap in Positions.',
+  hedgeRefusedAgain: 'Gate refused the hedge again. Nothing else changed.',
   quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>
     `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours, or ${closeOtherText(leg, open)}.`,
   refused: (leg: OpenLeg, open: number, reason: string): string =>
@@ -674,6 +698,7 @@ export function newJob(
     exec?: RealizeExec;
     sliceUsd?: number;
     sliceCount?: number;
+    capsUsd?: Record<string, number>;
     estimate?: RealizeEstimate | null;
     delever?: DeleverJobInput | null;
     imUsedStart?: ImUsedRow[] | null;
@@ -691,7 +716,14 @@ export function newJob(
   const fields = {
     kind,
     exec: input.exec ?? (sliced ? 'maker' : 'market'),
-    slice: sliced ? { index: 1, count: Math.max(1, input.sliceCount ?? 1), sizeUsd: Math.max(0, input.sliceUsd ?? 0) } : null,
+    slice: sliced
+      ? {
+          index: 1,
+          count: Math.max(1, input.sliceCount ?? 1),
+          sizeUsd: Math.max(0, input.sliceUsd ?? 0),
+          ...(input.capsUsd && Object.keys(input.capsUsd).length > 0 ? { capsUsd: input.capsUsd } : {}),
+        }
+      : null,
     notHedgedQty: 0,
     followMisses: 0,
     follow: null,
@@ -708,7 +740,8 @@ export function newJob(
     totalCostUsd: null,
     retryConverts: 0,
     haltKind: null,
-    deleverTwap: delever ? (input.twap ?? null) : null,
+    deleverTwap: delever || kind === 'realize' ? (input.twap ?? null) : null,
+    profitStops: [],
     maker: sliced && input.exec === 'maker' ? (input.maker ?? null) : null,
   } satisfies Partial<Job>;
   return {
@@ -993,7 +1026,12 @@ function applyDefaults(job: Partial<Job>): void {
   if (!(HALT_KINDS as readonly unknown[]).includes(job.haltKind)) job.haltKind = null;
   if (typeof job.twap !== 'object' || job.kind !== 'twap') job.twap = null;
   if (typeof job.sizeRefusal !== 'object' || job.kind !== 'twap') job.sizeRefusal = null;
-  if (job.kind !== 'delever' || !isDeleverTwap(job.deleverTwap)) job.deleverTwap = null;
+  if ((job.kind !== 'delever' && job.kind !== 'realize') || !isDeleverTwap(job.deleverTwap)) job.deleverTwap = null;
+  if (!Array.isArray(job.profitStops)) job.profitStops = [];
+  if (typeof job.unwindTarget !== 'object') job.unwindTarget = null;
+  job.topUps = finiteOr(job.topUps, 0);
+  job.topUpPending = job.topUpPending === true;
+  job.quotesChecked = job.quotesChecked === true;
   if (!isMakerOpts(job.maker)) job.maker = null;
   job.sleptFrom = typeof job.sleptFrom === 'number' && Number.isFinite(job.sleptFrom) ? job.sleptFrom : null;
   job.sleptTo = typeof job.sleptTo === 'number' && Number.isFinite(job.sleptTo) ? job.sleptTo : null;
@@ -1016,7 +1054,9 @@ function isDeleverTwap(value: unknown): value is DeleverTwap {
     twap !== null &&
     [twap.durationSec, twap.intervalSec, twap.slices].every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0) &&
     (twap.takerAfterSec === undefined || twap.takerAfterSec === null || (Number.isFinite(twap.takerAfterSec) && twap.takerAfterSec > 0)) &&
-    [undefined, null, 2, 5, 10].includes(twap.repegBehindBp)
+    [undefined, null, 2, 5, 10].includes(twap.repegBehindBp) &&
+    (twap.legs === undefined ||
+      (Array.isArray(twap.legs) && twap.legs.every((leg) => typeof leg?.symbol === 'string' && Number.isInteger(leg.slices) && leg.slices > 0)))
   );
 }
 

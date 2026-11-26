@@ -58,7 +58,7 @@ export function DealModal({ dealId, onClose }: { dealId: string; onClose: () => 
               {t('trade.deal.refreshFailed')}
             </span>
           )}
-          <RunView {...dealRunProps(view.data, report, now, alertLines, onClose)} />
+          <RunView {...dealRunProps(view.data, report, now, alertLines)} />
         </div>
       )}
     </Modal>

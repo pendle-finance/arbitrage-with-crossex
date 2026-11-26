@@ -2,7 +2,7 @@ import { type NormalizedBook, touchOf } from '../estimate/books';
 import { resolveFeeRates, type VenueFeeRow } from '../estimate/fees';
 import { DEFAULT_STEP, parseSymbol, roundToStep } from '../numbers';
 import { ceilCents, CONVERT_MAX, CONVERT_RATE, HYPERLIQUID_MIN_USDC, marginPerConvertUsdc, type Pool } from './plan';
-import { impactOf, type SliceOption, sliceSizeOf } from './slices';
+import { impactOf, ONE_ORDER_USD, type SliceOption, sliceQtys, twapQtysFor } from './slices';
 
 export { marginPerConvertUsdc };
 
@@ -91,6 +91,7 @@ export interface RealizeInput {
   feeRows: VenueFeeRow[];
   rules: Record<string, PerpRule>;
   sliceUsd?: number;
+  twapSlices?: number;
 }
 
 const PAYING_VENUE: Partial<Record<Pool, { exchange: string; quote: string }>> = {
@@ -114,6 +115,7 @@ interface Paying {
   takerRate: number;
   book: NormalizedBook | null;
   capUsd: number;
+  split: Pick<RealizeInput, 'sliceUsd' | 'twapSlices'>;
 }
 
 interface Priced {
@@ -221,6 +223,7 @@ function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean 
         takerRate: rates.takerRate,
         book: input.books[symbol] ?? null,
         capUsd: marketCapUsd(perp, rule, exchange, mark),
+        split: { sliceUsd: input.sliceUsd, twapSlices: input.twapSlices },
       },
     ];
   });
@@ -250,12 +253,36 @@ export function convertFor(reopenMarginUsd: number, availableMargin: number): nu
   return short > 0 ? Math.max(HYPERLIQUID_MIN_USDC, ceilCents(short / marginPerConvertUsdc)) : 0;
 }
 
+export function averagedRealize(profitPerCoin: number, positionQty: number, qtys: number[], feePerCoin: number): { qty: number; realizedUsd: number } {
+  let perCoin = profitPerCoin;
+  let qty = 0;
+  let realizedUsd = 0;
+  for (const slice of qtys) {
+    if (qty > 0 && perCoin <= feePerCoin) break;
+    realizedUsd += slice * perCoin;
+    qty += slice;
+    perCoin *= positionQty > 0 ? Math.max(0, 1 - slice / positionQty) : 0;
+  }
+  return { qty, realizedUsd };
+}
+
+function slicesOf(leg: Paying, qty: number): number[] {
+  const capQty = leg.capUsd / leg.mark;
+  const { sliceUsd, twapSlices } = leg.split;
+  if (twapSlices !== undefined && twapSlices > 0) return twapQtysFor(qty, twapSlices, leg.lot, leg.minQty, capQty);
+  const mid = touchOf(leg.book)?.mid ?? leg.mark;
+  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : ONE_ORDER_USD;
+  return sliceQtys(qty, Math.min(askedUsd / mid, capQty), leg.minQty, leg.lot, capQty);
+}
+
 function orderOf(leg: Paying, qty: number, state: State): Order {
-  const priced = priceOrder(leg, qty);
-  const realizedUsd = qty * leg.profitPerCoin;
-  const convert = convertFor(qty * leg.marginPerCoin, state.available);
+  const run = averagedRealize(leg.profitPerCoin, leg.positionQty, slicesOf(leg, qty), 2 * leg.mark * leg.takerRate);
+  const closed = run.qty > 0 && run.qty < qty ? Number(roundToStep(run.qty, leg.lot, 'nearest')) : qty;
+  const realizedUsd = run.qty > 0 ? run.realizedUsd : qty * leg.profitPerCoin;
+  const priced = priceOrder(leg, closed);
+  const convert = convertFor(closed * leg.marginPerCoin, state.available);
   const cashIn = realizedUsd - priced.closeFeeUsd - priced.reopenFeeUsd - priced.closeImpactUsd;
-  return { qty, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * CONVERT_RATE };
+  return { qty: closed, priced, realizedUsd, convert, cashIn, net: cashIn - priced.reopenImpactUsd - convert * CONVERT_RATE };
 }
 
 /** Past the size whose reopen needs no Convert, each coin also pays for its
@@ -320,14 +347,22 @@ interface SliceVerdict {
   overCapUsd: number | null;
 }
 
-function sliceVerdictOf(leg: Paying, qty: number, sliceUsd: number | undefined): SliceVerdict {
-  const touch = touchOf(leg.book);
-  if (!leg.book || !touch) return { pastBook: true, overCapUsd: null };
-  const side = leg.side === 'SHORT' ? 'BUY' : 'SELL';
-  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : sliceSizeOf({ book: leg.book, side, mid: touch.mid, totalUsd: qty * touch.mid });
+function sliceVerdictOf(leg: Paying, qty: number): SliceVerdict {
+  if (!leg.book || !touchOf(leg.book)) return { pastBook: true, overCapUsd: null };
   const capQty = leg.capUsd / leg.mark;
-  const sliceQty = Math.min(qty, Math.max(leg.minQty, Math.min(askedUsd / touch.mid, capQty)));
+  const sliceQty = Math.min(qty, Math.max(leg.minQty, ...slicesOf(leg, qty)));
   return { pastBook: priceOrder(leg, sliceQty).pastBook, overCapUsd: Math.min(qty, leg.minQty) > capQty ? leg.capUsd : null };
+}
+
+export function capsUsdOf(perps: RealizePerp[], rules: Record<string, PerpRule>): Record<string, number> {
+  return Object.fromEntries(
+    perps.flatMap((perp) => {
+      const mark = positiveOf(perp.markPrice);
+      if (!perp.symbol || !(mark > 0)) return [];
+      const capUsd = marketCapUsd(perp, rules[perp.symbol] ?? {}, parseSymbol(perp.symbol).exchange, mark);
+      return Number.isFinite(capUsd) ? [[perp.symbol, capUsd]] : [];
+    }),
+  );
 }
 
 function refusalOf(verdicts: SliceVerdict[], unfunded: boolean): RealizeRefusal | null {
@@ -358,6 +393,37 @@ export function slicedEstimateOf(
   const leadWalkUsd = (exec === 'market' ? lead.closeImpactUsd : 0) + lead.reopenImpactUsd;
   const sliceWalkUsd = (exec === 'market' ? slice.impactUsd : 0) + slice.reopenImpactUsd;
   const impactUsd = Math.max(0, estimate.impactUsd - leadWalkUsd + sliceWalkUsd);
+  return { feeUsd: estimate.feeUsd, impactUsd, totalUsd: estimate.feeUsd + impactUsd };
+}
+
+export function twapEstimateOf(
+  plan: Pick<RealizePlan, 'legs' | 'estimates'>,
+  exec: RealizeExec,
+  books: Record<string, NormalizedBook | null>,
+  qtysBySymbol: Record<string, number[]>,
+): RealizeEstimate {
+  const estimate = plan.estimates[exec];
+  let impactUsd = estimate.impactUsd;
+  for (const leg of plan.legs) {
+    const qtys = qtysBySymbol[leg.symbol] ?? [];
+    const book = books[leg.symbol] ?? null;
+    const touch = touchOf(book);
+    if (!book || !touch || qtys.length === 0) continue;
+    const walkUsd = (side: 'BUY' | 'SELL'): number | null => {
+      let usd = 0;
+      for (const qty of qtys) {
+        const impact = impactOf(book, side, touch.mid, qty);
+        if (!impact) return null;
+        usd += impact.usd;
+      }
+      return usd;
+    };
+    const close = exec === 'market' ? walkUsd(leg.side === 'SHORT' ? 'BUY' : 'SELL') : 0;
+    const reopen = walkUsd(leg.side === 'SHORT' ? 'SELL' : 'BUY');
+    if (close === null || reopen === null) continue;
+    impactUsd += close + reopen - ((exec === 'market' ? leg.closeImpactUsd : 0) + leg.reopenImpactUsd);
+  }
+  impactUsd = Math.max(0, impactUsd);
   return { feeUsd: estimate.feeUsd, impactUsd, totalUsd: estimate.feeUsd + impactUsd };
 }
 
@@ -392,7 +458,7 @@ export function planRealize(input: RealizeInput): RealizePlan | null {
     if (state.left <= 0) break;
     const order = sizeOrder(leg, state);
     orders.push(order);
-    verdicts.push(sliceVerdictOf(leg, order.qty, input.sliceUsd));
+    verdicts.push(sliceVerdictOf(leg, order.qty));
     shown.push(legOf(input.pool, leg, order));
     // A leg that frees no cash at any size only adds cost, so it is not planned.
     // A refusal still names and shows it, so a book it runs past says so.

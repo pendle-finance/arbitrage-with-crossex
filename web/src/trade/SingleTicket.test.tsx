@@ -13,6 +13,7 @@ import {
   REALIZE_RUNNING_JOB,
   rebalanceHandler,
   symbolHandlers,
+  TWAP_OFF,
 } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { pickOption } from '../test/picker';
@@ -42,7 +43,7 @@ function twapPreviewHandler(bodies: Array<{ actions: ActionInput[]; twap?: unkno
     return HttpResponse.json(
       env<PreviewResponse>({
         previews: body.actions.map((a, i) => previewFor(a, { index: i, qty: '0.0015' })),
-        priceImpact: { whole: 83, sliced: 14 },
+        priceImpact: { whole: 83, sliced: 14 }, twapDefault: TWAP_OFF,
         twap: { plan: PLAN, refusal: null },
       }),
     );

@@ -224,6 +224,15 @@ describe('POST /api/preview with twap', () => {
       text: 'Book too thin for 2.5 ETH a slice.',
       fix: { label: 'Use 2 ETH', patch: { intervalSec: 300, sliceQty: '2' } },
     });
+    expect(data.twapDefault?.on).toBe(true);
+  });
+
+  it('the TWAP default comes from the books even when TWAP is off', async () => {
+    mockPairStack();
+
+    const { data } = await previewTwap(pair('3'));
+
+    expect(data.twapDefault?.on).toBe(true);
   });
 
   describe('close perps with unequal legs', () => {

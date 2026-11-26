@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse, TwapStartBody } from '../api/types';
 import { sig } from '../lib/fmt';
-import { baseHandlers, ethPosition, makeCrossexPosition, previewFor } from '../test/fixtures';
+import { baseHandlers, ethPosition, makeCrossexPosition, previewFor, TWAP_OFF } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ClosePopover } from './ClosePopover';
@@ -504,7 +504,7 @@ describe('ClosePopover: TWAP', () => {
               fees: { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { taker: 129.75 } },
             }),
           ],
-          priceImpact: { whole: 8, sliced: 1 },
+          priceImpact: { whole: 8, sliced: 1 }, twapDefault: TWAP_OFF,
           twap: {
             plan: { slices: 5, sliceQty: '30', lastQty: '30', intervalSec: 180, durationSec: 900, takerAfterSec: 144 },
             refusal: null,

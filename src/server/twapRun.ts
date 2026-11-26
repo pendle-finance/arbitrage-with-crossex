@@ -15,12 +15,15 @@ import {
   HALT_TEXT,
   haltReasonFor,
   type HaltKind,
+  hedgesOf,
   isChildOf,
   type Job,
   type JobFile,
+  type JobFollow,
   type JobTwap,
   SLICE_STEP,
   type SizeRefusal,
+  type Step,
 } from './rebalanceJob';
 
 export interface TwapRunDeps {
@@ -108,8 +111,8 @@ export interface TwapJobView {
   boros: TwapBorosView | null;
 }
 
-const MAKER_FEE_BP = 2;
-const TAKER_FEE_BP = 5;
+export const MAKER_FEE_BP = 2;
+export const TAKER_FEE_BP = 5;
 
 const SLEEP_TEXT = 'This Mac slept during the TWAP. Nothing was sent while it slept. Press Resume.';
 const SLICE_NUMBER = /-[sf](\d+)(?:-\d+)?$/;
@@ -238,8 +241,48 @@ function pauseTwap(deps: TwapRunDeps, job: Job): void {
   haltTwap(deps, job, null, null);
 }
 
-export async function stopLiveChild(deps: TwapRunDeps, job: Job): Promise<void> {
-  const live = childrenOf(deps.store, job, { activeOnly: true });
+export function sliceStepBehind(job: Job): Step | null {
+  const step = job.steps[job.stepIndex];
+  if (!step || step.name === SLICE_STEP) return step ?? null;
+  if (!step.retry) return null;
+  const next = job.steps.slice(job.stepIndex + 1).find((later) => !later.name.startsWith('Convert'));
+  return next?.name === SLICE_STEP ? next : null;
+}
+
+export function unwindTargetOf(job: Job, step: Step, child: PairRow, qty: number): JobFollow | null {
+  if (job.kind !== 'realize') {
+    return { symbol: child.a.contract, exchange: parseSymbol(child.a.contract).exchange, side: child.a.side === 'BUY' ? 'SELL' : 'BUY', qty, reduceOnly: child.a.reduceOnly !== true };
+  }
+  const leg = job.realize?.legs.find((row) => row.symbol === step.perp?.symbol);
+  const hedge = leg
+    ? hedgesOf(leg, job.before?.perps ?? [])
+        .filter((perp) => leg.hedge === null || perp.exchange === leg.hedge)
+        .sort((x, y) => y.qty - x.qty)[0]
+    : undefined;
+  return hedge ? { symbol: hedge.symbol, exchange: hedge.exchange, side: hedge.side === 'LONG' ? 'SELL' : 'BUY', qty, reduceOnly: true } : null;
+}
+
+export function openGapOf(store: Store, job: Job): { qty: number; follow: JobFollow; unwind: JobFollow | null } | null {
+  const step = sliceStepBehind(job);
+  const child = step?.lead ? store.getPair(step.lead.text) : null;
+  if (!step?.follow || child?.mode !== 'HALTED' || !child.b) return null;
+  if (job.kind !== 'realize' && child.haltKind !== 'hedge-margin') return null;
+  const proj = project(child, store.listOrders(child.id));
+  const qty = Number(fxStr(fxMax(FX_ZERO, fx(proj.aFilled) - fx(proj.bFilled))));
+  if (!(qty > 0)) return null;
+  const { symbol, exchange, side, reduceOnly } = step.follow;
+  return { qty, follow: { symbol, exchange, side, qty, reduceOnly }, unwind: unwindTargetOf(job, step, child, qty) };
+}
+
+export function markOpenGap(store: Store, job: Job): void {
+  const gap = openGapOf(store, job);
+  job.notHedgedQty = gap?.qty ?? 0;
+  job.follow = gap?.follow ?? null;
+  job.unwindTarget = gap?.unwind ?? null;
+}
+
+export async function stopLiveChild(deps: TwapRunDeps, job: Job, keepHalted = false): Promise<void> {
+  const live = childrenOf(deps.store, job, { activeOnly: true }).filter((pair) => !keepHalted || pair.mode !== 'HALTED');
   for (const pair of live) commands.stop(deps.store, pair.id);
   if (live.length > 0) deps.engineWake();
 }
@@ -256,11 +299,15 @@ export async function bootHaltTwap(deps: TwapRunDeps, job: Job): Promise<Job> {
   return job;
 }
 
-const isLiveDeleverTwap = (job: Job): boolean => job.kind === 'delever' && Boolean(job.deleverTwap) && job.status === 'running';
+export const isSlicedTwap = (job: Job): boolean => (job.kind === 'delever' || job.kind === 'realize') && Boolean(job.deleverTwap);
+
+const isLiveDeleverTwap = (job: Job): boolean => isSlicedTwap(job) && job.status === 'running';
 
 export function sleepHaltTwap(deps: TwapRunDeps, job: Job, gap: { fromMs: number; toMs: number }): Job {
   if (!isLiveJob(job) && !isLiveDeleverTwap(job)) return job;
-  void stopLiveChild(deps, job);
+  const sliced = isSlicedTwap(job);
+  void stopLiveChild(deps, job, sliced);
+  if (sliced) markOpenGap(deps.store, job);
   job.sleptFrom = gap.fromMs;
   job.sleptTo = gap.toMs;
   job.pauseRequested = false;
@@ -653,7 +700,8 @@ const EMPTY_VIEW: TwapJobView = {
 function deleverViewOf(job: Job, own: ChildDealView[], feeRows: VenueFeeRow[]): TwapJobView {
   const plan = job.deleverTwap;
   if (!plan) return EMPTY_VIEW;
-  const step = job.steps.find((candidate) => candidate.name === SLICE_STEP);
+  const current = job.steps[job.stepIndex];
+  const step = current?.name === SLICE_STEP ? current : job.steps.find((candidate) => candidate.name === SLICE_STEP);
   const slice = step && step.startedAt !== null ? (job.slice?.index ?? 0) : 0;
   const sliceLive = job.status === 'running' && step?.status !== 'done' && Boolean(step?.cut);
   const plans = deleverLegPlans(job);
@@ -684,7 +732,7 @@ function deleverViewOf(job: Job, own: ChildDealView[], feeRows: VenueFeeRow[]): 
 
 export function twapViewOf(job: Job, children: ChildDealView[], feeRows: VenueFeeRow[] = []): TwapJobView {
   const own = children.filter((view) => isChildOf(job.id, view.pair.id));
-  if (job.kind === 'delever') return deleverViewOf(job, own, feeRows);
+  if (isSlicedTwap(job)) return deleverViewOf(job, own, feeRows);
   const twap = job.twap;
   if (job.kind !== 'twap' || !twap) return EMPTY_VIEW;
   const legs = legsOf(twapLegPlans(twap), own);

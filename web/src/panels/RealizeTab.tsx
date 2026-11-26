@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
-import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView, SliceOption } from '../api/types';
+import type { Pool, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RealizeTwap, RealizeTwapTargets, RebalanceView } from '../api/types';
 import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
 import { OrdersGroup, perMode } from '../components/OrdersGroup';
@@ -13,7 +13,8 @@ import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { apiErrorText } from '../lib/apiErrorText';
-import { fmtAbout, fmtNotionalShort, num } from '../lib/fmt';
+import { num, prettyVenue, qtyGrouped } from '../lib/fmt';
+import { spanText } from '../lib/span';
 import { useDebounced } from '../lib/useDebounced';
 import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
@@ -23,15 +24,17 @@ import { PlanSteps, realizeText, refusalOf, TotalCost, type CostRow, type PlanSt
 import { CONVERT_TO, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
-import { costOf, hasPlan, legCostsOf, netOf, sliceOf, type Cost, type Slice } from './realizeTabCost';
-import { SplitArea } from './SliceTable';
+import { costOf, hasPlan, legCostsOf, netOf, sliceOf, twapQueryOf, type Cost, type Slice } from './realizeTabCost';
 import { CloseMakerSettings, useCloseMaker, withMakerWait } from './closeMaker';
 import { useTwapTakerAfter } from '../trade/useTwapTakerAfter';
+import { TwapArea, useTwapDefault, useTwapInput } from '../trade/TwapArea';
+import { EstimateRow } from '../trade/PairTicketBits';
 
 type AmountPick = 'clear' | 'all' | 'custom';
 
 const TARGET: Record<AmountPick, 'clear-debt' | 'all' | 'custom'> = { clear: 'clear-debt', all: 'all', custom: 'custom' };
 
+const TWAP_TARGET: Record<AmountPick, keyof RealizeTwapTargets> = { clear: 'clearDebt', all: 'all', custom: 'custom' };
 
 type TabProps = {
   view: RebalanceView;
@@ -98,44 +101,47 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const all = hasPlan(tab?.all ?? null) ? (tab?.all ?? null) : null;
   const [amount, setAmount] = useState<AmountPick>(() => (clearDebt ? 'clear' : 'all'));
   const [exec, setExec] = useState<RealizeExec>('maker');
-  const [pickedUsd, setPickedUsd] = useState<number | null>(null);
-  const [sliceText, setSliceText] = useState('');
-  const [split, setSplit] = useState<boolean | null>(null);
   const [customText, setCustomText] = useState('');
   const maker = useCloseMaker();
-  const takerOff = useTwapTakerAfter(maker.taker, false, null);
+  const twap = useTwapInput();
+  const [customLead, setCustomLead] = useState(0);
 
   const presetOptions = withMakerWait(tab?.sliceOptions ?? [], maker.taker.sec);
   const basePriced = clearDebt && clearDebt.legs.length > 0 ? clearDebt : all;
   const splitPlan = amount === 'clear' ? clearDebt : all;
-  const baseSliceOf = (sizeUsd: number): Slice | null => (splitPlan ? sliceOf(presetOptions, sizeUsd, splitPlan.legs[0], splitPlan === basePriced) : null);
-  const presetRows = presetOptions.filter((o) => !o.custom && !o.whole);
-  const splitRows = presetRows.filter((o) => (baseSliceOf(o.sizeUsd)?.count ?? 1) > 1);
-  const recommended = splitRows.find((o) => o.sizeUsd === tab?.defaultSliceUsd) ?? null;
-  const suggested = recommended ?? splitRows.reduce<SliceOption | null>((best, o) => (best === null || o.sizeUsd > best.sizeUsd ? o : best), null);
-  const suggestedSlice = suggested ? baseSliceOf(suggested.sizeUsd) : null;
-  const canSplit = suggested !== null;
-  const splitOn = canSplit && (split ?? recommended !== null);
-  const sliceUsd = splitOn ? (pickedUsd ?? suggested?.sizeUsd ?? 0) : (presetOptions.find((o) => o.whole)?.sizeUsd ?? 0);
-  const customSlice = sliceUsd > 0 && !presetOptions.some((o) => !o.custom && o.sizeUsd === sliceUsd);
-  const sliceQueried = sliceUsd > 0 && sliceUsd !== tab?.defaultSliceUsd;
-  const debouncedSlice = useDebounced(sliceUsd, CUSTOM_DEBOUNCE_MS);
+  const sliceUsd = presetOptions.find((o) => o.whole)?.sizeUsd ?? 0;
   const baseAllNet = all ? Math.max(0, netOf(all, costOf(all, exec, sliceOf(presetOptions, sliceUsd, all.legs[0], all === basePriced)))) : 0;
   const typedUsd = parsedAmount(customText);
   const customUsd = typedUsd !== null && typedUsd > 0 ? Math.min(typedUsd, baseAllNet) : null;
   const debouncedUsd = useDebounced(customUsd, CUSTOM_DEBOUNCE_MS);
-  const queried = (amount === 'custom' && debouncedUsd !== null) || sliceQueried;
-  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, sliceQueried ? debouncedSlice : null, queried && tab ? tab.pool : null);
+  const leadQty = (amount === 'custom' ? customLead : (splitPlan?.legs[0]?.qty ?? 0));
+  const twapQuery = twap.on && !twap.startBlocked ? twapQueryOf(twap.input, leadQty) : null;
+  const queried = (amount === 'custom' && debouncedUsd !== null) || twapQuery !== null;
+  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, null, queried && tab ? tab.pool : null, twapQuery);
   const customPlan = customQuery.data?.realize?.custom ?? null;
-  const liveTab = sliceQueried ? (customQuery.data?.realize ?? null) : null;
+  useTwapDefault(twap, amount === 'custom' ? customQuery.data?.realize?.twapDefault.custom : tab?.twapDefault[TWAP_TARGET[amount]], exec);
+  const customLeadNow = customPlan?.legs[0]?.qty ?? 0;
+  useEffect(() => {
+    if (customLeadNow > 0) setCustomLead(customLeadNow);
+  }, [customLeadNow]);
+  const twapPricing = twapQuery !== null && (customQuery.isPlaceholderData || customQuery.isPending);
+  const realizeTwap = twapQuery !== null && !twapPricing ? (customQuery.data?.realizeTwap ?? null) : null;
+  const liveTab = twapQuery !== null && !twapPricing ? (customQuery.data?.realize ?? null) : null;
   const shownClear = liveTab ? (hasPlan(liveTab.clearDebt) ? liveTab.clearDebt : null) : clearDebt;
   const shownAll = liveTab ? (hasPlan(liveTab.all) ? liveTab.all : null) : all;
   const pricedPlan = shownClear && shownClear.legs.length > 0 ? shownClear : shownAll;
   const options = liveTab ? withMakerWait(liveTab.sliceOptions, maker.taker.sec) : presetOptions;
-  const customOption = customSlice ? (liveTab?.sliceOptions.find((o) => o.custom) ?? null) : null;
-  const shownSliceUsd = customOption?.sizeUsd ?? sliceUsd;
+  const shownSliceUsd = options.find((o) => o.whole)?.sizeUsd ?? sliceUsd;
   const sliceFor = (plan: RealizePlan): Slice | null => sliceOf(options, shownSliceUsd, plan.legs[0], plan === pricedPlan);
-  const costFor = (plan: RealizePlan, mode: RealizeExec): Cost => costOf(plan, mode, sliceFor(plan));
+  const twapOf = (plan: RealizePlan): RealizeTwap | null =>
+    realizeTwap === null ? null : plan === shownClear ? realizeTwap.clearDebt : plan === shownAll ? realizeTwap.all : plan === customPlan ? realizeTwap.custom : null;
+  const costFor = (plan: RealizePlan, mode: RealizeExec): Cost => {
+    const twapEstimates = twapOf(plan)?.estimates ?? null;
+    return twapEstimates ? costOf({ ...plan, estimates: twapEstimates }, mode, null) : costOf(plan, mode, sliceFor(plan));
+  };
+  const activeTwap = realizeTwap ? realizeTwap[TWAP_TARGET[amount]] : null;
+  const twapPlan = twap.on ? (activeTwap?.plan ?? null) : null;
+  const takerOff = useTwapTakerAfter(maker.taker, twap.on, twapPlan?.takerAfterSec ?? null);
   const allNet = shownAll ? Math.max(0, netOf(shownAll, costFor(shownAll, exec))) : 0;
 
 
@@ -152,26 +158,23 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
     );
   }
 
-  const sliceInvalid = splitOn && sliceText.trim() !== '' && !((parsedAmount(sliceText) ?? 0) > 0);
   const customMissing = amount === 'custom' && customUsd === null;
   const customOverAll = amount === 'custom' && typedUsd !== null && customUsd !== null && typedUsd > customUsd;
   const active = amount === 'clear' ? shownClear : amount === 'all' ? shownAll : customMissing ? null : customPlan;
-  const slicePricing = sliceQueried && (debouncedSlice !== sliceUsd || customQuery.isFetching);
-  const pricing = slicePricing || (amount === 'custom' && customUsd !== null && (customUsd !== debouncedUsd || customQuery.isFetching));
+  const pricing = twapPricing || (amount === 'custom' && customUsd !== null && (customUsd !== debouncedUsd || customQuery.isFetching));
   const slice = active ? sliceFor(active) : null;
   const cost = active ? costFor(active, exec) : null;
   const legCosts = active && cost && !pricing ? legCostsOf(active, exec, cost) : null;
   const net = active && cost ? netOf(active, cost) : 0;
-  const slicePastBook = options.find((o) => o.sizeUsd === shownSliceUsd)?.pastBook === true;
+  const twapBlocked = twap.blockedBy(activeTwap);
   const otherRefusal = active?.refused && active.refused.reason !== 'past-book' ? active.refused : null;
-  const sliceRefused = !otherRefusal && (slicePastBook || active?.refused?.reason === 'past-book');
-  const bookBody = splitOn ? 'sliceBookBody' : canSplit ? 'wholeBookBody' : 'bookBody';
+  const sliceRefused = !otherRefusal && active?.refused?.reason === 'past-book' && (!twap.on || liveTab !== null);
   const refusal = !active
     ? null
     : otherRefusal
       ? refusalOf({ ...view.plans.repay, realize: active })
       : sliceRefused
-        ? { title: realizeText('bookTitle'), body: realizeText(bookBody) }
+        ? { title: realizeText('bookTitle'), body: twap.on ? realizeText('bookBody') : t('accounts.deleverTab.bookBody') }
         : null;
   const wallet = WALLET_LABEL[poolKey(tab.pool)] ?? poolKey(tab.pool);
   const bucket = view.buckets.find((b) => keyOf(b) === poolKey(tab.pool));
@@ -182,24 +185,10 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const allText = String(Math.round(allNet));
   const boxText = amount === 'clear' ? debtText : amount === 'all' ? allText : customText;
 
-  const oneOrder = slice?.count === 1;
+  const oneOrder = !twapPlan && slice?.count === 1;
   const orderCost = perMode((mode) => (active ? costFor(active, mode).totalUsd : null));
-  const orderSec = perMode((mode) => (slice ? slice.seconds[mode] / Math.max(1, slice.count) : null));
-  const impactOf = (o: SliceOption): number => (exec === 'market' ? o.impactUsd : 0) + o.reopenImpactUsd;
-  const wholeOption = options.find((o) => o.whole) ?? null;
-  const shownOption = splitOn
-    ? (options.find((o) => o.sizeUsd === shownSliceUsd) ?? null)
-    : suggested
-      ? (options.find((o) => !o.custom && !o.whole && o.sizeUsd === suggested.sizeUsd) ?? null)
-      : null;
-  const impact: PriceImpactPreview | null =
-    wholeOption && shownOption && active === pricedPlan ? { whole: wholeOption.pastBook ? null : impactOf(wholeOption), sliced: impactOf(shownOption) } : null;
-  const splitHover =
-    suggested && suggestedSlice
-      ? t('accounts.realizeTab.splitHover', { size: fmtNotionalShort(suggested.sizeUsd), count: suggestedSlice.count, time: fmtAbout(suggestedSlice.seconds[exec]) })
-      : t('accounts.realizeTab.splitTooSmall');
-
-  const rows: CostRow[] = cost
+  const orderSec = perMode((mode) => (twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : slice ? slice.seconds[mode] / Math.max(1, slice.count) : null));
+  const rows: CostRow[] = cost && !(twap.on && twapBlocked)
     ? [
         { label: t('accounts.realizeTab.tradingFee'), usd: cost.feeUsd },
         ...(cost.convertUsd > 0 ? [{ label: t('accounts.moveCash.convertFee'), usd: cost.convertUsd }] : []),
@@ -226,12 +215,21 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       ]
     : [];
 
-  const pickSlice = (sizeUsd: number) => setPickedUsd(sizeUsd);
-  const typeSlice = (text: string) => {
-    setSliceText(text);
-    const parsed = parsedAmount(text);
-    if (parsed !== null && parsed > 0) setPickedUsd(parsed);
-  };
+  const legOf = (symbol: string) => active?.legs.find((l) => l.symbol === symbol);
+  const leadRow = activeTwap?.legs.reduce<RealizeTwap['legs'][number] | null>((best, row) => (best === null || row.slices > best.slices ? row : best), null) ?? null;
+  const twapCoin = legOf(leadRow?.symbol ?? '')?.base ?? active?.legs[0]?.base ?? '';
+  const legSlices =
+    twapPlan && !twapBlocked
+      ? (activeTwap?.legs ?? []).map((row) => {
+          const leg = legOf(row.symbol);
+          const coin = leg?.base ?? '';
+          const value =
+            row.plan && row.plan.lastQty !== row.plan.sliceQty
+              ? t('trade.twap.area.slices', { n: row.slices, qty: qtyGrouped(row.plan.lastQty), coin })
+              : t('trade.twap.area.slicesOnly', { n: row.slices });
+          return { key: row.symbol, label: t('accounts.realizeTab.twapLeg', { coin, venue: prettyVenue(leg?.exchange ?? '') }), value };
+        })
+      : [];
 
   const confirm = () => {
     if (!active || !cost) return;
@@ -239,12 +237,15 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       {
         kind: 'realize',
         exec,
-        sliceUsd: shownSliceUsd,
         realizeUsd: net,
         realizeTarget: TARGET[amount],
         realizePool: tab.pool,
         costUsd: cost.totalUsd,
-        ...(exec === 'maker' ? { maker: maker.opts } : {}),
+        ...(twapPlan && twapQuery
+          ? { twap: { ...twapQuery, ...(exec === 'maker' ? maker.opts : {}) } }
+          : exec === 'maker'
+            ? { maker: maker.opts }
+            : {}),
       },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
     );
@@ -252,11 +253,9 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
 
   const sentence: string | null = customMissing
     ? t('accounts.realizeTab.typeAmount')
-    : sliceInvalid
-      ? t('accounts.realizeTab.typeSlice')
-      : customOverAll
-        ? t('accounts.realizeTab.customOverAll', { amount: num(allNet, 0), coin: poolCoin(tab.pool) })
-        : null;
+    : customOverAll
+      ? t('accounts.realizeTab.customOverAll', { amount: num(allNet, 0), coin: poolCoin(tab.pool) })
+      : null;
 
   return (
     <>
@@ -319,16 +318,14 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       {active && (!refusal || sliceRefused) && active.legs.length > 0 && (
         <>
           <OrdersGroup value={exec} onChange={setExec} cost={orderCost} seconds={orderSec} whole={perMode(() => oneOrder)}>
-              {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} />}
-              {wholeOption && (
-                <SplitArea
-                  on={splitOn}
-                  onToggle={setSplit}
-                  canSplit={canSplit}
-                  hover={splitHover}
-                  impact={impact}
-                  table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, dedupe: active === pricedPlan }}
-                />
+              {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
+              <TwapArea on={twap.on} onToggle={twap.setOn} input={twap.input} onInput={twap.setInput} preview={activeTwap} impact={null} coin={twapCoin} />
+              {legSlices.length > 1 && (
+                <div className="flex flex-col gap-1.5 px-3">
+                  {legSlices.map((row) => (
+                    <EstimateRow key={row.key} label={row.label} value={<span className="num">{row.value}</span>} />
+                  ))}
+                </div>
               )}
           </OrdersGroup>
 
@@ -343,14 +340,14 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       ) : (
         <RebalanceModalFooter
           rows={[]}
-          holdLabel={pricing ? t('common.refreshing') : t('accounts.realizeTab.holdRealize')}
+          holdLabel={pricing ? t('common.refreshing') : twapPlan ? t('accounts.realizeTab.holdRealizeTwap', { duration: spanText(twapPlan.durationSec) }) : t('accounts.realizeTab.holdRealize')}
           optional={false}
           stale={false}
           quoteStale={amount === 'custom' && customQuery.isError}
           lock={lock}
           pricing={pricing}
           holdMs={holdMs}
-          disabled={lock !== null || start.isPending || pricing || sliceInvalid || (exec === 'maker' && takerOff) || !active || active.legs.length === 0 || !(Math.round(net) >= 1)}
+          disabled={lock !== null || start.isPending || pricing || (twap.on && twapBlocked) || (exec === 'maker' && takerOff) || !active || active.legs.length === 0 || !(Math.round(net) >= 1)}
           onRefresh={() => void customQuery.refetch()}
           onConfirm={confirm}
         />

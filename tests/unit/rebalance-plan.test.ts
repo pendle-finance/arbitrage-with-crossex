@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
+import { ONE_ORDER_USD } from '../../src/core/rebalance/slices';
 import { roundToStep } from '../../src/core/numbers';
 import { type RealizeLeg, realizedNetUsd } from '../../src/core/rebalance/realize';
 import {
@@ -1828,7 +1829,7 @@ describe('fullPlanOf', () => {
 
   it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('full plan at every rung of the size ladder (%d USD borrow)', (borrow) => {
     const book = ownerShapeAt(borrow);
-    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    const full = fullPlanOf(book.buckets, book.account, { ...book.inputs, sliceUsd: ONE_ORDER_USD });
     const perDay = usdtPerDay(book.buckets);
     expect(full).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
     expect(full?.costUsd).toBe(Math.round(((full?.moveCostUsd ?? 0) + (full?.realizeCostUsd ?? 0)) * 100) / 100);

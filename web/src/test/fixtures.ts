@@ -2,6 +2,7 @@
 import { http, HttpResponse } from 'msw';
 import type {
   ActionInput,
+  TwapDefault,
   DeleverEstimate,
   DeleverPlan,
   FullPlan,
@@ -2452,6 +2453,10 @@ function sliceRowsOf(totalUsd: number, mid: number, custom: number | null = null
   return custom === null ? [...rows, whole] : [...rows, sliceRow(totalUsd, mid, custom, true), whole];
 }
 
+export const TWAP_OFF: TwapDefault = { on: false, maker: { durationSec: 3_600, intervalSec: 300 }, market: { durationSec: 720, intervalSec: 60 } };
+
+export const TWAP_OFF_TARGETS = { clearDebt: TWAP_OFF, all: TWAP_OFF, custom: TWAP_OFF };
+
 function acctTab(b: BorrowBook, refused: RealizeRefusal | null, custom: number | null): RealizeTab {
   const clearDebt = b.realized > 0 ? acctRealize(b.realized, refused, custom ?? 25_000) : null;
   const all = b.upnl > 0 ? acctRealize(b.upnl, refused, clearDebt ? null : (custom ?? 25_000)) : null;
@@ -2460,6 +2465,7 @@ function acctTab(b: BorrowBook, refused: RealizeRefusal | null, custom: number |
     pool: 'HYPERLIQUID', pools: ['HYPERLIQUID'], clearDebt, all, custom: null,
     sliceOptions: lead === null ? [] : sliceRowsOf(lead.legs[0]!.qty * b.mid, b.mid, custom),
     defaultSliceUsd: custom ?? 25_000,
+    twapDefault: TWAP_OFF_TARGETS,
   };
 }
 
@@ -2709,7 +2715,7 @@ function deleverTwapOf(plan: DeleverPlan, price: number, input: DeleverTwapBody,
   const planView = refusal
     ? null
     : { slices, sliceQty: String(sliceQty), lastQty: String(sliceQty), intervalSec, durationSec, takerAfterSec: Math.floor(intervalSec * 0.8) };
-  return { ...plan, twap: { plan: planView, refusal, price }, priceImpact: { whole: null, sliced: 1200 } };
+  return { ...plan, twap: { plan: planView, refusal, price }, priceImpact: { whole: null, sliced: 1200 }, twapDefault: TWAP_OFF };
 }
 
 export const deleverTwapPlans = {

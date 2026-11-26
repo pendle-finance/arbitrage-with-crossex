@@ -1862,3 +1862,30 @@ describe('an order-count refusal on a re-peg keeps the deal and does not loop', 
     expect(JSON.parse(w.store.getPair(w.pairId)!.reportJson!).bFilled).toBe('0.05');
   });
 });
+
+describe('a hedge hold that commits mid-tick', () => {
+  it('places no hedge on a HALTED pair when the hold lands while the tick reads the B price', async () => {
+    const w = mkWorld({ b: { minNotional: '1' } });
+    await stepChecked(w);
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, '0.05');
+    w.venue.nextCreate = Array(10).fill('reject:BALANCE_NOT_ENOUGH');
+    await stepChecked(w, 30);
+    expect(w.store.getPair(w.pairId)!.mode).toBe('HALTED');
+    w.venue.nextCreate = [];
+    const hedges = () => [...w.venue.orders.values()].filter((o) => o.contract === B_CONTRACT).length;
+    const before = hedges();
+    const realRef = w.venue.refPrice.bind(w.venue);
+    let held = false;
+    w.venue.refPrice = async (contract: string) => {
+      if (contract === B_CONTRACT && !held) {
+        held = true;
+        w.store.updatePair(w.pairId, { hedgeNotBefore: Number.MAX_SAFE_INTEGER });
+      }
+      return realRef(contract);
+    };
+    await stepChecked(w, 10);
+    expect(held).toBe(true);
+    expect(hedges()).toBe(before);
+    expect(w.store.getPair(w.pairId)!.mode).toBe('HALTED');
+  });
+});

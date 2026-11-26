@@ -64,7 +64,7 @@ const TITLE_KEY = {
   singleClose: 'titleSingleClose',
 } as const;
 
-const toResultRows = (rows: RunRow[]): ResultRow[] =>
+export const toResultRows = (rows: RunRow[]): ResultRow[] =>
   rows.map((row) => ({ label: row.label, value: row.tone ? <span className={TONE_CLASS[row.tone]}>{row.value}</span> : row.value }));
 
 const TONE_CLASS = { gain: 'text-emerald-400', loss: 'text-rose-400' } as const;
@@ -261,7 +261,7 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
 
   if (job.status === 'done') {
     const usd = usdOf(makerFilled);
-    const doneTitle = t(`trade.twap.run.${close ? 'doneClosed' : 'doneOpened'}${usd ? '' : 'NoUsd'}`, { qty: qtyText(makerFilled), coin, usd });
+    const doneTitle = t(`trade.twap.run.${close ? 'doneClosed' : 'doneOpened'}${pair ? '' : 'One'}${usd ? '' : 'NoUsd'}`, { qty: qtyText(makerFilled), coin, usd });
     const doneRows: RunRow[] = [
       ...avgRows(),
       ...slippageRow(t('trade.deal.slippage')),
