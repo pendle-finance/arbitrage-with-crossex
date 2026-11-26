@@ -515,7 +515,7 @@
     "totalCost": "Total cost",
     "realizedAfterCost": "Realized, after cost",
     "notHedged": "Not hedged during each slice: max {{qty}} {{coin}} ({{usd}})",
-    "holdRealize": "Hold to realize {{amount}} USDC",
+    "holdRealize": "Hold to realize",
     "amount": "Realize amount",
     "amountAria": "Amount to realize",
     "amountPresets": "Amount presets",

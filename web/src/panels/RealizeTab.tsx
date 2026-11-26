@@ -314,7 +314,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
         <RebalanceModalFooter
           rows={[]}
           verdict={warning && !sentence ? <NotHedgedLine text={warning} /> : undefined}
-          holdLabel={pricing ? t('accounts.rebalanceModal.pricing') : t('accounts.realizeTab.holdRealize', { amount: num(Math.max(0, net), 0) })}
+          holdLabel={pricing ? t('accounts.rebalanceModal.pricing') : t('accounts.realizeTab.holdRealize')}
           optional={false}
           stale={false}
           quoteStale={amount === 'custom' && customQuery.isError}

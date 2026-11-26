@@ -508,7 +508,7 @@
     "totalCost": "总成本",
     "realizedAfterCost": "已兑现，扣除成本后",
     "notHedged": "每片期间未对冲：最多 {{qty}} {{coin}}（{{usd}}）",
-    "holdRealize": "长按兑现 {{amount}} USDC",
+    "holdRealize": "长按兑现",
     "amount": "兑现金额",
     "amountAria": "要兑现的金额",
     "amountPresets": "金额预设",

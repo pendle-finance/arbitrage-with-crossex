@@ -1854,7 +1854,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
 
   it('realize hold label', () => {
     showOn(owner);
-    expect(screen.getByRole('button', { name: 'Hold to realize 7,128 USDC' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
   });
 
   it('while a new custom amount prices, the hold shows the pricing label, not the old amount', async () => {
@@ -1864,7 +1864,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
-    expect(screen.queryByRole('button', { name: /^Hold to realize [\d,]+ USDC/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hold to realize' })).toBeNull();
     expect(screen.getAllByText('Pricing the move.').length).toBeGreaterThan(0);
   });
 
