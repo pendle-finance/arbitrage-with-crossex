@@ -82,7 +82,6 @@
     "sizeAria": "平仓规模，适用于所有仓位",
     "sizeInvalid": "必须大于 0 且不超过 {{max}} {{unit}}",
     "sharedLabel": "此组合的份额",
-    "flat": "无持仓",
     "sharedOpen": "共用部分继续持有",
     "quoteFailed": "无法为此平仓报价",
     "estPnl": "预估盈亏",

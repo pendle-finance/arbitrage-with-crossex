@@ -44,6 +44,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
+import { StepList, type StepRow } from '../panels/RebalanceBits';
 import { BorosLogInButton } from './BorosAgentSetup';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -544,6 +545,36 @@ export function CloseBorosForm({
     );
   };
 
+  const stepRows: StepRow[] = closable.map((l) => {
+    const venues = spreadOf(l);
+    const days = l.maturity ? daysToMaturity(l.maturity, nowSec) : null;
+    const rates = [
+      l.entryApr !== undefined ? t('pairTicket.closeBoros.locked', { rate: fixedRateText(t, l.side === 'SHORT' ? l.entryApr : -l.entryApr) }) : null,
+      knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : null,
+    ].filter((s) => s !== null);
+    const facts = underPicker
+      ? ''
+      : ` · ${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`;
+    return {
+      key: String(l.marketId),
+      coin: l.base,
+      text: (
+        <span className="inline-flex max-w-full items-center gap-1.5">
+          {venues ? <SpreadIcon venues={venues} size={14} /> : <VenueIcon venue={l.venue} size={14} />}
+          <span className="truncate">{venueLabel(l)}</span>
+          <Chip sm tone={l.side === 'LONG' ? 'green' : 'red'} className="font-semibold">
+            {t(l.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
+          </Chip>
+          {facts && <span className="truncate text-ink-400">{facts}</span>}
+        </span>
+      ),
+      sub: null,
+      right: rates.join(' · '),
+      state: busy && pending.includes(l) ? 'running' : 'pending',
+      progress: null,
+    };
+  });
+
   const rateOf = (q: BorosSimulatedLeg | null) =>
     q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? t('pairTicket.closeBoros.quoting') : '—';
   const feeOf = (q: BorosSimulatedLeg | null, unit: string) =>
@@ -582,52 +613,18 @@ export function CloseBorosForm({
   if (!loginLabel && unquoted) notices.push({ key: 'unquoted', tone: 'amber', text: t('pairTicket.closeBoros.unquoted', { slip: slipStr }) });
   const toneClass = { amber: 'text-amber-400/90', rose: 'text-rose-400', dim: 'text-ink-400' } as const;
 
+  const beforeAfter = (before: number, after: number) => `${sigGrouped(before)} ${unit0} → ${sigGrouped(after)} ${unit0}`;
   const positionAfter = flatAfter
-    ? t('pairTicket.closeBoros.flat')
+    ? beforeAfter(maxCloseSize, 0)
     : atMax
       ? t('pairTicket.closeBoros.sharedOpen')
       : closable.length === 1
-        ? `${sigGrouped(leftOf(closable[0]))} ${unit0}`
+        ? beforeAfter(heldOf(closable[0]), leftOf(closable[0]))
         : null;
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="card flex flex-col divide-y divide-ink-800/80 px-3">
-        {closable.map((l) => {
-          const venues = spreadOf(l);
-          const days = l.maturity ? daysToMaturity(l.maturity, nowSec) : null;
-          const rates = [
-            l.entryApr !== undefined ? t('pairTicket.closeBoros.locked', { rate: fixedRateText(t, l.side === 'SHORT' ? l.entryApr : -l.entryApr) }) : null,
-            knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : null,
-          ].filter((s) => s !== null);
-          return (
-            <div key={l.marketId} className="flex flex-col gap-0.5 py-2">
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] font-semibold text-ink-50">
-                  {venues ? <SpreadIcon venues={venues} size={16} /> : <VenueIcon venue={l.venue} size={16} />}
-                  <span className="truncate">{venueLabel(l)}</span>
-                  <Chip sm tone={l.side === 'LONG' ? 'green' : 'red'} className="font-semibold">
-                    {t(l.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
-                  </Chip>
-                </span>
-                {!underPicker && (
-                  <span className="num shrink-0 text-[12.5px] font-semibold text-ink-50">
-                    {`${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}`}
-                  </span>
-                )}
-              </div>
-              <div className="flex items-baseline justify-between gap-3 text-[11px] text-ink-400">
-                {!underPicker && (
-                  <span className="num truncate">
-                    {`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`}
-                  </span>
-                )}
-                {rates.length > 0 && <span className="num ml-auto shrink-0">{rates.join(' · ')}</span>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      <StepList rows={stepRows} />
 
       <div className="flex flex-col gap-1.5">
         <div className="flex items-baseline justify-between gap-3">
@@ -760,7 +757,7 @@ export function CloseBorosForm({
           pendingFacts.map((f) => (
             <div key={f.l.marketId} className="flex items-baseline justify-between gap-3 pl-3 text-[11.5px] text-ink-400">
               {legName(f.l)}
-              <span className="num text-[12px] text-ink-300">{`${sigGrouped(leftOf(f.l))} ${f.l.collateral ?? ''}`}</span>
+              <span className="num text-[12px] text-ink-300">{`${sigGrouped(heldOf(f.l))} ${f.l.collateral ?? ''} → ${sigGrouped(leftOf(f.l))} ${f.l.collateral ?? ''}`}</span>
             </div>
           ))}
         {perpsUnhedged && (
