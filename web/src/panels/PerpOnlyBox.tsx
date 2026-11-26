@@ -58,6 +58,7 @@ export function ClosePairForm({
   livePositions,
   allowTwap = false,
   borosUnhedged = false,
+  onSent,
 }: {
   base: string;
   /** `partial`: close exactly `qty` rather than the whole venue position —
@@ -67,6 +68,7 @@ export function ClosePairForm({
   livePositions?: Map<string, CrossexPosition>;
   allowTwap?: boolean;
   borosUnhedged?: boolean;
+  onSent?: () => void;
 }) {
   const { t } = useTranslation();
   const flow = useTradeFlowOptional();
@@ -315,6 +317,7 @@ export function ClosePairForm({
           // The panel above already reviews this close; the hover card would
           // repeat it on top of the dialog. Errors still surface.
           hoverCard={false}
+          onSent={onSent}
         />
         <CloseMechanics maker={maker} twapOn={twapOn} />
       </div>

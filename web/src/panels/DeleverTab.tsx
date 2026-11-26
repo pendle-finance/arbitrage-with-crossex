@@ -3,20 +3,20 @@ import { useDeleverPlan, useStartRebalance } from '../api/queries';
 import type { DeleverPlan, DeleverRequest, RealizeExec } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { OrdersGroup, perMode } from '../components/OrdersGroup';
-import { PairPicker, type PairPickerRow } from '../components/PairPicker';
+import { PairPicker } from '../components/PairPicker';
 import { AmountPresets } from '../components/AmountPresets';
 import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
 import { amountError } from '../lib/amount';
-import { fmtDateLocal, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
+import { prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
 import { TwapArea, useTwapInput } from '../trade/TwapArea';
 import { useTwapTakerAfter } from '../trade/useTwapTakerAfter';
-import { daysLeftText, useOpenPairs, type OpenPair } from './assets/pairs';
+import { pairPickerRowOf, useOpenPairs, type OpenPair } from './assets/pairs';
 import { CloseMakerSettings, type MakerOpts, useCloseMaker, withMakerWait } from './closeMaker';
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
@@ -36,18 +36,6 @@ const largestIm = (pairs: OpenPair[]): OpenPair | null =>
 const qtyText = (qty: number): string => sigGrouped(qty);
 
 const pctText = (pct: number): string => sigGrouped(pct >= 0.1 ? Math.round(pct * 10) / 10 : Math.round(pct * 1000) / 1000);
-
-function rowOf(pair: OpenPair, now: number): PairPickerRow {
-  return {
-    key: pair.key,
-    longVenue: pair.longVenue,
-    shortVenue: pair.shortVenue,
-    base: pair.base,
-    maturityText: t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturitySec), left: daysLeftText(pair.maturitySec, now / 1000) }),
-    sizeText: t('accounts.deleverTab.pairSize', { qty: qtyText(pair.size), coin: pair.base }),
-    imText: fmtUsdCompact(pair.imUsd),
-  };
-}
 
 const shareQty = (pair: OpenPair, share: Share): number => (pair.size * Number(share)) / 100;
 const shareText = (pair: OpenPair, share: Share): string => sig(shareQty(pair, share));
@@ -322,7 +310,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     <div className="flex flex-col gap-4">
       <Field label={t('accounts.deleverTab.pair')}>
         <PairPicker
-          rows={pairs.map((p) => rowOf(p, now))}
+          rows={pairs.map((p) => pairPickerRowOf(p, now / 1000))}
           value={pair.key}
           onChange={(key) => {
             const next = pairs.find((p) => p.key === key);
