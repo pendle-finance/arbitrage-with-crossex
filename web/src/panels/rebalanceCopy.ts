@@ -197,7 +197,6 @@ export const modalImpactLabel = () => t('accounts.rebalance.modal.priceImpact');
 export const FEE_PLUS_IMPACT = (fee: string, impact: string) => t('accounts.rebalance.modal.feePlusImpact', { fee, impact });
 export const PER_MONTH = (nowText: string, afterText: string) =>
   t('accounts.rebalance.modal.perMonth', { now: nowText, after: afterText });
-export const modalSteps = () => t('accounts.rebalance.modal.steps');
 /** Replaces the confirm while the quote is stale: the plan moved under the
  * dialog, so the only next step is to price the new one. */
 export const modalRefreshRoute = () => t('accounts.rebalance.modal.refreshRoute');

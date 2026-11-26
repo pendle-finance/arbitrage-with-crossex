@@ -148,7 +148,6 @@
       "interest": "Interest",
       "fee": "Fee",
       "perMonth": "{{now}} → {{after}} a month",
-      "steps": "Show steps",
       "refreshRoute": "Refresh route",
       "resume": "Resume",
       "abandon": "Abandon",
@@ -176,7 +175,10 @@
     "preset": "Preset",
     "typeAmount": "Type an amount to move.",
     "pricing": "Pricing the move.",
-    "hideSteps": "Hide steps",
+    "steps": "Steps",
+    "moreSteps_one": "+{{n}} more step",
+    "moreSteps_other": "+{{n}} more steps",
+    "fewerSteps": "Show fewer",
     "now": "Now",
     "whereCaption": "Where your money is",
     "onTheWay": "On the way",
@@ -213,13 +215,9 @@
     "transfer": "Transfer"
   },
   "rebalanceBits": {
-    "arrives": "{{arrives}} arrives",
-    "arrivesBorrowPaid": "{{arrives}} arrives · borrow paid",
-    "arrivesBorrowLeft": "{{arrives}} arrives · borrow left {{left}}",
     "moveTo": "Move {{move}} USDC to {{wallet}}",
     "buyMoveIt": "Buy {{buy}} USDC, move it to {{wallet}}",
     "buyMove": "Buy {{buy}} USDC, move {{move}} USDC to {{wallet}}",
-    "round": "Round {{n}}",
     "stopped": "Stopped",
     "elapsedOf": "{{elapsed}} of {{expected}}"
   },
