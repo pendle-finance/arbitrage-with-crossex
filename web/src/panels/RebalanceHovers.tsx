@@ -301,17 +301,18 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: strin
 function RowsHover({ factKey, value, rows, warn }: { factKey: string; value: string; rows: FactRow[]; warn?: boolean }) {
   // The trigger's own grey would hide the figure's colour, so the figure keeps it.
   const label = <span className={warn ? 'text-amber-300' : 'text-ink-100'}>{value}</span>;
+  const align = rows.some((row) => row.sub) ? '' : 'text-right';
   return (
-    <HoverCard icon={false} widthPx={320} label={label}>
+    <HoverCard icon={false} label={label}>
       <div data-fact-rows={factKey} className="grid w-fit grid-cols-[auto_auto] gap-x-4 gap-y-1 text-xs">
         {rows.map((row) => (
           <Fragment key={row.name}>
             <span>{row.name}</span>
-            <span className="num whitespace-nowrap text-right">{row.value}</span>
+            <span className={`num whitespace-nowrap ${align}`}>{row.value}</span>
             {row.sub && (
               <>
                 <span />
-                <span className="num -mt-1 whitespace-nowrap text-right text-ink-400">{row.sub}</span>
+                <span className="num -mt-1 whitespace-nowrap text-ink-400">{row.sub}</span>
               </>
             )}
           </Fragment>
