@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { BorosPairBlocker, BorosPairSimulation, BorosSimulatedLeg } from '../api/types';
-import { AvailableMarginLines, BlockerList, blockerButtonReason, LiquidationLines, liqWarnOf, PairCosts, SuggestedTopUpLines } from './BorosPairBits';
+import { AvailableMarginLines, BlockerList, blockerButtonReason, LiquidationLines, liqWarnOf, PairCosts, SuggestedTopUpLines, TotalCostRow } from './BorosPairBits';
 
 const leg = (venue: string, liquidationApr: number | null, resultingSize: number): BorosSimulatedLeg =>
   ({
@@ -59,15 +60,26 @@ describe('PairCosts', () => {
     costToCrossSize: 0.25,
   } as unknown as BorosPairSimulation;
 
-  it('leads with the margin, legs on its hover, then what sits under it, then the fee', () => {
+  it('leads with the margin, legs on its label hover, then what sits under it, then the fee', async () => {
     render(<PairCosts sim={sim} afterMargin={<span>top-up</span>} />);
-    const order = [...document.body.querySelectorAll('span')].map((e) => e.textContent);
-    expect(order.indexOf('Margin usage')).toBeLessThan(order.indexOf('top-up'));
-    expect(order.indexOf('top-up')).toBeLessThan(order.indexOf('Trade fee · 2 markets'));
-    const margin = screen.getByText('Margin usage').closest('[title]')!;
-    expect(margin.textContent).toMatch(/1\.5 ETH/);
-    expect(margin.getAttribute('title')).toMatch(/\nGate 1 ETH\nHyperliquid 0\.5 ETH$/);
-    expect(screen.getByText('Trade fee · 2 markets').closest('[title]')!.textContent).toMatch(/0\.25 ETH/);
+    const text = document.body.textContent ?? '';
+    expect(text.indexOf('Margin usage')).toBeLessThan(text.indexOf('top-up'));
+    expect(text.indexOf('top-up')).toBeLessThan(text.indexOf('Trade fee · 2 markets'));
+    expect(screen.getByText('Margin usage').closest('.justify-between')!.textContent).toMatch(/1\.5 ETH/);
+    expect(screen.getByText('Margin usage').closest('.justify-between')).not.toHaveAttribute('title');
+    await userEvent.hover(screen.getByRole('button', { name: 'Margin usage' }));
+    expect((await screen.findByRole('tooltip')).textContent).toMatch(/\nGate 1 ETH\nHyperliquid 0\.5 ETH$/);
+    expect(screen.getByText('Trade fee · 2 markets').closest('.justify-between')!.textContent).toMatch(/0\.25 ETH/);
+  });
+});
+
+describe('TotalCostRow', () => {
+  it('adds the trade fee and the estimated slippage, and names the max-slippage total on its hover', async () => {
+    const sim = { collateral: 'ETH', collateralPriceUsd: 2000, costToCrossSize: 0.25 } as unknown as BorosPairSimulation;
+    render(<TotalCostRow sim={sim} slippage={{ est: 0.05, max: 0.5 }} />);
+    expect(screen.getByText('Total cost').closest('.justify-between')!.textContent).toMatch(/0\.3 ETH \(\$600(\.00)?\)$/);
+    await userEvent.hover(screen.getByRole('button', { name: 'Total cost' }));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('At max slippage: 0.75 ETH.');
   });
 });
 
@@ -83,13 +95,13 @@ describe('AvailableMarginLines / SuggestedTopUpLines', () => {
         <SuggestedTopUpLines sim={sim} funding={[cross]} nameOf={nameOf} />
       </>,
     );
-    expect(screen.getByText('Available margin').parentElement!.textContent).toMatch(/12\.5→5 ETH/);
+    expect(screen.getByText('Available margin').closest('.justify-between')!.textContent).toMatch(/12\.5→5 ETH/);
     expect(screen.getByText('Suggested top-up amount').parentElement!.textContent).toMatch(/\+3\.25 ETH/);
   });
 
   it('before a quote shows the free margin alone', () => {
     render(<AvailableMarginLines sim={null} funding={undefined} nameOf={nameOf} fallback={7} unit="ETH" />);
-    expect(screen.getByText('Available margin').parentElement!.textContent).toBe('Available margin7 ETH');
+    expect(screen.getByText('Available margin').closest('.justify-between')!.textContent).toMatch(/^Available margin\D*7 ETH$/);
   });
 
   it('shows no top-up when free margin covers it, and names each account when there are two', () => {

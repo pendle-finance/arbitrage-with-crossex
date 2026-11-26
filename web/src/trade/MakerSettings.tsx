@@ -169,16 +169,16 @@ export function MakerSettings({
                 {t('pairTicket.makerSettings.reset')}
               </button>
             )}
+            {saving != null && saving > 0 && (
+              <span className="ml-auto text-[11px] text-ink-400" title={savingHint ?? t('pairTicket.makerSettings.savingHint')}>
+                <Trans
+                  i18nKey="pairTicket.makerSettings.saving"
+                  values={{ amount: sig(saving) }}
+                  components={{ g: <span className="num text-emerald-400" /> }}
+                />
+              </span>
+            )}
           </div>
-          {saving != null && saving > 0 && (
-            <span className="text-[11px] text-ink-400" title={savingHint ?? t('pairTicket.makerSettings.savingHint')}>
-              <Trans
-                i18nKey="pairTicket.makerSettings.saving"
-                values={{ amount: sig(saving) }}
-                components={{ g: <span className="num text-emerald-400" /> }}
-              />
-            </span>
-          )}
           <SegmentedToggle<LegPick | ''>
             ariaLabel={t('pairTicket.makerSettings.makerLeg')}
             fill

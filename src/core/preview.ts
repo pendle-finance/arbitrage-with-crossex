@@ -26,6 +26,9 @@ interface PreviewDeps {
   fetchBook?: typeof fetchVenueBook;
 }
 
+const TOUCH_KEEP_MS = 10_000;
+const lastTouch = new Map<string, { touch: NonNullable<ReturnType<typeof touchOf>>; at: number }>();
+
 export async function previewActions(deps: PreviewDeps, actions: ActionInput[], sliced = false): Promise<PreviewResult[]> {
   const resolved = await resolveActions(deps.clients, actions, { mode: 'preview', sliced });
   return Promise.all(
@@ -64,7 +67,10 @@ export async function previewActions(deps: PreviewDeps, actions: ActionInput[], 
       if (r.type === 'LIMIT' && r.tif === 'POC') {
         const { exchange, base, quote } = parseSymbol(r.symbol);
         const book = await (deps.fetchBook ?? realFetchVenueBook)(exchange, base, quote).catch(() => null);
-        const touch = touchOf(book);
+        const fresh = touchOf(book);
+        if (fresh) lastTouch.set(r.symbol, { touch: fresh, at: Date.now() });
+        const kept = lastTouch.get(r.symbol);
+        const touch = fresh ?? (kept && Date.now() - kept.at <= TOUCH_KEEP_MS ? kept.touch : null);
         if (touch) preview.restEstimate = touch;
         else preview.warnings.push("No order book, so the maker price can't follow the market");
       }
