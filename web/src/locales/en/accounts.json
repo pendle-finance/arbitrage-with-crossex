@@ -494,7 +494,7 @@
     "cashShortLink": "Realize uPnL",
     "deleverLink": "Delever a pair",
     "upTo": "Up to {{amount}} {{coin}}, the cash in {{wallet}}",
-    "max": "Max",
+    "maxAmount": "Max {{amount}} {{coin}}",
     "cost": "Cost",
     "after": "After",
     "clearDebt": "Clear debt",

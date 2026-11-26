@@ -488,7 +488,7 @@
     "cashShortLink": "兑现未实现盈亏",
     "deleverLink": "降低一个组合的规模",
     "upTo": "最多 {{amount}} {{coin}}，即 {{wallet}} 的现金",
-    "max": "最大",
+    "maxAmount": "最大 {{amount}} {{coin}}",
     "cost": "成本",
     "after": "之后",
     "clearDebt": "还清借款",
