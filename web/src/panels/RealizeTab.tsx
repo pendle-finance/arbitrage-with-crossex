@@ -1,11 +1,12 @@
 import { ArrowRight } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
-import type { RealizeExec, RealizePlan, RebalanceView } from '../api/types';
+import type { Pool, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView } from '../api/types';
+import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
 import { ExecModeToggle } from '../components/ExecModeToggle';
-import { SegmentedToggle } from '../components/SegmentedToggle';
+import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { apiErrorText } from '../lib/apiErrorText';
@@ -28,23 +29,69 @@ const TARGET: Record<AmountPick, 'clear-debt' | 'all' | 'custom'> = { clear: 'cl
 
 const EXEC_ORDER: RealizeExec[] = ['maker', 'market'];
 
-export function RealizeTab({
-  view,
-  holdMs,
-  lock,
-  onTab,
-  onStarted,
-}: {
+type TabProps = {
   view: RebalanceView;
   holdMs?: number;
   lock: string | null;
   onTab: (tab: RebalanceTab) => void;
   onStarted: () => void;
-}) {
+};
+
+export function RealizeTab(props: TabProps) {
+  const base = props.view.realize ?? null;
+  const [picked, setPicked] = useState<Pool | null>(null);
+  const pool = base && picked !== null && base.pools.includes(picked) ? picked : (base?.pool ?? null);
+  const other = base !== null && pool !== null && pool !== base.pool;
+  const poolQuery = useRealizeCustom(null, null, other ? pool : null);
+  const loaded = other ? (poolQuery.data?.realize ?? null) : null;
+  const lost = other && loaded !== null && !loaded.pools.includes(pool);
+  useEffect(() => {
+    if (lost) setPicked(null);
+  }, [lost]);
+  const tab = other ? (loaded?.pool === pool ? loaded : null) : base;
+  return (
+    <>
+      {base && pool && <RealizeWallet view={props.view} pools={base.pools} pool={pool} onPick={setPicked} />}
+      {other && !tab ? <Skeleton className="h-40 w-full" /> : <RealizeBody key={pool ?? ''} {...props} tab={tab} />}
+    </>
+  );
+}
+
+function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; pools: Pool[]; pool: Pool; onPick: (pool: Pool) => void }) {
+  const { t } = useTranslation();
+  const walletOf = (p: Pool): string => WALLET_LABEL[poolKey(p)] ?? poolKey(p);
+  const upnlOf = (p: Pool): number => view.buckets.find((b) => keyOf(b) === poolKey(p))?.upnl ?? 0;
+  if (pools.length < 2) {
+    return (
+      <div className="flex items-center gap-3 text-xs">
+        <span className="text-ink-400">{t('accounts.realizeTab.wallet', { wallet: walletOf(pool) })}</span>
+        <span className="num text-ink-100">{t('accounts.realizeTab.walletUpnl', { amount: num(upnlOf(pool), 0), coin: poolCoin(pool) })}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className={microLabelClass}>{t('accounts.realizeTab.walletLabel')}</span>
+      <select
+        aria-label={t('accounts.realizeTab.walletLabel')}
+        className="input num h-8 !py-0 text-xs"
+        value={pool}
+        onChange={(e) => onPick(e.target.value as Pool)}
+      >
+        {pools.map((p) => (
+          <option key={p} value={p}>
+            {t('accounts.realizeTab.walletOption', { wallet: walletOf(p), amount: num(upnlOf(p), 0), coin: poolCoin(p) })}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & { tab: RealizeTabData | null }) {
   const { t } = useTranslation();
   const toast = useToast();
   const start = useStartRebalance();
-  const tab = view.realize ?? null;
   const clearDebt = hasPlan(tab?.clearDebt ?? null) ? (tab?.clearDebt ?? null) : null;
   const all = hasPlan(tab?.all ?? null) ? (tab?.all ?? null) : null;
   const [amount, setAmount] = useState<AmountPick>(() => (clearDebt ? 'clear' : 'all'));
@@ -60,10 +107,11 @@ export function RealizeTab({
   const sliceQueried = sliceUsd > 0 && sliceUsd !== tab?.defaultSliceUsd;
   const debouncedSlice = useDebounced(sliceUsd, CUSTOM_DEBOUNCE_MS);
   const baseAllNet = all ? Math.max(0, netOf(all, costOf(all, exec, sliceOf(presetOptions, sliceUsd, all.legs[0], all === basePriced)))) : 0;
-  const typedUsd = parsedAmount(customText);
+  const typedUsd = parsedAmount(customText.replaceAll(',', ''));
   const customUsd = typedUsd !== null && typedUsd > 0 ? Math.min(typedUsd, baseAllNet) : null;
   const debouncedUsd = useDebounced(customUsd, CUSTOM_DEBOUNCE_MS);
-  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, sliceQueried ? debouncedSlice : null);
+  const queried = (amount === 'custom' && debouncedUsd !== null) || sliceQueried;
+  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, sliceQueried ? debouncedSlice : null, queried && tab ? tab.pool : null);
   const customPlan = customQuery.data?.realize?.custom ?? null;
   const liveTab = sliceQueried ? (customQuery.data?.realize ?? null) : null;
   const shownClear = liveTab ? (hasPlan(liveTab.clearDebt) ? liveTab.clearDebt : null) : clearDebt;
@@ -110,6 +158,8 @@ export function RealizeTab({
   const bucket = view.buckets.find((b) => keyOf(b) === poolKey(tab.pool));
   const cashNow = bucket?.cash ?? 0;
   const clearNet = shownClear ? netOf(shownClear, costFor(shownClear, exec)) : 0;
+  const debtNet = clearDebt ? Math.max(0, clearNet) : 0;
+  const boxText = amount === 'clear' ? num(debtNet, 0) : amount === 'all' ? num(allNet, 0) : customText;
 
   const execLabel = (mode: RealizeExec): string =>
     execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode] / Math.max(1, slice.count)) : '—');
@@ -158,6 +208,7 @@ export function RealizeTab({
         sliceUsd: shownSliceUsd,
         realizeUsd: net,
         realizeTarget: TARGET[amount],
+        realizePool: tab.pool,
         costUsd: cost.totalUsd,
       },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
@@ -175,35 +226,27 @@ export function RealizeTab({
 
   return (
     <>
-      <div className="flex items-center gap-3 text-xs">
-        <span className="text-ink-400">{t('accounts.realizeTab.wallet', { wallet })}</span>
-        <span className="num text-ink-100">{t('accounts.realizeTab.walletUpnl', { amount: num(bucket?.upnl ?? 0, 0), coin: poolCoin(tab.pool) })}</span>
-      </div>
-      <div className="flex flex-col gap-2">
-        <SegmentedToggle<AmountPick>
-          ariaLabel={t('accounts.realizeTab.custom')}
-          fill
-          value={amount}
-          onChange={setAmount}
-          options={[
-            { value: 'clear', label: t('accounts.realizeTab.clearDebtChip', { amount: num(Math.max(0, clearNet), 0) }), disabled: !clearDebt },
-            { value: 'all', label: t('accounts.realizeTab.all'), disabled: !all },
-            { value: 'custom', label: t('accounts.realizeTab.custom'), disabled: !all },
+      <div className="flex flex-col gap-1.5">
+        <span className={microLabelClass}>{t('accounts.realizeTab.amount')}</span>
+        <AmountPresets<Exclude<AmountPick, 'custom'>>
+          value={boxText}
+          onChange={(text) => {
+            setCustomText(text);
+            setAmount('custom');
+          }}
+          inputLabel={t('accounts.realizeTab.amountAria')}
+          suffix={poolCoin(tab.pool)}
+          placeholder={t('accounts.realizeTab.upToShort', { amount: num(allNet, 0) })}
+          bad={customOverAll}
+          boxClassName="w-40"
+          presetsLabel={t('accounts.realizeTab.amountPresets')}
+          preset={amount === 'custom' ? null : amount}
+          onPreset={setAmount}
+          presets={[
+            { value: 'clear', label: t('accounts.realizeTab.debtPreset', { amount: num(debtNet, 0), coin: poolCoin(tab.pool) }), disabled: Math.round(debtNet) === 0 },
+            { value: 'all', label: t('accounts.realizeTab.allPreset', { amount: num(allNet, 0), coin: poolCoin(tab.pool) }), disabled: !all },
           ]}
         />
-        {amount === 'custom' && (
-          <div className="flex items-center gap-3">
-            <input
-              className="input num h-9 w-40"
-              inputMode="decimal"
-              aria-label={t('accounts.realizeTab.custom')}
-              placeholder={num(allNet, 0)}
-              value={customText}
-              onChange={(e) => setCustomText(e.target.value)}
-            />
-            <span className="num text-xs text-ink-400">{t('accounts.realizeTab.upTo', { amount: num(allNet, 0), coin: poolCoin(tab.pool) })}</span>
-          </div>
-        )}
         {sentence && <p className="num text-xs text-ink-300">{sentence}</p>}
       </div>
 

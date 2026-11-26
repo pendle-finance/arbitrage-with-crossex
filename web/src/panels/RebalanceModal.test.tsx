@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAccount, usePositions, useRebalance, useTransfer } from '../api/queries';
 import type { CrossexAccount, PositionsResponse, RebalanceStep, RebalanceView, TransferView } from '../api/types';
-import type { RebalanceJob, RouteName } from '../api/types';
+import type { Pool, RebalanceJob, RouteName } from '../api/types';
 import { plansOf, accountBodies, accountHandler, positionsBodies, REBALANCE_NOW, rebalanceViews, rebased, whaleRebalanceViews } from '../test/fixtures';
 import { extraRebalanceViews, transferHandler, transferViews, twapFixtures } from '../test/fixtures';
 import { env, server } from '../test/server';
@@ -1557,6 +1557,7 @@ function showOn(view: RebalanceView, tab?: RebalanceTab) {
 const tabRadio = (name: string) => within(screen.getByRole('radiogroup', { name: 'Reduce borrow' })).getByRole('radio', { name });
 const boxOf = (label: string) => screen.getByText(label, { selector: 'span' }).parentElement as HTMLElement;
 const owner = rebalanceViews.ownerAccount;
+const amountPresets = () => within(screen.getByRole('radiogroup', { name: 'Amount presets' })).getAllByRole('radio');
 const ownerSlices = owner.realize!.sliceOptions;
 
 function Opener({ tab }: { tab?: RebalanceTab }) {
@@ -1771,7 +1772,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.getByRole('radiogroup', { name: 'Slice size' })).toBeInTheDocument();
   });
 
-  it('realize amount chips', async () => {
+  it('realize amount: the box holds the lit preset, and typing lights none', async () => {
     const asked: string[] = [];
     serve({});
     server.use(http.get('/api/rebalance', ({ request }) => {
@@ -1779,18 +1780,66 @@ describe('RebalanceModal Realize uPnL tab', () => {
       return HttpResponse.json(env(owner));
     }));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    const chips = within(screen.getByRole('radiogroup', { name: 'Custom amount' })).getAllByRole('radio');
-    expect(chips.map((chip) => chip.textContent)).toEqual([expect.stringMatching(/^Clear debt [\d,]+ USDC$/), 'All', 'Custom amount']);
-    await userEvent.click(chips[2]!);
-    await userEvent.type(screen.getByRole('textbox', { name: 'Custom amount' }), '999999999');
+    const chips = amountPresets();
+    expect(chips.map((chip) => chip.textContent)).toEqual([expect.stringMatching(/^Debt \([\d,]+ USDC\)$/), expect.stringMatching(/^All \([\d,]+ USDC\)$/)]);
+    expect(chips[0]).toHaveAttribute('aria-checked', 'true');
+    const box = screen.getByRole('textbox', { name: 'Amount to realize' });
+    expect(box).toHaveValue(chips[0]!.textContent!.match(/[\d,]+/)![0]);
+    await userEvent.click(chips[1]!);
+    const allText = chips[1]!.textContent!.match(/[\d,]+/)![0];
+    expect(box).toHaveValue(allText);
+    expect(allText).toContain(',');
+    await userEvent.type(box, '{backspace}');
+    expect(screen.queryByText('Type an amount to realize.')).toBeNull();
+    await userEvent.clear(box);
+    await userEvent.type(box, '999999999');
+    expect(amountPresets().every((chip) => chip.getAttribute('aria-checked') === 'false')).toBe(true);
     await waitFor(() => expect(asked.some((search) => search.includes('realizeUsd='))).toBe(true));
-    const sent = Number(new URLSearchParams(asked.find((search) => search.includes('realizeUsd='))).get('realizeUsd'));
-    expect(sent).toBeLessThan(999999999);
+    const query = new URLSearchParams(asked.find((search) => search.includes('realizeUsd=')));
+    expect(Number(query.get('realizeUsd'))).toBeLessThan(999999999);
+    expect(query.get('realizePool')).toBe('HYPERLIQUID');
+  });
+
+  it('realize wallet: one wallet in profit reads as a line, with no picker', () => {
+    showOn(owner);
+    expect(screen.getByText('Wallet: USDC · Hyperliquid')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Wallet' })).toBeNull();
+  });
+
+  it('realize wallet: two wallets in profit give a picker, and the pick prices and starts from that wallet', async () => {
+    const twoPools = { ...owner, realize: { ...owner.realize!, pools: ['HYPERLIQUID', 'CROSSEX'] as Pool[] } };
+    const onCrossex = { ...twoPools, realize: { ...twoPools.realize, pool: 'CROSSEX' as Pool, clearDebt: null } };
+    const asked: string[] = [];
+    serve({});
+    const sent = starts();
+    server.use(http.get('/api/rebalance', ({ request }) => {
+      const search = new URL(request.url).search;
+      asked.push(search);
+      return HttpResponse.json(env(search.includes('realizePool=CROSSEX') ? onCrossex : twoPools));
+    }));
+    renderWithClient(<RebalanceModal view={twoPools} onClose={vi.fn()} holdMs={50} />);
+    const picker = screen.getByRole('combobox', { name: 'Wallet' });
+    expect(within(picker).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      expect.stringMatching(/^USDC · Hyperliquid · uPnL [\d,]+ USDC$/),
+      expect.stringMatching(/^USDT · CrossEx · uPnL [\d,]+ USDT$/),
+    ]);
+    await userEvent.selectOptions(picker, 'CROSSEX');
+    await waitFor(() => expect(asked.some((search) => search.includes('realizePool=CROSSEX'))).toBe(true));
+    const chips = await waitFor(() => {
+      const found = amountPresets();
+      expect(found[0]).toBeDisabled();
+      expect(found[0]).toHaveTextContent(/^Debt \(0 USDT\)$/);
+      return found;
+    });
+    expect(chips[1]).toHaveAttribute('aria-checked', 'true');
+    fireEvent.pointerDown(screen.getByRole('button', { name: /^Hold to realize/ }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ kind: 'realize', realizeTarget: 'all', realizePool: 'CROSSEX' });
   });
 
   it('realize All: the After box shows the Convert paying down the borrow in the target wallet', async () => {
     showOn(owner);
-    const chips = within(screen.getByRole('radiogroup', { name: 'Custom amount' })).getAllByRole('radio');
+    const chips = amountPresets();
     await userEvent.click(chips[1]!);
     const legs = owner.realize!.all!.legs;
     const landed = legs.reduce((total, leg) => total + (leg.convert ? leg.convert.amount - leg.convert.feeUsd : 0), 0);
@@ -1812,9 +1861,9 @@ describe('RebalanceModal Realize uPnL tab', () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    const chips = within(screen.getByRole('radiogroup', { name: 'Custom amount' })).getAllByRole('radio');
-    await userEvent.click(chips[2]!);
-    await userEvent.type(screen.getByRole('textbox', { name: 'Custom amount' }), '5000');
+    const box = screen.getByRole('textbox', { name: 'Amount to realize' });
+    await userEvent.clear(box);
+    await userEvent.type(box, '5000');
     expect(screen.queryByRole('button', { name: /^Hold to realize [\d,]+ USDC/ })).toBeNull();
     expect(screen.getAllByText('Pricing the move.').length).toBeGreaterThan(0);
   });
