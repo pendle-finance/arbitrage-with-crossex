@@ -151,11 +151,18 @@ const innerItems = (): HTMLElement[] => {
 };
 
 const stepTexts = () =>
-  innerItems()
-    .map((row) => [...row.querySelectorAll('span')].map((span) => span.textContent).filter(Boolean));
+  innerItems().map((row) =>
+    [...row.children]
+      .flatMap((el) => (el.children.length > 1 ? [...el.children] : [el]))
+      .map((el) => el.textContent)
+      .filter(Boolean),
+  );
+
+const moreSteps = () => screen.queryByRole('button', { name: /^\+\d+ more steps?$/ });
 
 async function openSteps(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement[]> {
-  await user.click(screen.getByRole('button', { name: 'Show steps' }));
+  const more = moreSteps();
+  if (more) await user.click(more);
   return innerItems();
 }
 
@@ -315,15 +322,11 @@ describe('RebalanceModal plan state', () => {
     expect(numbers[2]).toBe('0.00');
   });
 
-  it('folds the step list behind one control, over one hold to confirm button', async () => {
-    const user = userEvent.setup();
+  it('shows up to three steps with no fold, over one hold to confirm button', async () => {
     show(rebalanceViews.twoBorrows);
-    expect(screen.queryByRole('button', { name: 'Hide steps' })).toBeNull();
-    expect(screen.getAllByRole('button', { name: HOLD })).toHaveLength(1);
-    await user.click(screen.getByRole('button', { name: 'Show steps' }));
     expect(innerItems()).toHaveLength(2);
-    await user.click(screen.getByRole('button', { name: 'Hide steps' }));
-    expect(screen.queryByRole('button', { name: 'Hide steps' })).toBeNull();
+    expect(moreSteps()).toBeNull();
+    expect(screen.getAllByRole('button', { name: HOLD })).toHaveLength(1);
   });
 
   it('carries only what the decision needs, never Borrowing or Interest paid', async () => {
@@ -337,7 +340,7 @@ describe('RebalanceModal plan state', () => {
   it('explains a round and why more than one in the step control hover', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.twoBorrows);
-    expect((await hoverCard(user, 'Show steps')).text).toBe(
+    expect((await hoverCard(user, 'Steps')).text).toBe(
       'A round is one trip through Gate spot, capped by your free margin. Gate locks $48.80 of initial margin for your borrow. Each round repays some borrow, so the next round is bigger.',
     );
   });
@@ -961,7 +964,6 @@ describe('RebalanceModal where the money is', () => {
   });
 
   it('a two-half Convert that stopped, then finished, reads as one Convert', async () => {
-    const user = userEvent.setup();
     const done = rebalanceViews.lighterConvertDone;
     const halted: RebalanceView = {
       ...rebalanceViews.lighterAcross,
@@ -978,7 +980,6 @@ describe('RebalanceModal where the money is', () => {
     await next();
     expect(screen.getAllByText('Done')[0]).toBeInTheDocument();
     expect(facts()).toEqual({ Route: 'Convert', Moved: '$498.00', Took: '2s', 'Total cost': '$2.00' });
-    await user.click(screen.getByRole('button', { name: 'Show steps' }));
     const rows = within(dialog()).getAllByRole('listitem');
     expect(rows).toHaveLength(1);
     expect(rows[0].textContent).toContain(
@@ -1054,10 +1055,14 @@ describe('RebalanceModal route and step content', () => {
     expect(within(routeGroup()).getAllByRole('radio')).toHaveLength(2);
   });
 
-  it('five rounds shown', async () => {
+  it('five rounds fold to the first two and a more link that opens all five', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.accountA);
+    expect(innerItems()).toHaveLength(2);
+    expect(moreSteps()?.textContent).toBe('+3 more steps');
     expect(await openSteps(user)).toHaveLength(5);
+    await user.click(screen.getByRole('button', { name: 'Show fewer' }));
+    expect(innerItems()).toHaveLength(2);
   });
 
   it('round 4 text', async () => {
@@ -1067,29 +1072,14 @@ describe('RebalanceModal route and step content', () => {
     expect(within(row).getByText('Buy 23.77 USDC, move 44.71 USDC to the CrossEx Hyperliquid wallet')).toBeInTheDocument();
   });
 
-  it('round 4 sub text', async () => {
+  it('a planned step row carries no arrives or borrow line', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.accountA);
-    const row = (await openSteps(user))[3];
-    expect(within(row).getByText('44.66 arrives · borrow left 11.53')).toBeInTheDocument();
+    await openSteps(user);
+    expect(within(dialog()).queryByText(/arrives|borrow left|borrow paid/)).toBeNull();
   });
 
-  it('last round pays the borrow', async () => {
-    const user = userEvent.setup();
-    show(rebalanceViews.accountA);
-    const row = (await openSteps(user))[4];
-    expect(within(row).getByText('40.10 arrives · borrow paid')).toBeInTheDocument();
-  });
-
-  it('no borrow shows arrives only', async () => {
-    const user = userEvent.setup();
-    show(rebalanceViews.accountB);
-    const [row] = await openSteps(user);
-    expect(within(row).getByText('477.24 arrives')).toBeInTheDocument();
-    expect(within(dialog()).queryByText(/borrow paid/)).toBeNull();
-  });
-
-  it('no borrow job row shows arrives only', async () => {
+  it('a done job row carries no arrives line', async () => {
     const user = userEvent.setup();
     const job = rebalanceViews.balancedDone.job;
     const running: RebalanceView = {
@@ -1107,8 +1097,7 @@ describe('RebalanceModal route and step content', () => {
     await next();
     expect(screen.getAllByText('Done')[0]).toBeInTheDocument();
     const [row] = await openSteps(user);
-    expect(within(row).getByText('477.24 arrives')).toBeInTheDocument();
-    expect(within(dialog()).queryByText(/borrow paid/)).toBeNull();
+    expect(within(row).queryByText(/arrives/)).toBeNull();
   });
 
   it('running mix at the Convert row', async () => {
@@ -1128,7 +1117,6 @@ describe('RebalanceModal route and step content', () => {
     });
     let rows = await openSteps(user);
     expect(rows).toHaveLength(7);
-    expect(within(rows[6]).getByText('Convert')).toBeInTheDocument();
     expect(within(rows[6]).getByText('Instant')).toBeInTheDocument();
     expect(facts().Round).toBe('6 of 6');
     cleanup();
@@ -1146,7 +1134,7 @@ describe('RebalanceModal route and step content', () => {
     show(rebalanceViews.accountARunning);
     const rows = await openSteps(user);
     expect(within(rows[2]).getByText('Gate spot to the CrossEx Hyperliquid wallet')).toBeInTheDocument();
-    expect(within(rows[3]).getByText('44.66 arrives · borrow left 11.53')).toBeInTheDocument();
+    expect(within(rows[3]).queryByText(/arrives/)).toBeNull();
   });
 
   it('each step names the wallet it moves to', async () => {
@@ -1154,13 +1142,13 @@ describe('RebalanceModal route and step content', () => {
     show(rebalanceViews.lighterSplit);
     await openSteps(user);
     expect(stepTexts()).toEqual([
-      ['Round 1', 'Buy 249.83 USDC, move it to the CrossEx Hyperliquid wallet', '249.78 arrives', 'about 2 min'],
-      ['Convert', 'Convert 250.29 USDT to USDC in the CrossEx Lighter wallet', '249.78 arrives', 'Instant'],
+      ['1', 'Buy 249.83 USDC, move it to the CrossEx Hyperliquid wallet', 'about 2 min'],
+      ['2', 'Convert 250.29 USDT to USDC in the CrossEx Lighter wallet', 'Instant'],
     ]);
     await user.click(screen.getByRole('radio', { name: 'Spot loop' }));
     expect(stepTexts()).toEqual([
-      ['Round 1', 'Buy 249.63 USDC, move it to the CrossEx Hyperliquid wallet', '249.58 arrives', 'about 2 min'],
-      ['Round 2', 'Buy 250.61 USDC, move it to the CrossEx Lighter wallet', '249.58 arrives', 'about 4 min'],
+      ['1', 'Buy 249.63 USDC, move it to the CrossEx Hyperliquid wallet', 'about 2 min'],
+      ['2', 'Buy 250.61 USDC, move it to the CrossEx Lighter wallet', 'about 4 min'],
     ]);
   });
 
@@ -1172,7 +1160,6 @@ describe('RebalanceModal route and step content', () => {
     await openSteps(user);
     expect(stepTexts()).toEqual([
       [
-        'Round 1',
         'Move 500.00 USDC from the CrossEx Hyperliquid wallet to the CrossEx Lighter wallet',
         'Gate spot to the CrossEx Lighter wallet',
         '6m 40s of about 10 min',
@@ -1205,7 +1192,7 @@ describe('RebalanceModal hovers and facts', () => {
   it('the step control names the margin the borrow holds', async () => {
     const user = userEvent.setup();
     show(rebalanceViews.exampleD);
-    expect((await hoverCard(user, 'Show steps')).text).toContain('Gate locks $1,922.48 of initial margin for your borrow.');
+    expect((await hoverCard(user, 'Steps')).text).toContain('Gate locks $1,922.48 of initial margin for your borrow.');
   });
 
   it('recommended hover', async () => {

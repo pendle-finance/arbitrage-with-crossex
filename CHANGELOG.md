@@ -58,6 +58,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   Realize uPnL can split the close into slices.
 - **Move cash Custom amount lines up.** The From and To cards each show a label row, the wallet
   select and the amount at one height. "Max X" sits on the From label row.
+- **Move cash steps are one compact row each:** number, coin, the move and the time. Up to three
+  show open; more show the first two and a "+N more steps" link. A running step shows its leg and
+  a thin progress line.
 
 ## 1.7.9 — 2026-11-10
 

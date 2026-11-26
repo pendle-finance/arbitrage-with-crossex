@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronDown, ChevronRight, TriangleAlert } from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import type { EvenPlan, Pool, RebalanceBucket, RoutePlan } from '../api/types';
 import { Chip } from '../components/Chip';
 import { TokenIcon } from '../components/AssetIcon';
 import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { fmtUsd, num } from '../lib/fmt';
-import { StepList, type StepRow } from './RebalanceBits';
-import { HOVER, modalFeeLabel, modalImpactLabel, modalSteps, poolKey, WALLET_LABEL } from './rebalanceCopy';
+import { shownSteps, StepList, type StepRow } from './RebalanceBits';
+import { HOVER, modalFeeLabel, modalImpactLabel, poolKey, WALLET_LABEL } from './rebalanceCopy';
 import { costPartsUsd, daysText, paybackDays, Term, WORTH_IT_DAYS, worthChip } from './RebalanceHovers';
 
 export const realizeText = (key: string, values?: Record<string, string | number>): string =>
@@ -107,18 +107,27 @@ export function stepsHoverOf(rounds: number, held: number | null): string | null
   return [HOVER.round, held === null ? HOVER.whyMoreThanOne : HOVER.whyMoreThanOneBorrow(fmtUsd(held))].join(' ');
 }
 
+const STEPS_OPEN_UP_TO = 3;
+const STEPS_FOLDED = 2;
+
 export function StepsFold({ open, onToggle, hover, rows }: { open: boolean; onToggle: () => void; hover: string | null; rows: StepRow[] }) {
   const { t } = useTranslation();
-  const toggle = (
-    <button type="button" className="btn-link inline-flex items-center gap-1" aria-expanded={open} onClick={onToggle}>
-      {open ? <ChevronDown size={14} aria-hidden /> : <ChevronRight size={14} aria-hidden />}
-      {open ? t('accounts.rebalanceModal.hideSteps') : modalSteps()}
-    </button>
-  );
+  const folds = rows.length > STEPS_OPEN_UP_TO;
+  const limit = folds && !open ? STEPS_FOLDED : null;
+  const hidden = rows.length - shownSteps(rows, limit).length;
+  const label = t('accounts.rebalanceModal.steps');
   return (
-    <div className="flex flex-col gap-3">
-      <span className="self-start">{hover === null ? toggle : <Term wrapsControl label={toggle} text={hover} />}</span>
-      {open && <StepList rows={rows} />}
+    <div className="flex flex-col gap-1.5">
+      <div className={`flex items-center justify-between gap-3 pr-3 ${microLabelClass}`}>
+        {hover === null ? <span>{label}</span> : <Term label={label} text={hover} />}
+        <span>{t('accounts.rebalanceModal.time')}</span>
+      </div>
+      <StepList rows={rows} limit={limit} />
+      {folds && (
+        <button type="button" className="btn-link self-start text-xs" aria-expanded={open} onClick={onToggle}>
+          {open ? t('accounts.rebalanceModal.fewerSteps') : t('accounts.rebalanceModal.moreSteps', { count: hidden, n: num(hidden, 0) })}
+        </button>
+      )}
     </div>
   );
 }
