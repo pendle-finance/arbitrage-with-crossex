@@ -60,6 +60,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Move cash steps are one compact row each:** number, coin, the move and the time. One or two
   steps show open; three or more fold behind "Show all steps". A folded running job still shows
   its running step, with its leg and a thin progress line.
+- **Move cash drops the wallet bar chart** from the running, stopped and finished views, as the
+  plan view already did. The running step names the money on the way, and a stopped move says
+  where its money sits.
 - **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
   the sale adds up to the amount converted.
 - **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,

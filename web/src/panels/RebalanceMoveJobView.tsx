@@ -4,9 +4,7 @@ import type { GoalKind } from '../api/types';
 import { t } from '../i18n';
 import { fmtAbout, fmtAge, fmtUsd, num } from '../lib/fmt';
 import { ProgressBar } from './RebalanceBits';
-import { BalanceBars, scaleOf, type BarRow } from './RebalanceBars';
-import { gateSpot, HOVER } from './rebalanceCopy';
-import { barRowsOf, DUST, Facts, receivingHeld, roundCountOf, roundOf, ROUTE_LABEL, shownKeys, SpotLines, targetsOf, Term } from './RebalanceHovers';
+import { DUST, Facts, receivingHeld, roundCountOf, roundOf, ROUTE_LABEL, SpotLines } from './RebalanceHovers';
 import { abandonNote, Actions, CloseButton, haltLine, StopBox, stopTitle, type JobViewProps } from './RebalanceJobBits';
 import { landedOf } from './rebalanceJobSteps';
 import { StepsFold, stepsHoverOf } from './RebalancePlanBits';
@@ -22,9 +20,6 @@ const GOAL_WORD: Record<GoalKind, 'accounts.moveCash.clearDebt' | 'accounts.move
 export function MoveJobView(props: JobViewProps) {
   const { job, view, now, transfer, onTransfer, onClose } = props;
   const [stepsOpen, setStepsOpen] = useState(false);
-  const plan = view.plans[job.goal] ?? view.plans.even;
-  const keys = shownKeys(view, job.steps, plan);
-  const nowRows = barRowsOf(view.buckets, keys, targetsOf(view, plan));
   const held = receivingHeld(view.buckets, job.steps);
   const rounds = roundCountOf(job);
   const fold = (
@@ -33,9 +28,6 @@ export function MoveJobView(props: JobViewProps) {
   const header = (
     <p className="text-sm font-semibold text-ink-100">{t('accounts.sliceRun.moveHeader', { goal: t(GOAL_WORD[job.goal]) })}</p>
   );
-  const spotRow = (label: string, text: string, qty: number): BarRow => ({
-    key: 'spot', label: <Term label={label} text={text} />, name: label, cash: qty, upnl: 0, target: null, tone: 'spot',
-  });
   if (job.status === 'done') {
     const took = (job.steps.at(-1)?.doneAt ?? job.updatedAt) - job.createdAt;
     const left = transfer?.spot?.find((spot) => spot.coin === 'USDC' && spot.available >= DUST)?.available ?? null;
@@ -52,7 +44,6 @@ export function MoveJobView(props: JobViewProps) {
             ...(job.costUsd === null ? [] : [{ key: 'cost', label: t('accounts.moveCash.totalCost'), value: fmtUsd(job.costUsd) }]),
           ]}
         />
-        <BalanceBars caption={<Term label={t('accounts.rebalanceModal.now')} text={HOVER.now} />} rows={nowRows} scale={scaleOf(nowRows)} />
         {left !== null && (
           <div className="flex flex-wrap items-center gap-3 rounded border border-dashed border-ink-700 px-3 py-2 text-xs text-ink-300">
             <p className="num">{t('accounts.sliceRun.leftover', { amount: num(left) })}</p>
@@ -71,10 +62,6 @@ export function MoveJobView(props: JobViewProps) {
     );
   }
   const running = job.status === 'running';
-  const moving = running || job.inTransit?.at === 'MOVING';
-  const rows = job.inTransit
-    ? [...nowRows, spotRow(moving ? t('accounts.rebalanceModal.onTheWay') : gateSpot(), moving ? HOVER.onTheWay : HOVER.gateSpot, job.inTransit.qty)]
-    : nowRows;
   const round = roundOf(job);
   const total = jobSeconds(job);
   const elapsed = Math.max(0, (running ? now : job.updatedAt) - job.createdAt);
@@ -99,7 +86,6 @@ export function MoveJobView(props: JobViewProps) {
           ]}
         />
         <ProgressBar ratio={total > 0 ? elapsed / 1000 / total : 0} tone="running" />
-        <BalanceBars caption={<Term label={t('accounts.rebalanceModal.now')} text={HOVER.now} />} rows={rows} scale={scaleOf(rows)} />
         <p className="text-xs text-ink-400">{t('accounts.rebalanceModal.waitsLine')}</p>
         {fold}
       </>
@@ -109,7 +95,6 @@ export function MoveJobView(props: JobViewProps) {
     <>
       {header}
       <StopBox title={stopTitle(job)} lines={haltLine(job.haltReason)} />
-      <BalanceBars caption={t('accounts.rebalanceModal.whereCaption')} rows={rows} scale={scaleOf(rows)} />
       {transfer?.spot === null && <NoSpotReadLine />}
       <SpotLines transfer={transfer} job={job} onTransfer={onTransfer} />
       <Actions {...props} note={abandonNote(job, transfer)} />

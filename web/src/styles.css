@@ -272,7 +272,7 @@
 
   /* ---- recipes the mock adds ------------------------------------------- */
 
-  /* UiTooltipContent — shared verbatim by HoverCard and ChartTooltip. */
+  /* UiTooltipContent — used by HoverCard. */
   .pp-tooltip {
     @apply rounded-md border border-ink-600 bg-[#1B202C] px-3 py-1.5 text-[12px] leading-[1.5] text-ink-50;
     box-shadow:
@@ -304,16 +304,6 @@
   /* The round chevron that opens a card (PpCard's disclosure). */
   .pp-chevron {
     @apply inline-flex shrink-0 items-center justify-center rounded-full bg-wash/[0.15] p-2 text-ink-50 transition-colors;
-  }
-
-  .bar-pnl-gain {
-    @apply bg-grass/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.grass') 0 2px, transparent 2px 6px);
-  }
-
-  .bar-pnl-loss {
-    @apply bg-guava/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.guava') 0 2px, transparent 2px 6px);
   }
 
   /* Ring that flashes around the credentials form when a card's Execute lands. */
