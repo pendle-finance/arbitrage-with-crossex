@@ -149,7 +149,7 @@
     "availableMarginOf": "可用保证金 · {{account}}",
     "availableMarginHint": "该 Boros 账户的可用保证金，交易前 → 交易后。",
     "suggestedTopUp": "建议追加金额",
-    "suggestedTopUpHint": "向 Boros 存入该金额，使仓位的清算 APR 不低于建议水平。已计入交易后剩余的可用保证金。",
+    "suggestedTopUpHint": "向 Boros 存入该金额，使仓位的清算 APR 不低于建议水平。已计入交易后剩余的可用保证金，并包含任何缺口。",
     "crossAccount": "全仓",
     "position": "仓位",
     "positionOf": "仓位 · {{venue}}",

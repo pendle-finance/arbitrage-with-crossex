@@ -125,7 +125,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Boros slippage shows its dollar cost;** click it to change the max. Every slippage editor
   says the change is for this trade only.
 - **Close Boros:** the steps sit under Close size, each shows the size it closes and the mark.
-- **A quote that is loading reads "Refreshing…" on the button** instead of a red banner.
+- **A quote that is loading reads "Refreshing…" on the button** instead of a red banner. A
+  quote that failed keeps the action's name on the disabled button. A roll refused for margin
+  lists its open fees, so the figures add up to the shortfall.
 
 ## 1.7.9 — 2026-11-10
 
