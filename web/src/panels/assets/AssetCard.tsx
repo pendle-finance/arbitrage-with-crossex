@@ -1646,7 +1646,7 @@ interface RollLeg {
   size: number;
 }
 
-function RollLegName({ leg }: { leg: RollLeg }) {
+function RollLegName({ leg, coin }: { leg: RollLeg; coin: string }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5 text-ink-200">
       {leg.spreadVenues ? <SpreadIcon venues={leg.spreadVenues} size={14} /> : <VenueIcon venue={leg.venue} size={14} />}
@@ -1654,6 +1654,7 @@ function RollLegName({ leg }: { leg: RollLeg }) {
       <Chip sm tone={leg.side === 'LONG' ? 'green' : 'red'} className="shrink-0 font-semibold">
         {t(leg.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
       </Chip>
+      <span className="num shrink-0 text-ink-50">{exactQty(leg.size, coin)}</span>
     </span>
   );
 }
@@ -1740,7 +1741,7 @@ function RollSteps({ batches, coin, busy }: { batches: RollBatch[]; coin: string
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <span className="font-semibold text-ink-50">{b.title}</span>
             {b.legs.map((leg) => (
-              <RollLegName key={leg.marketId} leg={leg} />
+              <RollLegName key={leg.marketId} leg={leg} coin={coin} />
             ))}
           </span>
         ),
@@ -2235,6 +2236,22 @@ export function RollOverModal({
     sizeLimits.filter((l): l is BatchLimit => l !== null).sort((a, b) => a.maxSize - b.maxSize)[0] ?? null;
   const maxRoll = maxRollSize(sizeLimits);
 
+  const seedKey = `${mode}:${selected}:${simSize}`;
+  const seedPlans = target !== null ? plansFor(target, simSize) : null;
+  const pctOf = (apr: number | undefined) => (apr === undefined ? undefined : +(apr * 100).toFixed(2));
+  const liveExitSeed = pctOf(seedPlans?.exit?.toleranceApr);
+  const liveEntrySeed = pctOf(seedPlans?.entry?.toleranceApr);
+  const [frozenSeeds, setFrozenSeeds] = useState<{ key: string; exit?: number; entry?: number } | null>(null);
+  useEffect(() => {
+    setFrozenSeeds((prev) => {
+      if (prev?.key !== seedKey) return { key: seedKey, exit: liveExitSeed, entry: liveEntrySeed };
+      const exit = prev.exit ?? liveExitSeed;
+      const entry = prev.entry ?? liveEntrySeed;
+      return exit === prev.exit && entry === prev.entry ? prev : { key: seedKey, exit, entry };
+    });
+  }, [seedKey, liveExitSeed, liveEntrySeed]);
+  const seeds = frozenSeeds?.key === seedKey ? frozenSeeds : null;
+
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [stepsSlot, setStepsSlot] = useState<HTMLDivElement | null>(null);
@@ -2242,7 +2259,7 @@ export function RollOverModal({
   return (
     <Modal
       title={
-        picker !== null ? (
+        picker !== null && !sent ? (
           t('assetCard.roll.title')
         ) : (
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -2367,8 +2384,8 @@ export function RollOverModal({
               address={address}
               nowSec={nowSec}
               markets={markets ?? []}
-              entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
-              settling={size !== simSize}
+              entrySeedPct={seeds?.entry}
+              settling={size !== simSize || seeds === null}
               stepsSlot={stepsSlot}
               onBusy={setBusy}
               onResult={setSent}
@@ -2385,9 +2402,9 @@ export function RollOverModal({
               ctx={ctx.data}
               oldMaturity={soonest}
               nowSec={nowSec}
-              exitSeedPct={plans?.exit ? +(plans.exit.toleranceApr * 100).toFixed(2) : undefined}
-              entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
-              settling={size !== simSize}
+              exitSeedPct={seeds?.exit}
+              entrySeedPct={seeds?.entry}
+              settling={size !== simSize || seeds === null}
               stepsSlot={stepsSlot}
               onBusy={setBusy}
               onResult={setSent}
@@ -2645,12 +2662,15 @@ function RollReview({
     );
   const canConfirm = rollReq !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
+  const sentRoll = useRef<BorosRollRequest | null>(null);
   const run = async () => {
-    if (!rollReq) return;
+    const req = sentRoll.current ?? rollReq;
+    if (!req) return;
+    sentRoll.current = req;
     setBusy(true);
     setOut(null);
     try {
-      const payload = await executeRoll.mutateAsync({ ...rollReq, clientOrderIds: rollIds(rollReq) });
+      const payload = await executeRoll.mutateAsync({ ...req, clientOrderIds: rollIds(req) });
       setOut({ payload });
     } catch (e) {
       setOut({ error: e instanceof Error ? e.message : String(e) });
@@ -2989,12 +3009,15 @@ function OpenOnlyReview({
   const ids = useRef<string[]>([]);
   const canConfirm = req !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
+  const sentReq = useRef<typeof req>(null);
   const run = async () => {
-    if (!req) return;
+    const body = sentReq.current ?? req;
+    if (!body) return;
+    sentReq.current = body;
     setBusy(true);
     setOut(null);
     try {
-      const payload = await execute.mutateAsync({ ...req, legs: req.legs.map((l, i) => ({ ...l, clientOrderId: (ids.current[i] ??= `o${i}-${uuid()}`) })) });
+      const payload = await execute.mutateAsync({ ...body, legs: body.legs.map((l, i) => ({ ...l, clientOrderId: (ids.current[i] ??= `o${i}-${uuid()}`) })) });
       setOut({ payload });
     } catch (e) {
       setOut({ error: e instanceof Error ? e.message : String(e) });

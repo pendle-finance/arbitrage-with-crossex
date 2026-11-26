@@ -504,6 +504,13 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     ]);
   });
 
+  it('a full close of two legs shows each leg going to zero, not one shared size', async () => {
+    server.use(...quoted());
+    renderWithClient(<CloseBorosForm legs={pairLegs()} />);
+    await screen.findByRole('button', { name: /Close 2 positions/ });
+    expect(await screen.findAllByText('0.01 ETH → 0 ETH')).toHaveLength(2);
+  });
+
   it('a refused batch closes nothing and gives its one reason once', async () => {
     const sent: unknown[] = [];
     const closed: unknown[] = [];

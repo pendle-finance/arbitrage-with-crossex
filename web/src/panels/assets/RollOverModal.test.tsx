@@ -121,6 +121,7 @@ const venueOf = (marketId: number) => (marketId === GATE_OLD || marketId === GAT
  */
 let fitSize: number | undefined;
 let deepSize = 60;
+let deepApr = 0.013;
 let bandApr: number | undefined;
 const simLeg = (marketId: number, direction: 'long' | 'short', size: number, intent: string) => ({
   marketId,
@@ -135,7 +136,7 @@ const simLeg = (marketId: number, direction: 'long' | 'short', size: number, int
   bookStatus: 'ok',
   marginRequired: 5,
   slippageApr: 0.0025,
-  depth: fitSize === undefined ? undefined : [[0.001, fitSize], [0.013, fitSize + deepSize]],
+  depth: fitSize === undefined ? undefined : [[0.001, fitSize], [deepApr, fitSize + deepSize]],
   maxToleranceApr: bandApr ?? null,
   /**
    * A CLOSE ends flat (the exit); an OPEN adds to what the new markets
@@ -315,6 +316,7 @@ beforeEach(() => {
   localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDRESS }));
   fitSize = undefined;
   deepSize = 60;
+  deepApr = 0.013;
   bandApr = undefined;
   spreadListed = false;
   spreadCloseOnly = false;
@@ -612,6 +614,51 @@ describe('RollOverModal — the atomic roll', () => {
     expect(sent[1].clientOrderIds).toEqual(sent[0].clientOrderIds);
     expect(await within(dialog).findByText(/Rolled 100 ETH/)).toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('a re-quote that widens the bound during a refused send does not reach Retry: it re-sends the first body, and the pick is locked, then hidden', async () => {
+    const user = userEvent.setup();
+    fitSize = 40;
+    const sent: RollBody[] = [];
+    install({
+      onRollExecute: async (body, n) => {
+        sent.push(body);
+        if (n > 1) return okRoll(body);
+        deepApr = 0.016;
+        await new Promise((r) => setTimeout(r, 11_000));
+        return HttpResponse.json(executeBody(body, refusedResult(body, `entry:${GATE_NEW}`, 'insufficient-margin', 'not enough margin')));
+      },
+    });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByLabelText('Size to roll (ETH)')).toHaveValue('95'), { timeout: 4_000 });
+    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    expect(sent[0].exit.legs[0].slippageApr).toBeCloseTo(0.0143, 9);
+    expect(within(dialog).getByLabelText('Size to roll (ETH)')).toBeDisabled();
+    const retry = await within(dialog).findByRole('button', { name: 'Retry' }, { timeout: 15_000 });
+    expect(within(dialog).queryByLabelText('Size to roll (ETH)')).not.toBeInTheDocument();
+    await user.pointer({ keys: '[MouseLeft>]', target: retry });
+    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
+    expect(sent[1]).toEqual(sent[0]);
+  }, 30_000);
+
+  it('the hold waits while a typed size settles, and each step names its legs with their sizes', async () => {
+    const user = userEvent.setup();
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    const steps = within(dialog).getAllByRole('listitem').filter((li) => /^\d(Close|Open) /.test(li.textContent ?? ''));
+    for (const step of steps) expect(step.textContent).toMatch(/LONG100 ETH.*SHORT100 ETH|SHORT100 ETH.*LONG100 ETH/);
+    const box = within(dialog).getByLabelText('Size to roll (ETH)');
+    await user.clear(box);
+    await user.type(box, '50');
+    expect(confirm).toBeDisabled();
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
   });
 
   it('an unconfirmed roll shows a rose warning and offers no retry', async () => {
