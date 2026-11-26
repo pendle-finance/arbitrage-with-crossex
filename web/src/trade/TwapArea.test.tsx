@@ -348,11 +348,12 @@ describe('TwapArea', () => {
 describe('useTwapDefault', () => {
   const ON = { on: true, maker: { durationSec: 3_000, intervalSec: 300 }, market: { durationSec: 600, intervalSec: 60 } };
 
-  function Probe({ value, exec }: { value: typeof ON; exec: 'maker' | 'market' }) {
+  function Probe({ value, exec, landed = false }: { value: typeof ON | null | undefined; exec: 'maker' | 'market'; landed?: boolean }) {
     const twap = useTwapInput();
-    useTwapDefault(twap, value, exec);
+    const waiting = useTwapDefault(twap, value, exec, landed);
     return (
       <div>
+        {waiting && <span>waiting</span>}
         <button type="button" onClick={() => twap.setOn(!twap.on)}>
           {twap.on ? 'on' : 'off'}
         </button>
@@ -397,5 +398,24 @@ describe('useTwapDefault', () => {
     expect(screen.getByRole('button', { name: 'on' })).toBeInTheDocument();
     rerender(<Probe value={null as unknown as typeof ON} exec="maker" />);
     expect(screen.getByRole('button', { name: 'off' })).toBeInTheDocument();
+  });
+
+  it('a landed preview with no suggestion waits while the old suggestion still drives the switch', async () => {
+    const { rerender } = render(<Probe value={ON} exec="maker" landed />);
+    expect(screen.queryByText('waiting')).toBeNull();
+    rerender(<Probe value={undefined} exec="maker" landed={false} />);
+    expect(screen.queryByText('waiting')).toBeNull();
+    rerender(<Probe value={undefined} exec="maker" landed />);
+    expect(screen.getByText('waiting')).toBeInTheDocument();
+    rerender(<Probe value={ON} exec="maker" landed />);
+    expect(screen.queryByText('waiting')).toBeNull();
+    rerender(<Probe value={undefined} exec="maker" landed />);
+    await userEvent.click(screen.getByRole('button', { name: 'on' }));
+    expect(screen.queryByText('waiting')).toBeNull();
+  });
+
+  it('a landed preview with no suggestion does not wait when nothing was suggested', () => {
+    render(<Probe value={undefined} exec="maker" landed />);
+    expect(screen.queryByText('waiting')).toBeNull();
   });
 });

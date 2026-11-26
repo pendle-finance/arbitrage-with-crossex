@@ -126,7 +126,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const twapSent = twap.on && !twap.startBlocked ? { ...twap.input, ...(exec === 'maker' ? makerOpts : {}) } : undefined;
   const request = pair !== null && close !== null ? requestOf(pair, close, exec, twapSent) : null;
   const query = useDeleverPlan(request);
-  useTwapDefault(twap, query.data && query.data.twapDefault, exec);
+  const twapWait = useTwapDefault(twap, query.data && query.data.twapDefault, exec, query.data !== undefined && !query.isPlaceholderData);
   const takerOff = useTwapTakerAfter(maker.taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
   const takerBad = exec === 'maker' && takerOff;
 
@@ -177,6 +177,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     plan.refused === null &&
     !slicePastBook &&
     !twapBlocked &&
+    !twapWait &&
     !takerBad &&
     lock === null &&
     !start.isPending &&
@@ -272,6 +273,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
               onInput={twap.setInput}
               preview={plan.twap ?? null}
               impact={twapBlocked ? null : (plan.priceImpact ?? null)}
+              waiting={twapWait}
               coin={pair.base}
             />
         </OrdersGroup>

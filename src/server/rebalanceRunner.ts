@@ -68,6 +68,7 @@ import {
   convertSteps,
   HALT_TEXT,
   haltReasonFor,
+  isChildOf,
   pendingStep,
   REOPEN_HALT,
   roundStepNames,
@@ -487,6 +488,16 @@ async function addBackLeg(
   row.order = null;
   deps.jobs.write(job);
   if (filledOf(engineOf(deps).store, ended).a === 0) throw new Error(`Gate filled none of the ${perp.base} order. Try again.`);
+}
+
+export async function endHaltedChildren(deps: RunnerDeps, job: Job): Promise<void> {
+  if (!deps.twap) return;
+  const { store } = deps.twap;
+  const halted = store.listPairs({ activeOnly: true }).filter((pair) => pair.mode === 'HALTED' && isChildOf(job.id, pair.id));
+  for (const pair of halted) {
+    await heldSettled(deps, pair);
+    store.updatePair(pair.id, { mode: 'DONE' });
+  }
 }
 
 export async function settleAddBack(deps: RunnerDeps, job: Job): Promise<string[]> {

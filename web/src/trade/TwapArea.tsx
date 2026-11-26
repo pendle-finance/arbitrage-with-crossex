@@ -106,6 +106,7 @@ export interface TwapInputState {
   startBlocked: boolean;
   blockedBy: (preview: TwapPlanPreview | null | undefined) => boolean;
   suggest: (suggested: Suggested | null) => void;
+  followsSuggestion: boolean;
 }
 
 export function useTwapInput(): TwapInputState {
@@ -121,10 +122,11 @@ export function useTwapInput(): TwapInputState {
   const startBlocked = on && !isComplete(input);
   const blockedBy = (preview: TwapPlanPreview | null | undefined): boolean =>
     on && (startBlocked || !preview?.plan || preview.refusal !== null);
-  return { on, setOn, input, setInput, startBlocked, blockedBy, suggest };
+  const followsSuggestion = suggested !== null && (picked === null || (on && typed === null));
+  return { on, setOn, input, setInput, startBlocked, blockedBy, suggest, followsSuggestion };
 }
 
-export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null | undefined, exec: ExecMode): void {
+export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null | undefined, exec: ExecMode, landed = false): boolean {
   const none = value === null;
   const on = value?.on;
   const span = value?.[exec];
@@ -135,6 +137,7 @@ export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null |
     if (none) suggest(null);
     else if (on !== undefined && durationSec !== undefined && intervalSec !== undefined) suggest({ on, input: { durationSec, intervalSec } });
   }, [suggest, none, on, durationSec, intervalSec]);
+  return landed && value === undefined && twap.followsSuggestion;
 }
 
 export function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {
@@ -187,6 +190,7 @@ export function TwapArea({
   impact,
   coin,
   lot,
+  waiting = false,
 }: {
   on: boolean;
   onToggle: (on: boolean) => void;
@@ -196,6 +200,7 @@ export function TwapArea({
   impact: PriceImpactPreview | null;
   coin: string;
   lot?: string;
+  waiting?: boolean;
 }) {
   const { t } = useTranslation();
   const [drafts, setDrafts] = useState<Partial<Record<Box, string>>>({});
@@ -275,7 +280,11 @@ export function TwapArea({
         <HoverCard underline={false} wrapsControl widthPx={260} label={<Switch on={on} onChange={onToggle} label={t('trade.twap.area.title')} heading />}>
           {t('trade.twap.area.hover')}
         </HoverCard>
-        {impact && <ImpactPair impact={impact} on={on} />}
+        {waiting ? (
+          <span className="ml-auto text-[11px] text-ink-400">{t('trade.twap.area.readingBook')}</span>
+        ) : (
+          impact && <ImpactPair impact={impact} on={on} />
+        )}
       </div>
       {on && (
         <div className="flex flex-col gap-2.5 border-t border-ink-700 px-3 py-2.5">

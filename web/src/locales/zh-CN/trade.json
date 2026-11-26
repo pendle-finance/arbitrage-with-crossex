@@ -242,6 +242,7 @@
       "priceImpact": "价格冲击",
       "priceImpactTitle": "整笔一次成交的冲击，与所有分片的冲击之和",
       "tooThin": "盘口太薄，无法估价",
+      "readingBook": "正在读取订单簿…",
       "wholeRun": "整个执行",
       "duration": "时长",
       "interval": "间隔",
