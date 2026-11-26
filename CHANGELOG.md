@@ -54,7 +54,7 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Delever picks its size in the same amount box,** with 10%, 20% and 30% presets and the percent
   inside the box. A preset value has its own fill, so it reads apart from a typed one. With TWAP
   off, Delever sends one order in the mode you pick and splits only at a venue's order cap.
-  Realize uPnL can split the close into slices.
+  Realize uPnL runs its slices with TWAP.
 - **Move cash Custom amount lines up.** The From and To cards each show a label row, the wallet
   select and the amount at one height. "Max X" sits on the From label row.
 - **Move cash steps are one compact row each:** number, coin, the move and the time. One or two
@@ -176,6 +176,18 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **TWAP: a pause in the last slice stays a pause.** It no longer shows a red "rest not
   opened" alert. Resume sends the rest as one more slice. The strip says "rest not opened" for
   an open and "rest not closed" for a close.
+- **Realize uPnL TWAP**: a refused reopen no longer stays stuck. The deal screen after a Limit +
+  hedge fill shows the same coloured result box, with no Close button.
+- **A two-perp Realize TWAP** is held to the 5 min minimum as a whole, not per perp.
+- **With TWAP on, the Realize tab shows the TWAP plan's size and cash.** Two perps are priced at
+  the one slice size the job sends.
+- **Realize uPnL runs with TWAP only; Split is gone.** TWAP turns on by default from the book
+  when one order costs more than 5 bp of price impact or runs past the book, on Realize, Delever,
+  and the open and close tickets.
+- **Realize and Delever keep each perp's venue order cap** (Hyperliquid by leverage). The
+  past-book check judges the TWAP slice that is sent.
+- **The TWAP suggestion stays on when a TWAP plan is refused or a book read fails.** It turns on
+  only when slices save at least 1 bp, and slices are sized to the book.
 
 ## 1.7.9 — 2026-11-10
 
