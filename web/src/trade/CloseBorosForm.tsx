@@ -25,6 +25,7 @@ import type { BorosLegFill, BorosPairRequest, BorosSimulatedLeg, StrategyLeg } f
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
+import { ResultBox } from '../components/ResultBox';
 import { daysToMaturity, knownRate } from '../lib/boros';
 import { spreadName } from '../lib/spread';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
@@ -84,7 +85,6 @@ export function CloseBorosForm({
   perpsUnhedged = false,
   underPicker = false,
   onClosed,
-  onDone,
   onSent,
 }: {
   legs: CloseLeg[];
@@ -458,35 +458,17 @@ export function CloseBorosForm({
     return <p className="text-[12px] text-ink-400">{t('pairTicket.closeBoros.noLegs')}</p>;
   }
 
-  // A close that landed says so, and stays said until dismissed — the dialog
-  // closing on its own gave no confirmation that anything had happened.
   if (allDone) {
     const unit = closable[0]?.collateral ?? '';
     return (
-      <div className="flex flex-col gap-3">
-        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2.5 text-[12px] leading-relaxed text-emerald-300">
-          {t('pairTicket.closeBoros.closedDone', { count: closable.length })}
-        </p>
-        {/* The venue leg outliving the close is normal. Said plainly and NOT
-            as an amber warning: nothing went wrong. But the two halves are
-            not interchangeable — one is the user's to close whenever they
-            like, the other is not theirs at all. */}
-        {residualYours.map((r) => (
-          <p key={`yours-${r.key}`} className="text-[11px] leading-relaxed text-ink-400">
-            {r.prefix}
-            {t('pairTicket.closeBoros.residualYours', { amount: `${sigGrouped(r.amount)} ${unit}` })}
-          </p>
-        ))}
-        {residualOthers.map((r) => (
-          <p key={`others-${r.key}`} className="text-[11px] leading-relaxed text-ink-400">
-            {r.prefix}
-            {t('pairTicket.closeBoros.residualOthers', { amount: `${sigGrouped(r.amount)} ${unit}` })}
-          </p>
-        ))}
-        <button type="button" className="btn-primary w-full" onClick={onDone}>
-          {t('common.done')}
-        </button>
-      </div>
+      <ResultBox
+        tone="done"
+        title={t('pairTicket.closeBoros.closedDoneTitle', { count: closable.length })}
+        lines={[
+          ...residualYours.map((r) => `${r.prefix}${t('pairTicket.closeBoros.residualYours', { amount: `${sigGrouped(r.amount)} ${unit}` })}`),
+          ...residualOthers.map((r) => `${r.prefix}${t('pairTicket.closeBoros.residualOthers', { amount: `${sigGrouped(r.amount)} ${unit}` })}`),
+        ]}
+      />
     );
   }
 

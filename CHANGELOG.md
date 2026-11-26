@@ -167,6 +167,12 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Delever not hedged**: the red alert holds the title and the reason. Perp and Boros sizes
   sit in rows under it.
 - **Wallet hovers** fit their content. Hourly and daily interest start at one edge.
+- **Done, stopped and part results show in one coloured box**: green with a check, red for a
+  stop, amber for a part result. Move cash, Realize uPnL, Delever, TWAP, Limit order placed,
+  Close Boros, Roll over and Open only all use it.
+- **The Close button is gone from result screens.** Resume and Hold to abandon (and Back and
+  Retry) split the panel width.
+- **Roll over steps**: the Close and Open date titles line up with their values.
 
 ## 1.7.9 — 2026-11-10
 

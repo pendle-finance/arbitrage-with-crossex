@@ -613,7 +613,9 @@ describe('RollOverModal — the atomic roll', () => {
     expect(new Set(Object.values(body.clientOrderIds)).size).toBe(4);
     expect(Object.values(body.clientOrderIds).every(Boolean)).toBe(true);
 
-    expect(await within(dialog).findByText(/Rolled 100 ETH/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Rolled 100 ETH to/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('status')).toHaveTextContent(/Exit · .*2 of 2 legs/);
     // No second send, and no alert on a clean roll.
     await new Promise((r) => setTimeout(r, 250));
     expect(sent).toHaveLength(1);
@@ -637,10 +639,11 @@ describe('RollOverModal — the atomic roll', () => {
     const alert = await within(dialog).findByRole('alert');
     expect(alert).toHaveTextContent(/Nothing was traded/);
     expect(alert).toHaveTextContent(/Gate ETH 30 Oct 2026: not enough margin/);
-    // Both sides are reported, grouped Exit / Re-entry.
+    expect(within(dialog).queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Back' })).toHaveClass('flex-1');
+    await user.click(within(dialog).getByRole('button', { name: 'Legs' }));
     expect(within(dialog).getByText('Exit')).toBeInTheDocument();
     expect(within(dialog).getByText('Re-entry')).toBeInTheDocument();
-    expect(within(dialog).getByText('Exit').closest('[role="status"]')).toBe(within(dialog).getByText('Re-entry').closest('[role="status"]'));
 
     const retry = within(dialog).getByRole('button', { name: 'Retry' });
     await user.pointer({ keys: '[MouseLeft>]', target: retry });
@@ -729,6 +732,12 @@ describe('RollOverModal — the atomic roll', () => {
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     const steps = within(dialog).getAllByRole('listitem').filter((li) => /^\d(Close|Open) /.test(li.textContent ?? ''));
     for (const step of steps) expect(step.textContent).toMatch(/LONG100 ETH.*SHORT100 ETH|SHORT100 ETH.*LONG100 ETH/);
+    expect(steps).toHaveLength(2);
+    for (const step of steps) {
+      const title = within(step).getByText(/^(Close|Open) /);
+      expect(title).toHaveClass('min-w-[8.5rem]');
+      expect(title.parentElement).toHaveClass('items-center');
+    }
     const box = within(dialog).getByLabelText('Size to roll (ETH)');
     await user.clear(box);
     await user.type(box, '50');
@@ -745,7 +754,7 @@ describe('RollOverModal — the atomic roll', () => {
 
     expect(await within(dialog).findByRole('alert')).toHaveTextContent(/did not confirm this roll/);
     expect(within(dialog).queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
     // No straggling resend from the unknown verdict.
     await new Promise((r) => setTimeout(r, 250));
     expect(sent).toHaveLength(1);

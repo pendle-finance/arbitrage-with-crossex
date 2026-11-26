@@ -442,6 +442,7 @@ describe('RunView, TWAP paused and ended', () => {
     const legs = [leg('Gate', 'LONG', '289.02', '1729.96'), leg('Hyperliquid', 'SHORT', '289.02', '1730.3')];
     renderRun(job({ status: 'abandoned', child: null, legs }, { slice: 5, nextAt: null }));
     expect(screen.getByText('Stopped at slice 5 of 12')).toBeTruthy();
+    expect(screen.getByRole('alert')).toBeTruthy();
     expect(within(rowOf('Opened · each leg')).getByText('289.02 / 693.64 ETH')).toBeTruthy();
     expect(within(rowOf('Not opened · each leg')).getByText('404.62 ETH')).toBeTruthy();
     expect(screen.queryByText('Hold to stop')).toBeNull();
@@ -455,7 +456,11 @@ describe('RunView, TWAP paused and ended', () => {
         { slice: 12, nextAt: null, startedAt: NOW - 3_720_000 },
       ),
     );
-    expect(within(rowOf('Opened · each leg')).getByText('693.64 ETH ($1,200,011)')).toBeTruthy();
+    expect(screen.getByText('Opened 693.64 ETH each ($1,200,011)')).toBeTruthy();
+    expect(screen.queryByText('Opened · each leg')).toBeNull();
+    expect(screen.queryByText('Done')).toBeNull();
+    expect(screen.queryByRole('progressbar')).toBeNull();
+    expect(screen.queryByText('Close')).toBeNull();
     expect(screen.getByText('Avg price · Gate')).toBeTruthy();
     expect(screen.getByText('Slippage')).toBeTruthy();
     expect(within(rowOf('Fees')).getByText('$861')).toBeTruthy();

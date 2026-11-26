@@ -187,11 +187,11 @@ describe('RebalanceJobView, sliced runs', () => {
 
   it('delever done receipt', () => {
     const { job } = show(rebalanceViews.deleverDone);
-    expect(screen.getByText(/^Hyperliquid Long · Gate Short 900(\.0+)? → 720(\.0+)? BTC each$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Boros 900(\.0+)? → 720(\.0+)? YU$/)).toBeInTheDocument();
+    expect(screen.getByText(/^900(\.0+)? → 720(\.0+)? BTC each$/)).toBeInTheDocument();
+    expect(screen.getByText(/^900(\.0+)? → 720(\.0+)? YU$/)).toBeInTheDocument();
     expect(screen.getByText('IM used · CrossEx')).toBeInTheDocument();
     expect(screen.getByText('91.2% → 74.2%')).toBeInTheDocument();
-    expect(screen.getByText('Delever 20.0%')).toBeInTheDocument();
+    expect(screen.getByText('Delevered 20.0%')).toBeInTheDocument();
     expect(screen.getByText('Total cost')).toBeInTheDocument();
     expect(screen.getByText(`${fmtUsd(job.totalCostUsd!)} (est. ${fmtUsd(job.estimate!.totalUsd)})`)).toBeInTheDocument();
   });
@@ -203,7 +203,7 @@ describe('RebalanceJobView, sliced runs', () => {
     cleanup();
     show({ ...rebalanceViews.deleverDone, buckets: rebalanceViews.deleverDone.buckets.map((b) => ({ ...b, borrow: 0 })) });
     expect(screen.queryByRole('button', { name: 'Next: Move cash' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
   });
 
   it('abandoned delever keeps the boros gap and the close hold', async () => {
@@ -238,7 +238,7 @@ describe('RebalanceJobView, sliced runs', () => {
     expect(screen.queryByRole('button', { name: /at market$/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to reopen at limit|^Hold to close at limit/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Hold to abandon' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
   });
 
   it('a part add-back shows the add-back hold and Hold to abandon, and no Boros retry', async () => {
