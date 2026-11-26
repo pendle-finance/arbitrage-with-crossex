@@ -2,6 +2,7 @@ import { Check, ChevronDown } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { t } from '../i18n';
+import { TokenIcon } from './AssetIcon';
 import { prettyVenue } from '../lib/fmt';
 import { PairTitle } from './PairTitle';
 import { usePopoverPlacement } from './usePopoverPlacement';
@@ -28,6 +29,7 @@ function PairCell({ row }: { row: PairPickerRow }) {
   return (
     <span className="flex min-w-0 flex-1 flex-col items-start gap-1">
       <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5 text-pp-base font-semibold text-ink-50">
+        <TokenIcon symbol={row.base} size={16} />
         <span>{row.base}</span>
         <span className="text-ink-500">·</span>
         <PairTitle longVenue={row.longVenue} shortVenue={row.shortVenue} />
