@@ -148,7 +148,7 @@ export function SingleTicket() {
   const ref = p?.refPrice?.value ?? book.data?.mid;
   const twapPreview = twapOn ? (preview.data?.twap ?? null) : null;
   const impact = preview.data?.priceImpact ?? null;
-  useTwapDefault(twap, type !== 'LIMIT' ? undefined : preview.data && preview.data.twapDefault, 'maker');
+  const twapWait = useTwapDefault(twap, type !== 'LIMIT' ? undefined : preview.data && preview.data.twapDefault, 'maker', type === 'LIMIT' && preview.data !== undefined && !preview.isPlaceholderData);
   const twapBlocked = twapOn && twap.blockedBy(twapPreview);
   const plan = twapPreview?.plan ?? null;
 
@@ -316,6 +316,7 @@ export function SingleTicket() {
           onInput={twap.setInput}
           preview={twapPreview}
           impact={impact}
+          waiting={twapWait}
           coin={base ?? ''}
           lot={detail.data?.lotSize}
         />
@@ -412,7 +413,7 @@ export function SingleTicket() {
             </>
           }
           buttonClassName="w-full"
-          extraDisabled={(Boolean(symbol) && levMax === 0) || twapBlocked || takerBlocked}
+          extraDisabled={(Boolean(symbol) && levMax === 0) || twapBlocked || takerBlocked || twapWait}
           decorate={decorate}
           dealOpts={
             twapOn ? { makerLeg: 'auto', repegBehindBp: repeg, timeoutSec: taker.sec } : undefined

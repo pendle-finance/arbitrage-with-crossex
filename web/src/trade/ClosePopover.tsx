@@ -233,7 +233,7 @@ export function ClosePopover({
   const p = preview.previews?.[0];
   const estimating = preview.estimating;
   const twapPreview = preview.data?.twap ?? null;
-  useTwapDefault(twapState, preview.data && preview.data.twapDefault, 'maker');
+  const twapWait = useTwapDefault(twapState, preview.data && preview.data.twapDefault, 'maker', preview.data !== undefined && !preview.isPlaceholderData);
   const twapPlan = twapOn ? (twapPreview?.plan ?? null) : null;
 
   const takerAfterBad = useTwapTakerAfter(taker, twapOn, twapPlan?.takerAfterSec ?? null);
@@ -437,6 +437,7 @@ export function ClosePopover({
           onInput={twapState.setInput}
           preview={twapOn && action ? twapPreview : null}
           impact={preview.data?.priceImpact ?? null}
+          waiting={twapWait}
           coin={base}
           lot={detail.data?.lotSize}
         />
@@ -555,6 +556,7 @@ export function ClosePopover({
             decorate={twapOn ? decorate : undefined}
             dealOpts={dealOpts}
             twap={twapStart}
+            extraDisabled={twapWait}
             intentKey={twapOn ? JSON.stringify([action, twapState.input, taker.takerAfter, repegBehindBp]) : undefined}
             label={
             <>
