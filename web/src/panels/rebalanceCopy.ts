@@ -208,6 +208,7 @@ export const transferCta = () => t('accounts.rebalance.transferCta');
 
 export const rateUnknown = () => t('accounts.rebalance.rateUnknown');
 export const INTEREST_PER_HOUR = (usdText: string) => t('accounts.rebalance.interestPerHour', { usd: usdText });
+export const INTEREST_PER_DAY = (usdText: string) => t('accounts.rebalance.interestPerDay', { usd: usdText });
 export const RATE_PER_YEAR = (pctText: string) => t('accounts.rebalance.ratePerYear', { pct: pctText });
 
 export const PLATFORM = 'Gate CrossEx';

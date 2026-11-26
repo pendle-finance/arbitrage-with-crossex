@@ -134,7 +134,6 @@ import { DUST_USD, sameSize } from './grouping';
 import { daysLeftText, openPairKey, pairKey } from './pairs';
 import { sigFigsDirectional } from '../../lib/ticks';
 import { useRebalanceOpener } from '../rebalanceOpener';
-import { sliceStateLabel } from '../RebalanceSliceJobView';
 import { PairTitle } from '../../components/PairTitle';
 import { DropdownMenu } from '../../components/DropdownMenu';
 import { exclusionAfter, legVenueName } from './excludeLeg';
@@ -726,12 +725,6 @@ function deleverJobOf(job: RebalanceJob | null, pair: PairEstimate): RebalanceJo
   return sameSet(perps, job.delever.legs.map((l) => l.symbol)) && sameSet(markets, job.delever.boros.map((b) => b.marketId)) ? job : null;
 }
 
-function deleverPillLabel(job: RebalanceJob | null): string {
-  if (!job) return t('assetCard.actions.delever');
-  if (job.status === 'halted') return job.paused && job.slice ? sliceStateLabel(job) : t('common.stopped');
-  return job.slice ? sliceStateLabel(job) : t('common.running');
-}
-
 function PairCard({
   pair,
   base,
@@ -1193,7 +1186,7 @@ function PairCard({
                 }
                 onClick={onDelever}
               >
-                {deleverPillLabel(deleverJob)}
+                {t('assetCard.actions.delever')}
               </button>
               <button
                 type="button"
@@ -2354,18 +2347,7 @@ export function RollOverModal({
 
   return (
     <Modal
-      title={
-        picker !== null && !sent ? (
-          t('assetCard.roll.title')
-        ) : (
-          <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-            {t('assetCard.roll.title')}
-            <span className="text-[14px] font-medium text-ink-200">
-              <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} sides={false} />
-            </span>
-          </span>
-        )
-      }
+      title={t('assetCard.roll.title')}
       onClose={onClose}
       locked={busy}
       widthClass="w-[640px] max-w-[calc(100vw-32px)]"
@@ -2383,7 +2365,21 @@ export function RollOverModal({
                 onChange={setMode}
                 options={[
                   { value: 'reopen', label: t('assetCard.roll.modeReopen') },
-                  { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
+                  {
+                    value: 'openOnly',
+                    label: (
+                      <HoverCard
+                        wrapsControl
+                        widthPx={320}
+                        label={<span className="underline decoration-dotted underline-offset-4">{t('assetCard.roll.modeOpenOnly')}</span>}
+                      >
+                        <span className="flex flex-col gap-1 text-xs leading-snug">
+                          <span>{t('assetCard.roll.modeOpenOnlyHedge')}</span>
+                          <span>{t('assetCard.roll.modeOpenOnlyOld', { date: fmtDateLocal(soonest) })}</span>
+                        </span>
+                      </HoverCard>
+                    ),
+                  },
                 ]}
               />
               <div
