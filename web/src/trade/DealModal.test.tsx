@@ -81,7 +81,7 @@ describe('DealModal', () => {
     cumQty: '0',
     closeReason: 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR',
   };
-  const refusedLine = 'Re-peg refused by Gate · no order resting · retry in 1 min';
+  const refusedLine = 'Re-peg refused by Gate · no order resting · price moves again in 1 min';
 
   it('a refused re-peg says no order rests', async () => {
     renderModal({ ...makeDealView({ pair: { mode: 'OPENING', deadlineAt: null }, orders: [dealOrder('A', 'maker'), refusedMaker] }), repegRefused: 'GATE' });

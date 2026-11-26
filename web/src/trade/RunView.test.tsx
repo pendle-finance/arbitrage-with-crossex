@@ -322,7 +322,7 @@ describe('RunView, TWAP running', () => {
     const legs = [leg('Gate', 'LONG', '672.24', '1729.9'), leg('Hyperliquid', 'SHORT', '672.24', '1730.2')];
     const child = restingChild({ slice: 12, repegRefused: { kind: 'order-allowance', at: NOW - 5_000 } });
     renderRun(job({ legs, child }, { slice: 12, nextAt: null, takerAfterSec: null }));
-    expect(screen.getByText('Re-peg refused by Gate · no order resting · retry in 1 min')).toBeTruthy();
+    expect(screen.getByText('Re-peg refused by Gate · no order resting · price moves again in 1 min')).toBeTruthy();
     expect(within(rowOf('Slice 12 of 12')).getByText('No market order')).toBeTruthy();
     expect(within(rowOf('Rest')).getByText('21.40 ETH')).toBeTruthy();
     expect(screen.queryByText(/Limit resting|resting until filled/)).toBeNull();
@@ -337,7 +337,7 @@ describe('RunView, TWAP running', () => {
   it('refused re-peg line', () => {
     const child = restingChild({ makerLeg: 'b', side: 'SELL', repegRefused: { kind: 'order-allowance', at: NOW - 5_000 } });
     renderRun(job({ child }, { makerLeg: 'b', takerAfterSec: null }));
-    expect(screen.getByText('Re-peg refused by Hyperliquid · no order resting · retry in 1 min')).toBeTruthy();
+    expect(screen.getByText('Re-peg refused by Hyperliquid · no order resting · price moves again in 1 min')).toBeTruthy();
   });
 
   it('delever twap shows graph and price box', async () => {

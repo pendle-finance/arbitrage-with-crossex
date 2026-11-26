@@ -382,7 +382,7 @@
       "resume": "恢复",
       "restarted": "应用在 {{time}} 重启。第 {{i}} 片已停止：未成交部分已取消，已成交部分已对冲。",
       "slept": "这台 Mac 在 {{from}} 到 {{to}} 休眠。第 {{i}} 片已停止：未成交部分已取消，已成交部分已对冲。",
-      "repegRefused": "{{venue}} 拒绝改价 · 当前无挂单 · 1 分钟后重试",
+      "repegRefused": "{{venue}} 拒绝改价 · 当前无挂单 · 1 分钟后再次改价",
       "holdOpenHedge": "长按以市价开 {{venue}} {{side}} {{qty}} {{coin}}",
       "holdCloseFilled": "长按以市价平 {{venue}} {{side}} {{qty}} {{coin}}",
       "titlePairOpen": "TWAP · {{coin}} 组合开仓",

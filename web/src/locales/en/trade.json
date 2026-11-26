@@ -383,7 +383,7 @@
       "resume": "Resume",
       "restarted": "The app restarted at {{time}}. Slice {{i}} stopped: its rest is cancelled and what filled is hedged.",
       "slept": "This Mac slept from {{from}} to {{to}}. Slice {{i}} stopped: its rest is cancelled and what filled is hedged.",
-      "repegRefused": "Re-peg refused by {{venue}} · no order resting · retry in 1 min",
+      "repegRefused": "Re-peg refused by {{venue}} · no order resting · price moves again in 1 min",
       "holdOpenHedge": "Hold to open {{venue}} {{side}} {{qty}} {{coin}} at market",
       "holdCloseFilled": "Hold to close {{venue}} {{side}} {{qty}} {{coin}} at market",
       "titlePairOpen": "TWAP · {{coin}} pair open",
