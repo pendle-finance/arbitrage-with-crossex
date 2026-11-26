@@ -105,7 +105,7 @@ export function ListPicker<K extends string>({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        className={`flex h-[35px] w-full cursor-pointer items-center gap-2 rounded border bg-wash/[0.05] pl-2.5 pr-2.5 text-left text-sm font-medium transition-colors hover:bg-wash/[0.08] disabled:cursor-not-allowed disabled:opacity-50 ${
+        className={`flex h-[35px] w-full cursor-pointer items-center gap-2 rounded border bg-wash/[0.05] pl-2.5 pr-2.5 text-left text-xs font-medium transition-colors hover:bg-wash/[0.08] disabled:cursor-not-allowed disabled:opacity-50 ${
           open ? 'border-info/70' : 'border-ink-700'
         }`}
         onClick={() => (open ? hide(false) : show())}
