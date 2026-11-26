@@ -645,6 +645,46 @@ describe('RollOverModal — the atomic roll', () => {
     expect(sent[1]).toEqual(sent[0]);
   }, 30_000);
 
+  it('a roll refused for slippage: Back reopens the review, and the raised bound goes out with the same ids', async () => {
+    const user = userEvent.setup();
+    const sent: RollBody[] = [];
+    install({
+      onRollExecute: (body, n) => {
+        sent.push(body);
+        if (n === 1) return HttpResponse.json(executeBody(body, refusedResult(body, `entry:${GATE_NEW}`, 'slippage-exceeds-max', 'fills past your max slippage')));
+        return okRoll(body);
+      },
+    });
+    const dialog = await armAndHold(user);
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    await user.click(await within(dialog).findByRole('button', { name: 'Back' }));
+    const [, entryMax] = within(dialog).getAllByTitle(/Change max slippage/);
+    await user.click(entryMax);
+    const entrySlip = within(dialog).getByLabelText('Re-entry max slippage, % APR');
+    await user.clear(entrySlip);
+    await user.type(entrySlip, '2');
+    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
+    expect(sent[1].entry.legs[0].slippageApr).toBeCloseTo(0.02, 9);
+    expect(sent[1].clientOrderIds).toEqual(sent[0].clientOrderIds);
+  });
+
+  it.each([
+    [409, true],
+    [500, false],
+  ])('a %i on send offers Back only when the server refused before sending: %s', async (status, back) => {
+    const user = userEvent.setup();
+    install({
+      onRollExecute: () =>
+        HttpResponse.json({ ok: false, error: { category: status === 409 ? 'validation' : 'upstream', message: 'refused', retryable: false } }, { status }),
+    });
+    const dialog = await armAndHold(user);
+    await within(dialog).findByRole('button', { name: 'Retry' }, { timeout: 4_000 });
+    expect(within(dialog).queryByRole('button', { name: 'Back' }) !== null).toBe(back);
+  });
+
   it('the hold waits while a typed size settles, and each step names its legs with their sizes', async () => {
     const user = userEvent.setup();
     install();
