@@ -10,7 +10,6 @@ export function ExecModeToggle({
   order,
   subs,
   fill,
-  className,
 }: {
   value: ExecMode;
   onChange: (m: ExecMode) => void;
@@ -19,13 +18,11 @@ export function ExecModeToggle({
   order: ExecMode[];
   subs?: Partial<Record<ExecMode, ReactNode>>;
   fill?: boolean;
-  className?: string;
 }) {
   return (
     <SegmentedToggle<ExecMode>
       ariaLabel={ariaLabel}
       fill={fill}
-      className={className}
       value={value}
       onChange={onChange}
       options={order.map((mode) => ({ value: mode, label: labels[mode], sub: subs?.[mode] }))}

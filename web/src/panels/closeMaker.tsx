@@ -23,14 +23,13 @@ export function useCloseMaker(): CloseMaker {
   return { taker, repegBp, setRepegBp, opts: { takerAfterSec: taker.sec, repegBehindBp: repegBp } };
 }
 
-export function CloseMakerSettings({ maker, capSec, attached }: { maker: CloseMaker; capSec: number | null; attached?: boolean }) {
+export function CloseMakerSettings({ maker, capSec }: { maker: CloseMaker; capSec: number | null }) {
   return (
     <MakerSettings
       legs={null}
       makerLeg="auto"
       autoPick={null}
       onMakerLeg={() => undefined}
-      attached={attached}
       takerAfter={maker.taker.takerAfter}
       onTakerAfter={maker.taker.pick}
       takerCapSec={capSec}

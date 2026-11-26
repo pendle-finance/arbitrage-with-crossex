@@ -7,6 +7,7 @@ import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { fmtAbout, fmtPct, fmtUsd, fmtUsdCompact, num } from '../lib/fmt';
 import type { ExecMode } from '../trade/PairTicketBits';
+import { sectionHeadClass } from '../trade/FoldRow';
 import { ImpactPair } from '../trade/TwapArea';
 
 export const MAX_SLIPPAGE_RATIO = 0.0025;
@@ -59,19 +60,23 @@ export function SplitArea({
   table: SliceTableProps;
 }) {
   return (
-    <div className="flex flex-col gap-2.5 rounded-md border border-ink-700 px-3 py-2.5">
-      <div className="flex items-center gap-3">
+    <div className="flex flex-col rounded-md border border-ink-700">
+      <div className={`flex items-center gap-3 ${sectionHeadClass(on)}`}>
         <HoverCard
           underline={false}
           wrapsControl
           widthPx={260}
-          label={<Switch on={on} onChange={onToggle} disabled={!canSplit} label={t('accounts.realizeTab.split')} />}
+          label={<Switch on={on} onChange={onToggle} disabled={!canSplit} label={t('accounts.realizeTab.split')} heading />}
         >
           {hover}
         </HoverCard>
         {impact && <ImpactPair impact={impact} on={false} />}
       </div>
-      {on && <SliceTable {...table} />}
+      {on && (
+        <div className="border-t border-ink-700 px-3 py-2.5">
+          <SliceTable {...table} />
+        </div>
+      )}
     </div>
   );
 }

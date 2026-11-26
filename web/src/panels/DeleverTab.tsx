@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useDeleverPlan, useStartRebalance } from '../api/queries';
 import type { DeleverPlan, DeleverRequest, RealizeExec } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
+import { ExecModeLabel } from '../components/Approx';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { PairPicker, type PairPickerRow } from '../components/PairPicker';
 import { AmountPresets } from '../components/AmountPresets';
@@ -10,7 +11,7 @@ import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
 import { amountError } from '../lib/amount';
-import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
+import { fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
@@ -21,7 +22,7 @@ import { CloseMakerSettings, type MakerOpts, useCloseMaker, withMakerWait } from
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
 import { spanText } from '../lib/span';
-import { execModeLabel, poolKey } from './rebalanceCopy';
+import { poolKey } from './rebalanceCopy';
 import { SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
 import { PlanSteps, realizeText, TotalCost, type CostRow, type PlanStep } from './RebalancePlanBits';
@@ -191,7 +192,9 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const oneOrder = !twapPlan && option?.count === 1;
   const orderSec = (mode: RealizeExec): number =>
     twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : option ? option.seconds[mode] / Math.max(1, option.count) : 0;
-  const modeLabel = (mode: RealizeExec): string => execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(orderSec(mode)), oneOrder);
+  const modeLabel = (mode: RealizeExec) => (
+    <ExecModeLabel mode={mode} usd={fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0)} seconds={orderSec(mode)} whole={oneOrder} />
+  );
 
   const costRows: CostRow[] = estimate
     ? [
@@ -269,28 +272,27 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
       <>
         <PlanSteps label={t('accounts.deleverTab.steps')} rows={steps} />
         <Field label={t('accounts.realizeTab.orders')}>
-          <div className="flex flex-col">
+          <div className="order-stack">
             <ExecModeToggle
               ariaLabel={t('accounts.realizeTab.orders')}
               fill
-              className={exec === 'maker' ? 'seg-attached' : undefined}
               value={exec}
               onChange={setExec}
               order={['maker', 'market']}
               labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
             />
-            {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} attached />}
+            {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
+            <TwapArea
+              on={twap.on}
+              onToggle={twap.setOn}
+              input={twap.input}
+              onInput={twap.setInput}
+              preview={plan.twap ?? null}
+              impact={twapBlocked ? null : (plan.priceImpact ?? null)}
+              coin={pair.base}
+            />
           </div>
         </Field>
-        <TwapArea
-          on={twap.on}
-          onToggle={twap.setOn}
-          input={twap.input}
-          onInput={twap.setInput}
-          preview={plan.twap ?? null}
-          impact={twapBlocked ? null : (plan.priceImpact ?? null)}
-          coin={pair.base}
-        />
         {costBox}
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {walletBlocked && !wallet.loginLabel && (

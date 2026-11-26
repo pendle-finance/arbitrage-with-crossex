@@ -234,7 +234,7 @@ export const legFeeUsd = (leg: RealizeLeg): number => leg.closeFeeUsd + leg.reop
 
 export const legImpactUsd = (leg: RealizeLeg): number => Math.max(0, leg.closeImpactUsd + leg.reopenImpactUsd);
 
-export const execModeLabel = (mode: RealizeExec, usd: string, time: string, whole = false): string =>
+export const execModeKey = (mode: RealizeExec, whole: boolean) =>
   whole
-    ? t(mode === 'maker' ? 'accounts.realizeTab.limitHedgeWhole' : 'accounts.realizeTab.marketWhole', { usd, time })
-    : t(mode === 'maker' ? 'accounts.realizeTab.limitHedge' : 'accounts.realizeTab.market', { usd, time });
+    ? mode === 'maker' ? 'accounts.realizeTab.limitHedgeWhole' : 'accounts.realizeTab.marketWhole'
+    : mode === 'maker' ? 'accounts.realizeTab.limitHedge' : 'accounts.realizeTab.market';

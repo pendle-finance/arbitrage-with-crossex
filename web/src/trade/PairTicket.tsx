@@ -453,11 +453,10 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         )}
       </div>
 
-      <div className="flex flex-col">
+      <div className="order-stack">
         <ExecModeToggle
           ariaLabel={t('pairTicket.orderType.aria')}
           fill
-          className={mode === 'maker' ? 'seg-attached' : undefined}
           value={mode}
           onChange={(m) => {
             setMode(m);
@@ -480,14 +479,10 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             repegBehindBp={repegBp}
             repegLocked={pinned}
             onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}
-            attached
           />
         )}
-      </div>
-
-      {mode === 'maker' && (
-        <>
-          {allowTwap && <TwapArea
+        {mode === 'maker' && allowTwap && (
+          <TwapArea
             on={twap.on}
             onToggle={(on) => {
               twap.setOn(on);
@@ -499,7 +494,12 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             impact={previewData?.priceImpact ?? null}
             coin={base ?? ''}
             lot={longDetail.data?.lotSize ?? shortDetail.data?.lotSize}
-          />}
+          />
+        )}
+      </div>
+
+      {mode === 'maker' && (
+        <>
           {!twapOn && (
             <>
             <LimitPriceBox

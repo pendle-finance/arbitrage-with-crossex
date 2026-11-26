@@ -1,10 +1,12 @@
 import { Check, ChevronDown } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { TokenIcon } from './AssetIcon';
 import { usePopoverPlacement } from './usePopoverPlacement';
 
 export interface ListPickerRow<K extends string> {
   key: K;
+  icon?: string;
   name: ReactNode;
   value: ReactNode;
 }
@@ -105,7 +107,10 @@ export function ListPicker<K extends string>({
       >
         {picked && (
           <span className={`${line} flex-1`}>
-            <span className="truncate text-ink-50">{picked.name}</span>
+            <span className="flex min-w-0 items-center gap-2">
+              {picked.icon && <TokenIcon symbol={picked.icon} size={16} />}
+              <span className="truncate text-ink-50">{picked.name}</span>
+            </span>
             <span className="num shrink-0 text-ink-300">{picked.value}</span>
           </span>
         )}
@@ -143,7 +148,10 @@ export function ListPicker<K extends string>({
               >
                 <span className="flex w-3.5 shrink-0 text-info">{row.key === value && <Check size={14} aria-hidden />}</span>
                 <span className={`${line} flex-1`}>
-                  <span className="truncate text-ink-50">{row.name}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    {row.icon && <TokenIcon symbol={row.icon} size={16} />}
+                    <span className="truncate text-ink-50">{row.name}</span>
+                  </span>
                   <span className="num shrink-0 text-ink-300">{row.value}</span>
                 </span>
               </button>

@@ -99,7 +99,6 @@ export function MakerSettings({
   repegLocked,
   onRepeg,
   marketSlippage,
-  attached,
 }: {
   legs: { name: string; side: Side }[] | null;
   makerLeg: 'auto' | LegPick;
@@ -114,7 +113,6 @@ export function MakerSettings({
   repegLocked: boolean;
   onRepeg: (v: number | null) => void;
   marketSlippage?: { value: number; onChange: (v: number) => void };
-  attached?: boolean;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -137,7 +135,7 @@ export function MakerSettings({
   const presetOff = (sec: number) => capSec !== null && sec > capSec;
 
   return (
-    <FoldRow label={t('pairTicket.makerSettings.title')} summary={summary} open={open} onToggle={() => setOpen((v) => !v)} attached={attached}>
+    <FoldRow label={t('pairTicket.makerSettings.title')} summary={summary} open={open} onToggle={() => setOpen((v) => !v)}>
       {legs && (
         <div className="flex flex-col gap-1.5">
           <div className="flex items-center gap-2">

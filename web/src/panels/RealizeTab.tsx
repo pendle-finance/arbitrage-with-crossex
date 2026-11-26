@@ -5,6 +5,7 @@ import { useRealizeCustom, useStartRebalance } from '../api/queries';
 import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RebalanceView, SliceOption } from '../api/types';
 import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
+import { ExecModeLabel } from '../components/Approx';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { ListPicker } from '../components/ListPicker';
 import { SignedNumber } from '../components/SignedNumber';
@@ -19,7 +20,7 @@ import { VerdictAlert } from './RebalanceBits';
 import { keyOf, SLICE_HOVER, Term } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
 import { PlanSteps, realizeText, refusalOf, TotalCost, type CostRow, type PlanStep } from './RebalancePlanBits';
-import { CONVERT_TO, execModeLabel, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
+import { CONVERT_TO, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
 import { costOf, hasPlan, legCostsOf, netOf, sliceOf, type Cost, type Slice } from './realizeTabCost';
@@ -77,6 +78,7 @@ function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; poo
         onChange={onPick}
         rows={shown.map((p) => ({
           key: p,
+          icon: poolCoin(p),
           name: walletOf(p),
           value: (
             <>
@@ -182,8 +184,9 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const boxText = amount === 'clear' ? debtText : amount === 'all' ? allText : customText;
 
   const oneOrder = slice?.count === 1;
-  const execLabel = (mode: RealizeExec): string =>
-    execModeLabel(mode, active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—', slice ? fmtAbout(slice.seconds[mode] / Math.max(1, slice.count)) : '—', oneOrder);
+  const execLabel = (mode: RealizeExec) => (
+    <ExecModeLabel mode={mode} usd={active ? fmtUsd(costFor(active, mode).totalUsd, 0) : '—'} seconds={slice ? slice.seconds[mode] / Math.max(1, slice.count) : null} whole={oneOrder} />
+  );
   const impactOf = (o: SliceOption): number => (exec === 'market' ? o.impactUsd : 0) + o.reopenImpactUsd;
   const wholeOption = options.find((o) => o.whole) ?? null;
   const shownOption = splitOn
@@ -319,30 +322,28 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
         <>
           <div className="flex flex-col gap-1.5">
             <span className={microLabelClass}>{t('accounts.realizeTab.orders')}</span>
-            <div className="flex flex-col">
+            <div className="order-stack">
               <ExecModeToggle
                 ariaLabel={t('accounts.realizeTab.orders')}
                 fill
-                className={exec === 'maker' ? 'seg-attached' : undefined}
                 value={exec}
                 onChange={setExec}
                 order={EXEC_ORDER}
                 labels={{ maker: execLabel('maker'), market: execLabel('market') }}
               />
-              {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} attached />}
+              {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={null} />}
+              {wholeOption && (
+                <SplitArea
+                  on={splitOn}
+                  onToggle={setSplit}
+                  canSplit={canSplit}
+                  hover={splitHover}
+                  impact={impact}
+                  table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, dedupe: active === pricedPlan }}
+                />
+              )}
             </div>
           </div>
-
-          {wholeOption && (
-            <SplitArea
-              on={splitOn}
-              onToggle={setSplit}
-              canSplit={canSplit}
-              hover={splitHover}
-              impact={impact}
-              table={{ options, value: shownSliceUsd, exec, onPick: pickSlice, customText: sliceText, onCustom: typeSlice, dedupe: active === pricedPlan }}
-            />
-          )}
 
           {rows.length > 0 && <TotalCost rows={rows} />}
 

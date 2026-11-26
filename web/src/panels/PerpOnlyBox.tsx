@@ -191,11 +191,10 @@ export function ClosePairForm({
         onChange={setQtyEdited}
       />
 
-      <div className="flex flex-col">
+      <div className="order-stack">
         <ExecModeToggle
           ariaLabel={t('accounts.closePair.executionAria')}
           fill
-          className={maker ? 'seg-attached' : undefined}
           value={mode}
           onChange={setMode}
           order={['maker', 'market']}
@@ -203,7 +202,6 @@ export function ClosePairForm({
         />
         {maker && (
           <MakerSettings
-            attached
             legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
             makerLeg={makerLeg}
             autoPick={autoPick}
@@ -219,20 +217,19 @@ export function ClosePairForm({
             marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
           />
         )}
+        {maker && allowTwap && (
+          <TwapArea
+            on={twap.on}
+            onToggle={twap.setOn}
+            input={twap.input}
+            onInput={twap.setInput}
+            preview={actions ? (preview.data?.twap ?? null) : null}
+            impact={preview.data?.priceImpact ?? null}
+            coin={base}
+          />
+        )}
       </div>
       {!maker && <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />}
-
-      {maker && allowTwap && (
-        <TwapArea
-          on={twap.on}
-          onToggle={twap.setOn}
-          input={twap.input}
-          onInput={twap.setInput}
-          preview={actions ? (preview.data?.twap ?? null) : null}
-          impact={preview.data?.priceImpact ?? null}
-          coin={base}
-        />
-      )}
       <CloseRestNotes base={base} restLegs={restLegs} sideOf={sideOf} />
 
       <ClosePairEstimate
