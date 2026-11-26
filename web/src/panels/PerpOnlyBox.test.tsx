@@ -290,7 +290,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
   it('market slippage row with market', async () => {
     server.use(...baseHandlers(), previewHandler());
     renderPlain();
-    await userEvent.click(await screen.findByRole('radio', { name: /^Market$/ }));
+    await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
     expect(screen.getByRole('textbox', { name: 'Market slippage' })).toHaveValue('0.5');
     expect(screen.queryByRole('switch', { name: 'TWAP' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Maker settings/ })).toBeNull();
@@ -345,7 +345,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
   it('market: the trade cost is two taker fees and no plan line shows', async () => {
     server.use(...baseHandlers(), previewHandler([], FEES));
     renderPlain();
-    await userEvent.click(await screen.findByRole('radio', { name: /^Market$/ }));
+    await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
     expect(await screen.findByText('≈ 103.80 USDT')).toBeInTheDocument();
     expect(screen.queryByText(/rests as maker/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Book' })).toBeInTheDocument();

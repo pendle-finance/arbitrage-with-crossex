@@ -319,9 +319,12 @@
     }
   },
   "orderType": {
-    "aria": "Order type",
+    "label": "Orders",
     "limitHedge": "Limit + hedge",
     "market": "Market",
-    "limit": "Limit"
+    "limit": "Limit",
+    "hoverMaker": "One leg rests as a post-only limit order at the maker fee. Each fill is hedged at market on the other leg. Lower fee, slower. After the taker time, the rest fills at market.",
+    "hoverMarket": "Both legs fill at market at once, at the taker fee. Done in seconds.",
+    "hoverFigures": "Each choice shows its estimated cost and time."
   }
 }

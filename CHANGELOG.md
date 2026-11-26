@@ -57,9 +57,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   Realize uPnL can split the close into slices.
 - **Move cash Custom amount lines up.** The From and To cards each show a label row, the wallet
   select and the amount at one height. "Max X" sits on the From label row.
-- **Move cash steps are one compact row each:** number, coin, the move and the time. Up to three
-  show open; more show the first two and a "+N more steps" link. A running step shows its leg and
-  a thin progress line.
+- **Move cash steps are one compact row each:** number, coin, the move and the time. One or two
+  steps show open; three or more fold behind "Show all steps". A folded running job still shows
+  its running step, with its leg and a thin progress line.
 - **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
   the sale adds up to the amount converted.
 - **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,
@@ -70,6 +70,9 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   Boros and shows the days to maturity.
 - **Maker settings sit in the Orders group** on Rebalance, the pair ticket and Close perps.
   Realize uPnL and Delever closes use the taker-after time and re-peg you set there.
+- **One Orders group on the pair ticket, Close perps, Realize uPnL and Delever:** the "Orders"
+  label has a hover that explains Limit + hedge and Market, and each choice shows its estimated
+  cost and time, for example "Limit + hedge ≈ $3.25 · 5 min".
 - **Realize uPnL and Delever steps** show a token icon and the cost of each step. The Realize
   wallet picker shows the wallet on the left and its uPnL on the right. A stale quote turns the
   hold button into "Refresh quote". HYPE shows the Hyperliquid mark.

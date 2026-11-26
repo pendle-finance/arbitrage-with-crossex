@@ -185,7 +185,7 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
 
 /** The close defaults to Limit + hedge; market-mode cases pick it first. */
 async function pickMarket(): Promise<void> {
-  await userEvent.click(await screen.findByRole('radio', { name: /^Market$/ }));
+  await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
 }
 
 const qtysOf = (as: ActionInput[] | undefined) => as?.map((a) => (a.kind === 'close-position' ? a.qty : undefined));

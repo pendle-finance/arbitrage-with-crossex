@@ -2,8 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { useDeleverPlan, useStartRebalance } from '../api/queries';
 import type { DeleverPlan, DeleverRequest, RealizeExec } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
-import { ExecModeLabel } from '../components/Approx';
-import { ExecModeToggle } from '../components/ExecModeToggle';
+import { OrdersGroup, perMode } from '../components/OrdersGroup';
 import { PairPicker, type PairPickerRow } from '../components/PairPicker';
 import { AmountPresets } from '../components/AmountPresets';
 import { Skeleton } from '../components/Skeleton';
@@ -11,7 +10,7 @@ import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
 import { amountError } from '../lib/amount';
-import { fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
+import { fmtDateLocal, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
@@ -192,9 +191,8 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const oneOrder = !twapPlan && option?.count === 1;
   const orderSec = (mode: RealizeExec): number =>
     twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : option ? option.seconds[mode] / Math.max(1, option.count) : 0;
-  const modeLabel = (mode: RealizeExec) => (
-    <ExecModeLabel mode={mode} usd={fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0)} seconds={orderSec(mode)} whole={oneOrder} />
-  );
+  const orderCost = perMode((mode) => plan?.estimates[mode].totalUsd ?? null);
+  const orderTime = perMode((mode) => (plan ? orderSec(mode) : null));
 
   const costRows: CostRow[] = estimate
     ? [
@@ -271,16 +269,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     return (
       <>
         <PlanSteps label={t('accounts.deleverTab.steps')} rows={steps} />
-        <Field label={t('accounts.realizeTab.orders')}>
-          <div className="order-stack">
-            <ExecModeToggle
-              ariaLabel={t('accounts.realizeTab.orders')}
-              fill
-              value={exec}
-              onChange={setExec}
-              order={['maker', 'market']}
-              labels={{ maker: modeLabel('maker'), market: modeLabel('market') }}
-            />
+        <OrdersGroup value={exec} onChange={setExec} cost={orderCost} seconds={orderTime} whole={perMode(() => oneOrder)}>
             {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
             <TwapArea
               on={twap.on}
@@ -291,8 +280,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
               impact={twapBlocked ? null : (plan.priceImpact ?? null)}
               coin={pair.base}
             />
-          </div>
-        </Field>
+        </OrdersGroup>
         {costBox}
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {walletBlocked && !wallet.loginLabel && (

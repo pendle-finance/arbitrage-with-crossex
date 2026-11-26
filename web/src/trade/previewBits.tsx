@@ -70,6 +70,29 @@ export function estFeeOf(p: PreviewResult): number {
   return p.fees?.est.taker ?? p.fees?.est.maker ?? 0;
 }
 
+export function legNotional(p: PreviewResult): number | null {
+  const mid = p.fillEstimate?.midPrice;
+  const q = Number(p.qty);
+  return mid && Number.isFinite(q) ? q * mid : (p.estNotional ?? null);
+}
+
+export function pairModeFees(
+  previews: readonly (PreviewResult | undefined)[] | undefined,
+  makerIdx: number | null,
+): { maker: number | null; market: number | null } {
+  const legs = (previews ?? []).map((p) => {
+    const n = p?.fees ? legNotional(p) : null;
+    return p?.fees && n !== null ? { n, fees: p.fees } : null;
+  });
+  const [a, b] = legs;
+  if (legs.length !== 2 || !a || !b) return { maker: null, market: null };
+  const asMaker = (l: typeof a) => l.fees.est.maker ?? l.n * l.fees.makerRate;
+  const asTaker = (l: typeof a) => l.fees.est.taker ?? l.n * l.fees.takerRate;
+  const rest = (m: typeof a, h: typeof a) => asMaker(m) + asTaker(h);
+  const maker = makerIdx === 0 ? rest(a, b) : makerIdx === 1 ? rest(b, a) : Math.min(rest(a, b), rest(b, a));
+  return { maker, market: asTaker(a) + asTaker(b) };
+}
+
 /** Violations (red, blocking) + warnings (dim) as a compact list. */
 export function ViolationList({ violations, warnings }: { violations: Pick<Violation, 'message'>[]; warnings?: string[] }) {
   if (!violations.length && !(warnings ?? []).length) return null;
