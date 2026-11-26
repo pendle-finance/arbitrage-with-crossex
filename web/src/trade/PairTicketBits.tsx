@@ -458,6 +458,7 @@ export function VenueSelect({
 }) {
   const otherVenue = otherValue ? parseSymbol(otherValue).exchange : null;
   const long = tone === 'long';
+  const none = !loading && (venues ?? []).length === 0;
   const { t } = useTranslation();
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -470,7 +471,8 @@ export function VenueSelect({
         label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
         value={value ?? ''}
         onChange={onPick}
-        placeholder={loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}
+        disabled={none}
+        placeholder={loading ? t('trade.symbol.loadingVenues') : none ? t('trade.symbol.pickCoin') : t('pairTicket.bits.selectVenue')}
         rows={(venues ?? []).map((r) => ({
           key: r.symbol,
           icon: <VenueIcon venue={r.exchange} size={16} />,
