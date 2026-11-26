@@ -301,14 +301,15 @@
     "max": "Max",
     "sizeAria": "Close size, applied to both legs",
     "sizeInvalid": "Size must be above 0 and at most {{max}} {{base}}.",
-    "pnlToRealise": "PnL to realize",
-    "pnlSub": "Both legs · before fees",
+    "priceBooked": "Price PnL booked",
+    "priceBookedHover": "The price gain or loss on each leg, booked when it closes. Before fees.",
     "after": {
       "left": "left",
       "notInPair": "not in this pair",
       "boros": "Boros",
       "perps": "Perps",
-      "openUnhedged": "Open, not hedged",
+      "flat": "Flat",
+      "borosUnhedged": "{{qty}} {{coin}} fixed rate · not hedged",
       "openFloating": "Open, floating funding"
     },
     "head": {

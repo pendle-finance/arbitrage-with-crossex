@@ -81,12 +81,14 @@ const FALLBACK_SLIPPAGE_PCT = 1;
 export function CloseBorosForm({
   legs,
   perpsUnhedged = false,
+  underPicker = false,
   onClosed,
   onDone,
   onSent,
 }: {
   legs: CloseLeg[];
   perpsUnhedged?: boolean;
+  underPicker?: boolean;
   onSent?: () => void;
   /**
    * What actually came off each market, so the caller can shrink a claim that
@@ -608,15 +610,19 @@ export function CloseBorosForm({
                     {t(l.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
                   </Chip>
                 </span>
-                <span className="num shrink-0 text-[12.5px] font-semibold text-ink-50">
-                  {`${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}`}
-                </span>
+                {!underPicker && (
+                  <span className="num shrink-0 text-[12.5px] font-semibold text-ink-50">
+                    {`${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}`}
+                  </span>
+                )}
               </div>
               <div className="flex items-baseline justify-between gap-3 text-[11px] text-ink-400">
-                <span className="num truncate">
-                  {`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`}
-                </span>
-                {rates.length > 0 && <span className="num shrink-0">{rates.join(' · ')}</span>}
+                {!underPicker && (
+                  <span className="num truncate">
+                    {`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`}
+                  </span>
+                )}
+                {rates.length > 0 && <span className="num ml-auto shrink-0">{rates.join(' · ')}</span>}
               </div>
             </div>
           );
