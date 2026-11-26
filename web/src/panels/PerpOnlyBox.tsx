@@ -56,6 +56,7 @@ export function ClosePairForm({
   livePositions,
   allowTwap = false,
   borosUnhedged = null,
+  bookedBefore = null,
   onSent,
 }: {
   base: string;
@@ -66,6 +67,7 @@ export function ClosePairForm({
   livePositions?: Map<string, CrossexPosition>;
   allowTwap?: boolean;
   borosUnhedged?: { qty: number; coin: string } | null;
+  bookedBefore?: { usd: number; sinceSec: number } | null;
   onSent?: () => void;
 }) {
   const { t } = useTranslation();
@@ -281,6 +283,7 @@ export function ClosePairForm({
         rows={afterRows}
         flat={!qtyInvalid && !afterRows.some((r) => r.kind === 'left')}
         borosUnhedged={borosUnhedged}
+        bookedBefore={bookedBefore}
       />
 
       <div className="sticky bottom-0 z-10 flex flex-col gap-1.5 bg-ink-950 pb-1 pt-2">
