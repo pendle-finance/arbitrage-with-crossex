@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Pool } from '../api/types';
 import { AmountBox } from '../components/AmountBox';
+import { TokenIcon } from '../components/AssetIcon';
 import { BoxSelect } from '../components/BoxSelect';
 import { microLabelClass } from '../components/Th';
 import { num } from '../lib/fmt';
@@ -58,6 +59,12 @@ export function MoveCashWallets({
     </option>
   ));
   const amountText = (amount: number, pool: Pool) => <span className="num text-sm font-semibold text-ink-50">{`${num(amount)} ${poolCoin(pool)}`}</span>;
+  const walletName = (pool: Pool) => (
+    <span className="flex items-center gap-1.5 font-medium text-ink-50">
+      <TokenIcon symbol={poolCoin(pool)} size={16} />
+      {walletOf(pool)}
+    </span>
+  );
   const fromLabel = t('accounts.moveCash.from');
   const toLabel = t('accounts.moveCash.to');
   const fromBox = custom ? (
@@ -83,7 +90,7 @@ export function MoveCashWallets({
     </>
   ) : (
     flow.sent.map(({ pool, amount }, i) => (
-      <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={<span className="font-medium text-ink-50">{walletOf(pool)}</span>}>
+      <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={walletName(pool)}>
         {amountText(amount, pool)}
       </WalletLine>
     ))
@@ -108,9 +115,9 @@ export function MoveCashWallets({
             </>
           ) : (
             flow.arrives.map(({ pool, amount }, i) => (
-              <WalletLine key={pool} label={i === 0 ? toLabel : undefined} wallet={<span className="font-medium text-ink-50">{walletOf(pool)}</span>}>
+              <WalletLine key={pool} label={i === 0 ? toLabel : undefined} wallet={walletName(pool)}>
                 {priced && amountText(amount, pool)}
-                {flow.hasBorrow && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
+                {flow.hasBorrow && <span className="ml-auto text-ink-400">{t('accounts.moveCash.repays')}</span>}
               </WalletLine>
             ))
           )}
