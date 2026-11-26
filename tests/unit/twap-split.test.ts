@@ -166,6 +166,14 @@ describe('a two-leg TWAP refusal', () => {
     expect(fixed.every((row) => row.plan && !row.refusal)).toBe(true);
   });
 
+  it('holds only the whole job to the 5 minute minimum, not each leg', () => {
+    const counts = splitSlices(3, weights);
+    expect(counts).toEqual([2, 1]);
+    const rows = splitPlans(100, counts, [eth, btc]);
+    expect(rows.map((row) => row.refusal)).toEqual([null, null]);
+    expect(rows.map((row) => row.plan?.durationSec)).toEqual([200, 100]);
+  });
+
   it('offers no fix when no total fits', () => {
     const tiny: SplitLeg = { ...btc, qty: '0.003' };
     expect(splitFixOf({ durationSec: 3_600, slices: 2 }, { ...eth, qty: '0.002' }, [{ ...eth, qty: '0.002' }, tiny], [6, 300])).toBeNull();

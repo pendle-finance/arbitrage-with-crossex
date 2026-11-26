@@ -232,7 +232,7 @@ function minText(ctx: Context): string {
   return `${ctx.minLeg.venue} takes at least ${qtyText(qty)} ${ctx.coin} (${usdText(usd)}) a slice.`;
 }
 
-function verdictOf(ctx: Context, shape: Shape): Verdict | null {
+function verdictOf(ctx: Context, shape: Shape, part = false): Verdict | null {
   const { coin, lot, totalLots, minLeg, maxLeg, bookLots } = ctx;
   const countField = isSizeMode(shape.mode) ? 'sliceSize' : 'interval';
   const smallest = shape.baseLots < shape.lastLots ? shape.baseLots : shape.lastLots;
@@ -240,7 +240,7 @@ function verdictOf(ctx: Context, shape: Shape): Verdict | null {
   if (totalLots < minLeg.minLots * BigInt(TWAP_LIMITS.minSlices)) {
     return { kind: 'too-small', field: 'sliceSize', text: `Too small for 2 slices: ${minText(ctx)}`, boundLots: null };
   }
-  if (shape.durationSec < TWAP_LIMITS.minDurationSec) {
+  if (!part && shape.durationSec < TWAP_LIMITS.minDurationSec) {
     return { kind: 'duration-low', field: 'duration', text: `Duration at least ${spanText(TWAP_LIMITS.minDurationSec)}.`, boundLots: null };
   }
   if (shape.durationSec > TWAP_LIMITS.maxDurationSec) {
@@ -389,7 +389,7 @@ export interface SplitLeg {
 export function splitPlans(intervalSec: number, counts: number[], legs: SplitLeg[]): { plan: TwapPlan | null; refusal: TwapRefusal | null }[] {
   return legs.map((leg, index) => {
     if ((counts[index] ?? 1) <= 1) return { plan: restPlan(leg.qty, 1, intervalSec, leg.rules, leg.mark), refusal: null };
-    const result = planSlices(leg.qty, { intervalSec, slices: counts[index] }, leg.rules, leg.mark, leg.bookQty);
+    const result = planSlices(leg.qty, { intervalSec, slices: counts[index] }, leg.rules, leg.mark, leg.bookQty, true);
     return { plan: result.plan, refusal: result.ok ? null : result.refusal };
   });
 }
@@ -416,11 +416,12 @@ export function planSlices(
   legs: TwapLegRule[],
   mark: number,
   bookMaxQty?: string | null,
+  part = false,
 ): TwapPlanResult {
   const ctx = contextOf(totalQty, legs, mark, bookMaxQty);
   const shape = shapeOf(ctx, input);
   const plan = planOf(ctx, shape);
-  const verdict = verdictOf(ctx, shape);
+  const verdict = verdictOf(ctx, shape, part);
   if (verdict === null && plan !== null) return { ok: true, plan };
   if (verdict === null) throw new Error('twap: a plan with no slices passed every check');
   return { ok: false, plan, refusal: { field: verdict.field, text: verdict.text, fix: fixOf(ctx, input, shape, verdict) } };
