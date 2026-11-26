@@ -251,6 +251,7 @@ export function SlippageLine({
   invalidText,
   inputAriaLabel,
   title,
+  label,
   hint,
   quick = ['0.2', '0.4', '1', '2'],
 }: {
@@ -269,6 +270,7 @@ export function SlippageLine({
   invalidText: string;
   inputAriaLabel: string;
   title?: string;
+  label?: string;
   /** The editor's explanatory line. */
   hint: string;
   quick?: string[];
@@ -278,7 +280,7 @@ export function SlippageLine({
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline justify-between gap-3">
         <span className="text-[12px] text-ink-200" title={title}>
-          {t('pairTicket.bits.slippage')}
+          {label ?? t('pairTicket.bits.slippage')}
         </span>
         <span className="num text-[12px] text-ink-400">
           {t('pairTicket.bits.est')} <span className="text-ink-50">{est ?? '—'}</span>

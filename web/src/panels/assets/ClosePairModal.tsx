@@ -8,7 +8,7 @@ import { CloseBorosForm } from '../../trade/CloseBorosForm';
 import { FieldLabel } from '../../trade/SymbolCombobox';
 import { ClosePairForm } from '../PerpOnlyBox';
 import { RollOverModal } from './AssetCard';
-import { pairBorosCloseLegs, pairCanRoll, pairPerpCloseLegs, type PairEstimate } from './assetModel';
+import { pairBorosCloseLegs, pairCanRoll, pairPerpBookedUsd, pairPerpCloseLegs, type PairEstimate } from './assetModel';
 import { openPairOf, pairPickerRowOf, useOpenPairs, type PairEntry } from './pairs';
 
 const borosLegsOf = (e: PairEntry) =>
@@ -94,7 +94,9 @@ export function ClosePairModal({
             base={picked.group.base}
             legs={pairPerpCloseLegs(picked.pair)}
             livePositions={livePositions}
+            allowTwap
             borosUnhedged={borosSizeOf(picked)}
+            bookedBefore={pairPerpBookedUsd(picked.pair, picked.group)}
             onSent={onSent}
           />
         ) : (

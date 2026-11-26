@@ -297,12 +297,12 @@
   },
   "closePair": {
     "sizeLabel": "Close size",
-    "maxTitle": "Close the whole pair",
-    "max": "Max",
     "sizeAria": "Close size, applied to both legs",
     "sizeInvalid": "Size must be above 0 and at most {{max}} {{base}}.",
     "priceBooked": "Price PnL booked",
     "priceBookedHover": "The price gain or loss on each leg, booked when it closes. Before fees.",
+    "priceBookedSince": "Price gain or loss on both perps since the pair opened on {{date}}: each leg booked by this close, plus what earlier closes booked. Before fees.",
+    "bookedBefore": "Booked before",
     "after": {
       "left": "left",
       "notInPair": "not in this pair",
@@ -544,7 +544,7 @@
     "pct20": "20%",
     "pct30": "30%",
     "amountAria": "Size to delever, each leg",
-    "custom": "Custom",
+    "custom": "Custom %",
     "customPctAria": "Custom percent of the pair",
     "sizeSuffix": "{{coin}} · {{pct}}%",
     "tradingFeePerps": "Trading fee · perps",

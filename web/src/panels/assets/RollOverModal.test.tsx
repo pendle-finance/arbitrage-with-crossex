@@ -121,6 +121,7 @@ const venueOf = (marketId: number) => (marketId === GATE_OLD || marketId === GAT
  */
 let fitSize: number | undefined;
 let deepSize = 60;
+let deepApr = 0.013;
 let bandApr: number | undefined;
 const simLeg = (marketId: number, direction: 'long' | 'short', size: number, intent: string) => ({
   marketId,
@@ -135,7 +136,7 @@ const simLeg = (marketId: number, direction: 'long' | 'short', size: number, int
   bookStatus: 'ok',
   marginRequired: 5,
   slippageApr: 0.0025,
-  depth: fitSize === undefined ? undefined : [[0.001, fitSize], [0.013, fitSize + deepSize]],
+  depth: fitSize === undefined ? undefined : [[0.001, fitSize], [deepApr, fitSize + deepSize]],
   maxToleranceApr: bandApr ?? null,
   /**
    * A CLOSE ends flat (the exit); an OPEN adds to what the new markets
@@ -304,11 +305,6 @@ function install(
 async function armAndHold(user: ReturnType<typeof userEvent.setup>) {
   renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
   const dialog = await screen.findByRole('dialog');
-  // PICK: the one target maturity is auto-selected; "Roll over →" opens the
-  // review once the venue context is in.
-  const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-  await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-  await user.click(next);
   // REVIEW: the hold unlocks once the roll is quoted and the agent is live.
   const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
   await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
@@ -320,6 +316,7 @@ beforeEach(() => {
   localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ADDRESS }));
   fitSize = undefined;
   deepSize = 60;
+  deepApr = 0.013;
   bandApr = undefined;
   spreadListed = false;
   spreadCloseOnly = false;
@@ -350,7 +347,7 @@ describe('RollOverModal — the pick page', () => {
     // The four grips: each sets the share and counts as the trader's choice,
     // so the default's note goes and no later quote moves the size back.
     const shortcuts = within(dialog).getByRole('radiogroup', { name: 'Share shortcuts' });
-    expect(within(shortcuts).getAllByRole('radio').map((b) => b.textContent)).toEqual(['25%', '50%', '75%', '100%', 'Custom']);
+    expect(within(shortcuts).getAllByRole('radio').map((b) => b.textContent)).toEqual(['25%', '50%', '75%', '100%', 'Custom %']);
     await user.click(within(shortcuts).getByRole('radio', { name: '75%' }));
     expect(box).toHaveValue('75');
     await user.click(within(shortcuts).getByRole('radio', { name: '25%' }));
@@ -394,7 +391,6 @@ describe('RollOverModal — the pick page', () => {
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
 
     // The review inherits it rather than falling back to the 1% seed.
-    await user.click(within(dialog).getByRole('button', { name: 'Roll over' }));
     await waitFor(() => {
       const last = rollSims.at(-1)!;
       expect(last.exit.legs[0].slippageApr).toBeCloseTo(0.0143, 9);
@@ -483,9 +479,6 @@ describe('RollOverModal — spread target', () => {
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(entries.length).toBeGreaterThan(0), { timeout: 4_000 });
     expect(entries.at(-1)!.legs).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short' })]);
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
     const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     expect((await within(dialog).findAllByText(/4\.00%/)).length).toBeGreaterThan(0);
@@ -508,9 +501,6 @@ describe('RollOverModal — spread target', () => {
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
-    const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
     expect((await within(dialog).findAllByText('ETH Spread HL-GATE')).length).toBeGreaterThan(0);
     await waitFor(() => expect(entries.at(-1)!.legs).toEqual([expect.objectContaining({ marketId: SPREAD_NEW, direction: 'short' })]), { timeout: 4_000 });
   });
@@ -527,7 +517,7 @@ describe('RollOverModal — spread target', () => {
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByText(/No later maturity on both venues yet/, undefined, { timeout: 4_000 })).toBeInTheDocument();
     expect(entries).toEqual([]);
-    expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
+    expect(within(dialog).queryByRole('button', { name: 'Roll over' })).not.toBeInTheDocument();
   });
 
   it('a close-only spread at the target maturity counts as no spread: the roll goes into the two singles', async () => {
@@ -626,6 +616,91 @@ describe('RollOverModal — the atomic roll', () => {
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('a re-quote that widens the bound during a refused send does not reach Retry: it re-sends the first body, and the pick is locked, then hidden', async () => {
+    const user = userEvent.setup();
+    fitSize = 40;
+    const sent: RollBody[] = [];
+    install({
+      onRollExecute: async (body, n) => {
+        sent.push(body);
+        if (n > 1) return okRoll(body);
+        deepApr = 0.016;
+        await new Promise((r) => setTimeout(r, 11_000));
+        return HttpResponse.json(executeBody(body, refusedResult(body, `entry:${GATE_NEW}`, 'insufficient-margin', 'not enough margin')));
+      },
+    });
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByLabelText('Size to roll (ETH)')).toHaveValue('95'), { timeout: 4_000 });
+    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    expect(sent[0].exit.legs[0].slippageApr).toBeCloseTo(0.0143, 9);
+    expect(within(dialog).getByLabelText('Size to roll (ETH)')).toBeDisabled();
+    const retry = await within(dialog).findByRole('button', { name: 'Retry' }, { timeout: 15_000 });
+    expect(within(dialog).queryByLabelText('Size to roll (ETH)')).not.toBeInTheDocument();
+    await user.pointer({ keys: '[MouseLeft>]', target: retry });
+    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
+    expect(sent[1]).toEqual(sent[0]);
+  }, 30_000);
+
+  it('a roll refused for slippage: Back reopens the review, and the raised bound goes out with the same ids', async () => {
+    const user = userEvent.setup();
+    const sent: RollBody[] = [];
+    install({
+      onRollExecute: (body, n) => {
+        sent.push(body);
+        if (n === 1) return HttpResponse.json(executeBody(body, refusedResult(body, `entry:${GATE_NEW}`, 'slippage-exceeds-max', 'fills past your max slippage')));
+        return okRoll(body);
+      },
+    });
+    const dialog = await armAndHold(user);
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
+    await user.click(await within(dialog).findByRole('button', { name: 'Back' }));
+    const [, entryMax] = within(dialog).getAllByTitle(/Change max slippage/);
+    await user.click(entryMax);
+    const entrySlip = within(dialog).getByLabelText('Re-entry max slippage, % APR');
+    await user.clear(entrySlip);
+    await user.type(entrySlip, '2');
+    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+    await waitFor(() => expect(sent).toHaveLength(2), { timeout: 4_000 });
+    expect(sent[1].entry.legs[0].slippageApr).toBeCloseTo(0.02, 9);
+    expect(sent[1].clientOrderIds).toEqual(sent[0].clientOrderIds);
+  });
+
+  it.each([
+    [409, true],
+    [500, false],
+  ])('a %i on send offers Back only when the server refused before sending: %s', async (status, back) => {
+    const user = userEvent.setup();
+    install({
+      onRollExecute: () =>
+        HttpResponse.json({ ok: false, error: { category: status === 409 ? 'validation' : 'upstream', message: 'refused', retryable: false } }, { status }),
+    });
+    const dialog = await armAndHold(user);
+    await within(dialog).findByRole('button', { name: 'Retry' }, { timeout: 4_000 });
+    expect(within(dialog).queryByRole('button', { name: 'Back' }) !== null).toBe(back);
+  });
+
+  it('the hold waits while a typed size settles, and each step names its legs with their sizes', async () => {
+    const user = userEvent.setup();
+    install();
+    renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
+    const dialog = await screen.findByRole('dialog');
+    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    const steps = within(dialog).getAllByRole('listitem').filter((li) => /^\d(Close|Open) /.test(li.textContent ?? ''));
+    for (const step of steps) expect(step.textContent).toMatch(/LONG100 ETH.*SHORT100 ETH|SHORT100 ETH.*LONG100 ETH/);
+    const box = within(dialog).getByLabelText('Size to roll (ETH)');
+    await user.clear(box);
+    await user.type(box, '50');
+    expect(confirm).toBeDisabled();
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+  });
+
   it('an unconfirmed roll shows a rose warning and offers no retry', async () => {
     const user = userEvent.setup();
     const sent: RollBody[] = [];
@@ -688,9 +763,6 @@ describe('RollOverModal — the review page', () => {
     install({ onRollExecute: (body) => { sent.push(body); return okRoll(body); }, onRollSimulate: (b) => sims.push(b) });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
 
     // A roll IS a close of these legs: no box to tick, no acknowledgement blocker.
     const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
@@ -763,9 +835,6 @@ describe('RollOverModal — the review page', () => {
     );
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
 
     const box = await within(dialog).findByRole('checkbox');
     expect(within(dialog).getByText(/I understand this closes my existing .* position of 0\.004 ETH, realizing its PnL, and opens/)).toBeInTheDocument();
@@ -782,7 +851,6 @@ describe('RollOverModal — the review page', () => {
   });
 
   it('reads the margin, the warnings and the blockers straight from the roll gate', async () => {
-    const user = userEvent.setup();
     install({
       gate: () =>
         rollGate({
@@ -793,9 +861,6 @@ describe('RollOverModal — the review page', () => {
     });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
 
     // The blocker is listed and holds the confirm shut.
     expect(await within(dialog).findByText(/Re-entry Gate ETH 30 Oct 2026: Insufficient liquidity/)).toBeInTheDocument();
@@ -808,8 +873,7 @@ describe('RollOverModal — the review page', () => {
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
     // Before → after, as the venue simulated it.
     expect(within(dialog).getByText(/4 ETH → -2 ETH/)).toBeInTheDocument();
-    expect(within(dialog).getByText('No, 2 ETH short')).toBeInTheDocument();
-    expect(within(dialog).getByText('The venue refuses the roll. Top up first, or roll a smaller size.')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Can it fund/)).not.toBeInTheDocument();
   });
 
   it('a batch the venue refused for margin shows the account once the old legs are closed, and the shortfall from it', async () => {
@@ -824,68 +888,53 @@ describe('RollOverModal — the review page', () => {
     });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
     expect(await within(dialog).findByText(/Not enough margin/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/0\.0525 ETH → 0\.084 ETH/)).toBeInTheDocument();
-    expect(within(dialog).getByText('No, 0.029 ETH short')).toBeInTheDocument();
-    expect(within(dialog).getByText(/Top up first, or roll a smaller size/)).toBeInTheDocument();
-    await user.hover(within(dialog).getByText('Available margin'));
+    const afterClose = within(dialog).getByText('Available after the close').closest('div')!.parentElement as HTMLElement;
+    expect(afterClose.textContent).toMatch(/0\.084 ETH/);
+    expect(afterClose.textContent).not.toMatch(/→/);
+    expect(within(dialog).queryByText(/Can it fund/)).not.toBeInTheDocument();
+    await user.hover(within(dialog).getByText('Available after the close'));
     expect(await screen.findByText(/once the old positions close/)).toBeInTheDocument();
     expect(within(dialog).queryByText('Simulation failed')).not.toBeInTheDocument();
   });
 
   it('a comfortably funded roll shows the required and available margin with no shortfall', async () => {
-    const user = userEvent.setup();
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
     const required = await within(dialog).findByText('Margin required');
     const row = required.parentElement!.parentElement as HTMLElement;
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
     expect(within(dialog).getByText(/895 ETH → 900 ETH/)).toBeInTheDocument();
-    expect(within(dialog).queryByText(/^No, .* short$/)).not.toBeInTheDocument();
-    expect(within(dialog).queryByText(/Top up first/)).not.toBeInTheDocument();
-    expect(await within(dialog).findByText('Yes')).toBeInTheDocument();
+    expect(within(dialog).queryByText(/Can it fund/)).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('a picker on the pick step leaves the review titled with the pair, and each step shows slippage in dollars', async () => {
-    const user = userEvent.setup();
+  it('one panel: the picker stays above the two numbered steps, and the cost shows the slippage of each step in dollars', async () => {
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} picker={<div>Pair picker</div>} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'Roll over' })).toBeInTheDocument();
+    await within(dialog).findByText('Margin required', undefined, { timeout: 4_000 });
+    expect(within(dialog).getByRole('heading', { name: 'Roll over Boros position' })).toBeInTheDocument();
     expect(within(dialog).getByText('Pair picker')).toBeInTheDocument();
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
-    await within(dialog).findByText('Margin required');
-    expect(within(dialog).getByRole('heading', { name: /Roll over.*Gate.*LONG.*Hyperliquid.*SHORT/ })).toBeInTheDocument();
-    expect(within(dialog).queryByText('Pair picker')).not.toBeInTheDocument();
-    const close = within(dialog).getByRole('region', { name: /^Close / });
-    const open = within(dialog).getByRole('region', { name: /^Open / });
-    for (const step of [close, open]) {
-      expect(step.textContent).toMatch(/Est\.\s*\d[\d.,]*% \(\$[\d,.]+\)/);
-      expect(step.textContent).toMatch(/APR \(\$[\d,.]+\)/);
-      expect(within(step).getByText('Total cost')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Back' })).not.toBeInTheDocument();
+    const steps = within(dialog).getAllByRole('listitem').filter((li) => /^\d(Close|Open) /.test(li.textContent ?? ''));
+    expect(steps.map((li) => li.textContent?.match(/^\d(Close|Open)/)?.[0])).toEqual(['1Close', '2Open']);
+    const cost = within(dialog).getByRole('region', { name: 'Cost' });
+    for (const label of ['Close slippage', 'Open slippage']) {
+      const line = within(cost).getByText(label).parentElement as HTMLElement;
+      expect(line.textContent).toMatch(/Est\.\s*\d[\d.,]*% \(\$[\d,.]+\)/);
+      expect(line.textContent).toMatch(/APR \(\$[\d,.]+\)/);
     }
+    expect(within(cost).getByText('Total cost')).toBeInTheDocument();
   });
 
   it('the confirm stays disabled until a fresh quote lands', async () => {
-    const user = userEvent.setup();
     let release!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
     install({ rollSimGate: gate });
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
     const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
     // No quote yet → the "Waiting for a quote" blocker holds it shut.
     expect(confirm).toBeDisabled();
@@ -899,9 +948,6 @@ describe('RollOverModal — the review page', () => {
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
     // Gate LONG locked 4%, closed at 6% → gains 2% × 100 ETH × 8/365y; the
     // Hyperliquid SHORT locked 8%, closed at 6% → gains the same. 0.0877 ETH
     // at $2,500 = $219.18, before the fees PairCosts lists.
@@ -964,9 +1010,6 @@ describe('RollOverModal — open only (keep old legs)', () => {
 
     // Switch to open-only; the primary button renames accordingly.
     await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
-    const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
 
     // The review has NO exit batch — just the new legs.
     expect(within(dialog).queryByText('Exit')).not.toBeInTheDocument();
@@ -998,11 +1041,11 @@ describe('RollOverModal — open only (keep old legs)', () => {
     install();
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
-    expect(await within(dialog).findByText('$161.64', undefined, { timeout: 4_000 })).toBeInTheDocument();
+    expect((await within(dialog).findAllByText('$161.64', undefined, { timeout: 4_000 })).length).toBeGreaterThan(0);
 
     await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
-    expect(await within(dialog).findByText('$80.82')).toBeInTheDocument();
-    expect(within(dialog).queryByText('$161.64')).not.toBeInTheDocument();
+    expect((await within(dialog).findAllByText('$80.82')).length).toBeGreaterThan(0);
+    await waitFor(() => expect(within(dialog).queryByText('$161.64')).not.toBeInTheDocument());
   });
 
   it('offers no Retry after a partial fill — the same ids would only replay it', async () => {
@@ -1027,9 +1070,6 @@ describe('RollOverModal — open only (keep old legs)', () => {
     renderWithClient(<RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => {}} />);
     const dialog = await screen.findByRole('dialog');
     await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
-    const next = await within(dialog).findByRole('button', { name: 'Open new maturity' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
     const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
     await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
     await user.pointer({ keys: '[MouseLeft>]', target: confirm });
@@ -1111,11 +1151,8 @@ describe('RollOverModal — per-venue exposure', () => {
       await user.clear(box);
       await user.type(box, typed);
     }
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
-    const confirm = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Roll over' })).not.toBeDisabled(), { timeout: 4_000 });
+    const confirm = within(dialog).getByRole('button', { name: 'Roll over' });
     await user.pointer({ keys: '[MouseLeft>]', target: confirm });
     await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4_000 });
     const sizes = (legs: Leg[]) => Object.fromEntries(legs.map((l) => [l.marketId, l.size]));
@@ -1161,10 +1198,8 @@ describe('RollOverModal — per-venue exposure', () => {
       await user.clear(box);
       await user.type(box, typed);
     }
-    const next = await within(dialog).findByRole('button', { name: 'Roll over' });
-    await waitFor(() => expect(next).not.toBeDisabled(), { timeout: 4_000 });
-    await user.click(next);
-    await within(dialog).findByText('Yes', undefined, { timeout: 4_000 });
+    await within(dialog).findByText(/ETH → /, undefined, { timeout: 4_000 });
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Roll over' })).not.toBeDisabled(), { timeout: 4_000 });
     return dialog.textContent ?? '';
   };
 

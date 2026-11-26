@@ -16,10 +16,9 @@ import { ExecuteControl } from '../trade/ExecuteControl';
 import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
 import { type ExecMode, SlippageLine, storedExecMode } from '../trade/PairTicketBits';
 import { pairModeFees, ViolationList } from '../trade/previewBits';
-import { type CloseAfterRow, ClosePairAfter, ClosePairCost, matchedCloseOf } from './ClosePairFormBits';
+import { type CloseAfterRow, ClosePairAfter, ClosePairCost, CloseSizePresets, matchedCloseOf } from './ClosePairFormBits';
 import {
   buildCloseActions,
-  CloseSizeField,
   closeCosts,
   decorateClose,
   shownLegOf,
@@ -57,6 +56,7 @@ export function ClosePairForm({
   livePositions,
   allowTwap = false,
   borosUnhedged = null,
+  bookedBefore = null,
   onSent,
 }: {
   base: string;
@@ -67,6 +67,7 @@ export function ClosePairForm({
   livePositions?: Map<string, CrossexPosition>;
   allowTwap?: boolean;
   borosUnhedged?: { qty: number; coin: string } | null;
+  bookedBefore?: { usd: number; sinceSec: number } | null;
   onSent?: () => void;
 }) {
   const { t } = useTranslation();
@@ -194,13 +195,21 @@ export function ClosePairForm({
 
   return (
     <div className="flex flex-col gap-4">
-      <CloseSizeField
-        base={base}
-        qtyStr={qtyStr}
-        qtyInvalid={qtyInvalid}
-        maxCloseQty={maxCloseQty}
+      <CloseSizePresets
+        label={t('accounts.closePair.sizeLabel')}
+        inputLabel={t('accounts.closePair.sizeAria')}
+        coin={base}
+        max={maxCloseQty}
+        value={qtyStr}
+        invalid={qtyInvalid}
         onChange={setQtyEdited}
-      />
+      >
+        {qtyInvalid && (
+          <span className="text-[11px] text-rose-300">
+            {t('accounts.closePair.sizeInvalid', { max: sig(maxCloseQty), base })}
+          </span>
+        )}
+      </CloseSizePresets>
 
       <OrdersGroup
         value={mode}
@@ -274,6 +283,7 @@ export function ClosePairForm({
         rows={afterRows}
         flat={!qtyInvalid && !afterRows.some((r) => r.kind === 'left')}
         borosUnhedged={borosUnhedged}
+        bookedBefore={bookedBefore}
       />
 
       <div className="sticky bottom-0 z-10 flex flex-col gap-1.5 bg-ink-950 pb-1 pt-2">

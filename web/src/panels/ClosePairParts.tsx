@@ -1,64 +1,12 @@
-import { useTranslation } from 'react-i18next';
 import type { ActionInput, PreviewResult } from '../api/types';
-import { fieldValue, sig } from '../lib/fmt';
-import { AffixedInput } from '../trade/PairTicketBits';
+import { fieldValue } from '../lib/fmt';
 import { estFeeOf, legNotional } from '../trade/previewBits';
-import { FieldLabel } from '../trade/SymbolCombobox';
 import type { matchedCloseOf } from './ClosePairFormBits';
 
 export type CloseLeg = { symbol: string; qty: number; venue: string; partial?: boolean };
 export type SideOf = (symbol: string) => 'LONG' | 'SHORT';
 
 const CLOSE_CLIP_USD = 100_000;
-
-export function CloseSizeField({
-  base,
-  qtyStr,
-  qtyInvalid,
-  maxCloseQty,
-  onChange,
-}: {
-  base: string;
-  qtyStr: string;
-  qtyInvalid: boolean;
-  maxCloseQty: number;
-  onChange: (v: string) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-3">
-        <FieldLabel htmlFor={`close-pair-qty-${base}`}>{t('accounts.closePair.sizeLabel')}</FieldLabel>
-        <button
-          type="button"
-          className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-          title={t('accounts.closePair.maxTitle')}
-          onClick={() => onChange(fieldValue(maxCloseQty))}
-        >
-          {t('accounts.closePair.max')}{' '}
-          <span className="text-link underline decoration-link/40 underline-offset-2">
-            {sig(maxCloseQty)} {base}
-          </span>
-        </button>
-      </div>
-      <AffixedInput affix={<span>{base}</span>}>
-        <input
-          id={`close-pair-qty-${base}`}
-          className={`input num pr-16 ${qtyInvalid ? '!border-rose-500/60' : ''}`}
-          inputMode="decimal"
-          value={qtyStr}
-          onChange={(e) => onChange(e.target.value)}
-          aria-label={t('accounts.closePair.sizeAria')}
-        />
-      </AffixedInput>
-      {qtyInvalid && (
-        <span className="text-[11px] text-rose-300">
-          {t('accounts.closePair.sizeInvalid', { max: sig(maxCloseQty), base })}
-        </span>
-      )}
-    </div>
-  );
-}
 
 export function buildCloseActions({
   legs,

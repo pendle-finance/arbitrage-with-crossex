@@ -19,7 +19,7 @@ const TransferContext = createContext<{ current: TransferPick | null } | null>(n
 export function RebalanceOpenerProvider({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<{ tab: RebalanceTab | null; pairKey: string | null } | null>(null);
   const open = useCallback<Opener>((opts = {}) => {
-    openAccounts();
+    if (opts.pairKey === undefined) openAccounts();
     setTarget({ tab: opts.tab ?? null, pairKey: opts.pairKey ?? null });
   }, []);
   const close = useCallback(() => setTarget(null), []);
@@ -58,5 +58,11 @@ export function useTransferPickTarget(pick: TransferPick) {
 
 export function useTransferPick(): TransferPick {
   const target = useContext(TransferContext);
-  return useCallback<TransferPick>((coin, wallet) => target?.current?.(coin, wallet), [target]);
+  return useCallback<TransferPick>(
+    (coin, wallet) => {
+      openAccounts();
+      requestAnimationFrame(() => target?.current?.(coin, wallet));
+    },
+    [target],
+  );
 }

@@ -5,6 +5,7 @@
  *
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
+import { createPortal } from 'react-dom';
 import { cloneElement, createContext, type ReactNode, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
@@ -60,9 +61,11 @@ import {
   usePositions,
   useRebalance,
 } from '../../api/queries';
+import { ApiError } from '../../api/client';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
 import { aprCost, AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, MarginUsageRow, marketName, OpposingAcknowledgement, SpreadReadout, SuggestedTopUpLines, usdOf as simUsdOf } from '../../trade/BorosPairBits';
-import { EstimateAge, EstimateRow, SlippageLine, StepBadge, SummaryCard } from '../../trade/PairTicketBits';
+import { EstimateAge, EstimateRow, SlippageLine, SummaryCard } from '../../trade/PairTicketBits';
+import { StepList } from '../RebalanceBits';
 import { AmountPresets } from '../../components/AmountPresets';
 import { SegmentedToggle } from '../../components/SegmentedToggle';
 import { QueryError } from '../../components/QueryError';
@@ -135,7 +138,7 @@ import { SinceChip } from './SinceChip';
 import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 import { localizeServerText } from '../../i18n/serverMessages';
-import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
+import { ArrowDown, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
 
 interface Props {
   group: AssetGroup;
@@ -1644,18 +1647,16 @@ interface RollLeg {
   size: number;
 }
 
-function RollLegLine({ leg, collateral }: { leg: RollLeg; collateral: string }) {
+function RollLegName({ leg, coin }: { leg: RollLeg; coin: string }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-200">
-        {leg.spreadVenues ? <SpreadIcon venues={leg.spreadVenues} size={16} /> : <VenueIcon venue={leg.venue} size={16} />}
-        <span className="truncate">{leg.name}</span>
-        <Chip sm tone={leg.side === 'LONG' ? 'green' : 'red'} className="shrink-0 font-semibold">
-          {t(leg.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
-        </Chip>
-      </span>
-      <span className="num shrink-0 text-[12.5px] text-ink-50">{exactQty(leg.size, collateral)}</span>
-    </div>
+    <span className="flex min-w-0 items-center gap-1.5 text-ink-200">
+      {leg.spreadVenues ? <SpreadIcon venues={leg.spreadVenues} size={14} /> : <VenueIcon venue={leg.venue} size={14} />}
+      <span className="truncate">{leg.name}</span>
+      <Chip sm tone={leg.side === 'LONG' ? 'green' : 'red'} className="shrink-0 font-semibold">
+        {t(leg.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
+      </Chip>
+      <span className="num shrink-0 text-ink-50">{exactQty(leg.size, coin)}</span>
+    </span>
   );
 }
 
@@ -1720,68 +1721,76 @@ function AfterRates({ sim, legs, liqWarn }: { sim: BorosPairSimulation | null; l
   );
 }
 
-function RollStep({
-  n,
-  title,
-  legs,
-  collateral,
-  sim,
-  slip,
-  slipInvalidText,
-  slipAria,
-  slipHint,
-  children = null,
-  footer = null,
-}: {
-  n?: number;
+interface RollBatch {
+  key: string;
   title: string;
   legs: RollLeg[];
-  collateral: string;
   sim: BorosPairSimulation | null;
   slip: BatchSlip;
-  slipInvalidText: string;
+  slipLabel?: string;
   slipAria: string;
   slipHint: string;
-  children?: ReactNode;
-  footer?: ReactNode;
-}) {
-  const cost = batchCost(sim, slip.apr);
-  const est = sim?.slippageApr != null ? `${fmtPct(sim.slippageApr)}${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null;
-  const overVenues = sim ? sim.legs.filter((l) => l.slippageExceeded).map((l) => prettyVenue(l.venue)) : [];
+}
+
+function RollSteps({ batches, coin, busy }: { batches: RollBatch[]; coin: string; busy: boolean }) {
   return (
-    <section aria-label={title} className="card flex flex-col gap-1.5 px-3.5 py-3">
-      <span className="flex items-center gap-2 text-[13px] font-semibold text-ink-50">
-        {n !== undefined && <StepBadge n={n} />}
-        {title}
-      </span>
-      {legs.map((leg) => (
-        <RollLegLine key={leg.marketId} leg={leg} collateral={collateral} />
-      ))}
-      {children && <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">{children}</div>}
-      <SlippageLine
-        est={est}
-        max={fmtPct(slip.apr * Math.max(1, legs.length))}
-        unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
-        open={slip.open}
-        onToggle={slip.onToggle}
-        value={slip.str}
-        onChange={slip.onChange}
-        invalid={slip.invalid}
-        invalidText={slipInvalidText}
-        inputAriaLabel={slipAria}
-        hint={slipHint}
-      />
-      {overVenues.length > 0 && (
-        <p className="alert-amber text-[11px] leading-relaxed text-amber-100" role="alert">
-          {t('assetCard.batch.slipTooHigh', { venues: overVenues.join(t('assetCard.andSep')) })}
-        </p>
-      )}
-      <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value={usdOrDash(cost.feeUsd)} />
-      <div className="mt-auto flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
-        <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={usdOrDash(cost.totalUsd)} strong />
-        {footer}
+    <StepList
+      rows={batches.map((b) => ({
+        key: b.key,
+        coin,
+        text: (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="font-semibold text-ink-50">{b.title}</span>
+            {b.legs.map((leg) => (
+              <RollLegName key={leg.marketId} leg={leg} coin={coin} />
+            ))}
+          </span>
+        ),
+        sub: null,
+        right: usdOrDash(batchCost(b.sim, b.slip.apr).totalUsd),
+        state: busy ? 'running' : 'pending',
+        progress: null,
+      }))}
+    />
+  );
+}
+
+function RollCostCard({ batches, age }: { batches: RollBatch[]; age: ReactNode }) {
+  const costs = batches.map((b) => batchCost(b.sim, b.slip.apr));
+  return (
+    <SummaryCard title={t('accounts.moveCash.cost')} aside={age}>
+      {batches.map((b, i) => {
+        const cost = costs[i];
+        const overVenues = b.sim ? b.sim.legs.filter((l) => l.slippageExceeded).map((l) => prettyVenue(l.venue)) : [];
+        return (
+          <div key={b.key} className="flex flex-col gap-1.5">
+            <SlippageLine
+              label={b.slipLabel}
+              est={b.sim?.slippageApr != null ? `${fmtPct(b.sim.slippageApr)}${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null}
+              max={fmtPct(b.slip.apr * Math.max(1, b.legs.length))}
+              unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
+              open={b.slip.open}
+              onToggle={b.slip.onToggle}
+              value={b.slip.str}
+              onChange={b.slip.onChange}
+              invalid={b.slip.invalid}
+              invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+              inputAriaLabel={b.slipAria}
+              hint={b.slipHint}
+            />
+            {overVenues.length > 0 && (
+              <p className="alert-amber text-[11px] leading-relaxed text-amber-100" role="alert">
+                {t('assetCard.batch.slipTooHigh', { venues: overVenues.join(t('assetCard.andSep')) })}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value={usdOrDash(sumUsd(costs.map((c) => c.feeUsd)))} />
+      <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+        <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={usdOrDash(sumUsd(costs.map((c) => c.totalUsd)))} strong />
       </div>
-    </section>
+    </SummaryCard>
   );
 }
 
@@ -2228,18 +2237,34 @@ export function RollOverModal({
     sizeLimits.filter((l): l is BatchLimit => l !== null).sort((a, b) => a.maxSize - b.maxSize)[0] ?? null;
   const maxRoll = maxRollSize(sizeLimits);
 
-  const [step, setStep] = useState<'pick' | 'review'>('pick');
-  // The review page locks the modal while a batch is in flight.
+  const seedKey = `${mode}:${selected}:${simSize}`;
+  const seedPlans = target !== null ? plansFor(target, simSize) : null;
+  const pctOf = (apr: number | undefined) => (apr === undefined ? undefined : +(apr * 100).toFixed(2));
+  const liveExitSeed = pctOf(seedPlans?.exit?.toleranceApr);
+  const liveEntrySeed = pctOf(seedPlans?.entry?.toleranceApr);
+  const [frozenSeeds, setFrozenSeeds] = useState<{ key: string; exit?: number; entry?: number } | null>(null);
+  useEffect(() => {
+    setFrozenSeeds((prev) => {
+      if (prev?.key !== seedKey) return { key: seedKey, exit: liveExitSeed, entry: liveEntrySeed };
+      const exit = prev.exit ?? liveExitSeed;
+      const entry = prev.entry ?? liveEntrySeed;
+      return exit === prev.exit && entry === prev.entry ? prev : { key: seedKey, exit, entry };
+    });
+  }, [seedKey, liveExitSeed, liveEntrySeed]);
+  const seeds = frozenSeeds?.key === seedKey ? frozenSeeds : null;
+
   const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [stepsSlot, setStepsSlot] = useState<HTMLDivElement | null>(null);
 
   return (
     <Modal
       title={
-        picker !== null && step === 'pick' ? (
-          t('assetCard.actions.rollOver')
+        picker !== null && !sent ? (
+          t('assetCard.roll.title')
         ) : (
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-            {t('assetCard.actions.rollOver')}
+            {t('assetCard.roll.title')}
             <span className="text-[14px] font-medium text-ink-200">
               <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} />
             </span>
@@ -2250,152 +2275,151 @@ export function RollOverModal({
       locked={busy}
       widthClass="w-[640px] max-w-[calc(100vw-32px)]"
     >
-      {step === 'review' && target !== null && address !== null && ctx.data ? (
-        openOnly ? (
-          <OpenOnlyReview
-            pair={pair}
-            base={base}
-            yuLegs={yuLegs}
-            target={target}
-            size={size}
-            collateral={collateral}
-            address={address}
-            nowSec={nowSec}
-            markets={markets ?? []}
-            entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
-            onBack={() => setStep('pick')}
-            onBusy={setBusy}
-            onClose={onClose}
-          />
-        ) : (
-          <RollReview
-            pair={pair}
-            yuLegs={yuLegs}
-            target={target}
-            size={size}
-            collateral={collateral}
-            address={address}
-            ctx={ctx.data}
-            oldMaturity={soonest}
-            nowSec={nowSec}
-            perpImUsd={heldSize > 0 ? pairPerpImUsd * (size / heldSize) : 0}
-            exitSeedPct={plans?.exit ? +(plans.exit.toleranceApr * 100).toFixed(2) : undefined}
-            entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
-            onBack={() => setStep('pick')}
-            onBusy={setBusy}
-            onClose={onClose}
-          />
-        )
-      ) : (
-        <div className="flex flex-col gap-4">
-          {picker}
-          <SegmentedToggle<'reopen' | 'openOnly'>
-            className="seg-info"
-            fill
-            ariaLabel={t('assetCard.roll.modeAria')}
-            value={mode}
-            onChange={setMode}
-            options={[
-              { value: 'reopen', label: t('assetCard.roll.modeReopen') },
-              { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
-            ]}
-          />
-
-          <div className="flex flex-col gap-1.5">
-            <span className={microLabelClass}>{sizeLabel}</span>
-            <AmountPresets<RollShare>
-              value={sizeStr}
-              onChange={setSize}
-              inputLabel={`${sizeLabel} (${collateral})`}
-              suffix={t('assetCard.roll.sizeSuffix', { coin: collateral, pct })}
-              bad={sizeStr !== '' && !sizeOk}
-              boxClassName="w-56"
-              presetsLabel={t('assetCard.roll.shareShortcuts')}
-              preset={litShare}
-              onPreset={(share) => setSize(fmtSize(heldSize * (Number(share) / 100)))}
-              presets={ROLL_SHARES.map((share) => ({ value: share, label: `${share}%` }))}
-              custom={{
-                label: t('accounts.deleverTab.custom'),
-                unit: '%',
-                inputLabel: t('accounts.deleverTab.customPctAria'),
-                max: 100,
-                onApply: (share) => setSize(fmtSize(heldSize * (share / 100))),
-              }}
+      <div className="flex flex-col gap-4">
+        {!sent && (
+          <fieldset disabled={busy} className="flex min-w-0 flex-col gap-4">
+            {picker}
+            <SegmentedToggle<'reopen' | 'openOnly'>
+              className="seg-info"
+              fill
+              ariaLabel={t('assetCard.roll.modeAria')}
+              value={mode}
+              onChange={setMode}
+              options={[
+                { value: 'reopen', label: t('assetCard.roll.modeReopen') },
+                { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
+              ]}
             />
-          </div>
+            <div ref={setStepsSlot} className="empty:hidden" />
 
-          {targets.length === 0 ? (
-            <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
-              {ctx.isLoading ? t('assetCard.roll.loadingMaturities') : t('assetCard.roll.noTarget')}
-            </div>
-          ) : (
             <div className="flex flex-col gap-1.5">
-              <div className={`${ROLL_OPTION_GRID} px-3 ${microLabelClass}`}>
-                <span className="pl-[26px]">{t('assetCard.roll.rollInto')}</span>
-                <span className="text-right">
-                  <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
-                    {t('assetCard.roll.fixedAprHint')}
-                  </HoverCard>
-                </span>
-                <span className="text-right">
-                  <HoverCard label={t('assetCard.roll.estProfit')} widthPx={260}>
-                    {openOnly ? t('assetCard.option.earnOpenTitle') : t('assetCard.option.earnRollTitle')}
-                  </HoverCard>
-                </span>
-                <span className="text-right">{t('pairTicket.borosBits.totalCost')}</span>
-              </div>
-              <div className="flex flex-col gap-1.5" role="radiogroup" aria-label={t('assetCard.roll.rollInto')}>
-                {targets.map((tg) => (
-                  <RollOption
-                    key={tg.maturity}
-                    target={tg}
-                    base={base}
-                    pair={pair}
-                    yuLegs={yuLegs}
-                    size={simSize}
-                    perpImUsd={perpImUsd}
-                    address={address}
-                    exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
-                    entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
-                    nowSec={nowSec}
-                    openOnly={openOnly}
-                    selected={selected === tg.maturity}
-                    onSelect={() => setPicked(tg.maturity)}
-                    onLegs={(q) => setLegsBy((prev) => (prev[tg.maturity]?.key === q.key ? prev : { ...prev, [tg.maturity]: q }))}
-                  />
-                ))}
-              </div>
+              <span className={microLabelClass}>{sizeLabel}</span>
+              <AmountPresets<RollShare>
+                value={sizeStr}
+                onChange={setSize}
+                inputLabel={`${sizeLabel} (${collateral})`}
+                suffix={t('assetCard.roll.sizeSuffix', { coin: collateral, pct })}
+                bad={sizeStr !== '' && !sizeOk}
+                boxClassName="w-48"
+                presetsLabel={t('assetCard.roll.shareShortcuts')}
+                preset={litShare}
+                onPreset={(share) => setSize(fmtSize(heldSize * (Number(share) / 100)))}
+                presets={ROLL_SHARES.map((share) => ({ value: share, label: `${share}%` }))}
+                custom={{
+                  label: t('accounts.deleverTab.custom'),
+                  unit: '%',
+                  inputLabel: t('accounts.deleverTab.customPctAria'),
+                  max: 100,
+                  onApply: (share) => setSize(fmtSize(heldSize * (share / 100))),
+                }}
+              />
             </div>
-          )}
 
-          {sizeLimit !== null && maxRoll !== null && (
-            <p role="alert" className="alert-amber text-[11.5px] leading-relaxed text-amber-100">
-              {sizeLimit.kind === 'liquidity'
-                ? t('assetCard.roll.tooBigLiquidity', { market: sizeLimit.marketName })
-                : t('assetCard.roll.tooBigRate', { market: sizeLimit.marketName })}{' '}
-              {t(openOnly ? 'assetCard.roll.mostOpens' : 'assetCard.roll.mostRolls', { qty: fmtTokenQty(maxRoll, collateral) })}{' '}
-              <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
-                {t(openOnly ? 'assetCard.roll.openInstead' : 'assetCard.roll.rollInstead', { qty: exactQty(suggestedRollSize(maxRoll, heldSize), collateral) })}
-              </button>
-            </p>
-          )}
+            {targets.length === 0 ? (
+              <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
+                {ctx.isLoading ? t('assetCard.roll.loadingMaturities') : t('assetCard.roll.noTarget')}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <div className={`${ROLL_OPTION_GRID} pr-3 ${microLabelClass}`}>
+                  <span>{t('assetCard.roll.rollInto')}</span>
+                  <span className="text-right">
+                    <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
+                      {t('assetCard.roll.fixedAprHint')}
+                    </HoverCard>
+                  </span>
+                  <span className="text-right">
+                    <HoverCard label={t('assetCard.roll.estProfit')} widthPx={260}>
+                      {openOnly ? t('assetCard.option.earnOpenTitle') : t('assetCard.option.earnRollTitle')}
+                    </HoverCard>
+                  </span>
+                  <span className="text-right">{t('pairTicket.borosBits.totalCost')}</span>
+                </div>
+                <div className="flex flex-col gap-1.5" role="radiogroup" aria-label={t('assetCard.roll.rollInto')}>
+                  {targets.map((tg) => (
+                    <RollOption
+                      key={tg.maturity}
+                      target={tg}
+                      base={base}
+                      pair={pair}
+                      yuLegs={yuLegs}
+                      size={simSize}
+                      perpImUsd={perpImUsd}
+                      address={address}
+                      exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
+                      entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
+                      nowSec={nowSec}
+                      openOnly={openOnly}
+                      selected={selected === tg.maturity}
+                      onSelect={() => setPicked(tg.maturity)}
+                      onLegs={(q) => setLegsBy((prev) => (prev[tg.maturity]?.key === q.key ? prev : { ...prev, [tg.maturity]: q }))}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
 
+            {sizeLimit !== null && maxRoll !== null && (
+              <p role="alert" className="alert-amber text-[11.5px] leading-relaxed text-amber-100">
+                {sizeLimit.kind === 'liquidity'
+                  ? t('assetCard.roll.tooBigLiquidity', { market: sizeLimit.marketName })
+                  : t('assetCard.roll.tooBigRate', { market: sizeLimit.marketName })}{' '}
+                {t(openOnly ? 'assetCard.roll.mostOpens' : 'assetCard.roll.mostRolls', { qty: fmtTokenQty(maxRoll, collateral) })}{' '}
+                <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
+                  {t(openOnly ? 'assetCard.roll.openInstead' : 'assetCard.roll.rollInstead', { qty: exactQty(suggestedRollSize(maxRoll, heldSize), collateral) })}
+                </button>
+              </p>
+            )}
+
+          </fieldset>
+        )}
+        {target !== null && address !== null && ctx.data && simSize > 0 ? (
+          openOnly ? (
+            <OpenOnlyReview
+              pair={pair}
+              base={base}
+              yuLegs={yuLegs}
+              target={target}
+              size={simSize}
+              collateral={collateral}
+              address={address}
+              nowSec={nowSec}
+              markets={markets ?? []}
+              entrySeedPct={seeds?.entry}
+              settling={size !== simSize || seeds === null}
+              stepsSlot={stepsSlot}
+              onBusy={setBusy}
+              onResult={setSent}
+              onClose={onClose}
+            />
+          ) : (
+            <RollReview
+              pair={pair}
+              yuLegs={yuLegs}
+              target={target}
+              size={simSize}
+              collateral={collateral}
+              address={address}
+              ctx={ctx.data}
+              oldMaturity={soonest}
+              nowSec={nowSec}
+              exitSeedPct={seeds?.exit}
+              entrySeedPct={seeds?.entry}
+              settling={size !== simSize || seeds === null}
+              stepsSlot={stepsSlot}
+              onBusy={setBusy}
+              onResult={setSent}
+              onClose={onClose}
+            />
+          )
+        ) : (
           <div className="flex items-center justify-end gap-2">
             <button type="button" className="btn" onClick={onClose}>
               {t('common.cancel')}
             </button>
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={target === null || !(size > 0) || address === null || !ctx.data}
-              onClick={() => setStep('review')}
-            >
-              {openOnly ? t('assetCard.roll.openNewMaturity') : t('assetCard.actions.rollOver')}
-              <ArrowRight size={14} aria-hidden />
-            </button>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </Modal>
   );
 }
@@ -2472,11 +2496,12 @@ function RollReview({
   ctx,
   oldMaturity,
   nowSec,
-  perpImUsd,
   exitSeedPct,
   entrySeedPct,
-  onBack,
+  settling,
+  stepsSlot,
   onBusy,
+  onResult,
   onClose,
 }: {
   pair: PairEstimate;
@@ -2488,15 +2513,15 @@ function RollReview({
   ctx: BorosPairContext;
   oldMaturity: number;
   nowSec: number;
-  /** The perp margin behind THIS size — the capital base of the headline. */
-  perpImUsd: number;
   /** The tolerance the pick page settled on for each batch at this size, in
    * % APR — wider than the per-market seed when the size needed it. Absent
    * (no ladder quoted yet) falls back to the seed. */
   exitSeedPct?: number;
   entrySeedPct?: number;
-  onBack: () => void;
+  settling: boolean;
+  stepsSlot: HTMLElement | null;
   onBusy: (busy: boolean) => void;
+  onResult: (shown: boolean) => void;
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
@@ -2556,7 +2581,8 @@ function RollReview({
   };
   // The report page reads the execute response, not the quote — so once the
   // roll has been sent the poll stops rather than re-pricing a closed pair.
-  const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string } | null>(null);
+  const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string; refused: boolean } | null>(null);
+  useEffect(() => onResult(out !== null), [out, onResult]);
   const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null, ROLL_POLL_MS);
   const exitSim = roll.data?.exit.simulation ?? null;
   const entrySim = roll.data?.entry.simulation ?? null;
@@ -2635,7 +2661,7 @@ function RollReview({
     Object.fromEntries(
       [...req.exit.legs.map((l) => `exit:${l.marketId}`), ...req.entry.legs.map((l) => `entry:${l.marketId}`)].map((k) => [k, ids.current[k]]),
     );
-  const canConfirm = rollReq !== null && blockers.length === 0 && !busy && out === null && canTrade;
+  const canConfirm = rollReq !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
   const run = async () => {
     if (!rollReq) return;
@@ -2645,7 +2671,7 @@ function RollReview({
       const payload = await executeRoll.mutateAsync({ ...rollReq, clientOrderIds: rollIds(rollReq) });
       setOut({ payload });
     } catch (e) {
-      setOut({ error: e instanceof Error ? e.message : String(e) });
+      setOut({ error: e instanceof Error ? e.message : String(e), refused: e instanceof ApiError && e.httpStatus === 409 });
     } finally {
       setBusy(false);
     }
@@ -2669,6 +2695,7 @@ function RollReview({
     const namedMarket = reason?.leg != null ? legMarketName(reason.leg) : null;
     const refusedText = reason ? (namedMarket ? `${namedMarket}: ${localizeServerText(reason.message)}` : localizeServerText(reason.message)) : '';
     const canRetry = 'error' in out || status === 'refused';
+    const canEdit = status === 'refused' || ('error' in out && out.refused);
     return (
       <div className="flex flex-col gap-2">
         {result && (
@@ -2707,6 +2734,11 @@ function RollReview({
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             {t('common.close')}
           </button>
+          {canEdit && (
+            <button type="button" className="btn" onClick={() => setOut(null)} disabled={busy}>
+              {t('common.back')}
+            </button>
+          )}
           {canRetry && (
             <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
               {t('common.retry')}
@@ -2720,82 +2752,43 @@ function RollReview({
   const allMarkets = [...ctx.markets, ...(ctx.spreadMarkets ?? [])];
   const exitRows = rollLegsOf(rollExitLegs, allMarkets, heldSide, (i) => yuLegs[i]?.venue ?? '');
   const entryRows = rollLegsOf(rollEntryLegs, allMarkets, openSide, () => '');
-  const totalUsd = sumUsd([batchCost(exitSim, exitSlip.apr).totalUsd, batchCost(entrySim, entrySlip.apr).totalUsd]);
-  const fig = rollFigures({ entrySim: entrySim ?? undefined, exitSim: exitSim ?? undefined, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec });
   const exitPnl = exitPnlOf(exitSim, yuLegs, nowSec);
   const money = (n: number) =>
     px !== null && px > 0 ? <SignedNumber value={n * px} format={fmtUsd} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, collateral)} />;
-  const marginOk = marginNeed !== null && availableAfter !== null && marginShort === 0;
   const afterAvail = availableAfter ?? availableAfterExit;
   const blank = <span className="text-ink-500">{pending ? '…' : '—'}</span>;
   const reasons = [...new Set([...(exitSim?.reasons ?? []), ...(entrySim?.reasons ?? [])])];
-
-  const exitCost = batchCost(exitSim, exitSlip.apr);
-  const entryCost = batchCost(entrySim, entrySlip.apr);
-  const fundTone = marginShort > 0 ? 'border-amber-500/40' : marginOk ? 'border-emerald-500/30' : '';
+  const batches: RollBatch[] = [
+    {
+      key: 'exit',
+      title: t('assetCard.roll.stepClose', { date: fmtDateLocal(oldMaturity) }),
+      legs: exitRows,
+      sim: exitSim,
+      slip: exitSlip,
+      slipLabel: t('assetCard.roll.slipClose'),
+      slipAria: t('assetCard.batch.slipAria', { label: t('assetCard.roll.exit') }),
+      slipHint: t('assetCard.batch.slipHint'),
+    },
+    {
+      key: 'entry',
+      title: t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) }),
+      legs: entryRows,
+      sim: entrySim,
+      slip: entrySlip,
+      slipLabel: t('assetCard.roll.slipOpen'),
+      slipAria: t('assetCard.batch.slipAria', { label: t('assetCard.roll.reentry') }),
+      slipHint: t('assetCard.batch.slipHint'),
+    },
+  ];
 
   return (
     <div className="flex flex-col gap-3">
       {roll.isError && <QueryError title={t('assetCard.review.quoteFailed')} error={roll.error} onRetry={() => roll.refetch()} />}
-      <div className="card flex flex-wrap items-end justify-between gap-x-6 gap-y-3 px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-[12px] text-ink-300">
-            <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={280}>
-              <HoverRows
-                lead={t('assetCard.roll.fixedAprHint')}
-                rows={[
-                  [t('assetCard.option.perpMargin'), fmtUsd(perpImUsd)],
-                  [t('assetCard.option.newBorosMargin'), usdOrDash(fig.newBorosImUsd)],
-                  [t('common.capital'), usdOrDash(fig.capitalUsd)],
-                ]}
-              />
-            </HoverCard>
-            <EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />
-          </div>
-          <div className="num mt-1.5 text-[26px] font-semibold leading-none tracking-[-0.02em]">
-            {fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : blank}
-            <span className="ml-2 text-[13px] font-normal text-ink-300">{daysLeftText(target.maturity, nowSec)}</span>
-          </div>
-        </div>
-        <div className="grid grid-cols-3 gap-x-5">
-          <div>
-            <div className={statLabel}>{t('common.size')}</div>
-            <div className={`${statValue} font-semibold text-ink-50`}>{exactQty(size, collateral)}</div>
-          </div>
-          <div>
-            <div className={statLabel}>{t('assetCard.estEarnings')}</div>
-            <div className={`${statValue} font-semibold`}>
-              {fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : blank}
-            </div>
-          </div>
-          <div>
-            <div className={statLabel}>
-              <HoverCard label={t('pairTicket.borosBits.totalCost')} widthPx={260}>
-                <HoverRows
-                  rows={[
-                    [t('assetCard.roll.stepClose', { date: fmtDateLocal(oldMaturity) }), usdOrDash(exitCost.totalUsd)],
-                    [t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) }), usdOrDash(entryCost.totalUsd)],
-                  ]}
-                />
-              </HoverCard>
-            </div>
-            <div className={`${statValue} font-semibold text-ink-50`}>{totalUsd !== null ? fmtUsd(totalUsd) : blank}</div>
-          </div>
-        </div>
-      </div>
+      {stepsSlot && createPortal(<RollSteps batches={batches} coin={collateral} busy={busy} />, stepsSlot)}
+      <RollCostCard batches={batches} age={<EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />} />
 
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
-        <RollStep
-          n={1}
-          title={t('assetCard.roll.stepClose', { date: fmtDateLocal(oldMaturity) })}
-          legs={exitRows}
-          collateral={collateral}
-          sim={exitSim}
-          slip={exitSlip}
-          slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-          slipAria={t('assetCard.batch.slipAria', { label: t('assetCard.roll.exit') })}
-          slipHint={t('assetCard.batch.slipHint')}
-        >
+      <SummaryCard title={t('accounts.moveCash.after')}>
+        <div className="flex flex-col gap-1.5">
           <EstimateRow
             label={
               <HoverCard label={t('assetCard.review.exitPnl')} widthPx={300}>
@@ -2811,90 +2804,69 @@ function RollReview({
             value={exitPnl.total !== null ? money(exitPnl.total) : blank}
             strong
           />
-        </RollStep>
-        <RollStep
-          n={2}
-          title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
-          legs={entryRows}
-          collateral={collateral}
-          sim={entrySim}
-          slip={entrySlip}
-          slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-          slipAria={t('assetCard.batch.slipAria', { label: t('assetCard.roll.reentry') })}
-          slipHint={t('assetCard.batch.slipHint')}
-        >
           <AfterRates sim={entrySim} legs={entryRows} liqWarn={() => suggestedTopUp === null || suggestedTopUp > 0} />
-        </RollStep>
-      </div>
-
-      <section aria-label={t('assetCard.review.canFund')} className={`card flex flex-col gap-1.5 px-3.5 py-3 ${fundTone}`}>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[13px] font-semibold text-ink-50">{t('assetCard.review.canFund')}</span>
-          {marginShort > 0 ? (
-            <span className="num text-[12.5px] text-rose-300">{t('assetCard.roll.fundShort', { qty: fmtTokenQty(marginShort, collateral) })}</span>
-          ) : marginOk ? (
-            <span className="inline-flex items-center gap-1 text-[12.5px] text-emerald-300">
-              <Check size={12} aria-hidden />
-              {t('assetCard.roll.fundYes')}
-            </span>
-          ) : (
-            blank
-          )}
         </div>
-        {marginShort > 0 && <p className="text-[11px] leading-relaxed text-rose-200/90">{t('assetCard.roll.fundShortSub')}</p>}
-        <EstimateRow
-          label={t('assetCard.review.requiredMargin')}
-          value={
-            marginNeed !== null ? (
-              <>
-                {fmtTokenQty(marginNeed, collateral)}
-                {usdNote(marginNeed)}
-              </>
-            ) : (
-              blank
-            )
-          }
-        />
-        <EstimateRow
-          label={
-            <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
-              {availableAfter === null && availableAfterExit !== null ? t('assetCard.review.availTitleExit') : t('assetCard.review.availTitleAfter')}
-            </HoverCard>
-          }
-          value={
-            availableBefore !== null && afterAvail !== null ? (
-              <span className={afterAvail < 0 || marginShort > 0 ? 'text-rose-300' : ''}>
-                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(afterAvail, collateral)}
-                {usdNote(afterAvail)}
-              </span>
-            ) : (
-              blank
-            )
-          }
-        />
-        {suggestedTopUp !== null && suggestedTopUp > 0 && (
+        <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+          <EstimateRow
+            label={t('assetCard.review.requiredMargin')}
+            value={
+              marginNeed !== null ? (
+                <>
+                  {fmtTokenQty(marginNeed, collateral)}
+                  {usdNote(marginNeed)}
+                </>
+              ) : (
+                blank
+              )
+            }
+          />
           <EstimateRow
             label={
-              <span className="text-amber-300">
-                <HoverCard label={t('pairTicket.borosBits.suggestedTopUp')} widthPx={260}>
-                  {t('pairTicket.borosBits.suggestedTopUpHint')}
+              availableAfter === null && availableAfterExit !== null ? (
+                <HoverCard label={t('assetCard.review.availAfterClose')} widthPx={260}>
+                  {t('assetCard.review.availTitleExit')}
                 </HoverCard>
-              </span>
+              ) : (
+                <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
+                  {t('assetCard.review.availTitleAfter')}
+                </HoverCard>
+              )
             }
             value={
-              <span className="text-amber-300">
-                +{depositQty(suggestedTopUp, collateral)}
-                {usdNote(suggestedTopUp)}
-              </span>
+              availableBefore !== null && afterAvail !== null ? (
+                <span className={afterAvail < 0 || marginShort > 0 ? 'text-rose-300' : ''}>
+                  {availableAfter === null ? fmtTokenQty(afterAvail, collateral) : `${fmtTokenQty(availableBefore, collateral)} → ${fmtTokenQty(afterAvail, collateral)}`}
+                  {usdNote(afterAvail)}
+                </span>
+              ) : (
+                blank
+              )
             }
           />
-        )}
-        {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
-          <EstimateRow
-            label={t('assetCard.roll.openOrders', { date: fmtDateLocal(oldMaturity) })}
-            value={size < pairRollGeometry(pair).heldSize ? t('assetCard.roll.cancelledPart') : t('assetCard.roll.cancelled')}
-          />
-        )}
+          {suggestedTopUp !== null && suggestedTopUp > 0 && (
+            <EstimateRow
+              label={
+                <span className="text-amber-300">
+                  <HoverCard label={t('pairTicket.borosBits.suggestedTopUp')} widthPx={260}>
+                    {t('pairTicket.borosBits.suggestedTopUpHint')}
+                  </HoverCard>
+                </span>
+              }
+              value={
+                <span className="text-amber-300">
+                  +{depositQty(suggestedTopUp, collateral)}
+                  {usdNote(suggestedTopUp)}
+                </span>
+              }
+            />
+          )}
+          {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
+            <EstimateRow
+              label={t('assetCard.roll.openOrders', { date: fmtDateLocal(oldMaturity) })}
+              value={size < pairRollGeometry(pair).heldSize ? t('assetCard.roll.cancelledPart') : t('assetCard.roll.cancelled')}
+            />
+          )}
+        </div>
         {reasons.length > 0 && (
           <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
             {reasons.map((r) => (
@@ -2902,7 +2874,7 @@ function RollReview({
             ))}
           </ul>
         )}
-      </section>
+      </SummaryCard>
 
       {(roll.data?.gate.warnings ?? []).map((w) => (
         <p
@@ -2921,10 +2893,9 @@ function RollReview({
         )}
       />
 
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <button type="button" className="btn" onClick={onBack} disabled={busy}>
-          <ArrowLeft size={14} aria-hidden />
-          {t('common.back')}
+      <div className="mt-1 flex items-center justify-end gap-2">
+        <button type="button" className="btn" onClick={onClose} disabled={busy}>
+          {t('common.cancel')}
         </button>
         {loginLabel ? (
           <BorosLogInButton />
@@ -2959,8 +2930,10 @@ function OpenOnlyReview({
   nowSec,
   markets,
   entrySeedPct,
-  onBack,
+  settling,
+  stepsSlot,
   onBusy,
+  onResult,
   onClose,
 }: {
   pair: PairEstimate;
@@ -2975,8 +2948,10 @@ function OpenOnlyReview({
   /** The tolerance the pick page settled on for the entry at this size, in %
    * APR — wider than the per-market seed when the size needed it. */
   entrySeedPct?: number;
-  onBack: () => void;
+  settling: boolean;
+  stepsSlot: HTMLElement | null;
   onBusy: (busy: boolean) => void;
+  onResult: (shown: boolean) => void;
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
@@ -2984,7 +2959,7 @@ function OpenOnlyReview({
   const execute = useExecuteBorosPair();
   // One tolerance for the two entry legs — seeded as the pick page settled it,
   // editable here. Invalid (empty, zero, over the cap) blocks the confirm.
-  const seedPct = entrySeedPct ?? ROLL_MAX_SLIP_PCT / 10;
+  const seedPct = entrySeedPct ?? seedSlipPctFor(markets, targetMarketIds(target));
   const [slipEdited, setSlipEdited] = useState<string | null>(null);
   const [slipOpen, setSlipOpen] = useState(false);
   const slipStr = slipEdited ?? String(seedPct);
@@ -3002,6 +2977,7 @@ function OpenOnlyReview({
   // The report reads the execute response, not the quote — so once sent the
   // poll stops rather than re-pricing a position that is already open.
   const [out, setOut] = useState<{ payload: BorosPairExecuteResponse } | { error: string } | null>(null);
+  useEffect(() => onResult(out !== null), [out, onResult]);
   const sim = useBorosPairSimulation(req, req !== null && out === null, { refetchInterval: ROLL_POLL_MS });
   const simulation = sim.data?.simulation ?? null;
   const ackShown = sim.data?.gate.requiresAcknowledgement === true;
@@ -3035,7 +3011,7 @@ function OpenOnlyReview({
   // Two ids minted once and reused for every retry — a lost response replays
   // from the server's memo, a refusal executes again (as the pair ticket does).
   const ids = useRef<string[]>([]);
-  const canConfirm = req !== null && blockers.length === 0 && !busy && out === null && canTrade;
+  const canConfirm = req !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
   const run = async () => {
     if (!req) return;
@@ -3089,6 +3065,11 @@ function OpenOnlyReview({
           <button type="button" className="btn" onClick={onClose} disabled={busy}>
             {t('common.close')}
           </button>
+          {result?.filledNothing && (
+            <button type="button" className="btn" onClick={() => setOut(null)} disabled={busy}>
+              {t('common.back')}
+            </button>
+          )}
           {retryable && (
             <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
               {t('common.retry')}
@@ -3108,23 +3089,23 @@ function OpenOnlyReview({
     apr: slipApr,
   };
   const openRows = rollLegsOf(openLegs, markets, openSide, () => '');
+  const batch: RollBatch = {
+    key: 'entry',
+    title: t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) }),
+    legs: openRows,
+    sim: simulation,
+    slip,
+    slipAria: t('assetCard.openOnly.slipAria'),
+    slipHint: t('assetCard.openOnly.slipHint'),
+  };
   const blank = <span className="text-ink-500">{sim.isPending ? '…' : '—'}</span>;
   const old = fmtDateLocal(pair.soonestMaturitySec);
 
   return (
     <div className="flex flex-col gap-3">
       {sim.isError && <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />}
-      <RollStep
-        title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
-        legs={openRows}
-        collateral={collateral}
-        sim={simulation}
-        slip={slip}
-        slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-        slipAria={t('assetCard.openOnly.slipAria')}
-        slipHint={t('assetCard.openOnly.slipHint')}
-        footer={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />}
-      />
+      {stepsSlot && createPortal(<RollSteps batches={[batch]} coin={collateral} busy={busy} />, stepsSlot)}
+      <RollCostCard batches={[batch]} age={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />} />
 
       <SummaryCard title={t('accounts.moveCash.after')}>
         <div className="flex flex-col gap-1.5">
@@ -3167,10 +3148,9 @@ function OpenOnlyReview({
         )}
       />
 
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <button type="button" className="btn" onClick={onBack} disabled={busy}>
-          <ArrowLeft size={14} aria-hidden />
-          {t('common.back')}
+      <div className="mt-1 flex items-center justify-end gap-2">
+        <button type="button" className="btn" onClick={onClose} disabled={busy}>
+          {t('common.cancel')}
         </button>
         {loginLabel ? (
           <BorosLogInButton />

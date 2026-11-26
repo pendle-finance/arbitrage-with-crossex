@@ -66,7 +66,7 @@ describe('rebalance opener', () => {
     expect(result.current.state).toMatchObject({ open: false, tab: null, pairKey: null });
   });
 
-  it('opens on the tab and pair given and switches to Balances', () => {
+  it('opens on the tab and pair given over the current tab, and switches to Balances only without a pair', () => {
     const wrapper = ({ children }: { children: ReactNode }) => createElement(RebalanceOpenerProvider, null, children);
     const { result } = renderHook(useBoth, { wrapper });
     const tabs: unknown[] = [];
@@ -74,11 +74,12 @@ describe('rebalance opener', () => {
     window.addEventListener('crossex:open-tab', onTab);
     act(() => result.current.open({ tab: 'delever', pairKey: 'ETH:x' }));
     expect(result.current.state).toMatchObject({ open: true, tab: 'delever', pairKey: 'ETH:x' });
-    expect(tabs).toEqual(['balances']);
+    expect(tabs).toEqual([]);
     act(() => result.current.state.close());
     expect(result.current.state).toMatchObject({ open: false, tab: null, pairKey: null });
     act(() => result.current.open());
     expect(result.current.state).toMatchObject({ open: true, tab: null, pairKey: null });
+    expect(tabs).toEqual(['balances']);
     window.removeEventListener('crossex:open-tab', onTab);
   });
 });

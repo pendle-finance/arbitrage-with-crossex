@@ -341,6 +341,22 @@ describe('ClosePairForm: After card', () => {
     expect(card).toHaveTextContent('Hyperliquid SHORT');
   });
 
+  it('the price PnL adds what earlier closes booked since the pair opened, and the hover shows it', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const live = new Map([
+      ['BYBIT_FUTURE_HYPE_USDT', { symbol: 'BYBIT_FUTURE_HYPE_USDT', positionQty: '1.89', upnl: '-50500' }],
+      ['HYPERLIQUID_FUTURE_HYPE_USDC', { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', positionQty: '-1.89', upnl: '21000' }],
+    ]) as unknown as Map<string, CrossexPosition>;
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} livePositions={live} bookedBefore={{ usd: 29_530, sinceSec: 1_792_108_800 }} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(await within(after).findByText('$30.00')).toBeInTheDocument();
+    expect(within(after).queryByText('-$29,500.00')).toBeNull();
+    await userEvent.setup().hover(within(after).getByText('Price PnL booked'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent(/since the pair opened on 2026-10-16/);
+    expect(card).toHaveTextContent(/Booked before\s*\+?\$29,530\.00/);
+  });
+
   it('a partial size shows what stays open on each leg', async () => {
     server.use(
       ...baseHandlers(),
