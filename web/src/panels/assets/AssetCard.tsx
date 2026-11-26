@@ -5,7 +5,7 @@
  *
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
-import { cloneElement, createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { cloneElement, createContext, type ReactNode, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
@@ -42,6 +42,7 @@ import { Skeleton } from '../../components/Skeleton';
 import { microLabelClass } from '../../components/Th';
 import { SharePositionModal } from '../SharePositionModal';
 import { ClosePairForm } from '../PerpOnlyBox';
+import { ClosePairModal, RollPairModal } from './ClosePairModal';
 import { BorosLogInButton } from '../../trade/BorosAgentSetup';
 import { CloseBorosForm } from '../../trade/CloseBorosForm';
 import { pickOpenMarkets } from '../../trade/BorosPairTicket';
@@ -106,7 +107,6 @@ import {
   exclusionQty,
   keptSlice,
   perpKey,
-  pairBorosCloseLegs,
   pairCanRoll,
   pairRollDue,
   pairTimelineAxis,
@@ -2084,11 +2084,13 @@ export function RollOverModal({
   pair,
   base,
   nowSec,
+  picker = null,
   onClose,
 }: {
   pair: PairEstimate;
   base: string;
   nowSec: number;
+  picker?: ReactNode;
   onClose: () => void;
 }) {
   useTranslation();
@@ -2224,12 +2226,16 @@ export function RollOverModal({
   return (
     <Modal
       title={
-        <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-          {t('assetCard.actions.rollOver')}
-          <span className="text-[14px] font-medium text-ink-200">
-            <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} />
+        picker !== null ? (
+          t('assetCard.actions.rollOver')
+        ) : (
+          <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+            {t('assetCard.actions.rollOver')}
+            <span className="text-[14px] font-medium text-ink-200">
+              <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} />
+            </span>
           </span>
-        </span>
+        )
       }
       onClose={onClose}
       locked={busy}
@@ -2273,6 +2279,7 @@ export function RollOverModal({
         )
       ) : (
         <div className="flex flex-col gap-4">
+          {picker}
           <SegmentedToggle<'reopen' | 'openOnly'>
             className="seg-info"
             fill
@@ -6392,28 +6399,7 @@ export function AssetCard({
         )}
 
       {closePerps !== null && (
-        <Modal
-          title={
-            <>
-              {t('assetCard.actions.closePerps')}
-              <span className="ml-2 text-[12px] font-normal text-ink-400">
-                {group.base} · {prettyVenue(closePerps.longVenue)} ⇄ {prettyVenue(closePerps.shortVenue)}
-                {closePerps.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closePerps.soonestMaturitySec)}` : ''}
-              </span>
-            </>
-          }
-          onClose={() => setClosePerps(null)}
-          widthClass="w-[620px]"
-        >
-          <div className="flex flex-col gap-3">
-            <ClosePairForm
-              base={group.base}
-              legs={pairPerpCloseLegs(closePerps)}
-              livePositions={livePositions}
-              borosUnhedged
-            />
-          </div>
-        </Modal>
+        <ClosePairModal kind="perps" pair={closePerps} group={group} livePositions={livePositions} onClose={() => setClosePerps(null)} />
       )}
       {closePerpOnly !== null && (
         <Modal
@@ -6494,29 +6480,7 @@ export function AssetCard({
         </Modal>
       )}
       {closeBoros !== null && (
-        <Modal
-          title={
-            <>
-              {/* Named for what it closes: the perps stay open. */}
-              {pairBorosCloseLegs(closeBoros, group).length === 1 ? t('assetCard.borosOnly.closeLeg') : t('assetCard.borosOnly.closeLegs')}
-              <span className="ml-2 text-[12px] font-normal text-ink-400">
-                {group.base} · {prettyVenue(closeBoros.longVenue)} ⇄ {prettyVenue(closeBoros.shortVenue)}
-                {closeBoros.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closeBoros.soonestMaturitySec)}` : ''}
-              </span>
-            </>
-          }
-          onClose={() => setCloseBoros(null)}
-          widthClass="w-[620px]"
-        >
-          <CloseBorosForm
-            legs={pairBorosCloseLegs(closeBoros, group).map((l) => ({
-              ...l,
-              spreadVenues: group.borosOpen.find((b) => b.marketId === l.marketId)?.spreadVenues ?? null,
-            }))}
-            perpsUnhedged
-            onDone={() => setCloseBoros(null)}
-          />
-        </Modal>
+        <ClosePairModal kind="boros" pair={closeBoros} group={group} livePositions={livePositions} onClose={() => setCloseBoros(null)} />
       )}
       {closeBorosOnly !== null && (
         <Modal
@@ -6569,7 +6533,7 @@ export function AssetCard({
         </Modal>
       )}
       {rollOver !== null && (
-        <RollOverModal pair={rollOver} base={group.base} nowSec={nowSec} onClose={() => setRollOver(null)} />
+        <RollPairModal pair={rollOver} group={group} nowSec={nowSec} onClose={() => setRollOver(null)} />
       )}
 
       {feesOpen && (

@@ -2,8 +2,9 @@ import { useMemo } from 'react';
 import { useAssetPrefs, useAssetView } from '../../api/queries';
 import type { AssetGroup } from '../../api/types';
 import { t } from '../../i18n';
+import type { PairPickerRow } from '../../components/PairPicker';
 import { daysToMaturity } from '../../lib/boros';
-import { parseSymbol } from '../../lib/fmt';
+import { fmtDateLocal, fmtUsdCompact, parseSymbol, sigGrouped } from '../../lib/fmt';
 import { bookKey, useBookId } from '../bookId';
 import { useTrackedAddress } from '../trackedAddress';
 import { deriveAsset, type Exclusions, type PairEstimate } from './assetModel';
@@ -50,13 +51,26 @@ export function openPairOf(base: string, pair: PairEstimate): OpenPair {
   };
 }
 
+export interface PairEntry {
+  open: OpenPair;
+  pair: PairEstimate;
+  group: AssetGroup;
+}
+
+export function pairEntriesOf(
+  groups: readonly AssetGroup[],
+  view: { exclusions: Exclusions; sinceSec: number; nowSec: number },
+): PairEntry[] {
+  return groups.flatMap((group) =>
+    deriveAsset(group, view.exclusions, view.sinceSec, view.nowSec).pairs.map((pair) => ({ open: openPairOf(group.base, pair), pair, group })),
+  );
+}
+
 export function openPairsOf(
   groups: readonly AssetGroup[],
   view: { exclusions: Exclusions; sinceSec: number; nowSec: number },
 ): OpenPair[] {
-  return groups.flatMap((group) =>
-    deriveAsset(group, view.exclusions, view.sinceSec, view.nowSec).pairs.map((p) => openPairOf(group.base, p)),
-  );
+  return pairEntriesOf(groups, view).map((e) => e.open);
 }
 
 export const daysLeftText = (maturitySec: number, nowSec: number): string => {
@@ -64,7 +78,19 @@ export const daysLeftText = (maturitySec: number, nowSec: number): string => {
   return days > 0 ? t('assetCard.daysLeft', { days }) : t('assetCard.matured');
 };
 
-export function useOpenPairs(): { pairs: OpenPair[]; loading: boolean; failed: boolean; retry: () => void } {
+export function pairPickerRowOf(pair: OpenPair, nowSec: number): PairPickerRow {
+  return {
+    key: pair.key,
+    longVenue: pair.longVenue,
+    shortVenue: pair.shortVenue,
+    base: pair.base,
+    maturityText: t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturitySec), left: daysLeftText(pair.maturitySec, nowSec) }),
+    sizeText: t('accounts.deleverTab.pairSize', { qty: sigGrouped(pair.size), coin: pair.base }),
+    imText: fmtUsdCompact(pair.imUsd),
+  };
+}
+
+export function useOpenPairs(): { pairs: OpenPair[]; entries: PairEntry[]; loading: boolean; failed: boolean; retry: () => void } {
   const { address } = useTrackedAddress();
   const book = bookKey(useBookId(address));
   const prefsQuery = useAssetPrefs(book, address !== null);
@@ -75,11 +101,12 @@ export function useOpenPairs(): { pairs: OpenPair[]; loading: boolean; failed: b
   );
   const query = useAssetView(address, undefined, legSinceParam(saved?.legSince ?? {}));
   const data = query.data;
-  const pairs = useMemo(
-    () => (data ? openPairsOf(data.assets, { exclusions, sinceSec: data.sinceSec, nowSec: data.nowSec }) : []),
+  const entries = useMemo(
+    () => (data ? pairEntriesOf(data.assets, { exclusions, sinceSec: data.sinceSec, nowSec: data.nowSec }) : []),
     [data, exclusions],
   );
+  const pairs = useMemo(() => entries.map((e) => e.open), [entries]);
   const loading = address !== null && !query.isError && (prefsQuery.isPending || query.isPending);
   const failed = query.isError && data === undefined;
-  return { pairs, loading, failed, retry: () => void query.refetch() };
+  return { pairs, entries, loading, failed, retry: () => void query.refetch() };
 }

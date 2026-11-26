@@ -62,9 +62,9 @@ export function Modal({ title, locked = false, onClose, widthClass = 'w-[700px]'
               type="button"
               onClick={onClose}
               aria-label={t('app.closeAria')}
-              className="rounded-md px-2 py-0.5 text-ink-400 transition-colors hover:bg-ink-800 hover:text-ink-100"
+              className="rounded-full p-1 text-ink-300 transition-colors hover:bg-ink-500/25 hover:text-ink-50 focus:outline-none focus-visible:ring-1 focus-visible:ring-ink-400"
             >
-              <X size={14} aria-hidden />
+              <X size={20} aria-hidden />
             </button>
           )}
         </div>
