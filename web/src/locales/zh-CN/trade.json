@@ -357,7 +357,7 @@
       "onResume": "恢复后",
       "onResumeValue_other": "{{count}} 片，每 {{interval}} 一片",
       "pausing": "正在暂停：取消第 {{i}} 片的限价单，并对冲已成交部分",
-      "orders": "订单 {{n}}",
+      "orders": "订单",
       "colVenue": "交易所",
       "colOrder": "订单",
       "colSize": "数量",

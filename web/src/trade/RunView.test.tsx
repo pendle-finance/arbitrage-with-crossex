@@ -211,17 +211,16 @@ describe('RunView, TWAP running', () => {
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('21');
   });
 
-  it('pause stacks above hold to stop, full width, at one height', () => {
+  it('pause and hold to stop share one line, at one height', () => {
     renderRun(job());
     const pause = screen.getByRole('button', { name: 'Pause' });
     const stop = screen.getByRole('button', { name: 'Hold to stop' });
     expect(pause.parentElement).toBe(stop.parentElement);
-    expect(pause.parentElement?.className).toContain('flex-col');
-    expect(pause.parentElement?.className).not.toContain('grid-cols-2');
+    expect(pause.parentElement?.className.split(' ')).toContain('flex');
+    expect(pause.parentElement?.className).not.toContain('flex-col');
     expect(pause.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(pause.className.split(' ')).toContain('btn');
-    expect(stop.className).toContain('h-9');
-    expect(stop.className).toContain('!text-[12px]');
+    expect(pause.className.split(' ')).toEqual(expect.arrayContaining(['btn', 'flex-1']));
+    expect(stop.className.split(' ')).toEqual(expect.arrayContaining(['h-9', 'text-[12px]', 'flex-1']));
   });
 
   it('the slippage label carries a hover with its unit', async () => {
@@ -280,13 +279,13 @@ describe('RunView, TWAP running', () => {
 
   it('orders folded by default', () => {
     renderRun(job());
-    expect(screen.getByText('Orders 6')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Orders 6' })).toBeTruthy();
     expect(screen.queryByText('Market hedge · 3')).toBeNull();
   });
 
   it('orders table newest first', () => {
     renderRun(job());
-    fireEvent.click(screen.getByText('Orders 6'));
+    fireEvent.click(screen.getByRole('button', { name: 'Orders 6' }));
     const rows = screen.getAllByRole('row');
     expect(within(rows[0]!).getByText('Venue')).toBeTruthy();
     expect(within(rows[0]!).getByText('Order')).toBeTruthy();

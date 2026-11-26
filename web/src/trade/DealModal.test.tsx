@@ -122,7 +122,7 @@ describe('DealModal', () => {
     expect(await screen.findByText('Filled · each leg')).toBeInTheDocument();
     expect(screen.getByText('Not hedged now')).toBeInTheDocument();
     expect(screen.getByText('Fee so far')).toBeInTheDocument();
-    expect(screen.getByText('Orders 3')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Orders 3' })).toBeInTheDocument();
     expect(await screen.findByText(/Limit · Gate/)).toBeInTheDocument();
     await waitFor(() => expect(document.querySelector('[data-price-graph]')).not.toBeNull());
     expect(screen.queryByTestId('deal-report')).not.toBeInTheDocument();
@@ -455,7 +455,7 @@ describe('DealModal', () => {
     expect(screen.getByText('$0.09')).toBeInTheDocument();
     expect(screen.getByText('Took')).toBeInTheDocument();
     expect(screen.getByText('3m 40s')).toBeInTheDocument();
-    expect(screen.getByText('Orders 2')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Orders 2' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /stop/i })).not.toBeInTheDocument();
   });
 

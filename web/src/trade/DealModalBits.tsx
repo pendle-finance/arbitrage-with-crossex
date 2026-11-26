@@ -13,7 +13,7 @@ import { dealSlippage } from './dealSlippage';
 import { LimitPriceBox } from './LimitPriceBox';
 import { DealBookImpact } from './PriceImpactGraph';
 import type { RunRow, RunViewProps } from './RunView';
-import { clockSpan, feeText, HOLD_IN_ROW, padTwo, qtyText, sideWord, SideText, SlipLabel, usdText } from './RunViewBits';
+import { clockSpan, feeText, padTwo, qtyText, sideWord, SideText, SlipLabel, usdText } from './RunViewBits';
 
 function venueReasonText(raw: string | null): string | null {
   if (!raw) return null;
@@ -98,7 +98,7 @@ function DealActs({ dealId, mode, nothingRests }: { dealId: string; mode: DealPa
   const pending = convert.isPending || stop.isPending || resume.isPending;
   const error = (convert.error ?? stop.error ?? resume.error) as { message: string; hint?: string } | null;
   const holdStop = (
-    <HoldToConfirmButton tone="outline" className={HOLD_IN_ROW} disabled={pending} onConfirm={() => stop.mutate({ id: dealId })}>
+    <HoldToConfirmButton tone="outline" compact disabled={pending} onConfirm={() => stop.mutate({ id: dealId })}>
       {t('trade.twap.run.holdStop')}
     </HoldToConfirmButton>
   );

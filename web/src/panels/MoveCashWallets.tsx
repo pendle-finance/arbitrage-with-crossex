@@ -63,6 +63,18 @@ export function MoveCashWallets({
   );
   const fromLabel = t('accounts.moveCash.from');
   const toLabel = t('accounts.moveCash.to');
+  const stacked = flow.sent.length > 1 || flow.arrives.length > 1;
+  const walletRows = (label: string, legs: { pool: Pool; amount: number }[], shown: boolean) => (
+    <>
+      <span className={microLabelClass}>{label}</span>
+      {legs.map(({ pool, amount }) => (
+        <div key={pool} className="flex min-w-0 items-center justify-between gap-3">
+          {walletName(pool)}
+          {shown && amountText(amount, pool)}
+        </div>
+      ))}
+    </>
+  );
   const fromBox = custom ? (
     <>
       <WalletLine
@@ -82,6 +94,8 @@ export function MoveCashWallets({
       <ListPicker label={t('accounts.rebalanceModal.from')} value={from} onChange={onFrom} rows={rows} />
       <AmountBox className="w-full" inputLabel={t('accounts.rebalanceModal.amount')} value={text} onChange={onText} suffix={poolCoin(from)} />
     </>
+  ) : stacked ? (
+    walletRows(fromLabel, flow.sent, true)
   ) : (
     flow.sent.map(({ pool, amount }, i) => (
       <WalletLine key={pool} label={i === 0 ? fromLabel : undefined} wallet={walletName(pool)}>
@@ -104,6 +118,11 @@ export function MoveCashWallets({
               <div className="flex h-[35px] items-center gap-2 pl-2.5">
                 {priced ? flow.arrives.map(({ pool, amount }) => <span key={pool}>{amountText(amount, pool, 'text-xs')}</span>) : <span className="text-ink-500">–</span>}
               </div>
+            </>
+          ) : stacked ? (
+            <>
+              {walletRows(toLabel, flow.arrives, priced)}
+              {flow.hasBorrow && <span className="text-ink-400">{t('accounts.moveCash.repays')}</span>}
             </>
           ) : (
             flow.arrives.map(({ pool, amount }, i) => (

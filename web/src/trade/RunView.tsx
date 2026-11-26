@@ -103,7 +103,14 @@ export function RunView({ title, chip, progress, firstLine, rows, graph, priceBo
       ))}
       {orders.length > 0 && (
         <FoldRow
-          label={tr('trade.twap.run.orders', { n: orders.length })}
+          label={
+            <span className="inline-flex items-center gap-1.5">
+              {tr('trade.twap.run.orders')}
+              <Chip sm className="num">
+                {orders.length}
+              </Chip>
+            </span>
+          }
           summary=""
           open={ordersOpen}
           onToggle={() => setOrdersOpen((v) => !v)}
