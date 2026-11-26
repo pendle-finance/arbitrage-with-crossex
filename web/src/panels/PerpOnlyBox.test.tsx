@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -91,7 +91,14 @@ function heldPreviewHandler(held: Record<string, string>, bodies: Array<{ action
   });
 }
 
-const restLine = (text: string) => (_: string, el: Element | null) => el?.tagName === 'P' && el.textContent === text;
+async function afterCard(): Promise<HTMLElement> {
+  return screen.findByRole('region', { name: 'After' });
+}
+
+async function afterRow(qty: string): Promise<string> {
+  const cell = await within(await afterCard()).findByText(qty, {}, { timeout: 4000 });
+  return cell.parentElement?.textContent ?? '';
+}
 
 describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
   beforeEach(() => server.use(...baseHandlers(), ...symbolHandlers(RULES)));
@@ -113,7 +120,7 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     );
     renderWithClient(<ClosePairForm base="BTC" legs={btcLegs(4.4, 4.03)} allowTwap />);
     await twapOn();
-    expect(await screen.findByText(restLine('0.37 BTC Gate Long stays open. Close it as one leg.'))).toBeInTheDocument();
+    expect(await afterRow('0.37 BTC')).toMatch(/^LONG.*Gate.*left/);
     const btn = await screen.findByRole('button', { name: /Start TWAP close/ });
     await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
     const last = bodies[bodies.length - 1];
@@ -145,7 +152,8 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
       />,
     );
     await twapOn();
-    expect(await screen.findByText(restLine('0.37 BTC Gate Long stays open. Close it as one leg.'))).toBeInTheDocument();
+    expect(await afterRow('0.37 BTC')).toMatch(/^LONG.*Gate.*left/);
+    expect(await afterRow('3.6 BTC')).toMatch(/^LONG.*Gate.*not in this pair/);
     const btn = await screen.findByRole('button', { name: /Start TWAP close/ });
     await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ symbol: 'GATE_FUTURE_BTC_USDT', qty: '4.03' });
@@ -170,7 +178,8 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     await twapOn();
     await waitFor(() => expect(screen.getByRole('button', { name: /Start TWAP close/ })).toBeEnabled(), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ symbol: 'GATE_FUTURE_BTC_USDT', qty: '4.03' });
-    expect(screen.queryByText(/stays open/)).not.toBeInTheDocument();
+    expect(await afterRow('3.97 BTC')).toMatch(/^LONG.*Gate.*not in this pair/);
+    expect(within(await afterCard()).queryByText('left')).toBeNull();
   });
 
   it('a $6M book of 1,000.37 against 1,000 ETH closes 1000 on both and leaves 0.37 ETH', async () => {
@@ -187,7 +196,7 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
       />,
     );
     await twapOn();
-    expect(await screen.findByText(restLine('0.37 ETH Gate Long stays open. Close it as one leg.'))).toBeInTheDocument();
+    expect(await afterRow('0.37 ETH')).toMatch(/^LONG.*Gate.*left/);
     await waitFor(() => expect(screen.getByRole('button', { name: /Start TWAP close/ })).toBeEnabled(), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ qty: '1000' });
   });
@@ -197,8 +206,8 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     server.use(heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '4.4', HYPERLIQUID_FUTURE_BTC_USDT: '4.03157' }, bodies));
     renderWithClient(<ClosePairForm base="BTC" legs={btcLegs(4.4, 4.03157)} allowTwap />);
     await twapOn();
-    expect(await screen.findByText(restLine('0.3685 BTC Gate Long stays open. Close it as one leg.'))).toBeInTheDocument();
-    expect(screen.getByText(restLine('0.00007 BTC Hyperliquid Short stays open. Close it as one leg.'))).toBeInTheDocument();
+    expect(await afterRow('0.3685 BTC')).toMatch(/^LONG.*Gate.*left/);
+    expect(await afterRow('0.00007 BTC')).toMatch(/^SHORT.*Hyperliquid.*left/);
     await waitFor(() => expect(bodies[bodies.length - 1].actions.map((a) => ('qty' in a ? a.qty : undefined))).toEqual(['4.0315', '4.0315']));
   });
 
@@ -209,7 +218,7 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     expect(await screen.findByText('PnL to realize')).toBeInTheDocument();
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions.every((a) => !('qty' in a))).toBe(true);
-    expect(screen.queryByText(/stays open/)).toBeNull();
+    expect(within(await afterCard()).queryByText('left')).toBeNull();
   });
 
   it('equal legs with twap on send no size and show no rest', async () => {
@@ -219,7 +228,7 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     await twapOn();
     await waitFor(() => expect(screen.getByRole('button', { name: /Start TWAP close/ })).toBeEnabled(), { timeout: 4000 });
     expect(bodies[bodies.length - 1].actions.every((a) => !('qty' in a))).toBe(true);
-    expect(screen.queryByText(/stays open/)).toBeNull();
+    expect(within(await afterCard()).queryByText('left')).toBeNull();
   });
 });
 
@@ -291,7 +300,9 @@ describe('ClosePairForm, close perps with TWAP', () => {
     server.use(...baseHandlers(), previewHandler());
     renderPlain();
     await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
-    expect(screen.getByRole('textbox', { name: 'Market slippage' })).toHaveValue('0.5');
+    const cost = await screen.findByRole('region', { name: 'Cost' });
+    await userEvent.click(within(cost).getByRole('button', { name: '0.5%' }));
+    expect(within(cost).getByRole('textbox', { name: 'Market slippage' })).toHaveValue('0.5');
     expect(screen.queryByRole('switch', { name: 'TWAP' })).toBeNull();
     expect(screen.queryByRole('button', { name: /Maker settings/ })).toBeNull();
   });
@@ -327,15 +338,18 @@ describe('ClosePairForm, close perps with TWAP', () => {
     });
   });
 
-  it('limit and hedge: plan lines name each leg by its position, with the trade cost and a Book button', async () => {
+  it('limit and hedge: Cost lists each leg in the ticket format, the maker leg at its maker fee, with no Book button', async () => {
     server.use(...baseHandlers(), previewHandler([], FEES));
     renderPlain();
     expect(await screen.findByText('≈ 93.42 USDT')).toBeInTheDocument();
-    expect(screen.getByText('Trade cost')).toBeInTheDocument();
-    expect(screen.getByText('PnL to realize')).toBeInTheDocument();
-    expect(screen.getByText(/Gate · rests as maker/)).toBeInTheDocument();
-    expect(screen.getByText(/Hyperliquid · hedges/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Book' })).toHaveAttribute('aria-pressed', 'false');
+    const cost = screen.getByRole('region', { name: 'Cost' });
+    expect(within(cost).getByText('Trade cost')).toBeInTheDocument();
+    expect(within(cost).getByText('Maker')).toBeInTheDocument();
+    expect(within(cost).getByText('Rests')).toBeInTheDocument();
+    expect(within(cost).getByText('41.52')).toBeInTheDocument();
+    expect(within(cost).getByText('51.9')).toBeInTheDocument();
+    expect(within(await afterCard()).getByText('PnL to realize')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
     expect(screen.queryByText('Limit price')).toBeNull();
     expect(screen.queryByText('SELL')).toBeNull();
     expect(screen.queryByText('BUY')).toBeNull();
@@ -347,7 +361,9 @@ describe('ClosePairForm, close perps with TWAP', () => {
     renderPlain();
     await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
     expect(await screen.findByText('≈ 103.80 USDT')).toBeInTheDocument();
-    expect(screen.queryByText(/rests as maker/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Book' })).toBeInTheDocument();
+    expect(screen.queryByText('Rests')).toBeNull();
+    expect(screen.queryByText('Maker')).toBeNull();
+    expect(screen.getAllByText('51.9')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
   });
 });

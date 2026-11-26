@@ -1,13 +1,14 @@
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PreviewResult } from '../api/types';
+import { VenueIcon } from '../components/AssetIcon';
+import { Chip } from '../components/Chip';
 import { SignedNumber } from '../components/SignedNumber';
-import { fmtUsd } from '../lib/fmt';
+import { fmtUsd, prettyVenue, qtyGrouped } from '../lib/fmt';
 import { decimalsOf, stripZeros } from '../lib/ticks';
-import { EstimateHeadline } from '../trade/EstimateHeadline';
-import { EstimateCard, EstimateRow } from '../trade/PairTicketBits';
-import { PreviewFallback, ViolationList } from '../trade/previewBits';
-import { BookToggle, fmtTradeCost, PlanLine, type PlanRole } from '../trade/TicketEstimateBits';
+import { EstimateAge, EstimateRow, LegTable, SummaryCard } from '../trade/PairTicketBits';
+import { PreviewFallback } from '../trade/previewBits';
+import { fmtTradeCost } from '../trade/TicketEstimateBits';
 
 const UNKNOWN_LOT_DECIMALS = 8;
 
@@ -44,17 +45,18 @@ export function matchedCloseOf(
   };
 }
 
-export function ClosePairEstimate({
+export type CloseAfterRow = { symbol: string; venue: string; side: 'LONG' | 'SHORT'; kind: 'left' | 'notInPair'; qty: string };
+
+export function ClosePairCost({
   previews,
   isError,
   error,
   estimating,
   dataUpdatedAt,
   twapOn,
-  totalPnl,
+  rows,
   tradeCost,
-  plan,
-  book,
+  slippage,
 }: {
   previews: PreviewResult[] | undefined;
   isError: boolean;
@@ -62,49 +64,85 @@ export function ClosePairEstimate({
   estimating: boolean;
   dataUpdatedAt: number;
   twapOn: boolean;
-  totalPnl: number | null;
+  rows: Array<{ side: 'LONG' | 'SHORT'; p: PreviewResult | undefined; rests: boolean }>;
   tradeCost: number | null;
-  plan: Array<{ symbol: string; side: 'LONG' | 'SHORT'; role: PlanRole; qty: string | undefined }>;
-  book: ReactNode;
+  slippage: ReactNode;
 }) {
   const { t } = useTranslation();
-  const [showBook, setShowBook] = useState(false);
   return (
-    <EstimateCard
-      dataUpdatedAt={dataUpdatedAt}
-      estimating={estimating}
-      isError={isError}
+    <SummaryCard
+      title={t('accounts.moveCash.cost')}
       sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
-      aside={<BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} />}
+      aside={<EstimateAge dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={isError} />}
     >
       {previews && previews.length > 0 ? (
-        <>
-          <EstimateHeadline
-            label={t('accounts.closePair.pnlToRealise')}
-            sub={t(twapOn ? 'accounts.closePair.twap.headlineSub' : 'accounts.closePair.pnlSub')}
-            value={totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
-          />
-          {plan.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              {plan.map((line) => (
-                <PlanLine key={line.symbol} side={line.side} symbol={line.symbol} role={line.role} qty={line.qty} />
-              ))}
-            </div>
-          )}
-          {showBook && <div className="pt-1">{book}</div>}
-          <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
-            <EstimateRow label={t('pairTicket.bits.tradeCost')} value={fmtTradeCost(tradeCost)} />
-          </div>
-          <ViolationList
-            violations={previews.flatMap((p) => p.violations ?? [])}
-            warnings={previews.flatMap((p) => p.warnings ?? [])}
-          />
-        </>
+        <LegTable rows={rows} />
       ) : (
         <div className="text-[11px]">
           <PreviewFallback isError={isError} error={error} />
         </div>
       )}
-    </EstimateCard>
+      {slippage}
+      <div className="mt-0.5 border-t border-ink-800 pt-1.5">
+        <EstimateRow label={t('pairTicket.bits.tradeCost')} value={fmtTradeCost(tradeCost)} strong />
+      </div>
+    </SummaryCard>
+  );
+}
+
+function LegName({ side, venue }: { side: 'LONG' | 'SHORT'; venue: string }) {
+  const { t } = useTranslation();
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
+        {t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
+      </Chip>
+      <VenueIcon venue={venue} size={16} />
+      {prettyVenue(venue)}
+    </span>
+  );
+}
+
+export function ClosePairAfter({
+  base,
+  twapOn,
+  totalPnl,
+  rows,
+  borosUnhedged,
+}: {
+  base: string;
+  twapOn: boolean;
+  totalPnl: number | null;
+  rows: CloseAfterRow[];
+  borosUnhedged: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <SummaryCard title={t('accounts.moveCash.after')}>
+      <EstimateRow
+        label={t('accounts.closePair.pnlToRealise')}
+        sub={twapOn ? t('accounts.closePair.twap.headlineSub') : undefined}
+        value={totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
+        strong
+      />
+      {(rows.length > 0 || borosUnhedged) && (
+        <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+          {rows.map((r) => (
+            <EstimateRow
+              key={`${r.symbol}-${r.kind}`}
+              label={<LegName side={r.side} venue={r.venue} />}
+              sub={t(r.kind === 'left' ? 'accounts.closePair.after.left' : 'accounts.closePair.after.notInPair')}
+              value={`${qtyGrouped(r.qty)} ${base}`}
+            />
+          ))}
+          {borosUnhedged && (
+            <EstimateRow
+              label={t('accounts.closePair.after.boros')}
+              value={<span className="text-rose-400">{t('accounts.closePair.after.borosUnhedged')}</span>}
+            />
+          )}
+        </div>
+      )}
+    </SummaryCard>
   );
 }

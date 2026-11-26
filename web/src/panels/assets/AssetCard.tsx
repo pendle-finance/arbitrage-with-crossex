@@ -60,8 +60,10 @@ import {
   useRebalance,
 } from '../../api/queries';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, SuggestedTopUpLines } from '../../trade/BorosPairBits';
-import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
+import { aprCost, AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, MarginUsageRow, marketName, OpposingAcknowledgement, SpreadReadout, SuggestedTopUpLines, usdOf as simUsdOf } from '../../trade/BorosPairBits';
+import { EstimateAge, EstimateRow, SlippageLine, StepBadge, SummaryCard } from '../../trade/PairTicketBits';
+import { AmountPresets } from '../../components/AmountPresets';
+import { SegmentedToggle } from '../../components/SegmentedToggle';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
 import { useNow } from '../../lib/useNow';
@@ -1348,8 +1350,6 @@ const ROLL_MAX_SLIP_PCT = 10;
 /** Used when no market on a batch reports a usable deviation cap — the same
  * fallback the close form takes (CloseBorosForm's FALLBACK_SLIPPAGE_PCT). */
 const ROLL_FALLBACK_SLIP_PCT = 1;
-/** The slider's shortcuts, as shares of the position. */
-const ROLL_SHARE_STEPS = [0.25, 0.5, 0.75, 1] as const;
 
 /**
  * The tolerance a batch is seeded with, in % APR: half each market's own
@@ -1609,19 +1609,169 @@ function RollProbe({
   }, [settled, ok, netRate, size]);
   return null;
 }
-/** What an open-only roll leaves: the perps hedge the later legs first, so
- * the old legs show as their own card with perps missing (mozzarella 2026-10-17). */
-function OpenOnlyNote({ oldMaturity, className }: { oldMaturity: number; className: string }) {
-  const old = fmtDateLocal(oldMaturity);
+interface BatchCost {
+  feeUsd: number | null;
+  estSlipUsd: number | null;
+  maxSlipUsd: number | null;
+  totalUsd: number | null;
+}
+
+function batchCost(sim: BorosPairSimulation | null | undefined, toleranceApr: number): BatchCost {
+  if (!sim) return { feeUsd: null, estSlipUsd: null, maxSlipUsd: null, totalUsd: null };
+  const sizes = sim.legs.map((l) => Math.abs(l.sizing.deltaSize));
+  const traded = sizes.length > 0 ? Math.max(...sizes) : 0;
+  const feeUsd = simUsdOf(sim, sim.costToCrossSize);
+  const estSlipUsd = sim.slippageApr == null ? null : simUsdOf(sim, aprCost(sim, [{ apr: sim.slippageApr, size: traded }]));
+  const maxSlipUsd = simUsdOf(sim, aprCost(sim, sizes.map((size) => ({ apr: toleranceApr, size }))));
+  return { feeUsd, estSlipUsd, maxSlipUsd, totalUsd: feeUsd !== null && estSlipUsd !== null ? feeUsd + estSlipUsd : null };
+}
+
+const sumUsd = (parts: Array<number | null>): number | null =>
+  parts.every((p): p is number => p !== null) ? parts.reduce((a, p) => a + p, 0) : null;
+
+const usdOrDash = (usd: number | null): string => (usd === null ? '—' : fmtUsd(usd));
+
+const ROLL_SHARES = ['25', '50', '75', '100'] as const;
+const ROLL_OPTION_GRID = 'grid grid-cols-[minmax(0,1fr)_6.5rem_8rem_8rem] items-center gap-x-3';
+type RollShare = (typeof ROLL_SHARES)[number];
+
+interface RollLeg {
+  marketId: number;
+  name: string;
+  venue: string;
+  spreadVenues: readonly [string, string] | null;
+  side: 'LONG' | 'SHORT';
+  size: number;
+}
+
+function RollLegLine({ leg, collateral }: { leg: RollLeg; collateral: string }) {
   return (
-    // The box (when the caller draws one) wraps the list, so its padding
-    // never fights the list's own indent: the bullets sat on the border.
-    <div className={`text-[11.5px] leading-relaxed ${className}`}>
-      <ul className="list-disc pl-4">
-        <li>{t('assetCard.roll.openOnly1', { old })}</li>
-        <li>{t('assetCard.roll.openOnly2', { old })}</li>
-        <li>{t('assetCard.roll.openOnly3', { old })}</li>
-      </ul>
+    <div className="flex items-center justify-between gap-3">
+      <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-ink-200">
+        {leg.spreadVenues ? <SpreadIcon venues={leg.spreadVenues} size={16} /> : <VenueIcon venue={leg.venue} size={16} />}
+        <span className="truncate">{leg.name}</span>
+        <Chip sm tone={leg.side === 'LONG' ? 'green' : 'red'} className="shrink-0 font-semibold">
+          {t(leg.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
+        </Chip>
+      </span>
+      <span className="num shrink-0 text-[12.5px] text-ink-50">{exactQty(leg.size, collateral)}</span>
+    </div>
+  );
+}
+
+const MATURITY_SUFFIX = /\s+\d{1,2} [A-Za-z]{3,4} \d{4}$/;
+const heldSide = (b: BorosPairLegBody): 'LONG' | 'SHORT' => (b.direction === 'short' ? 'LONG' : 'SHORT');
+const openSide = (b: BorosPairLegBody): 'LONG' | 'SHORT' => (b.direction === 'long' ? 'LONG' : 'SHORT');
+
+function rollLegsOf(
+  bodies: BorosPairLegBody[] | null,
+  markets: ReadonlyArray<BorosPairMarketRow>,
+  sideOf: (body: BorosPairLegBody) => 'LONG' | 'SHORT',
+  fallbackVenue: (i: number) => string,
+): RollLeg[] {
+  return (bodies ?? []).map((body, i) => {
+    const m = markets.find((x) => x.marketId === body.marketId);
+    const venue = m?.venue ?? fallbackVenue(i);
+    return {
+      marketId: body.marketId,
+      name: m ? (m.spreadVenues ? spreadName(m.base, m.spreadVenues) : m.name.replace(MATURITY_SUFFIX, '')) : prettyVenue(venue),
+      venue,
+      spreadVenues: m?.spreadVenues ?? null,
+      side: sideOf(body),
+      size: body.size,
+    };
+  });
+}
+
+function HoverRows({ lead, rows }: { lead?: string; rows: Array<[string, string]> }) {
+  return (
+    <span className="flex flex-col gap-1">
+      {lead && <span>{lead}</span>}
+      {rows.map(([label, value]) => (
+        <span key={label} className="flex justify-between gap-4">
+          <span>{label}</span>
+          <span className="num">{value}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function AfterRates({ sim, legs, liqWarn }: { sim: BorosPairSimulation | null; legs: RollLeg[]; liqWarn: (leg: BorosSimulatedLeg) => boolean }) {
+  if (sim) {
+    return (
+      <>
+        <SpreadReadout sim={sim} />
+        <LiquidationLines sim={sim} warn={liqWarn} />
+      </>
+    );
+  }
+  return (
+    <>
+      <EstimateRow label={t('pairTicket.borosBits.estimatedSpread')} value="—" strong />
+      {legs.length === 1 ? (
+        <EstimateRow label={t('pairTicket.borosBits.liquidationApr')} value="—" strong />
+      ) : (
+        legs.map((leg) => (
+          <EstimateRow key={leg.marketId} label={t('pairTicket.borosBits.venueLiquidationApr', { venue: leg.venue })} value="—" strong />
+        ))
+      )}
+    </>
+  );
+}
+
+function RollStep({
+  n,
+  title,
+  legs,
+  collateral,
+  sim,
+  slip,
+  slipInvalidText,
+  slipAria,
+  slipHint,
+}: {
+  n?: number;
+  title: string;
+  legs: RollLeg[];
+  collateral: string;
+  sim: BorosPairSimulation | null;
+  slip: BatchSlip;
+  slipInvalidText: string;
+  slipAria: string;
+  slipHint: string;
+}) {
+  const cost = batchCost(sim, slip.apr);
+  const est = sim?.slippageApr != null ? `${fmtPct(sim.slippageApr)}${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null;
+  const overVenues = sim ? sim.legs.filter((l) => l.slippageExceeded).map((l) => prettyVenue(l.venue)) : [];
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="flex items-center gap-2 text-[12.5px] font-semibold text-ink-50">
+        {n !== undefined && <StepBadge n={n} />}
+        {title}
+      </span>
+      {legs.map((leg) => (
+        <RollLegLine key={leg.marketId} leg={leg} collateral={collateral} />
+      ))}
+      <SlippageLine
+        est={est}
+        max={fmtPct(slip.apr * Math.max(1, legs.length))}
+        unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
+        open={slip.open}
+        onToggle={slip.onToggle}
+        value={slip.str}
+        onChange={slip.onChange}
+        invalid={slip.invalid}
+        invalidText={slipInvalidText}
+        inputAriaLabel={slipAria}
+        hint={slipHint}
+      />
+      {overVenues.length > 0 && (
+        <p className="alert-amber text-[11px] leading-relaxed text-amber-100" role="alert">
+          {t('assetCard.batch.slipTooHigh', { venues: overVenues.join(t('assetCard.andSep')) })}
+        </p>
+      )}
+      <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value={usdOrDash(cost.feeUsd)} />
     </div>
   );
 }
@@ -2038,6 +2188,9 @@ export function RollOverModal({
    */
   const perpImUsd = heldSize > 0 ? pairPerpImUsd * (simSize / heldSize) : 0;
   const pct = heldSize > 0 ? Math.round((size / heldSize) * 100) : 0;
+  const sizeLabel = openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll');
+  const litShare: RollShare | null =
+    sizeOk && sizeStr.trim() !== '' ? (ROLL_SHARES.find((share) => Number(fmtSize(heldSize * (Number(share) / 100))) === parsedSize) ?? null) : null;
 
   /**
    * Each batch's tolerance FOLLOWS THE SIZE: the seed while the size fills
@@ -2070,14 +2223,17 @@ export function RollOverModal({
 
   return (
     <Modal
-      // Venues only: the maturity being left heads the Exit card, and the
-      // pick page states the days remaining on each option (his call
-      // 2026-09-18).
-      title={t('assetCard.roll.modalTitle', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}
+      title={
+        <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+          {t('assetCard.actions.rollOver')}
+          <span className="text-[14px] font-medium text-ink-200">
+            <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} />
+          </span>
+        </span>
+      }
       onClose={onClose}
       locked={busy}
-      // Wide enough for the review's two batches side by side.
-      widthClass="w-[780px] max-w-[calc(100vw-32px)]"
+      widthClass="w-[640px] max-w-[calc(100vw-32px)]"
     >
       {step === 'review' && target !== null && address !== null && ctx.data ? (
         openOnly ? (
@@ -2090,6 +2246,7 @@ export function RollOverModal({
             collateral={collateral}
             address={address}
             nowSec={nowSec}
+            markets={markets ?? []}
             entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
             onBack={() => setStep('pick')}
             onBusy={setBusy}
@@ -2115,75 +2272,81 @@ export function RollOverModal({
           />
         )
       ) : (
-        <>
-          {/* Close the old legs and re-open, or open the new maturity and let
-              the old legs run to maturity (a double hedge). */}
-          <div className="mb-3">
-            <div className="inline-flex rounded-md border border-ink-700 p-0.5 text-[12px]" role="group" aria-label={t('assetCard.roll.modeAria')}>
-              {(
-                [
-                  ['reopen', t('assetCard.roll.modeReopen')],
-                  ['openOnly', t('assetCard.roll.modeOpenOnly')],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={mode === value}
-                  className={`rounded px-3 py-1 transition-colors ${mode === value ? 'bg-info/20 font-medium text-ink-50' : 'text-ink-400 hover:text-ink-200'}`}
-                  onClick={() => setMode(value)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            {openOnly && <OpenOnlyNote oldMaturity={soonest} className="mt-2 text-ink-400" />}
-          </div>
+        <div className="flex flex-col gap-4">
+          <SegmentedToggle<'reopen' | 'openOnly'>
+            className="seg-info"
+            fill
+            ariaLabel={t('assetCard.roll.modeAria')}
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: 'reopen', label: t('assetCard.roll.modeReopen') },
+              { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
+            ]}
+          />
 
-          {/* A slider for the share of the position, a box for the exact
-              figure — the same value, two grips. */}
-          <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
-            <span className={microLabelClass}>{openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll')}</span>
-            <input
-              type="range"
-              className="min-w-[160px] flex-1 accent-info"
-              min={0}
-              max={heldSize}
-              step={heldSize > 0 ? heldSize / 200 : 1}
-              value={size}
-              onChange={(e) => setSize(fmtSize(Number(e.target.value)))}
-              aria-label={t('assetCard.roll.shareAria')}
-            />
-            <span className="num w-10 text-right text-ink-400">{pct}%</span>
-            <input
-              className={`input num w-32 !py-1.5 text-xs ${sizeStr !== '' && !sizeOk ? 'border-guava/60' : ''}`}
-              inputMode="decimal"
+          <div className="flex flex-col gap-1.5">
+            <span className={microLabelClass}>{sizeLabel}</span>
+            <AmountPresets<RollShare>
               value={sizeStr}
-              onChange={(e) => setSize(e.target.value)}
-              aria-label={`${openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll')} (${collateral})`}
+              onChange={setSize}
+              inputLabel={`${sizeLabel} (${collateral})`}
+              suffix={t('assetCard.roll.sizeSuffix', { coin: collateral, pct })}
+              bad={sizeStr !== '' && !sizeOk}
+              boxClassName="w-56"
+              presetsLabel={t('assetCard.roll.shareShortcuts')}
+              preset={litShare}
+              onPreset={(share) => setSize(fmtSize(heldSize * (Number(share) / 100)))}
+              presets={ROLL_SHARES.map((share) => ({ value: share, label: `${share}%` }))}
             />
-            <span className="text-ink-400">{collateral}</span>
-            {/* Four grips on the same value: a quarter, half, three
-                quarters, all. Each is a choice, so it counts as touching. */}
-            <span className="inline-flex gap-1" role="group" aria-label={t('assetCard.roll.shareShortcuts')}>
-              {ROLL_SHARE_STEPS.map((share) => (
-                <button
-                  key={share}
-                  type="button"
-                  className={`btn-ghost-xs num ${pct === Math.round(share * 100) && sizeOk ? '!text-ink-50' : ''}`}
-                  onClick={() => setSize(fmtSize(heldSize * share))}
-                  title={share === 1 ? t('assetCard.roll.wholePosition') : t('assetCard.roll.pctOfPosition', { pct: Math.round(share * 100) })}
-                >
-                  {Math.round(share * 100)}%
-                </button>
-              ))}
-            </span>
           </div>
 
-          {/* Only what a tolerance cannot fix. A size that merely needs a
-              wider tolerance has been given one, silently. */}
+          {targets.length === 0 ? (
+            <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
+              {ctx.isLoading ? t('assetCard.roll.loadingMaturities') : t('assetCard.roll.noTarget')}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <div className={`${ROLL_OPTION_GRID} px-3 ${microLabelClass}`}>
+                <span>{t('assetCard.roll.rollInto')}</span>
+                <span className="text-right">
+                  <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
+                    {t('assetCard.roll.fixedAprHint')}
+                  </HoverCard>
+                </span>
+                <span className="text-right">
+                  <HoverCard label={t('assetCard.roll.estProfit')} widthPx={260}>
+                    {openOnly ? t('assetCard.option.earnOpenTitle') : t('assetCard.option.earnRollTitle')}
+                  </HoverCard>
+                </span>
+                <span className="text-right">{t('pairTicket.borosBits.totalCost')}</span>
+              </div>
+              <div className="flex flex-col gap-1.5" role="radiogroup" aria-label={t('assetCard.roll.rollInto')}>
+                {targets.map((tg) => (
+                  <RollOption
+                    key={tg.maturity}
+                    target={tg}
+                    base={base}
+                    pair={pair}
+                    yuLegs={yuLegs}
+                    size={simSize}
+                    perpImUsd={perpImUsd}
+                    address={address}
+                    exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
+                    entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
+                    nowSec={nowSec}
+                    openOnly={openOnly}
+                    selected={selected === tg.maturity}
+                    onSelect={() => setPicked(tg.maturity)}
+                    onLegs={(q) => setLegsBy((prev) => (prev[tg.maturity]?.key === q.key ? prev : { ...prev, [tg.maturity]: q }))}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+
           {sizeLimit !== null && maxRoll !== null && (
-            <p role="alert" className="mb-3 rounded border border-amber-500/40 bg-amber-500/[0.05] px-3 py-2 text-[11.5px] leading-relaxed text-amber-100">
+            <p role="alert" className="alert-amber text-[11.5px] leading-relaxed text-amber-100">
               {sizeLimit.kind === 'liquidity'
                 ? t('assetCard.roll.tooBigLiquidity', { market: sizeLimit.marketName })
                 : t('assetCard.roll.tooBigRate', { market: sizeLimit.marketName })}{' '}
@@ -2194,60 +2357,21 @@ export function RollOverModal({
             </p>
           )}
 
-          {targets.length === 0 ? (
-            <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
-              {ctx.isLoading
-                ? t('assetCard.roll.loadingMaturities')
-                : t('assetCard.roll.noTarget')}
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2">
-              {targets.map((tg) => (
-                <RollOption
-                  key={tg.maturity}
-                  target={tg}
-                  base={base}
-                  pair={pair}
-                  yuLegs={yuLegs}
-                  size={simSize}
-                  perpImUsd={perpImUsd}
-                  address={address}
-                  exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
-                  entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
-                  nowSec={nowSec}
-                  openOnly={openOnly}
-                  selected={selected === tg.maturity}
-                  onSelect={() => setPicked(tg.maturity)}
-                  onLegs={(q) => setLegsBy((prev) => (prev[tg.maturity]?.key === q.key ? prev : { ...prev, [tg.maturity]: q }))}
-                />
-              ))}
-            </div>
-          )}
-
-          <div className="mt-4 flex items-center justify-end gap-2">
+          <div className="flex items-center justify-end gap-2">
             <button type="button" className="btn" onClick={onClose}>
               {t('common.cancel')}
             </button>
-            {/* Not the confirm: this opens the review, where the order is
-                checked and held. */}
             <button
               type="button"
               className="btn-primary"
               disabled={target === null || !(size > 0) || address === null || !ctx.data}
-              title={
-                target === null
-                  ? t('assetCard.roll.pickMaturity')
-                  : openOnly
-                    ? t('assetCard.roll.reviewOpenTitle')
-                    : t('assetCard.roll.reviewRollTitle')
-              }
               onClick={() => setStep('review')}
             >
               {openOnly ? t('assetCard.roll.openNewMaturity') : t('assetCard.actions.rollOver')}
               <ArrowRight size={14} aria-hidden />
             </button>
           </div>
-        </>
+        </div>
       )}
     </Modal>
   );
@@ -2289,9 +2413,6 @@ function RollLegReport({
   );
 }
 
-/** One batch of the roll, read exactly as the ticket reads a pair: the
- * spread readout, the costs, the position arithmetic, the simulator's own
- * notes — so a roll is two of the same thing the trader already knows. */
 /** One batch's tolerance, as the review page holds it: the typed percent,
  * whether it is usable, and whether its editor is open. */
 interface BatchSlip {
@@ -2302,196 +2423,6 @@ interface BatchSlip {
   onToggle: () => void;
   /** The batch's per-leg tolerance as an APR fraction. */
   apr: number;
-}
-
-function BatchSection({
-  label,
-  sub,
-  sim,
-  dataUpdatedAt,
-  estimating,
-  pending,
-  error,
-  onRetry,
-  exitPnl,
-  slip,
-  step,
-  heading,
-  liqWarn = true,
-}: {
-  label: string;
-  /** False when the margin left free after the batch already carries the
-   * new legs to the suggested liquidation rate. */
-  liqWarn?: boolean;
-  /** What the card's header SAYS, when that differs from the batch's name
-   * (`label` still names it in the tolerance box and the blockers). */
-  heading?: string;
-  sub: string;
-  step?: number;
-  sim: BorosPairSimulation | null;
-  dataUpdatedAt: number;
-  estimating: boolean;
-  pending: boolean;
-  error: unknown;
-  onRetry: () => void;
-  /** For the EXIT: the PnL of closing, shown in place of a spread —
-   * a close locks nothing, it realises what was locked. */
-  exitPnl?: { legs: ExitPnlLeg[]; total: number | null };
-  slip: BatchSlip;
-}) {
-  // The server's own per-leg verdict: the fill sits past the bound, so that
-  // leg would be refused before the wire. Said here, on the batch it is
-  // about, rather than as one line about "the roll".
-  const exceeded = sim ? sim.legs.filter((l) => l.slippageExceeded) : [];
-  const [more, setMore] = useState(false);
-  /** A quiet label/value line for the folded detail. */
-  const Row = ({ label, value, title }: { label: string; value: string; title?: string }) => (
-    <div className="flex items-baseline justify-between gap-3" title={title}>
-      <span className="pl-3 text-[11.5px] text-ink-400">{t('assetCard.batch.labelMargin', { label })}</span>
-      <span className="num text-[12px] text-ink-300">{value}</span>
-    </div>
-  );
-  const slipLine = (
-    <SlippageLine
-      est={sim?.slippageApr !== null && sim?.slippageApr !== undefined ? fmtPct(sim.slippageApr) : null}
-      max={fmtPct(slip.apr * 2)}
-      unit="APR"
-      open={slip.open}
-      onToggle={slip.onToggle}
-      value={slip.str}
-      onChange={slip.onChange}
-      invalid={slip.invalid}
-      invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-      inputAriaLabel={t('assetCard.batch.slipAria', { label })}
-      title={t('assetCard.batch.slipTitle', { max: slip.str })}
-      hint={t('assetCard.batch.slipHint')}
-    />
-  );
-  return (
-    <EstimateCard label={heading ?? label} sub={sub} step={step} dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={Boolean(error)}>
-      {error ? (
-        <QueryError title={t('assetCard.batch.cantPrice', { label: label.toLowerCase() })} error={error} onRetry={onRetry} />
-      ) : sim ? (
-        <>
-          {exitPnl ? (
-            <ExitPnlReadout sim={sim} exitPnl={exitPnl} between={slipLine} />
-          ) : (
-            <SpreadReadout sim={sim} />
-          )}
-          {exceeded.length > 0 && (
-            <p
-              className="alert-amber text-[11px] leading-relaxed text-amber-100"
-              role="alert"
-              title={t('assetCard.batch.exceededTitle')}
-            >
-              {t('assetCard.batch.slipTooHigh', { venues: exceeded.map((l) => prettyVenue(l.venue)).join(t('assetCard.andSep')) })}
-            </p>
-          )}
-          {/* The batch's headline, where the new legs liquidate, the margin
-              it moves and its fee, then its tolerance, are the decision;
-              where each position ends up and which bucket carries what are
-              the detail, folded until asked for — the two cards were a wall
-              of figures. */}
-          {!exitPnl && (
-            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-              <LiquidationLines sim={sim} warn={() => liqWarn} />
-            </div>
-          )}
-          <div className="border-t border-ink-800/80 pt-2">
-            <PairCosts sim={sim} freeing={Boolean(exitPnl)} />
-          </div>
-          {!exitPnl && <div className="border-t border-ink-800/80 pt-2">{slipLine}</div>}
-          <button
-            type="button"
-            className="self-start text-[11px] text-ink-400 underline decoration-dotted underline-offset-2 hover:text-ink-200"
-            aria-expanded={more}
-            onClick={() => setMore((v) => !v)}
-          >
-            {more ? t('assetCard.batch.less') : t('assetCard.batch.details')} {more ? '‹' : '›'}
-          </button>
-          {more && (
-            <>
-              {!exitPnl && (
-                <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-                  {sim.legs.map((l) => (
-                    <Row
-                      key={l.marketId}
-                      label={l.venue}
-                      title={t('assetCard.batch.legImTitle')}
-                      value={l.marginRequired !== null ? fmtTokenQty(l.marginRequired, sim.collateral) : '—'}
-                    />
-                  ))}
-                </div>
-              )}
-              <PositionArithmetic sim={sim} />
-              {sim.reasons.length > 0 && (
-                <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
-                  {sim.reasons.map((r) => (
-                    <li key={r}>· {localizeServerText(r)}</li>
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
-        </>
-      ) : (
-        <>
-          <span className="text-[11.5px] text-ink-500">{pending ? t('assetCard.batch.pricing') : t('assetCard.batch.noQuote')}</span>
-          {slipLine}
-        </>
-      )}
-    </EstimateCard>
-  );
-}
-
-/** The exit's headline: what closing realises, per leg and in total —
- * locked rate → execution rate, priced in dollars where the collateral
- * has a price, else in the token. Before fees; PairCosts has those. */
-function ExitPnlReadout({
-  sim,
-  exitPnl,
-  between,
-}: {
-  sim: BorosPairSimulation;
-  exitPnl: { legs: ExitPnlLeg[]; total: number | null };
-  /** Rendered under the headline, before the per-leg lines (the slippage line). */
-  between?: React.ReactNode;
-}) {
-  const px = sim.collateralPriceUsd;
-  const money = (n: number) =>
-    px !== null && px > 0 ? <SignedNumber value={n * px} format={fmtUsd} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, sim.collateral)} />;
-  const plain = (n: number) =>
-    px !== null && px > 0 ? fmtUsd(n * px) : fmtTokenQty(n, sim.collateral);
-  /**
-   * The per-leg split, as hover text. The total is the figure a roll is
-   * judged on; which venue contributed what — and the rate move behind it —
-   * is detail, so it rides on the label rather than taking two rows (his
-   * call 2026-09-18).
-   */
-  const breakdown = exitPnl.legs
-    .map(
-      (l) =>
-        `${prettyVenue(l.venue)} · ${fmtPct(l.lockedApr)} → ${l.execApr !== null ? fmtPct(l.execApr) : '—'}\t${
-          l.pnl !== null ? plain(l.pnl) : '—'
-        }`,
-    )
-    .join('\n');
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-3">
-        <span
-          className="cursor-help text-[12.5px] text-ink-50"
-          title={`${t('assetCard.exitPnl.title')}${
-            breakdown ? `\n${breakdown}` : ''
-          }`}
-        >
-          {t('assetCard.exitPnl.label')} <span className="text-ink-400">ⓘ</span>
-        </span>
-        <span className="num text-lg font-semibold">{exitPnl.total !== null ? money(exitPnl.total) : <span className="text-ink-500">—</span>}</span>
-      </div>
-      {between}
-    </div>
-  );
 }
 
 /**
@@ -2763,186 +2694,174 @@ function RollReview({
     );
   }
 
-  /**
-   * The strip at the top answers the only question first: what does this
-   * roll lock, for how long, and what does it cost today — the SAME figures
-   * the option card showed, re-priced at these tolerances. The two batches
-   * under it are how it executes; the margin line is whether it can. Three
-   * ranks, so the page reads top-down instead of as one wall of
-   * simulation output (his call 2026-09-20).
-   */
+  const allMarkets = [...ctx.markets, ...(ctx.spreadMarkets ?? [])];
+  const exitRows = rollLegsOf(rollExitLegs, allMarkets, heldSide, (i) => yuLegs[i]?.venue ?? '');
+  const entryRows = rollLegsOf(rollEntryLegs, allMarkets, openSide, () => '');
+  const totalUsd = sumUsd([batchCost(exitSim, exitSlip.apr).totalUsd, batchCost(entrySim, entrySlip.apr).totalUsd]);
   const fig = rollFigures({ entrySim: entrySim ?? undefined, exitSim: exitSim ?? undefined, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec });
-  const termDays = daysToMaturity(target.maturity, nowSec);
-  const dayOneUsd = fig.totalCostUsd !== null && fig.exitPnlUsd !== null ? fig.exitPnlUsd - fig.totalCostUsd : null;
+  const exitPnl = exitPnlOf(exitSim, yuLegs, nowSec);
+  const money = (n: number) =>
+    px !== null && px > 0 ? <SignedNumber value={n * px} format={fmtUsd} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, collateral)} />;
   const marginOk = marginNeed !== null && availableAfter !== null && marginShort === 0;
+  const afterAvail = availableAfter ?? availableAfterExit;
+  const blank = <span className="text-ink-500">{pending ? '…' : '—'}</span>;
+  const reasons = [...new Set([...(exitSim?.reasons ?? []), ...(entrySim?.reasons ?? [])])];
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
-        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-          <div className="min-w-0">
-            <div className={microLabelClass}>{t('assetCard.review.youLock')}</div>
-            <div className="num mt-1 text-[26px] font-semibold leading-none tracking-[-0.02em]">
-              {fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : <span className="text-ink-600">{pending ? '…' : '—'}</span>}
-              <span className="ml-2 text-[13px] font-normal text-ink-300">{t('assetCard.review.days', { days: termDays })}</span>
-            </div>
-            <div className="mt-1.5 text-[11.5px] text-ink-400">{t('assetCard.review.netOfFees')}</div>
-          </div>
-          <div className="grid grid-cols-3 gap-x-5">
-            <div title={t('assetCard.review.sizeTitle')}>
-              <div className={statLabel}>{t('common.size')}</div>
-              <div className={`${statValue} font-semibold text-ink-50`}>{exactQty(size, collateral)}</div>
-            </div>
-            <div title={t('assetCard.review.earnTitle')}>
-              <div className={statLabel}>{t('assetCard.estEarnings')}</div>
-              <div className={`${statValue} font-semibold`}>
-                {fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
-              </div>
-            </div>
-            <div
-              title={`${t('assetCard.review.exitFee')}\t${fig.exitCostUsd !== null ? `−${fmtUsd(fig.exitCostUsd)}` : '—'}\n${t('assetCard.review.entryFee')}\t${fig.entryCostUsd !== null ? `−${fmtUsd(fig.entryCostUsd)}` : '—'}\n${t('assetCard.review.exitPnl')}\t${fig.exitPnlUsd !== null ? `${fig.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(fig.exitPnlUsd))}` : '—'}`}
-            >
-              <div className={statLabel}>{t('assetCard.review.costToday')}</div>
-              <div className={statValue}>
-                {dayOneUsd !== null ? <SignedNumber value={dayOneUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* The two batches side by side: how the roll executes — what closing
-          realises against what re-opening locks, each with its own
-          tolerance and the margin it moves. */}
-      <div className={microLabelClass}>{t('assetCard.review.howExecutes')}</div>
-      {/* Cancels are per market: a part roll also drops the kept part's orders. */}
-      {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
-        <p className="text-[11px] text-ink-400">
-          {size < pairRollGeometry(pair).heldSize
-            ? t('assetCard.review.cancelPart', { date: fmtDateLocal(oldMaturity) })
-            : t('assetCard.review.cancelAll', { date: fmtDateLocal(oldMaturity) })}
-        </p>
-      )}
-      {/* 1 then 2: the order the two batches are sent in, a numbered disc
-          on each card. */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
-        <BatchSection
-          label={t('assetCard.roll.exit')}
-          step={1}
-          sub={fmtDateLocal(oldMaturity)}
-          sim={exitSim}
-          dataUpdatedAt={roll.dataUpdatedAt}
-          estimating={roll.isPlaceholderData}
-          pending={pending}
-          error={roll.isError ? roll.error : null}
-          onRetry={() => roll.refetch()}
-          exitPnl={exitPnlOf(exitSim, yuLegs, nowSec)}
-          slip={exitSlip}
-        />
-        <BatchSection
-          label={t('assetCard.roll.reentry')}
-          // Reads as one phrase with the maturity beside it: "Roll into 2026-10-30".
-          heading={t('assetCard.roll.renewTo')}
-          step={2}
-          sub={fmtDateLocal(target.maturity)}
-          sim={entrySim}
-          dataUpdatedAt={roll.dataUpdatedAt}
-          estimating={roll.isPlaceholderData}
-          pending={pending}
-          error={roll.isError ? roll.error : null}
-          onRetry={() => roll.refetch()}
-          slip={entrySlip}
-          liqWarn={suggestedTopUp === null || suggestedTopUp > 0}
-        />
-      </div>
-
-      {/* Margin: two numbers — what the new legs need, and what will be
-          there to pay for it once the exit has run. Green when it clears. */}
-      <div
-        className={`flex flex-col gap-1.5 rounded-lg border px-3.5 py-3 ${
-          marginShort > 0 ? 'border-amber-500/40 bg-amber-500/[0.05]' : marginOk ? 'border-emerald-500/25 bg-emerald-500/[0.03]' : 'border-ink-700 bg-ink-850/40'
-        }`}
-        role={marginShort > 0 ? 'alert' : undefined}
+      {roll.isError && <QueryError title={t('assetCard.review.quoteFailed')} error={roll.error} onRetry={() => roll.refetch()} />}
+      <SummaryCard
+        title={t('accounts.moveCash.cost')}
+        aside={<EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />}
       >
-        <span className="flex items-center gap-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
-          <StepBadge n={3} />
-          {t('assetCard.review.canFund')}
-          {marginOk && <Check size={12} aria-hidden className="text-emerald-300" />}
-        </span>
-        <EstimateRow
-          label={t('assetCard.review.requiredMargin')}
-          sub={t('assetCard.review.forNewLegs')}
-          title={t('assetCard.review.requiredTitle')}
-          value={
-            marginNeed !== null ? (
-              <>
-                {fmtTokenQty(marginNeed, collateral)}
-                {usdNote(marginNeed)}
-              </>
-            ) : (
-              '—'
-            )
-          }
-          strong
+        <RollStep
+          n={1}
+          title={t('assetCard.roll.stepClose', { date: fmtDateLocal(oldMaturity) })}
+          legs={exitRows}
+          collateral={collateral}
+          sim={exitSim}
+          slip={exitSlip}
+          slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+          slipAria={t('assetCard.batch.slipAria', { label: t('assetCard.roll.exit') })}
+          slipHint={t('assetCard.batch.slipHint')}
         />
-        <EstimateRow
-          label={t('assetCard.review.availableMargin')}
-          sub={
-            availableAfter !== null
-              ? t('assetCard.review.availSubAfter')
-              : availableAfterExit !== null
-                ? t('assetCard.review.availSubExit')
-                : undefined
-          }
-          title={
-            availableAfter !== null
-              ? t('assetCard.review.availTitleAfter')
-              : availableAfterExit !== null
-                ? t('assetCard.review.availTitleExit')
-                : undefined
-          }
-          value={
-            availableBefore !== null && availableAfter !== null ? (
-              <>
-                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(availableAfter, collateral)}
-                {usdNote(availableAfter)}
-              </>
-            ) : availableBefore !== null && availableAfterExit !== null ? (
-              <>
-                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(availableAfterExit, collateral)}
-                {usdNote(availableAfterExit)}
-              </>
-            ) : (
-              // No preview yet, a lost one (429), or a refusal with no state:
-              // the reason is in the box below. "Simulation failed" here read
-              // as mozzarella's 1.7.5 bug on every first open.
-              <span className="text-ink-400">{pending ? '…' : '—'}</span>
-            )
-          }
-          strong
-        />
-        {suggestedTopUp !== null && suggestedTopUp > 0 && (
+        <div className="border-t border-ink-800 pt-2">
+          <RollStep
+            n={2}
+            title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
+            legs={entryRows}
+            collateral={collateral}
+            sim={entrySim}
+            slip={entrySlip}
+            slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+            slipAria={t('assetCard.batch.slipAria', { label: t('assetCard.roll.reentry') })}
+            slipHint={t('assetCard.batch.slipHint')}
+          />
+        </div>
+        <div className="border-t border-ink-800 pt-1.5">
+          <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={totalUsd !== null ? fmtUsd(totalUsd) : blank} strong />
+        </div>
+      </SummaryCard>
+
+      <SummaryCard title={t('accounts.moveCash.after')}>
+        <div className="flex flex-col gap-1.5">
           <EstimateRow
-            label={<span className="text-amber-300">{t('pairTicket.borosBits.suggestedTopUp')}</span>}
-            title={t('pairTicket.borosBits.suggestedTopUpHint')}
-            value={
-              <span className="text-amber-300">
-                +{depositQty(suggestedTopUp, collateral)}
-                {usdNote(suggestedTopUp)}
-              </span>
+            label={
+              <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={280}>
+                <HoverRows
+                  lead={t('assetCard.roll.fixedAprHint')}
+                  rows={[
+                    [t('assetCard.option.perpMargin'), fmtUsd(perpImUsd)],
+                    [t('assetCard.option.newBorosMargin'), usdOrDash(fig.newBorosImUsd)],
+                    [t('common.capital'), usdOrDash(fig.capitalUsd)],
+                  ]}
+                />
+              </HoverCard>
             }
+            value={fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : blank}
             strong
           />
+          <AfterRates sim={entrySim} legs={entryRows} liqWarn={() => suggestedTopUp === null || suggestedTopUp > 0} />
+          <EstimateRow label={t('assetCard.roll.matures')} value={`${fmtDateLocal(target.maturity)} · ${daysLeftText(target.maturity, nowSec)}`} />
+          <EstimateRow
+            label={
+              <HoverCard label={t('assetCard.review.exitPnl')} widthPx={300}>
+                <HoverRows
+                  lead={t('assetCard.exitPnl.title')}
+                  rows={exitPnl.legs.map((l) => [
+                    `${prettyVenue(l.venue)} · ${fmtPct(l.lockedApr)} → ${l.execApr !== null ? fmtPct(l.execApr) : '—'}`,
+                    l.pnl !== null ? (px !== null && px > 0 ? fmtUsd(l.pnl * px) : fmtTokenQty(l.pnl, collateral)) : '—',
+                  ])}
+                />
+              </HoverCard>
+            }
+            value={exitPnl.total !== null ? money(exitPnl.total) : blank}
+          />
+          <EstimateRow
+            label={t('assetCard.estEarnings')}
+            value={fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : blank}
+            strong
+          />
+        </div>
+        <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+          <EstimateRow
+            label={t('assetCard.review.requiredMargin')}
+            value={
+              marginNeed !== null ? (
+                <>
+                  {fmtTokenQty(marginNeed, collateral)}
+                  {usdNote(marginNeed)}
+                </>
+              ) : (
+                blank
+              )
+            }
+          />
+          <EstimateRow
+            label={
+              <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
+                {availableAfter === null && availableAfterExit !== null ? t('assetCard.review.availTitleExit') : t('assetCard.review.availTitleAfter')}
+              </HoverCard>
+            }
+            value={
+              availableBefore !== null && afterAvail !== null ? (
+                <span className={afterAvail < 0 || marginShort > 0 ? 'text-rose-300' : ''}>
+                  {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(afterAvail, collateral)}
+                  {usdNote(afterAvail)}
+                </span>
+              ) : (
+                blank
+              )
+            }
+          />
+          {suggestedTopUp !== null && suggestedTopUp > 0 && (
+            <EstimateRow
+              label={
+                <span className="text-amber-300">
+                  <HoverCard label={t('pairTicket.borosBits.suggestedTopUp')} widthPx={260}>
+                    {t('pairTicket.borosBits.suggestedTopUpHint')}
+                  </HoverCard>
+                </span>
+              }
+              value={
+                <span className="text-amber-300">
+                  +{depositQty(suggestedTopUp, collateral)}
+                  {usdNote(suggestedTopUp)}
+                </span>
+              }
+            />
+          )}
+          <EstimateRow
+            label={t('assetCard.review.canFund')}
+            value={
+              marginShort > 0 ? (
+                <span className="text-rose-300">{t('assetCard.roll.fundShort', { qty: fmtTokenQty(marginShort, collateral) })}</span>
+              ) : marginOk ? (
+                <span className="inline-flex items-center gap-1 text-emerald-300">
+                  <Check size={12} aria-hidden />
+                  {t('assetCard.roll.fundYes')}
+                </span>
+              ) : (
+                blank
+              )
+            }
+          />
+          {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
+            <EstimateRow
+              label={t('assetCard.roll.openOrders', { date: fmtDateLocal(oldMaturity) })}
+              value={size < pairRollGeometry(pair).heldSize ? t('assetCard.roll.cancelledPart') : t('assetCard.roll.cancelled')}
+            />
+          )}
+        </div>
+        {reasons.length > 0 && (
+          <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
+            {reasons.map((r) => (
+              <li key={r}>· {localizeServerText(r)}</li>
+            ))}
+          </ul>
         )}
-        {marginShort > 0 && (
-          <p className="text-[11.5px] leading-relaxed text-amber-100">
-            {t('assetCard.review.short', { qty: fmtTokenQty(marginShort, collateral) })}
-          </p>
-        )}
-      </div>
-      {/* The roll gate's warnings — the auto-top-up cost notice among them,
-          which the two-batch flow dropped. Rendered exactly as the ticket
-          renders gate warnings (BorosPairTicket). */}
+      </SummaryCard>
+
       {(roll.data?.gate.warnings ?? []).map((w) => (
         <p
           key={w}
@@ -2955,11 +2874,9 @@ function RollReview({
         <OpposingAcknowledgement sim={entrySim} checked={acked.checked} onChange={acked.set} nameOf={nameOf} />
       )}
       <BlockerList
-        // A fill past the tolerance still blocks (it is in `blockers`), but
-        // its batch already says so, in amber, next to the Max that fixes
-        // it — a second, red copy here explained nothing new. The same for
-        // the tick: the box above is the ask.
-        blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))}
+        blockers={blockers.filter(
+          (b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged') && !(roll.isError && b.code === 'quote-failed'),
+        )}
       />
 
       <div className="mt-1 flex items-center justify-between gap-2">
@@ -2970,14 +2887,9 @@ function RollReview({
         {loginLabel ? (
           <BorosLogInButton />
         ) : (
-        <HoldToConfirmButton
-          tone="cyan"
-          disabled={!canConfirm}
-          onConfirm={run}
-          title={t('assetCard.review.holdTitle')}
-        >
-          {busy ? t('assetCard.review.rolling') : t('assetCard.actions.rollOver')}
-        </HoldToConfirmButton>
+          <HoldToConfirmButton tone="cyan" disabled={!canConfirm} onConfirm={run} title={t('assetCard.review.holdTitle')}>
+            {busy ? t('assetCard.review.rolling') : t('assetCard.actions.rollOver')}
+          </HoldToConfirmButton>
         )}
       </div>
     </div>
@@ -3003,6 +2915,7 @@ function OpenOnlyReview({
   collateral,
   address,
   nowSec,
+  markets,
   entrySeedPct,
   onBack,
   onBusy,
@@ -3016,6 +2929,7 @@ function OpenOnlyReview({
   collateral: string;
   address: string;
   nowSec: number;
+  markets: ReadonlyArray<BorosPairMarketRow>;
   /** The tolerance the pick page settled on for the entry at this size, in %
    * APR — wider than the per-market seed when the size needed it. */
   entrySeedPct?: number;
@@ -3143,87 +3057,81 @@ function OpenOnlyReview({
     );
   }
 
-  const termDays = daysToMaturity(target.maturity, nowSec);
-  const slipLine = (
-    <SlippageLine
-      est={simulation?.slippageApr !== null && simulation?.slippageApr !== undefined ? fmtPct(simulation.slippageApr) : null}
-      max={fmtPct(slipApr * 2)}
-      unit="APR"
-      open={slipOpen}
-      onToggle={() => setSlipOpen((v) => !v)}
-      value={slipStr}
-      onChange={setSlipEdited}
-      invalid={slipInvalid}
-      invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-      inputAriaLabel={t('assetCard.openOnly.slipAria')}
-      title={t('assetCard.batch.slipTitle', { max: slipStr })}
-      hint={t('assetCard.openOnly.slipHint')}
-    />
-  );
+  const slip: BatchSlip = {
+    str: slipStr,
+    onChange: setSlipEdited,
+    invalid: slipInvalid,
+    open: slipOpen,
+    onToggle: () => setSlipOpen((v) => !v),
+    apr: slipApr,
+  };
+  const openRows = rollLegsOf(openLegs, markets, openSide, () => '');
+  const totalUsd = batchCost(simulation, slipApr).totalUsd;
+  const blank = <span className="text-ink-500">{sim.isPending ? '…' : '—'}</span>;
+  const old = fmtDateLocal(pair.soonestMaturitySec);
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
-        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-          <div className="min-w-0">
-            <div className={microLabelClass}>{t('assetCard.openOnly.openAt', { date: fmtDateLocal(target.maturity) })}</div>
-            <div className="num mt-1 text-[22px] font-semibold leading-none tracking-[-0.02em]">
-              {exactQty(size, collateral)}
-              <span className="ml-2 text-[13px] font-normal text-ink-300">{t('assetCard.review.days', { days: termDays })}</span>
-            </div>
-            <div className="mt-1.5 text-[11.5px] text-ink-400">{t('assetCard.openOnly.oldKeep')}</div>
-          </div>
-        </div>
-      </div>
-
-      <OpenOnlyNote oldMaturity={pair.soonestMaturitySec} className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-amber-200" />
-
-      <EstimateCard
-        label={t('assetCard.openOnly.newLegs')}
-        sub={`${'spreadVenues' in target ? spreadName(base, target.spreadVenues) : `${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)}`} · ${fmtDateLocal(target.maturity)}`}
-        dataUpdatedAt={sim.dataUpdatedAt}
-        estimating={sim.isPlaceholderData}
-        isError={sim.isError}
+      {sim.isError && <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />}
+      <SummaryCard
+        title={t('accounts.moveCash.cost')}
+        aside={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />}
       >
-        {sim.isError ? (
-          <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />
-        ) : simulation ? (
-          <>
-            <SpreadReadout sim={simulation} />
-            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-              <LiquidationLines sim={simulation} warn={liqWarnOf(sim.data?.gate.funding)} />
-            </div>
-            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-              <PairCosts
-                sim={simulation}
-                afterMargin={
-                  sim.data?.gate.funding && (
-                    <SuggestedTopUpLines sim={simulation} funding={sim.data.gate.funding} nameOf={nameOfAccount} />
-                  )
-                }
-              />
-              {sim.data?.gate.funding && (
-                <AvailableMarginLines
-                  sim={simulation}
-                  funding={sim.data.gate.funding}
-                  nameOf={nameOfAccount}
-                  fallback={null}
-                  unit={simulation.collateral}
-                />
-              )}
-            </div>
-            <div className="border-t border-ink-800/80 pt-2">{slipLine}</div>
-          </>
-        ) : (
-          <>
-            <span className="text-[11.5px] text-ink-500">{sim.isPending ? t('assetCard.batch.pricing') : t('assetCard.batch.noQuote')}</span>
-            {slipLine}
-          </>
+        <RollStep
+          title={t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) })}
+          legs={openRows}
+          collateral={collateral}
+          sim={simulation}
+          slip={slip}
+          slipInvalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+          slipAria={t('assetCard.openOnly.slipAria')}
+          slipHint={t('assetCard.openOnly.slipHint')}
+        />
+        <div className="border-t border-ink-800 pt-1.5">
+          <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={totalUsd !== null ? fmtUsd(totalUsd) : blank} strong />
+        </div>
+      </SummaryCard>
+
+      <SummaryCard title={t('accounts.moveCash.after')}>
+        <div className="flex flex-col gap-1.5">
+          <AfterRates sim={simulation} legs={openRows} liqWarn={liqWarnOf(sim.data?.gate.funding)} />
+          <EstimateRow label={t('assetCard.roll.matures')} value={`${fmtDateLocal(target.maturity)} · ${daysLeftText(target.maturity, nowSec)}`} />
+          <EstimateRow
+            label={
+              <HoverCard label={t('assetCard.roll.oldPositions', { date: old })} widthPx={280}>
+                <span className="flex flex-col gap-1">
+                  <span>{t('assetCard.roll.openOnly2', { old })}</span>
+                  <span>{t('assetCard.roll.openOnly3', { old })}</span>
+                </span>
+              </HoverCard>
+            }
+            value={<span className="font-normal text-rose-300">{t('assetCard.roll.oldStayOpen')}</span>}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+          {simulation ? <MarginUsageRow sim={simulation} /> : <EstimateRow label={t('pairTicket.borosBits.marginUsage')} value={blank} strong />}
+          {simulation && sim.data?.gate.funding && (
+            <>
+              <SuggestedTopUpLines sim={simulation} funding={sim.data.gate.funding} nameOf={nameOfAccount} />
+              <AvailableMarginLines sim={simulation} funding={sim.data.gate.funding} nameOf={nameOfAccount} fallback={null} unit={simulation.collateral} />
+            </>
+          )}
+        </div>
+        {simulation && simulation.reasons.length > 0 && (
+          <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
+            {simulation.reasons.map((r) => (
+              <li key={r}>· {localizeServerText(r)}</li>
+            ))}
+          </ul>
         )}
-      </EstimateCard>
+      </SummaryCard>
 
       {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
-      <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))} />
+      <BlockerList
+        blockers={blockers.filter(
+          (b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged') && !(sim.isError && b.code === 'quote-failed'),
+        )}
+      />
 
       <div className="mt-1 flex items-center justify-between gap-2">
         <button type="button" className="btn" onClick={onBack} disabled={busy}>
@@ -3233,12 +3141,7 @@ function OpenOnlyReview({
         {loginLabel ? (
           <BorosLogInButton />
         ) : (
-          <HoldToConfirmButton
-            tone="cyan"
-            disabled={!canConfirm}
-            onConfirm={run}
-            title={t('assetCard.openOnly.holdTitle')}
-          >
+          <HoldToConfirmButton tone="cyan" disabled={!canConfirm} onConfirm={run} title={t('assetCard.openOnly.holdTitle')}>
             {busy ? t('assetCard.openOnly.opening') : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
         )}
@@ -3253,8 +3156,6 @@ function OpenOnlyReview({
  * TWO simulations, because a roll at market is two market orders: `close` on
  * the legs held now and `open` on the new ones. Both cross a book, so both pay
  * taker fees and slippage -- quoting only the entry would understate the roll.
- * The headline is net of BOTH, so "continue earning 18.95%" is a rate actually
- * received; the breakdown behind it opens only on the selected option.
  */
 function RollOption({
   target,
@@ -3326,18 +3227,10 @@ function RollOption({
 
   const entrySim = entry.data?.simulation;
   const exitSim = exit.data?.simulation;
-  const {
-    netRate,
-    spreadApr,
-    netByMaturityUsd,
-    grossByMaturityUsd,
-    totalCostUsd,
-    exitCostUsd,
-    entryCostUsd,
-    exitPnlUsd,
-    capitalUsd,
-    newBorosImUsd,
-  } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec, keepOld: openOnly });
+  const { netRate, netByMaturityUsd } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec, keepOld: openOnly });
+  const costUsd = openOnly
+    ? batchCost(entrySim, entrySlippageApr).totalUsd
+    : sumUsd([batchCost(exitSim, exitSlippageApr).totalUsd, batchCost(entrySim, entrySlippageApr).totalUsd]);
 
   const pending = exit.isPending || entry.isPending;
   /**
@@ -3351,134 +3244,51 @@ function RollOption({
    * until the next.
    */
   const fresh = !entry.isPlaceholderData && !exit.isPlaceholderData;
-  const live = {
-    netRate,
-    spreadApr,
-    netByMaturityUsd,
-    grossByMaturityUsd,
-    totalCostUsd,
-    exitCostUsd,
-    entryCostUsd,
-    exitPnlUsd,
-    capitalUsd,
-    newBorosImUsd,
-    perpImUsd,
-  };
+  const live = { netRate, netByMaturityUsd, costUsd };
   const held = useRef(live);
   if (fresh) held.current = live;
   const v = fresh ? live : held.current;
   const settling = fresh ? '' : 'opacity-60 transition-opacity';
-
+  const blank = <span className="text-ink-600">{pending ? '…' : '—'}</span>;
 
   return (
-    <div
-      className={`rounded border transition-colors ${
-        selected ? 'border-sky-500/50 bg-sky-500/[0.06]' : 'border-ink-700 bg-ink-950/40 hover:border-ink-600'
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      className={`${ROLL_OPTION_GRID} w-full rounded border px-3 py-2.5 text-left transition-colors ${
+        selected ? 'border-info/60 bg-info/[0.08]' : 'border-ink-700 bg-ink-950/40 hover:border-ink-600'
       }`}
+      onClick={onSelect}
     >
-      <button type="button" className="flex w-full items-center gap-3 p-3 text-left" onClick={onSelect}>
-        <span
-          aria-hidden
-          className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border ${
-            selected ? 'border-sky-400 bg-sky-400/30' : 'border-ink-600'
-          }`}
-        />
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className={`num text-[20px] font-semibold leading-none tracking-[-0.02em] ${settling}`}>
-            {v.netRate !== null ? (
-              <SignedNumber value={v.netRate} format={fmtPct} />
-            ) : (
-              <span className="text-ink-600">{pending ? '…' : '—'}</span>
-            )}
-            <span className="ml-1.5 text-[12px] font-normal text-ink-300">{t('assetCard.option.fixed')}</span>
-          </span>
-          <span className="num text-[11.5px] text-ink-400" title={t('assetCard.option.dayTitle')}>
-            {t('assetCard.option.daysDate', { days: daysToMaturity(target.maturity, nowSec), date: fmtDateLocal(target.maturity) })}
-          </span>
-          {/* Spread and singles are separate cards (mozzarella 2026-10-14): say
-              which one the roll lands in. */}
-          <span className="text-[11px] text-ink-500">
-            → {'spreadMarketId' in target ? <SpreadName base={base} venues={target.spreadVenues} /> : t('assetCard.option.singles')}
-          </span>
+      <span className="flex min-w-0 flex-col gap-1">
+        <span className="num text-[13px] font-semibold text-ink-50">
+          {fmtDateLocal(target.maturity)}
+          <span className="ml-1.5 text-[11.5px] font-normal text-ink-400">{daysLeftText(target.maturity, nowSec)}</span>
         </span>
-      </button>
-
-      {/* Under the rate: what it locks, what that is worth, what it ties up
-          — three figures of one rank. The fees that were netted out of the
-          headline come last and small: they explain the number, they are
-          not the number (his call 2026-09-17). */}
-      {selected && (
-        <div className={`border-t border-ink-800 px-3 pb-3 pt-2.5 ${settling}`}>
-          <div className="grid grid-cols-3 gap-x-4">
-            <div title={t('assetCard.option.spreadTitle')}>
-              <div className={statLabel}>{t('assetCard.option.lockedSpread')}</div>
-              <div className={statValue}>
-                {v.spreadApr !== null ? (
-                  <SignedNumber value={v.spreadApr} format={fmtPct} />
-                ) : (
-                  <span className="text-ink-600">{pending ? '…' : '—'}</span>
-                )}
-              </div>
-            </div>
-            <div
-              title={
-                v.grossByMaturityUsd !== null
-                  ? `${t('assetCard.option.carryTo', { date: fmtDateLocal(target.maturity) })}\t${fmtUsd(v.grossByMaturityUsd)}\n${t('common.fees')}\t${v.totalCostUsd !== null ? `−${fmtUsd(v.totalCostUsd)}` : '—'}${openOnly ? '' : `\n${t('assetCard.review.exitPnl')}\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}`}`
-                  : openOnly
-                    ? t('assetCard.option.earnOpenTitle')
-                    : t('assetCard.option.earnRollTitle')
-              }
-            >
-              <div className={statLabel}>{t('assetCard.estEarnings')}</div>
-              <div className={`${statValue} font-semibold`}>
-                {v.netByMaturityUsd !== null ? (
-                  <SignedNumber value={v.netByMaturityUsd} format={fmtUsd} />
-                ) : (
-                  <span className="text-ink-600">{pending ? '…' : '—'}</span>
-                )}
-              </div>
-            </div>
-            <div
-              title={
-                v.newBorosImUsd !== null
-                  ? `${t('assetCard.option.perpMargin')}\t${fmtUsd(v.perpImUsd)}\n${t('assetCard.option.newBorosMargin')}\t${fmtUsd(v.newBorosImUsd)}`
-                  : t('assetCard.option.capitalTitle')
-              }
-            >
-              <div className={statLabel}>{t('common.capital')}</div>
-              <div className={`${statValue} text-ink-100`}>{v.capitalUsd !== null ? fmtUsdCompact(v.capitalUsd) : '—'}</div>
-            </div>
-          </div>
-          {/* The split sits behind an ⓘ after the number, the house pattern
-              (reduce-only ⓘ, dust assets ⓘ): the number is what the option
-              states, the split is what explains it. */}
-          {/* ONE figure for what the roll costs on day one: the two batches'
-              fees, and what closing the old legs realises of their remaining
-              locked spread (which can pay for the fees, or add to them). The
-              split is behind the ⓘ. */}
-          <div className="num mt-2.5 flex items-baseline justify-between gap-3 border-t border-ink-800 pt-2 text-[11px] text-ink-500">
-            <span>{openOnly ? t('assetCard.option.openingCost') : t('assetCard.option.rolloverCost')}</span>
-            <span>
-              {v.totalCostUsd !== null && v.exitPnlUsd !== null ? (
-                <SignedNumber value={v.exitPnlUsd - v.totalCostUsd} format={fmtUsd} />
-              ) : (
-                <span className="text-ink-600">—</span>
-              )}
-              <span
-                className="ml-1 cursor-help text-ink-500"
-                title={
-                  openOnly
-                    ? `${t('assetCard.option.openingFee')}\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n${t('assetCard.option.openNotes')}`
-                    : `${t('assetCard.review.exitFee')}\t${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'}\n${t('assetCard.review.entryFee')}\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n${t('assetCard.review.exitPnl')}\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}\n${t('assetCard.option.rollNotes')}`
-                }
-              >
-                ⓘ
-              </span>
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
+        <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-300">
+          {'spreadMarketId' in target ? (
+            <>
+              <SpreadIcon venues={target.spreadVenues} size={14} />
+              <SpreadName base={base} venues={target.spreadVenues} />
+            </>
+          ) : (
+            <>
+              <VenueIcon venue={pair.longVenue} size={14} />
+              <VenueIcon venue={pair.shortVenue} size={14} />
+              <span className="truncate">{t('assetCard.roll.twoMarkets', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}</span>
+            </>
+          )}
+        </span>
+      </span>
+      <span className={`num text-right text-[15px] font-semibold ${settling}`}>
+        {v.netRate !== null ? <SignedNumber value={v.netRate} format={fmtPct} /> : blank}
+      </span>
+      <span className={`num text-right text-[12.5px] ${settling}`}>
+        {v.netByMaturityUsd !== null ? <SignedNumber value={v.netByMaturityUsd} format={fmtUsd} /> : blank}
+      </span>
+      <span className={`num text-right text-[12.5px] text-ink-50 ${settling}`}>{v.costUsd !== null ? fmtUsd(v.costUsd) : blank}</span>
+    </button>
   );
 }
 
@@ -6595,13 +6405,13 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
-            <p className="text-[11px] leading-relaxed text-amber-200">{t('assetCard.closeModal.borosStaysOpen')}</p>
             {/* The form's own leg rows say which leg is a pair slice of a
                 larger venue position and how much of it. */}
             <ClosePairForm
               base={group.base}
               legs={pairPerpCloseLegs(closePerps)}
               livePositions={livePositions}
+              borosUnhedged
             />
           </div>
         </Modal>
@@ -6700,7 +6510,7 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
-            <p className="text-[11px] leading-relaxed text-amber-200">{t('assetCard.closeModal.perpsStayOpen')}</p>
+            <p className="text-[11.5px] text-ink-400">{t('assetCard.closeModal.perpsStayOpen')}</p>
             <CloseBorosForm
               legs={pairBorosCloseLegs(closeBoros, group).map((l) => ({
                 ...l,

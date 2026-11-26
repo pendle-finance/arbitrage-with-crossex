@@ -542,7 +542,7 @@ describe('CloseBorosForm — a leg nothing can quote', () => {
     // pair simulator has nothing to quote against. The close is still valid.
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
-    expect(await screen.findByText(/No quote is available for this market/)).toBeInTheDocument();
+    expect(await screen.findByText(/No quote for this market/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Close position/ })).toBeEnabled();
   });
 
@@ -564,7 +564,7 @@ describe('CloseBorosForm — a leg nothing can quote', () => {
     renderWithClient(<CloseBorosForm legs={[leg()]} />);
     const btn = await screen.findByRole('button', { name: /Close position/ });
     expect(btn).toBeDisabled();
-    expect(screen.queryByText(/No quote is available/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No quote for this market/)).not.toBeInTheDocument();
     release();
     await waitFor(() => expect(btn).toBeEnabled());
   });
@@ -572,9 +572,9 @@ describe('CloseBorosForm — a leg nothing can quote', () => {
 
 describe('CloseBorosForm — full sizes on a large book', () => {
   it.each([
-    [4100, '4,100 ETH'],
-    [12_345_678.9, '12,345,678.9 ETH'],
-  ])('states a %d ETH close with every digit and commas, never compact or exponent', async (size, text) => {
+    [4100, '4,100 ETH', '4,000 ETH'],
+    [12_345_678.9, '12,345,678.9 ETH', '12,345,578.9 ETH'],
+  ])('states a %d ETH close with every digit and commas, never compact or exponent', async (size, text, left) => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: size }]} />);
 
@@ -582,7 +582,7 @@ describe('CloseBorosForm — full sizes on a large book', () => {
     const input = screen.getByLabelText(/Close size, applied to all positions/) as HTMLInputElement;
     expect(input.value).not.toContain(',');
     fireEvent.change(input, { target: { value: '100' } });
-    expect(await screen.findByText(/Partial close/)).toBeInTheDocument();
+    expect(await screen.findByText(left)).toBeInTheDocument();
     fireEvent.change(input, { target: { value: '99999999' } });
     expect(await screen.findByText(`Must be above 0 and at most ${text}`)).toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/\d(k|M) ETH|e\+/);
@@ -593,8 +593,9 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
   it('never says flat after at the max: the rest of the venue leg stays open', async () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 37.3, share: 0.0734 }]} />);
-    expect(await screen.findByText(/the rest of the shared position stays open/)).toBeInTheDocument();
-    expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
+    expect(await screen.findByText('Shared part stays open')).toBeInTheDocument();
+    expect(screen.getByText("This pair's share")).toBeInTheDocument();
+    expect(screen.queryByText('Flat')).not.toBeInTheDocument();
   });
 
   const heldOnChain = (currentSize: number) =>
@@ -634,20 +635,20 @@ describe('CloseBorosForm — a slice of a shared leg', () => {
   it.each([0.02, 2, 40, 400, 2_400])('S-CLOSE-08 the kept part of a part-excluded leg is never flat (%s ETH)', async (kept) => {
     server.use(versionHandler(), agentReady(), heldOnChain(kept * 2.5));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: kept, share: 1 }]} />);
-    expect(await screen.findByText(/the rest of the shared position stays open/)).toBeInTheDocument();
-    expect(screen.queryByText(/flat after/)).not.toBeInTheDocument();
+    expect(await screen.findByText('Shared part stays open')).toBeInTheDocument();
+    expect(screen.queryByText('Flat')).not.toBeInTheDocument();
   });
 
   it('flat after when the close takes the whole on-chain leg', async () => {
     server.use(versionHandler(), agentReady(), heldOnChain(2_400));
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), notionalToken: 2_400, share: 1 }]} />);
-    expect(await screen.findByText(/flat after/)).toBeInTheDocument();
+    expect(await screen.findByText('Flat')).toBeInTheDocument();
   });
 
   it('still says flat after for a whole leg at the max', async () => {
     server.use(...ready());
     renderWithClient(<CloseBorosForm legs={[{ ...leg(), share: 1 }]} />);
-    expect(await screen.findByText(/flat after/)).toBeInTheDocument();
+    expect(await screen.findByText('Flat')).toBeInTheDocument();
   });
 });
 
@@ -747,7 +748,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     renderWithClient(<CloseBorosForm legs={book(0.3, 0.255)} onClosed={(l, q) => closed.push([l.marketId!, q])} />);
 
     expect(await screen.findAllByText('ETH Spread HL-GATE')).not.toHaveLength(0);
-    expect(screen.getAllByText('Boros')).toHaveLength(3);
+    expect(screen.queryByText('Boros')).toBeNull();
     expect(screen.getByText('Close size · all positions')).toBeInTheDocument();
     expect(screen.getByLabelText(/Close size, applied to all positions/)).toHaveValue('0.555');
     expect(screen.queryByText(/This close spans/)).not.toBeInTheDocument();
@@ -888,7 +889,7 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
       [60, single],
       [59, spread],
     ]);
-    const chip = await screen.findByText(new RegExp(`Filled ${filledText} ETH — ${leftText} ETH of what you asked for is still open`));
+    const chip = await screen.findByText(new RegExp(`Filled ${filledText} ETH\\. ${leftText} ETH of what you asked for is still open`));
     expect(chip).toBeInTheDocument();
     expect(screen.getAllByText('Closed')).toHaveLength(2);
     expect(screen.getByLabelText(/Close size, applied to all positions/)).toHaveValue(leftText);
@@ -934,7 +935,8 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     );
     expect(await screen.findByText('ETH Spread HL-GATE')).toBeInTheDocument();
     expect(screen.queryByText('Hyperliquid')).toBeNull();
-    expect(screen.getByText(/Leaves both bundles:/)).toHaveTextContent(/Leaves both bundles: .*Hyperliquid and .*Gate\./);
-    expect(screen.getByText(/The perps stay open\./)).toBeInTheDocument();
+    expect(screen.getByText('Bundles')).toBeInTheDocument();
+    expect(screen.getByText(/Leaves/)).toHaveTextContent(/Leaves .*Hyperliquid and .*Gate$/);
+    expect(screen.queryByText(/perps stay open/)).toBeNull();
   });
 });

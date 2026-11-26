@@ -296,17 +296,18 @@
     "emptyHint": "Deposit collateral to CrossEx to get started."
   },
   "closePair": {
-    "pairSlice": "pair slice",
-    "wholePosition": "whole position",
-    "ofHeld": "of {{held}} on the venue",
-    "sizeLabel": "Close size · both legs",
+    "sizeLabel": "Close size",
     "maxTitle": "Close the whole pair",
     "max": "Max",
     "sizeAria": "Close size, applied to both legs",
     "sizeInvalid": "Size must be above 0 and at most {{max}} {{base}}.",
-    "sizeHint": "Each venue rounds down to its lot size. See the rows above.",
     "pnlToRealise": "PnL to realize",
-    "pnlSub": "Both legs · before fees",
+    "after": {
+      "left": "left",
+      "notInPair": "not in this pair",
+      "boros": "Boros",
+      "borosUnhedged": "Open, not hedged"
+    },
     "head": {
       "leg": "Leg",
       "limitPx": "Limit price",
@@ -338,8 +339,7 @@
       "start": "Start TWAP close",
       "reduceOnly": "Reduce-only. Each fill is hedged at once.",
       "marketSlippage": "Market slippage",
-      "marketSlippageHint": "The most the market step may move the price.",
-      "restOpen": "<n>{{qty}} {{coin}}</n> {{venue}} {{side}} stays open. Close it as one leg."
+      "marketSlippageHint": "The most the market step may move the price."
     }
   },
   "tracked": {
