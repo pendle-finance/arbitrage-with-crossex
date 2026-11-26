@@ -105,7 +105,10 @@ export function matchedCloseOf(
   };
 }
 
-export type CloseAfterRow = { symbol: string; venue: string; side: 'LONG' | 'SHORT'; kind: 'left' | 'notInPair'; qty: string };
+export type CloseAfterRow = { symbol: string; venue: string; side: 'LONG' | 'SHORT' } & (
+  | { kind: 'pair'; before: string; after: string }
+  | { kind: 'notInPair'; qty: string }
+);
 
 export function ClosePairCost({
   previews,
@@ -171,7 +174,6 @@ export function ClosePairAfter({
   totalPnl,
   legPnl,
   rows,
-  flat,
   borosUnhedged,
   bookedBefore,
 }: {
@@ -180,7 +182,6 @@ export function ClosePairAfter({
   totalPnl: number | null;
   legPnl: ClosePairLegPnl[];
   rows: CloseAfterRow[];
-  flat: boolean;
   borosUnhedged: { qty: number; coin: string } | null;
   bookedBefore: { usd: number; sinceSec: number } | null;
 }) {
@@ -221,15 +222,18 @@ export function ClosePairAfter({
         value={total !== null ? <SignedNumber value={total} format={(n) => fmtUsd(n)} /> : '—'}
         strong
       />
-      {(rows.length > 0 || flat || borosUnhedged) && (
+      {(rows.length > 0 || borosUnhedged) && (
         <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
-          {flat && <EstimateRow label={t('accounts.closePair.after.perps')} value={t('accounts.closePair.after.flat')} />}
           {rows.map((r) => (
             <EstimateRow
               key={`${r.symbol}-${r.kind}`}
               label={<LegName side={r.side} venue={r.venue} />}
-              sub={t(r.kind === 'left' ? 'accounts.closePair.after.left' : 'accounts.closePair.after.notInPair')}
-              value={`${qtyGrouped(r.qty)} ${base}`}
+              sub={r.kind === 'notInPair' ? t('accounts.closePair.after.notInPair') : undefined}
+              value={
+                r.kind === 'pair'
+                  ? `${qtyGrouped(r.before)} ${base} → ${qtyGrouped(r.after)} ${base}`
+                  : `${qtyGrouped(r.qty)} ${base}`
+              }
             />
           ))}
           {borosUnhedged && (

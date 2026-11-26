@@ -179,7 +179,7 @@ export function ClosePairForm({
     const shown = { symbol: l.symbol, venue: l.venue, side: sideOf(l.symbol) };
     const rows: CloseAfterRow[] = [];
     const closing = qtyInvalid ? null : p && Number(p.qty) > 0 ? Number(p.qty) : closeQtyOf(l.qty);
-    if (closing !== null && l.qty - closing > eps) rows.push({ ...shown, kind: 'left', qty: sig(l.qty - closing) });
+    if (closing !== null) rows.push({ ...shown, kind: 'pair', before: sig(l.qty), after: l.qty - closing > eps ? sig(l.qty - closing) : '0' });
     const live = livePositions?.get(l.symbol)?.positionQty ?? p?.closing?.positionQty;
     const held = live === undefined ? NaN : Math.abs(Number(live));
     if (l.partial && held - l.qty > eps) rows.push({ ...shown, kind: 'notInPair', qty: sig(held - l.qty) });
@@ -281,7 +281,6 @@ export function ClosePairForm({
         totalPnl={totalPnl}
         legPnl={legPnl}
         rows={afterRows}
-        flat={!qtyInvalid && !afterRows.some((r) => r.kind === 'left')}
         borosUnhedged={borosUnhedged}
         bookedBefore={bookedBefore}
       />

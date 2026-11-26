@@ -323,7 +323,7 @@ describe('ClosePairForm: After card', () => {
     expect(boros).toHaveClass('text-amber-300');
   });
 
-  it('a full close shows Perps as Flat and the price PnL label lists each leg', async () => {
+  it('a full close shows each leg going to 0 and the price PnL label lists each leg', async () => {
     server.use(...baseHandlers(), previewSpy([]));
     const live = new Map([
       ['BYBIT_FUTURE_HYPE_USDT', { symbol: 'BYBIT_FUTURE_HYPE_USDT', positionQty: '1.89', upnl: '-5' }],
@@ -331,12 +331,12 @@ describe('ClosePairForm: After card', () => {
     ]) as unknown as Map<string, CrossexPosition>;
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} livePositions={live} />);
     const after = await screen.findByRole('region', { name: 'After' });
-    expect(within(after).getByText('Perps')).toBeInTheDocument();
-    expect(within(after).getByText('Flat')).toBeInTheDocument();
+    await waitFor(() => expect(within(after).getAllByText('1.89 HYPE → 0 HYPE')).toHaveLength(2));
+    expect(within(after).queryByText('Flat')).toBeNull();
     expect(within(after).queryByText('Both legs · before fees')).toBeNull();
-    await userEvent.setup().hover(await within(after).findByText('Price PnL booked'));
+    await userEvent.setup().hover(await within(after).findByText('Realized price PnL'));
     const card = await screen.findByRole('tooltip');
-    expect(card).toHaveTextContent('The price gain or loss on each leg, booked when it closes. Before fees.');
+    expect(card).toHaveTextContent('The price gain or loss on each leg, realized when it closes. Before fees.');
     expect(card).toHaveTextContent('Bybit LONG');
     expect(card).toHaveTextContent('Hyperliquid SHORT');
   });
@@ -351,10 +351,10 @@ describe('ClosePairForm: After card', () => {
     const after = await screen.findByRole('region', { name: 'After' });
     expect(await within(after).findByText('$30.00')).toBeInTheDocument();
     expect(within(after).queryByText('-$29,500.00')).toBeNull();
-    await userEvent.setup().hover(within(after).getByText('Price PnL booked'));
+    await userEvent.setup().hover(within(after).getByText('Realized price PnL'));
     const card = await screen.findByRole('tooltip');
     expect(card).toHaveTextContent(/since the pair opened on 2026-10-16/);
-    expect(card).toHaveTextContent(/Booked before\s*\+?\$29,530\.00/);
+    expect(card).toHaveTextContent(/Realized earlier\s*\+?\$29,530\.00/);
   });
 
   it('a partial size shows what stays open on each leg', async () => {
@@ -375,7 +375,7 @@ describe('ClosePairForm: After card', () => {
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
     fireEvent.change(screen.getByLabelText('Close size, applied to both legs'), { target: { value: '1' } });
     const after = await screen.findByRole('region', { name: 'After' });
-    await waitFor(() => expect(within(after).getAllByText('left')).toHaveLength(2), { timeout: 4000 });
+    await waitFor(() => expect(within(after).getAllByText(/^1\.89 HYPE → 0\.89 HYPE$/)).toHaveLength(2), { timeout: 4000 });
     expect(screen.queryByText(/rounds down to its lot size/)).toBeNull();
   });
 });
