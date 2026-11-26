@@ -1299,6 +1299,21 @@ export function realizeTabOf(
   customSliceUsd?: number,
   pickedPool?: Pool,
 ): RealizeTab | null {
+  const tab = realizeTabFor(buckets, account, inputs, customUsd, customSliceUsd, pickedPool);
+  if (!tab || (customSliceUsd !== undefined && customSliceUsd > 0) || inputs.sliceUsd !== undefined || inputs.twapSlices !== undefined || !(tab.defaultSliceUsd > 0)) return tab;
+  if (![tab.clearDebt, tab.all, tab.custom].some((plan) => (plan?.legs.length ?? 0) > 1)) return tab;
+  const even = realizeTabFor(buckets, account, { ...inputs, sliceUsd: tab.defaultSliceUsd }, customUsd, undefined, pickedPool);
+  return even ? { ...even, defaultSliceUsd: tab.defaultSliceUsd } : tab;
+}
+
+function realizeTabFor(
+  buckets: Bucket[],
+  account: AccountLike,
+  inputs: PlanInputs,
+  customUsd: number | null,
+  customSliceUsd?: number,
+  pickedPool?: Pool,
+): RealizeTab | null {
   const sliced = customSliceUsd !== undefined && customSliceUsd > 0 ? { ...inputs, sliceUsd: customSliceUsd } : inputs;
   const folded = hasChargedBorrow(buckets) ? planMoves(buckets, account, sliced, REPAY_GOAL).realize : null;
   const pools = profitPoolsOf(buckets, inputs.perps ?? [], folded);

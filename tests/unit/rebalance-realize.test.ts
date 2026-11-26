@@ -206,6 +206,16 @@ describe('planRealize leg order', () => {
     expect(fullOf(oneOrder(twoLegs()))).toMatchObject({ clearsBorrow: true, needsRealize: true, refused: null });
   });
 
+  it('two legs are priced at the one slice size the job sends for both', () => {
+    const book = twoLegs();
+    const tab = tabOf(book);
+    expect(tab?.clearDebt?.legs).toHaveLength(2);
+    const sent = realizeTabOf(book.buckets, book.account, book.inputs, null, tab!.defaultSliceUsd);
+    const shape = (plan: RealizePlan | null | undefined) => plan?.legs.map((leg) => [leg.symbol, leg.qty, leg.realizedUsd]);
+    expect(shape(tab?.clearDebt)).toEqual(shape(sent?.clearDebt));
+    expect(shape(tab?.all)).toEqual(shape(sent?.all));
+  });
+
   it('switches leg when the first cannot fund its convert', () => {
     const realize = clearDebtOf(oneOrder(bookBb43()));
     expect(realize.legs[0].base).toBe('BTC');
