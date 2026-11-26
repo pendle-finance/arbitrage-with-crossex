@@ -243,6 +243,7 @@
       "priceImpact": "Price impact",
       "priceImpactTitle": "Impact of the whole size at once, then the sum over all slices",
       "tooThin": "Book too thin to price",
+      "readingBook": "Reading the order book…",
       "wholeRun": "whole run",
       "duration": "Duration",
       "interval": "Interval",

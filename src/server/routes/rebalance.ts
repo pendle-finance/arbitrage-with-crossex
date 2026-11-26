@@ -88,7 +88,7 @@ import {
   type StepName,
   twapLockText,
 } from '../rebalanceJob';
-import { applyFix, cancelRestingLead, receivedOf, runJob, settleAddBack, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
+import { applyFix, cancelRestingLead, endHaltedChildren, receivedOf, runJob, settleAddBack, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
 import { configuredRoot, createBorosCloseDeps, createPairPricer } from './borosPair';
 
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
@@ -1338,7 +1338,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const job = haltedOr409(store, id, reply);
       if (!job) return reply;
       if (fixing) return conflict(reply, FIX_RUNNING);
-      const settle = settleAddBack(runnerDeps(store), job).then((unread) => {
+      const settle = endHaltedChildren(runnerDeps(store), job).then(() => settleAddBack(runnerDeps(store), job)).then((unread) => {
         job.status = 'abandoned';
         job.haltReason = addBackAbandonText(job, unread) ?? job.haltReason;
         const gaps = addBackGapsOf(job, unread);

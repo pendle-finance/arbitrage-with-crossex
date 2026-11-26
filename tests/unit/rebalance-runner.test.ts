@@ -55,6 +55,7 @@ import {
   QUOTE_RECHECK_MS,
   quoteFloor,
   applyFix,
+  endHaltedChildren,
   BOROS_LATE_SEND_MS,
   cancelRestingLead,
   runJob,
@@ -5598,6 +5599,15 @@ describe('slices: pause, boot and fix', () => {
     expect(engine.store.getPair(id)?.mode).toBe('DONE');
     expect(job).toMatchObject({ status: 'running', haltReason: null, haltKind: null });
     expect(job.steps[0].qty).toBeCloseTo(2, 9);
+  });
+
+  it('Abandon ends a halted reopen child, so it never retries the hedge after the trader closes the gap', async () => {
+    const { h, engine, id } = await childAtBoot(false, { a: '2', b: '0', mode: 'HALTED', haltKind: 'hedge-margin' });
+    await endHaltedChildren(h.deps, h.jobs.read()!);
+    const pair = engine.store.getPair(id);
+    expect(pair?.mode).toBe('DONE');
+    expect(pair?.hedgeNotBefore).toBe(Number.MAX_SAFE_INTEGER);
+    expect(engine.store.listPairs({ activeOnly: true }).some((row) => row.id === id)).toBe(false);
   });
 });
 
