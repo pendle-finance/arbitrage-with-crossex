@@ -23,7 +23,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { sigFigsDirectional } from '../lib/ticks';
 import type { BorosLegFill, BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
-import { fixedRateText } from '../components/FixedRate';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
 import { daysToMaturity, knownRate } from '../lib/boros';
@@ -548,10 +547,7 @@ export function CloseBorosForm({
   const stepRows: StepRow[] = closable.map((l) => {
     const venues = spreadOf(l);
     const days = l.maturity ? daysToMaturity(l.maturity, nowSec) : null;
-    const rates = [
-      l.entryApr !== undefined ? t('pairTicket.closeBoros.locked', { rate: fixedRateText(t, l.side === 'SHORT' ? l.entryApr : -l.entryApr) }) : null,
-      knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : null,
-    ].filter((s) => s !== null);
+    const mark = knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : '';
     const facts = underPicker
       ? ''
       : `${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`;
@@ -571,7 +567,7 @@ export function CloseBorosForm({
         </span>
       ),
       sub: null,
-      right: rates.join(' · '),
+      right: mark,
       state: busy && pending.includes(l) ? 'running' : 'pending',
       progress: null,
     };

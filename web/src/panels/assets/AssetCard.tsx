@@ -1350,6 +1350,7 @@ function PairCard({
  * fell back to "waiting for a quote".
  */
 const ROLL_POLL_MS = 10_000;
+const QUOTE_WAIT_CODES: ReadonlySet<string> = new Set(['no-quote', 'stale-simulation']);
 /**
  * Longer than the ticket's 12 s (SIMULATION_MAX_AGE_MS): the roll polls every
  * 10 s, so 12 s would flag a slow poll as out of date. The send re-fetches
@@ -3006,7 +3007,11 @@ function RollReview({
       )}
       <BlockerList
         blockers={blockers.filter(
-          (b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged') && !(roll.isError && b.code === 'quote-failed'),
+          (b) =>
+            b.code !== 'slippage-exceeds-max' &&
+            !QUOTE_WAIT_CODES.has(b.code) &&
+            !(ackShown && b.code === 'flip-unacknowledged') &&
+            !(roll.isError && b.code === 'quote-failed'),
         )}
       />
 
@@ -3015,7 +3020,11 @@ function RollReview({
           <BorosLogInButton />
         ) : (
           <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.review.holdTitle')}>
-            {busy ? t('assetCard.review.rolling') : t('assetCard.actions.rollOver')}
+            {busy
+              ? t('assetCard.review.rolling')
+              : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+                ? t('assetCard.review.refreshingQuote')
+                : t('assetCard.actions.rollOver')}
           </HoldToConfirmButton>
         )}
       </div>
@@ -3260,7 +3269,11 @@ function OpenOnlyReview({
       {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
       <BlockerList
         blockers={blockers.filter(
-          (b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged') && !(sim.isError && b.code === 'quote-failed'),
+          (b) =>
+            b.code !== 'slippage-exceeds-max' &&
+            !QUOTE_WAIT_CODES.has(b.code) &&
+            !(ackShown && b.code === 'flip-unacknowledged') &&
+            !(sim.isError && b.code === 'quote-failed'),
         )}
       />
 
@@ -3269,7 +3282,11 @@ function OpenOnlyReview({
           <BorosLogInButton />
         ) : (
           <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.openOnly.holdTitle')}>
-            {busy ? t('assetCard.openOnly.opening') : t('assetCard.roll.openNewMaturity')}
+            {busy
+              ? t('assetCard.openOnly.opening')
+              : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+                ? t('assetCard.review.refreshingQuote')
+                : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
         )}
       </div>
