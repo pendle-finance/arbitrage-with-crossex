@@ -76,6 +76,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   trader can switch to any open pair. The picked pair stays through a refresh, and the picker locks
   once an order is sent. The Roll over review shows a headline, two step cards side by side, each
   with its own Total cost, then "Can it fund?".
+- **Close perps and Close Boros drop the standing line under the button** ("Reduce-only…" and
+  "Cancels resting orders…"). The orders they send are unchanged.
 - **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
   the sale adds up to the amount converted.
 - **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,
