@@ -128,6 +128,7 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **A quote that is loading reads "Refreshing…" on the button** instead of a red banner. A
   quote that failed keeps the action's name on the disabled button. A roll refused for margin
   lists its open fees, so the figures add up to the shortfall.
+- **Step rows keep equal gaps around the coin icon** and line up as each step runs.
 
 ## 1.7.9 — 2026-11-10
 
