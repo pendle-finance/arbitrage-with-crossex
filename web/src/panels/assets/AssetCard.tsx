@@ -2513,7 +2513,12 @@ export function RollOverModal({
             />
           )
         ) : (
-          null
+          !sent &&
+          !(simSize > 0) && (
+            <HoldToConfirmButton tone="cyan" className="w-full" disabled onConfirm={() => {}}>
+              {openOnly ? t('assetCard.roll.openNewMaturity') : t('assetCard.actions.rollOver')}
+            </HoldToConfirmButton>
+          )
         )}
       </div>
     </Modal>
