@@ -1019,8 +1019,10 @@ describe('sliced jobs through the routes', () => {
 
     expect(child.repegBehindBp).toBe(2);
     expect(child.deadlineAt! - child.createdAt).toBe(600_000);
+    expect((await h.post(`/api/rebalance/${job.id}/pause`)).statusCode).toBe(200);
     auto = true;
     settleAll();
+    await waitFor(() => h.file().paused === true, 'the pause');
   });
 
   it('with TWAP off, Pause lets the child in flight end first, then the job pauses', async () => {
