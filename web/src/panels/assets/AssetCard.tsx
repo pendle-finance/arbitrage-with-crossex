@@ -937,7 +937,7 @@ function PairCard({
   // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
   // on every button, and reserves colour for what the action does.
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
-  const rollRates = useRollRateInputs(pair, rollMarkets, rollHeldSize, ROLL_PROBE_POLL_MS, probeTargets.length > 0);
+  const rollRates = useRollRateInputs(pair, rollMarkets, rollHeldSize, ROLL_PROBE_POLL_MS, probeTargets.length > 0, 'hold');
 
   return (
     <div ref={rootRef} className="scroll-mt-36 overflow-x-auto rounded border border-wash/[0.16] bg-wash/[0.03]">
@@ -1515,7 +1515,7 @@ function rollOpportunities(
 }
 
 /**
- * One maturity, priced for the banner EXACTLY as the modal will price it.
+ * One maturity, priced for the banner as the modal prices it at the default settings.
  * Renders nothing; slow poll — it is a signal, the modal re-prices live.
  *
  * Two stages. First a quote at a FIFTH of the position: its ladders say how
@@ -1524,7 +1524,7 @@ function rollOpportunities(
  * to — the smaller of that and the position. A default under a fifth is no opportunity: the market cannot
  * take a meaningful slice. Then a quote AT that default size, both batches,
  * through the same `rollFigures` the option card uses, so the banner's rate
- * is the modal's opening headline to the decimal.
+ * is the modal's opening headline at the default settings.
  */
 function RollProbe({
   target,
@@ -1850,10 +1850,14 @@ function useRollRateInputs(
   heldSize: number,
   pollMs: number,
   enabled: boolean,
+  basis: 'hold' | 'settings',
 ): RollRateInputs {
-  const settings = useMemo(() => loadControls(), []);
-  const rebate = useRebate().data ?? null;
-  const closing = enabled && settings.exitMode === 'close';
+  const settings = loadControls();
+  const holdBasis = basis === 'hold';
+  const viewOnly = useActiveWallet().viewOnly;
+  const ownRebate = useRebate().data ?? null;
+  const rebate = viewOnly ? null : ownRebate;
+  const closing = enabled && !holdBasis && settings.exitMode === 'close';
   const legs = closing ? pairPerpCloseLegs(pair) : [];
   const actions: ActionInput[] | null =
     legs.length === 2
@@ -1880,7 +1884,7 @@ function useRollRateInputs(
     perpExitUsd,
     shareOf: (size) => (heldSize > 0 ? size / heldSize : 0),
     rebateApr: (ids) =>
-      settings.includeRebate && rebate ? ids.reduce((sum, id) => sum + settleOf(id) - rebatedSettleApr(settleOf(id), rebate, id), 0) : 0,
+      (holdBasis || settings.includeRebate) && rebate ? ids.reduce((sum, id) => sum + settleOf(id) - rebatedSettleApr(settleOf(id), rebate, id), 0) : 0,
   };
 }
 
@@ -2206,7 +2210,7 @@ export function RollOverModal({
   const { yuLegs, heldSize, pairPerpImUsd } = pairRollGeometry(pair);
 
   const targets = useMemo(() => rollTargetsFor(markets ?? [], pair, base, soonest), [markets, soonest, base, pair]);
-  const rollRates = useRollRateInputs(pair, markets, heldSize, ROLL_POLL_MS, true);
+  const rollRates = useRollRateInputs(pair, markets, heldSize, ROLL_POLL_MS, true, 'settings');
 
   const [picked, setPicked] = useState<number | null>(null);
   const selected = picked ?? targets[0]?.maturity ?? null;

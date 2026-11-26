@@ -383,7 +383,9 @@ export function evaluateRollGate(input: EvaluateRollInput): RollGate {
       : VENUE_MARGIN_CODE.test(venue.reason?.code ?? ''));
   const shortAfterExit =
     venue !== null && venue.availableAfter === null && marginRefused && venue.availableAfterExit !== null
-      ? venue.availableAfterExit - venue.marginRequired
+      ? venue.availableAfterExit -
+        venue.marginRequired -
+        entry.simulation.legs.reduce((sum, l) => sum + l.takerFeeCost + l.fillVsMarkCost, 0)
       : null;
   if (venue === null) {
     // A leg with no rate to send at never reaches the preview (`rollPlanFor`
