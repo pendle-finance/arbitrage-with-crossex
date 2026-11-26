@@ -147,7 +147,8 @@ describe('AssetCard — roll over', () => {
     // The popup names the pair; with nothing to roll into there is no target,
     // so the pick page's "Roll over →" stays disabled.
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: /^Roll over.*Gate.*LONG.*Hyperliquid.*SHORT/ })).toBeInTheDocument();
+    expect(within(dialog).getByRole('heading', { name: 'Roll over' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Pair' })).toHaveTextContent(/Gate.*LONG.*Hyperliquid.*SHORT/);
     expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
     // No maturity lists a market at BOTH venues, so there is nothing to roll
     // into -- the table says so rather than inventing a target.
@@ -483,7 +484,7 @@ describe('AssetCard — roll over', () => {
     const roll = within(panel).getByRole('button', { name: 'Roll over' });
     expect(roll).not.toHaveClass('roll-nudge');
     await userEvent.click(roll);
-    expect(within(screen.getByRole('dialog')).getByRole('heading', { name: /^Roll over.*Gate.*LONG.*Hyperliquid.*SHORT/ })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Pair' })).toHaveTextContent(/Gate.*LONG.*Hyperliquid.*SHORT/);
     // Opening it by hand raises no banner and no flag.
     expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
     expect(screen.queryByText('Ready to roll')).not.toBeInTheDocument();

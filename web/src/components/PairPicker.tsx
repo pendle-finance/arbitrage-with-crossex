@@ -47,6 +47,7 @@ export function PairPicker({
   searchLabel,
   columns,
   emptyText,
+  disabled = false,
 }: {
   rows: PairPickerRow[];
   value: string | null;
@@ -55,6 +56,7 @@ export function PairPicker({
   searchLabel: string;
   columns: { pair: string; size: string; im: string };
   emptyText: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -143,7 +145,7 @@ export function PairPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
-        disabled={rows.length === 0}
+        disabled={disabled || rows.length === 0}
         className={`flex w-full cursor-pointer items-center gap-3 rounded border bg-ink-900/40 px-3 py-2 text-left disabled:cursor-not-allowed disabled:opacity-40 ${
           open ? 'border-info' : 'border-ink-700 hover:border-ink-500'
         }`}
