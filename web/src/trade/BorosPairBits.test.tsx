@@ -74,12 +74,11 @@ describe('PairCosts', () => {
 });
 
 describe('TotalCostRow', () => {
-  it('adds the trade fee and the estimated slippage, and names the max-slippage total on its hover', async () => {
+  it('adds the trade fee and the estimated slippage', () => {
     const sim = { collateral: 'ETH', collateralPriceUsd: 2000, costToCrossSize: 0.25 } as unknown as BorosPairSimulation;
-    render(<TotalCostRow sim={sim} slippage={{ est: 0.05, max: 0.5 }} />);
+    render(<TotalCostRow sim={sim} slippage={0.05} />);
     expect(screen.getByText('Total cost').closest('.justify-between')!.textContent).toMatch(/0\.3 ETH \(\$600(\.00)?\)$/);
-    await userEvent.hover(screen.getByRole('button', { name: 'Total cost' }));
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('At max slippage: 0.75 ETH.');
+    expect(screen.queryByRole('button', { name: 'Total cost' })).not.toBeInTheDocument();
   });
 });
 

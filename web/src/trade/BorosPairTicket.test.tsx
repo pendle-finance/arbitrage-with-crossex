@@ -400,18 +400,6 @@ describe('BorosPairTicket', () => {
     expect(screen.queryByText('4.80%')).not.toBeInTheDocument();
   });
 
-  it('says that slippage bounds the rate, not the fill — on the slippage row', async () => {
-    // The standalone caption is gone; the caveat rides on the row it is
-    // about. It must survive somewhere: a tolerance that reads as a fill
-    // guarantee is the misunderstanding worth preventing.
-    const user = userEvent.setup();
-    server.use(...handlers());
-    renderWithClient(<BorosPairTicket />);
-    await fillTicket(user);
-    await user.hover(await screen.findByRole('button', { name: 'Slippage' }));
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(/caps the RATE, not the fill/i);
-  });
-
   it('offers the SIZE the collateral funds, not the collateral: both legs out of one cross bucket', async () => {
     // 500 USDT free; opening costs 0.03 per unit on HL and 0.02 on Binance.
     // As a pair both come out of the one cross bucket: 500 / 0.05 = 10,000

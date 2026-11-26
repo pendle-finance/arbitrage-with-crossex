@@ -44,7 +44,6 @@ import type {
   BorosPairResult,
 } from '../api/types';
 import { Chip } from '../components/Chip';
-import { HoverCard } from '../components/HoverCard';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
 import { AffixedInput, EstimateAge, LegHeader, ShareSlider, SummaryCard } from './PairTicketBits';
@@ -1324,11 +1323,7 @@ export function BorosPairTicket({
         >
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[12px] text-ink-200">
-                  <HoverCard label={t('pairTicket.bits.slippage')} widthPx={260}>
-                    {t('pairTicket.boros.slippageHint')}
-                  </HoverCard>
-                </span>
+                <span className="text-[12px] text-ink-200">{t('pairTicket.bits.slippage')}</span>
                 <span className="num text-[12px] text-ink-400">
                   {t('pairTicket.bits.est')}{' '}
                   <span className="text-ink-50">
@@ -1409,7 +1404,7 @@ export function BorosPairTicket({
             <TradeFeeRow sim={simulation} singleLeg={activeLeg} />
             {slip && (
               <div className="mt-0.5 border-t border-ink-800 pt-1.5">
-                <TotalCostRow sim={simulation} slippage={slip} />
+                <TotalCostRow sim={simulation} slippage={slip.est} />
               </div>
             )}
         </SummaryCard>
