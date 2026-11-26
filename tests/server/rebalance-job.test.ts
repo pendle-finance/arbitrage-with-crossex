@@ -1005,6 +1005,26 @@ describe('sliced jobs through the routes', () => {
     expect(h.file().realize!.legs[0].filledQty).toBe(33);
   });
 
+  it('a Limit + hedge slice uses the job maker settings for its wait before taker and its re-peg', async () => {
+    sliceVenue();
+    const job = unfilled();
+    job.exec = 'maker';
+    job.maker = { takerAfterSec: 600, repegBehindBp: 2 };
+    auto = false;
+    const h = boot({ job, extra: borosDeps() });
+
+    expect((await h.post(`/api/rebalance/${job.id}/resume`)).statusCode).toBe(200);
+    await waitFor(() => h.store!.listPairs().length === 1, 'the child');
+    const child = h.store!.listPairs()[0];
+
+    expect(child.repegBehindBp).toBe(2);
+    expect(child.deadlineAt! - child.createdAt).toBe(600_000);
+    expect((await h.post(`/api/rebalance/${job.id}/pause`)).statusCode).toBe(200);
+    auto = true;
+    settleAll();
+    await waitFor(() => h.file().paused === true, 'the pause');
+  });
+
   it('with TWAP off, Pause lets the child in flight end first, then the job pauses', async () => {
     const sent = sliceVenue();
     const job = unfilled();
@@ -1031,6 +1051,26 @@ describe('sliced jobs through the routes', () => {
     const sent = sliceVenue();
     const job = unfilled();
     job.deleverTwap = { durationSec: 600, intervalSec: 60, slices: 10 };
+    auto = false;
+    const h = boot({ job, extra: borosDeps() });
+    expect((await h.post(`/api/rebalance/${job.id}/resume`)).statusCode).toBe(200);
+    await waitFor(() => h.store!.listPairs().length === 1, 'the child');
+    const id = h.store!.listPairs()[0].id;
+
+    expect((await h.post(`/api/rebalance/${job.id}/pause`)).statusCode).toBe(200);
+    await waitFor(() => h.store!.getPair(id)?.mode === 'STOPPING', 'the stop');
+    auto = true;
+    settleAll();
+    await waitFor(() => h.file().paused === true, 'the pause');
+
+    expect(sent).toEqual([]);
+  });
+
+  it.each([null, 600])('with TWAP off and a wait before taker of %s, Pause stops the live child at once', async (takerAfterSec) => {
+    const sent = sliceVenue();
+    const job = unfilled();
+    job.exec = 'maker';
+    job.maker = { takerAfterSec, repegBehindBp: 5 };
     auto = false;
     const h = boot({ job, extra: borosDeps() });
     expect((await h.post(`/api/rebalance/${job.id}/resume`)).statusCode).toBe(200);

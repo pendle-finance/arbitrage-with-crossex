@@ -191,47 +191,46 @@ export function ClosePairForm({
         onChange={setQtyEdited}
       />
 
-      <ExecModeToggle
-        ariaLabel={t('accounts.closePair.executionAria')}
-        fill
-        value={mode}
-        onChange={setMode}
-        order={['maker', 'market']}
-        labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
-      />
-
-      {maker && allowTwap && (
-        <TwapArea
-          on={twap.on}
-          onToggle={twap.setOn}
-          input={twap.input}
-          onInput={twap.setInput}
-          preview={actions ? (preview.data?.twap ?? null) : null}
-          impact={preview.data?.priceImpact ?? null}
-          coin={base}
+      <div className="order-stack">
+        <ExecModeToggle
+          ariaLabel={t('accounts.closePair.executionAria')}
+          fill
+          value={mode}
+          onChange={setMode}
+          order={['maker', 'market']}
+          labels={{ maker: t('pairTicket.orderType.limitHedge'), market: t('pairTicket.orderType.market') }}
         />
-      )}
+        {maker && (
+          <MakerSettings
+            legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
+            makerLeg={makerLeg}
+            autoPick={autoPick}
+            saving={maker ? makerSaving : null}
+            savingHint={t('accounts.closePair.savingHint')}
+            onMakerLeg={setMakerLeg}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            takerCapSec={twapOn ? (plan?.takerAfterSec ?? null) : null}
+            repegBehindBp={repeg}
+            repegLocked={false}
+            onRepeg={(v) => setRepeg(v as RepegBp)}
+            marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
+          />
+        )}
+        {maker && allowTwap && (
+          <TwapArea
+            on={twap.on}
+            onToggle={twap.setOn}
+            input={twap.input}
+            onInput={twap.setInput}
+            preview={actions ? (preview.data?.twap ?? null) : null}
+            impact={preview.data?.priceImpact ?? null}
+            coin={base}
+          />
+        )}
+      </div>
+      {!maker && <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />}
       <CloseRestNotes base={base} restLegs={restLegs} sideOf={sideOf} />
-
-      {maker ? (
-        <MakerSettings
-          legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
-          makerLeg={makerLeg}
-          autoPick={autoPick}
-          saving={maker ? makerSaving : null}
-          savingHint={t('accounts.closePair.savingHint')}
-          onMakerLeg={setMakerLeg}
-          takerAfter={taker.takerAfter}
-          onTakerAfter={taker.pick}
-          takerCapSec={twapOn ? (plan?.takerAfterSec ?? null) : null}
-          repegBehindBp={repeg}
-          repegLocked={false}
-          onRepeg={(v) => setRepeg(v as RepegBp)}
-          marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
-        />
-      ) : (
-        <CloseSlipField base={base} slipStr={slipStr} slipInvalid={slipInvalid} onChange={setSlipStr} />
-      )}
 
       <ClosePairEstimate
         previews={previews}

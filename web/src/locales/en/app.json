@@ -131,6 +131,13 @@
     "hours": "about {{n}} h",
     "hoursMinutes": "about {{h}} h {{m}} m"
   },
+  "approx": {
+    "mark": "about",
+    "seconds": "{{n}}s",
+    "minutes": "{{n}} min",
+    "hours": "{{n}} h",
+    "hoursMinutes": "{{h}} h {{m}} m"
+  },
   "syncAge": {
     "s": "{{n}} s ago",
     "m": "{{n}} min ago",

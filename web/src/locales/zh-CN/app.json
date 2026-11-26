@@ -130,6 +130,13 @@
     "hours": "约 {{n}} 小时",
     "hoursMinutes": "约 {{h}} 小时 {{m}} 分钟"
   },
+  "approx": {
+    "mark": "约",
+    "seconds": "{{n}} 秒",
+    "minutes": "{{n}} 分钟",
+    "hours": "{{n}} 小时",
+    "hoursMinutes": "{{h}} 小时 {{m}} 分钟"
+  },
   "syncAge": {
     "s": "{{n}} 秒前",
     "m": "{{n}} 分钟前",

@@ -15,6 +15,7 @@ import {
   symbolHandlers,
 } from '../test/fixtures';
 import { env, server } from '../test/server';
+import { pickOption } from '../test/picker';
 import { renderWithClient } from '../test/utils';
 import { SingleTicket } from './SingleTicket';
 
@@ -58,13 +59,13 @@ function dealHandler(calls: DealRequest[]) {
 
 async function pickBinanceBtc() {
   await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
-  await userEvent.selectOptions(await screen.findByLabelText('Long venue'), 'BINANCE_FUTURE_BTC_USDT');
+  await pickOption(userEvent.setup(), 'Long venue', 'BINANCE_FUTURE_BTC_USDT');
   await screen.findByRole('button', { name: /^Max / }).catch(() => undefined);
 }
 
 async function pickHyperliquidBtc() {
   await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
-  await userEvent.selectOptions(await screen.findByLabelText('Long venue'), 'HYPERLIQUID_FUTURE_BTC_USDC');
+  await pickOption(userEvent.setup(), 'Long venue', 'HYPERLIQUID_FUTURE_BTC_USDC');
   await userEvent.click(screen.getByRole('radio', { name: 'USDT' }));
   await screen.findByRole('button', { name: /^Max / });
 }

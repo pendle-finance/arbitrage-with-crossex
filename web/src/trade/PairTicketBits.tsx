@@ -6,14 +6,15 @@ import { useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
+import { ListPicker } from '../components/ListPicker';
+import { SwapButton } from '../components/SwapButton';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
 import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
-import { EstimateHeadline } from './EstimateHeadline';
 import { BookToggle, fmtTradeCost, PlanLine } from './TicketEstimateBits';
-import { ChevronDown, RotateCw } from 'lucide-react';
+import { RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
 
@@ -83,6 +84,54 @@ export function StepBadge({ n }: { n: number }) {
   );
 }
 
+export function EstimateAge({
+  dataUpdatedAt,
+  estimating,
+  isError,
+}: {
+  dataUpdatedAt: number;
+  estimating: boolean;
+  isError: boolean;
+}) {
+  const { t } = useTranslation();
+  const now = useNow(1_000);
+  const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
+  return (
+    <span className="num text-[11px] text-ink-400">
+      {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('trade.execute.pricing') : (
+        <>
+          <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
+        </>
+      )}
+    </span>
+  );
+}
+
+export function SummaryCard({
+  title,
+  sub,
+  aside,
+  children,
+}: {
+  title: string;
+  sub?: ReactNode;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-label={title} className="card flex flex-col gap-2 px-3.5 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-baseline gap-2">
+          <span className="text-[14px] font-semibold text-ink-50">{title}</span>
+          {sub && <span className="num text-[11px] text-ink-400">{sub}</span>}
+        </span>
+        {aside && <span className="flex items-center gap-2">{aside}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 /** The estimate card's frame: an "ESTIMATE" caption, the preview's age, and
  * whatever the caller puts in the top-right (the pair's Book toggle). */
 export function EstimateCard({
@@ -110,8 +159,6 @@ export function EstimateCard({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const now = useNow(1_000);
-  const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
   return (
     <div className="flex flex-col gap-2.5 card px-3.5 py-3">
       <div className="flex items-center justify-between gap-2">
@@ -132,13 +179,7 @@ export function EstimateCard({
           {sub && <span className="num text-[11px] text-ink-400">{sub}</span>}
         </span>
         <span className="flex items-center gap-2 text-[11px] text-ink-400">
-          <span className="num">
-            {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('trade.execute.pricing') : (
-              <>
-                <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
-              </>
-            )}
-          </span>
+          <EstimateAge dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={isError} />
           {aside}
         </span>
       </div>
@@ -301,7 +342,7 @@ export function LeverageValue({ text }: { text: string | null }) {
 // ---------------------------------------------------------------------------
 
 /** LONG or SHORT venue as a dropdown — the other leg's venue is disabled. */
-function VenueSelect({
+export function VenueSelect({
   tone,
   value,
   otherValue,
@@ -329,26 +370,19 @@ function VenueSelect({
           {t(long ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
         </span>
       </div>
-      <div className="relative">
-        <select
-          aria-label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
-          className="select"
-          value={value ?? ''}
-          onChange={(e) => onPick(e.target.value)}
-        >
-          <option value="">{loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}</option>
-          {(venues ?? []).map((r) => (
-            <option key={r.symbol} value={r.symbol} disabled={r.exchange === otherVenue}>
-              {prettyVenue(r.exchange)}
-              {r.quote !== 'USDT' ? ` · ${r.quote}` : ''}
-              {r.exchange === otherVenue ? ` (${t(long ? 'pairTicket.bits.shortVenue' : 'pairTicket.bits.longVenue')})` : ''}
-            </option>
-          ))}
-        </select>
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
-          <ChevronDown size={14} aria-hidden />
-        </span>
-      </div>
+      <ListPicker
+        label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
+        value={value ?? ''}
+        onChange={onPick}
+        placeholder={loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}
+        rows={(venues ?? []).map((r) => ({
+          key: r.symbol,
+          icon: <VenueIcon venue={r.exchange} size={16} />,
+          name: `${prettyVenue(r.exchange)}${r.quote !== 'USDT' ? ` · ${r.quote}` : ''}`,
+          value: r.exchange === otherVenue ? t(long ? 'pairTicket.bits.shortVenue' : 'pairTicket.bits.longVenue') : undefined,
+          disabled: r.exchange === otherVenue,
+        }))}
+      />
     </div>
   );
 }
@@ -375,16 +409,7 @@ export function PairVenues({
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
       <VenueSelect tone="long" value={longSym} otherValue={shortSym} onPick={onLong} venues={venues} loading={loading} />
-      <button
-        type="button"
-        aria-label={t('pairTicket.bits.swapVenues')}
-        title={t('pairTicket.bits.swapVenuesHint')}
-        disabled={!longSym && !shortSym}
-        onClick={onSwap}
-        className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        ⇄
-      </button>
+      <SwapButton label={t('pairTicket.bits.swapVenues')} title={t('pairTicket.bits.swapVenuesHint')} disabled={!longSym && !shortSym} onClick={onSwap} />
       <VenueSelect tone="short" value={shortSym} otherValue={longSym} onPick={onShort} venues={venues} loading={loading} />
     </div>
   );
@@ -502,60 +527,54 @@ export function PairEstimate({
       ? bpsOf((legLong.fillEstimate.avgPrice - legShort.fillEstimate.avgPrice) / refPx)
       : null;
 
+  const fold = previews ? null : (
+    <div className="text-[11px]">
+      <PreviewFallback isError={isError} error={error} />
+    </div>
+  );
+
   return (
-    <EstimateCard
-      dataUpdatedAt={dataUpdatedAt}
-      estimating={estimating}
-      isError={isError}
-      sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
-      aside={
-        <BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} />
-      }
-    >
-      {previews ? (
-        <>
-          <EstimateHeadline
-            label={t('pairTicket.bits.tradeCost')}
-            sub={mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
-            value={fmtTradeCost(tradeCost)}
-          />
-
-          {showRoles && (
-            <div className="flex flex-col gap-1.5">
-              {legLong && (
-                <PlanLine side="LONG" symbol={legLong.symbol} role={isMakerLeg(legLong) ? 'rests' : 'hedges'} qty={legLong.qty} />
-              )}
-              {legShort && (
-                <PlanLine side="SHORT" symbol={legShort.symbol} role={isMakerLeg(legShort) ? 'rests' : 'hedges'} qty={legShort.qty} />
-              )}
-            </div>
-          )}
-
-          {showBook && <div className="pt-1">{book}</div>}
-
-          <table className="w-full">
-            <thead>
-              <tr className="text-[12px] font-normal text-ink-300">
-                <th className="pb-1 text-left">{t('pairTicket.bits.colLeg')}</th>
-                <th className="pb-1 text-right">{t('pairTicket.bits.colPrice')}</th>
-                <th className="pb-1 text-right">{t('pairTicket.bits.colSlip')}</th>
-                <th className="pb-1 text-right">{t('pairTicket.preview.estFee')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <LegRow label={t('common.long')} tone="green" p={legLong} />
-              <LegRow label={t('common.short')} tone="red" p={legShort} />
-            </tbody>
-          </table>
-
-          <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
-            {sharedQty && (
-              <EstimateRow
-                label={t('pairTicket.bits.sharedQty')}
-                sub={binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
-                value={`${qtyGrouped(sharedQty)}${base ? ` ${base}` : ''}`}
-              />
+    <>
+      <SummaryCard
+        title={t('accounts.moveCash.cost')}
+        sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
+        aside={
+          <>
+            <EstimateAge dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={isError} />
+            <BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} />
+          </>
+        }
+      >
+        {previews ? (
+          <>
+            {showRoles && (
+              <div className="flex flex-col gap-1.5">
+                {legLong && (
+                  <PlanLine side="LONG" symbol={legLong.symbol} role={isMakerLeg(legLong) ? 'rests' : 'hedges'} qty={legLong.qty} />
+                )}
+                {legShort && (
+                  <PlanLine side="SHORT" symbol={legShort.symbol} role={isMakerLeg(legShort) ? 'rests' : 'hedges'} qty={legShort.qty} />
+                )}
+              </div>
             )}
+
+            {showBook && <div className="pt-1">{book}</div>}
+
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[12px] font-normal text-ink-300">
+                  <th className="pb-1 text-left font-normal">{t('pairTicket.bits.colLeg')}</th>
+                  <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colPrice')}</th>
+                  <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colSlip')}</th>
+                  <th className="pb-1 text-right font-normal">{t('pairTicket.preview.estFee')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <LegRow label={t('common.long')} tone="green" p={legLong} />
+                <LegRow label={t('common.short')} tone="red" p={legShort} />
+              </tbody>
+            </table>
+
             {spreadBps !== null && (
               <EstimateRow
                 label={t('pairTicket.bits.netSpread')}
@@ -565,7 +584,31 @@ export function PairEstimate({
                 }
               />
             )}
-            <EstimateRow label={t('pairTicket.bits.leverage')} value={<LeverageValue text={leverage} />} />
+            <div className="mt-0.5 border-t border-ink-800 pt-1.5">
+              <EstimateRow
+                label={t('pairTicket.bits.tradeCost')}
+                sub={mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
+                value={fmtTradeCost(tradeCost)}
+                strong
+              />
+            </div>
+          </>
+        ) : (
+          fold
+        )}
+      </SummaryCard>
+
+      {previews && (
+        <SummaryCard title={t('accounts.moveCash.after')}>
+          {sharedQty && (
+            <EstimateRow
+              label={t('pairTicket.bits.sharedQty')}
+              sub={binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
+              value={`${qtyGrouped(sharedQty)}${base ? ` ${base}` : ''}`}
+            />
+          )}
+          <EstimateRow label={t('pairTicket.bits.leverage')} value={<LeverageValue text={leverage} />} />
+          <div className="mt-0.5 border-t border-ink-800 pt-1.5">
             <EstimateRow
               label={t('pairTicket.bits.marginRequired')}
               title={t('pairTicket.bits.marginRequiredHint')}
@@ -573,17 +616,16 @@ export function PairEstimate({
               strong
             />
           </div>
-          <ViolationList
-            violations={dedupeByMessage([...(legLong?.violations ?? []), ...(legShort?.violations ?? [])])}
-            warnings={[...new Set([...(legLong?.warnings ?? []), ...(legShort?.warnings ?? [])])]}
-          />
-        </>
-      ) : (
-        <div className="text-[11px]">
-          <PreviewFallback isError={isError} error={error} />
-        </div>
+        </SummaryCard>
       )}
-    </EstimateCard>
+
+      {previews && (
+        <ViolationList
+          violations={dedupeByMessage([...(legLong?.violations ?? []), ...(legShort?.violations ?? [])])}
+          warnings={[...new Set([...(legLong?.warnings ?? []), ...(legShort?.warnings ?? [])])]}
+        />
+      )}
+    </>
   );
 }
 

@@ -18,8 +18,8 @@ export function TradeRailTabs({ venue, onChange }: { venue: Venue; onChange: (ne
       ariaLabel={t('common.venue')}
       value={venue}
       onChange={onChange}
-      look="underline"
-      className="border-b-0"
+      look="glow"
+      className="flex-1"
       options={[
         { value: 'perp', label: t('trade.rail.crossexPerps') },
         { value: 'boros', label: t('trade.rail.borosRates') },

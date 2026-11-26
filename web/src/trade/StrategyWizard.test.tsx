@@ -241,7 +241,7 @@ describe('StrategyWizard — a fill that closes an existing position is not new 
     };
     server.use(...tradableHandlers(closingFill), ...symbolHandlers([ETH_GATE]));
     renderWizard({ ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVenue: 'HYPERLIQUID' });
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', String(BN_M)));
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
@@ -293,7 +293,7 @@ describe('StrategyWizard — the hedge is sized off the EXECUTED collateral', ()
       sizeBase: undefined, // no collateral price ⇒ the card could not convert
     });
 
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', String(BN_M)));
     // With no `sizeBase` the prefill leaves the size empty (it has no coin
     // quantity to put there) — the user types the ETH size themselves. That
     // is precisely the path that produced the mis-sized hedge.
@@ -330,9 +330,9 @@ describe('StrategyWizard — step 1 becomes a receipt once the rate is locked', 
 
     // The wizard's own prefill arms both legs and the size; just wait for it.
     await waitFor(() =>
-      expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)),
+      expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', String(BN_M)),
     );
-    expect(screen.getByLabelText('Market B')).toHaveValue(String(HL_M));
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', String(HL_M));
 
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
@@ -456,7 +456,7 @@ const WIZ = { ...INTENT, maturity: MAT, borosLongVenue: 'BINANCE', borosShortVen
 
 /** Arm, wait for the tradable state, hold-to-confirm the pair. */
 const confirmPair = async () => {
-  await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
+  await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', String(BN_M)));
   const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
   await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
   fireEvent.pointerDown(confirm);
@@ -570,7 +570,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // clean pair lock and armed BOTH perp legs at the full intent size.
     server.use(...tradableHandlers(SINGLE_LOCK), ...symbolHandlers([ETH_GATE]));
     renderWizard(WIZ);
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', String(BN_M)));
     // The wizard has no Pair/Single choice — it locks the pair the card
     // quoted. The mocked result is one-sided regardless, which is the state
     // under test: a half-filled lock must never read as a clean pair.
@@ -598,7 +598,7 @@ describe('StrategyWizard — the book decides, not the last result', () => {
     // Positions or the standalone Boros ticket, both of which can close.
     server.use(...tradableHandlers([SINGLE_LOCK]), ...symbolHandlers([ETH_GATE]));
     renderWizard(WIZ);
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', String(BN_M)));
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });
     await waitFor(() => expect(confirm).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(confirm);
@@ -660,7 +660,7 @@ describe('StrategyWizard — leaving and closing are deliberate', () => {
       ...symbolHandlers([ETH_GATE]),
     );
     renderWizard(WIZ);
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(String(BN_M)));
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', String(BN_M)));
     expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
 
     const confirm = await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ });

@@ -25,7 +25,7 @@ describe('TradeRail', () => {
     const venue = within(screen.getByRole('radiogroup', { name: 'Venue' }));
     expect(venue.getAllByRole('radio').map((r) => r.textContent)).toEqual(['CrossEx perps', 'Boros rates']);
     expect(venue.getByRole('radio', { name: 'CrossEx perps' })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByLabelText('Coin search')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Coin' })).toBeInTheDocument();
     expect(screen.queryByLabelText('Symbol search')).not.toBeInTheDocument();
   });
 
@@ -41,7 +41,6 @@ describe('TradeRail', () => {
     expect(screen.getAllByRole('radio', { name: 'Pair' })).toHaveLength(1);
     expect(screen.getAllByRole('radio', { name: 'Single' })).toHaveLength(1);
     expect(screen.queryByRole('radiogroup', { name: 'Perp ticket mode' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Coin search')).not.toBeInTheDocument();
 
     await userEvent.click(toggle().getByRole('radio', { name: 'Single' }));
     expect(toggle().getByRole('radio', { name: 'Single' })).toHaveAttribute('aria-checked', 'true');

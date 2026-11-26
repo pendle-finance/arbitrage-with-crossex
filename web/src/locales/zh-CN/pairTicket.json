@@ -239,6 +239,7 @@
     "marketReceiveFixed": "市场 · 收取固定",
     "noSharedMaturity": "{{a}} 和 {{b}} 没有相同的到期日，无法组成组合。",
     "tradeOn": "交易市场",
+    "openOnBoros": "在 Boros 打开",
     "maxReduceHint": "只减仓最多可平的规模：两边持仓中较小的一方。",
     "maxOpenHint": "您的抵押品可开的最大规模（含保证金和吃单手续费，按当前利率）。",
     "maxOpenBothHint": "您的抵押品在两个市场上最多可开的规模（含保证金和吃单手续费，按当前利率）。",

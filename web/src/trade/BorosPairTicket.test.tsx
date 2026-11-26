@@ -13,6 +13,7 @@ import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
 import { server } from '../test/server';
 import { fmtDateLocal, fmtDateShort } from '../lib/fmt';
+import { optionLabels, pickOption, waitForOptions } from '../test/picker';
 import { renderWithClient } from '../test/utils';
 import { SPREAD_OPP_MARKET_ID, SPREAD_OPP_MATURITY } from '../test/fixtures';
 import { BorosPairTicket } from './BorosPairTicket';
@@ -219,11 +220,9 @@ function handlers(opts: {
 /** Fill in the form far enough that a simulation is requested. */
 async function fillTicket(user: ReturnType<typeof userEvent.setup>) {
   // The selects are disabled and empty until the context query lands.
-  await waitFor(() =>
-    expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-  );
-  await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
-  await user.selectOptions(screen.getByLabelText('Market B'), String(BN));
+  await waitForOptions(user, 'Market A');
+  await pickOption(user, 'Market A', String(HL));
+  await pickOption(user, 'Market B', String(BN));
   await user.type(screen.getByLabelText(/^Size per market/), '100000');
 }
 
@@ -378,15 +377,13 @@ describe('BorosPairTicket', () => {
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
+    await waitForOptions(user, 'Market A');
+    await pickOption(user, 'Market A', String(HL));
     expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
 
-    const labels = [...(screen.getByLabelText('Market B') as HTMLSelectElement).options].map((o) => o.textContent);
+    const labels = await optionLabels(user, 'Market B');
     // Collateral named, no date — and a market at another maturity is still a market.
-    expect(labels).toEqual(['Select market', 'Binance ETHUSDT · USDT', 'Bybit ETH · USDT']);
+    expect(labels).toEqual(['Binance ETHUSDT · USDT', 'Bybit ETH · USDT']);
   });
 
   it('leads with the estimated spread and shows the worst case beneath it', async () => {
@@ -613,8 +610,8 @@ describe('BorosPairTicket', () => {
     expect(confirm).toBeInTheDocument();
     // The button states the COUNT ("2 Boros market orders"); the market cards
     // name the two markets, so the selects carry them by accessible name.
-    expect(screen.getByLabelText('Market A')).toHaveDisplayValue('Hyperliquid ETH · USDT');
-    expect(screen.getByLabelText('Market B')).toHaveDisplayValue('Binance ETHUSDT · USDT');
+    expect(screen.getByLabelText('Market A')).toHaveTextContent('Hyperliquid ETH · USDT');
+    expect(screen.getByLabelText('Market B')).toHaveTextContent('Binance ETHUSDT · USDT');
     // Atomic acceptance is the promise; a full fill is NOT. Both halves must
     // still be stated together — overselling the batch is the failure mode —
     // so the hover is asserted to carry BOTH clauses, not just the reassuring
@@ -990,9 +987,7 @@ describe('BorosPairTicket', () => {
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
+    await waitForOptions(user, 'Market A');
     // The option's accessible name carries its "reduce-only" sub-label.
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     // Whose guarantee "reduce-only" is still qualified — on the badge that
@@ -1338,13 +1333,10 @@ describe('BorosPairTicket — market list', () => {
       }),
     );
     renderWithClient(<BorosPairTicket />);
+    const user = userEvent.setup();
 
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    expect(
-      within(screen.getByLabelText('Market A')).getByRole('option', { name: 'Hyperliquid SOL · SOL' }),
-    ).toBeInTheDocument();
+    await waitForOptions(user, 'Market A');
+    expect(await optionLabels(user, 'Market A')).toContain('Hyperliquid SOL · SOL');
   });
 });
 
@@ -1355,12 +1347,10 @@ describe('BorosPairTicket — the size unit', () => {
     server.use(...handlers());
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
+    await waitForOptions(user, 'Market A');
     expect(screen.getByText(/^Size per market$/)).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
+    await pickOption(user, 'Market A', String(HL));
     expect(screen.getByLabelText('Size per market (USDT)')).toBeInTheDocument();
     expect(screen.queryByText(/\(collateral\)/)).not.toBeInTheDocument();
   });
@@ -1369,10 +1359,8 @@ describe('BorosPairTicket — the size unit', () => {
     server.use(...handlers());
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(screen.getByLabelText('Market A'), '400');
+    await waitForOptions(user, 'Market A');
+    await pickOption(user, 'Market A', '400');
     expect(screen.getByLabelText('Size per market (BTC)')).toBeInTheDocument();
   });
 });
@@ -1435,8 +1423,8 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
 
     // Both legs on 902/903 (Sep). Before the fix leg B armed 901 (Dec) and the
     // ticket reported "different maturity" about a pair nobody chose.
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('903'));
-    expect(screen.getByLabelText('Market B')).toHaveValue('902');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '903'));
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '902');
     expect(screen.queryByText(/different maturity/)).not.toBeInTheDocument();
   });
 
@@ -1461,8 +1449,8 @@ describe('BorosPairTicket — the cue prefill lands both legs on ONE maturity', 
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue(''));
-    expect(screen.getByLabelText('Market B')).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', ''));
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '');
   });
 });
 
@@ -1534,13 +1522,13 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     await user.click(screen.getByRole('button', { name: 'fire' }));
 
     // The cue lands both legs on the shared Sep maturity, and the picker says so.
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('920'));
-    expect(screen.getByLabelText('Market B')).toHaveValue('922');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '920'));
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '922');
     expect(chip('Maturity', fmtDateLocal(SEP))).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(chip('Maturity', fmtDateLocal(DEC)));
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('921'));
-    expect(screen.getByLabelText('Market B')).toHaveValue('923');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '921'));
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '923');
   });
 
   it('settles both legs on a maturity the two markets share when a market is picked', async () => {
@@ -1559,14 +1547,12 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     );
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(screen.getByLabelText('Market A'), '960');
-    await user.selectOptions(screen.getByLabelText('Market B'), '962');
+    await waitForOptions(user, 'Market A');
+    await pickOption(user, 'Market A', '960');
+    await pickOption(user, 'Market B', '962');
 
-    expect(screen.getByLabelText('Market A')).toHaveValue('961');
-    expect(screen.getByLabelText('Market B')).toHaveValue('962');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '961');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '962');
     const dates = within(screen.getByRole('group', { name: 'Maturity' })).getAllByRole('button').map((b) => b.textContent);
     expect(dates).toEqual([expect.stringContaining(fmtDateLocal(DEC))]);
   });
@@ -1589,11 +1575,9 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     );
     const user = userEvent.setup();
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(screen.getByLabelText('Market A'), '970');
-    await user.selectOptions(screen.getByLabelText('Market B'), '971');
+    await waitForOptions(user, 'Market A');
+    await pickOption(user, 'Market A', '970');
+    await pickOption(user, 'Market B', '971');
     await user.type(screen.getByLabelText(/^Size per market/), '1000');
 
     expect(
@@ -1615,22 +1599,20 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
     expect(screen.queryByRole('group', { name: 'Maturity' })).toBeNull();
 
     await user.click(chip('Coin', 'BTC'));
-    const options = [...(screen.getByLabelText('Market A') as HTMLSelectElement).options].map((o) => o.textContent);
-    expect(options).toEqual(['Select market', 'OKX BTC · BTC']);
+    const options = await optionLabels(user, 'Market A');
+    expect(options).toEqual(['OKX BTC · BTC']);
   });
 
   it('clears the legs when the coin changes', async () => {
     const user = userEvent.setup();
     server.use(...handlers());
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(screen.getByLabelText('Market A'), String(HL));
+    await waitForOptions(user, 'Market A');
+    await pickOption(user, 'Market A', String(HL));
     expect(chip('Coin', 'ETH')).toHaveAttribute('aria-pressed', 'true');
 
     await user.click(chip('Coin', 'BTC'));
-    expect(screen.getByLabelText('Market A')).toHaveValue('');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '');
     expect(chip('Coin', 'BTC')).toHaveAttribute('aria-pressed', 'true');
   });
 
@@ -1648,11 +1630,10 @@ describe('BorosPairTicket — coin, then markets, then a maturity they share', (
       }),
     );
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    const labels = [...(screen.getByLabelText('Market A') as HTMLSelectElement).options].map((o) => o.textContent);
-    expect(labels).toEqual(['Select market', 'Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
+    const user = userEvent.setup();
+    await waitForOptions(user, 'Market A');
+    const labels = await optionLabels(user, 'Market A');
+    expect(labels).toEqual(['Hyperliquid BTC · BTC', 'Hyperliquid BTC · USDT']);
   });
 });
 
@@ -1814,8 +1795,8 @@ describe('BorosPairTicket — spread ticket', () => {
     );
     await user.click(screen.getByRole('button', { name: 'fire' }));
     expect(await screen.findByRole('button', { name: /Confirm · 2 Boros market orders/ })).toBeInTheDocument();
-    expect(screen.getByLabelText('Market A')).toHaveValue('211');
-    expect(screen.getByLabelText('Market B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '211');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '209');
     expect(screen.queryByText('ETH Spread HL-GATE')).not.toBeInTheDocument();
     expect(screen.queryByText(/Tick Reduce-only/)).not.toBeInTheDocument();
     await waitFor(() => expect(bodies.length).toBeGreaterThan(0));
@@ -1838,8 +1819,8 @@ describe('BorosPairTicket — spread ticket', () => {
     // "Trade on" naming the one spread market the order goes to.
     expect(await screen.findByText('ETH Spread HL-GATE')).toBeInTheDocument();
     expect(screen.getByText('Boros market A')).toBeInTheDocument();
-    expect(screen.getByLabelText('Market A')).toHaveValue('211');
-    expect(screen.getByLabelText('Market B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '211');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '209');
     expect(screen.getByLabelText(/^Size \(ETH\)/)).toHaveValue('0.121');
 
     expect(await screen.findByText('Liquidation APR')).toBeInTheDocument();
@@ -1942,11 +1923,9 @@ describe('BorosPairTicket — spread ticket', () => {
   /** The free ticket short Hyperliquid: Gate in slot A (long), Hyperliquid in slot B (short). */
   const pickShortHl = async (user: ReturnType<typeof userEvent.setup>) => {
     renderWithClient(<BorosPairTicket />);
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(screen.getByLabelText('Market A'), '211');
-    await user.selectOptions(screen.getByLabelText('Market B'), '209');
+    await waitForOptions(user, 'Market A');
+    await pickOption(user, 'Market A', '211');
+    await pickOption(user, 'Market B', '209');
   };
   type SimBody = { legs: { marketId: number; direction: string; size: number }[] };
 
@@ -1958,8 +1937,8 @@ describe('BorosPairTicket — spread ticket', () => {
 
     // One layout either way: the pickers keep the singles, and "Trade on" says the spread takes the order.
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
-    expect(screen.getByLabelText('Market A')).toHaveValue('211');
-    expect(screen.getByLabelText('Market B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '211');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '209');
     expect(screen.getByRole('group', { name: 'Maturity' })).toBeInTheDocument();
     expect(screen.queryByText(/1 Boros order instead of 2/)).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
@@ -1998,7 +1977,7 @@ describe('BorosPairTicket — spread ticket', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Trade on' })).not.toBeInTheDocument();
     expect(screen.queryByText('2 single markets')).not.toBeInTheDocument();
     // Re-picking the same singles lands back on the spread.
-    await user.selectOptions(screen.getByLabelText('Market A'), '211');
+    await pickOption(user, 'Market A', '211');
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
   });
@@ -2011,8 +1990,8 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: 'Swap markets' }));
     // The pickers show the singles in their new slots.
-    expect(screen.getByLabelText('Market A')).toHaveValue('209');
-    expect(screen.getByLabelText('Market B')).toHaveValue('211');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '209');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '211');
     await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
     await waitFor(() =>
       expect((bodies[bodies.length - 1] as SimBody | undefined)?.legs).toEqual([
@@ -2023,7 +2002,7 @@ describe('BorosPairTicket — spread ticket', () => {
     // Single trades leg A alone: the spread hands back its first single
     // (Hyperliquid, now in slot A) instead of clearing the pick.
     await user.click(screen.getByRole('radio', { name: 'Single' }));
-    expect(screen.getByRole('combobox', { name: 'Market' })).toHaveValue('209');
+    expect(screen.getByRole('button', { name: 'Market' })).toHaveAttribute('data-value', '209');
     expect(tradeOn()).not.toBeInTheDocument();
   });
 
@@ -2034,8 +2013,8 @@ describe('BorosPairTicket — spread ticket', () => {
     server.use(...spreadHandlers(() => {}, { spread }));
     const user = userEvent.setup();
     await pickShortHl(user);
-    expect(screen.getByLabelText('Market A')).toHaveValue('211');
-    expect(screen.getByLabelText('Market B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '211');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '209');
     expect(tradeOn()).not.toBeInTheDocument();
   });
 
@@ -2046,8 +2025,8 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     await waitFor(() => expect(tradeOn()).not.toBeInTheDocument());
-    expect(screen.getByLabelText('Market A')).toHaveValue('211');
-    expect(screen.getByLabelText('Market B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '211');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '209');
   });
 
   it('a close stays on the spread when the spread holds the position', async () => {
@@ -2091,8 +2070,8 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
     await waitFor(() => expect(tradeOn()).not.toBeInTheDocument());
-    expect(screen.getByLabelText('Market A')).toHaveValue('211');
-    expect(screen.getByLabelText('Market B')).toHaveValue('209');
+    expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '211');
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '209');
   });
 
   it('an open with a single held still trades on the spread (ED-6607)', async () => {
@@ -2143,16 +2122,14 @@ describe('BorosPairTicket — spread ticket', () => {
     renderWithClient(
       <BorosPrefillHarness prefill={{ base: 'ETH', longVenue: 'Gate', shortVenue: 'Hyperliquid', maturity: LATER, size: 300, sizeBase: 0.121 }} />,
     );
-    await waitFor(() =>
-      expect((screen.getByLabelText('Market A') as HTMLSelectElement).options.length).toBeGreaterThan(1),
-    );
-    await user.selectOptions(screen.getByLabelText('Market A'), '209');
-    await user.selectOptions(screen.getByLabelText('Market B'), '211');
+    await waitForOptions(user, 'Market A');
+    await pickOption(user, 'Market A', '209');
+    await pickOption(user, 'Market B', '211');
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
 
     await user.click(screen.getByRole('button', { name: 'fire' }));
-    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveValue('221'));
-    expect(screen.getByLabelText('Market B')).toHaveValue('219');
+    await waitFor(() => expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '221'));
+    expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '219');
     expect(tradeOn()).not.toBeInTheDocument();
     await waitFor(() =>
       expect((bodies[bodies.length - 1] as SimBody).legs.map((l) => l.marketId)).toEqual([221, 219]),

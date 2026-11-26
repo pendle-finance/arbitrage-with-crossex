@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { TriangleAlert } from 'lucide-react';
 import type { EvenPlan, Pool, RebalanceBucket, RoutePlan } from '../api/types';
 import { Chip } from '../components/Chip';
+import { TokenIcon } from '../components/AssetIcon';
 import { microLabelClass } from '../components/Th';
 import { t } from '../i18n';
 import { fmtUsd, num } from '../lib/fmt';
@@ -72,6 +73,30 @@ export function NotHedgedLine({ text }: { text: string }) {
       <TriangleAlert size={14} aria-hidden className="shrink-0" />
       {text}
     </p>
+  );
+}
+
+export type PlanStep = { key: string; icon: string | null; text: ReactNode; usd: number | null };
+
+export function PlanSteps({ label, rows }: { label: string; rows: PlanStep[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-3 pr-3">
+        <span className={microLabelClass}>{label}</span>
+        {rows.some((row) => row.usd !== null) && <span className={microLabelClass}>{t('accounts.moveCash.cost')}</span>}
+      </div>
+      <ol className="flex flex-col gap-1">
+        {rows.map((row, index) => (
+          <li key={row.key} className="flex items-center gap-3 rounded border border-ink-800 px-3 py-1.5 text-xs text-ink-100">
+            <span className="num w-4 shrink-0 text-ink-400">{index + 1}</span>
+            {row.icon && <TokenIcon symbol={row.icon} size={16} />}
+            <span className="min-w-0 flex-1">{row.text}</span>
+            {row.usd !== null && <span className="num shrink-0 text-ink-300">{fmtUsd(row.usd)}</span>}
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
