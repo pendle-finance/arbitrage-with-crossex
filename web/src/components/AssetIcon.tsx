@@ -42,13 +42,20 @@ const VENUE_FILE: Record<string, string> = {
 };
 
 /** The coins the bucket actually holds — the Boros collateral set. */
-const TOKEN_FILES = new Set(['ETH', 'BTC', 'USDT', 'USDC']);
+const TOKEN_FILE: Record<string, string> = {
+  ETH: 'ETH.svg',
+  BTC: 'BTC.svg',
+  USDT: 'USDT.svg',
+  USDC: 'USDC.svg',
+  HYPE: VENUE_FILE.HYPERLIQUID,
+};
 
 /** A coin icon is keyed by its upper-case symbol. Null when the bucket has
  * none, so the caller renders the fallback without a wasted request. */
 export function tokenIconUrl(symbol: string): string | null {
   const key = symbol.trim().toUpperCase();
-  return TOKEN_FILES.has(key) ? `${BUCKET}/${key}.svg` : null;
+  const file = TOKEN_FILE[key];
+  return file ? `${BUCKET}/${encodeURIComponent(file)}` : null;
 }
 
 export function venueIconUrl(venue: string): string | null {
