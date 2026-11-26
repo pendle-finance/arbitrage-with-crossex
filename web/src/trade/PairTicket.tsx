@@ -255,7 +255,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
   const legLong = preview.previews?.[0];
   const legShort = preview.previews?.[1];
   const previewData = preview.previews ? preview.data : undefined;
-  useTwapDefault(twap, previewData && previewData.twapDefault, mode);
+  const twapWait = useTwapDefault(twap, previewData && previewData.twapDefault, mode, allowTwap && mode === 'maker' && previewData !== undefined && !preview.isPlaceholderData);
   const landedTwap = useRef<string | null>(null);
   if (preview.data && !preview.isPlaceholderData && twapSettled) landedTwap.current = twapJson;
   const twapFresh = twapOn && twapSettled && landedTwap.current === twapJson;
@@ -484,6 +484,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
             onInput={twap.setInput}
             preview={twapPreview}
             impact={previewData?.priceImpact ?? null}
+            waiting={twapWait}
             coin={base ?? ''}
             lot={longDetail.data?.lotSize ?? shortDetail.data?.lotSize}
           />
@@ -589,7 +590,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         // load would open at the account's current leverage, not the venue max),
         // and, in maker mode, until the maker price has been tracked.
         extraDisabled={
-          (mode === 'maker' && (!makerPriceStr || takerBlocked)) ||
+          (mode === 'maker' && (!makerPriceStr || takerBlocked || twapWait)) ||
                     levLong === undefined ||
           levShort === undefined
         }

@@ -132,7 +132,7 @@ export function ClosePairForm({
     twap: twapOn ? twap.input : undefined,
   });
   const plan = preview.data?.twap?.plan ?? null;
-  useTwapDefault(twap, preview.data && preview.data.twapDefault, mode);
+  const twapWait = useTwapDefault(twap, preview.data && preview.data.twapDefault, mode, allowTwap && maker && preview.data !== undefined && !preview.isPlaceholderData);
   const takerBlocked = useTwapTakerAfter(taker, twapOn, plan?.takerAfterSec ?? null);
   if (!flow || legs.length !== 2) return null;
 
@@ -245,6 +245,7 @@ export function ClosePairForm({
             onInput={twap.setInput}
             preview={actions ? (preview.data?.twap ?? null) : null}
             impact={preview.data?.priceImpact ?? null}
+            waiting={twapWait}
             coin={base}
           />
         )}
@@ -329,7 +330,7 @@ export function ClosePairForm({
           decorate={decorate}
           dealOpts={dealOpts}
           twap={twapOn && plan ? { plan, blocked: twapBlocked } : null}
-          extraDisabled={(maker && (makerIdx === null || takerBlocked)) || (twapOn && (twapBlocked || !plan))}
+          extraDisabled={(maker && (makerIdx === null || takerBlocked || twapWait)) || (twapOn && (twapBlocked || !plan))}
           buttonClassName="w-full"
           // The panel above already reviews this close; the hover card would
           // repeat it on top of the dialog. Errors still surface.
