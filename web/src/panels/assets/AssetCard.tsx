@@ -5,6 +5,7 @@
  *
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
+import { createPortal } from 'react-dom';
 import { cloneElement, createContext, type ReactNode, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
@@ -1752,10 +1753,10 @@ function RollSteps({ batches, coin, busy }: { batches: RollBatch[]; coin: string
   );
 }
 
-function RollCostCard({ batches, footer }: { batches: RollBatch[]; footer: ReactNode }) {
+function RollCostCard({ batches, age }: { batches: RollBatch[]; age: ReactNode }) {
   const costs = batches.map((b) => batchCost(b.sim, b.slip.apr));
   return (
-    <SummaryCard title={t('accounts.moveCash.cost')}>
+    <SummaryCard title={t('accounts.moveCash.cost')} aside={age}>
       {batches.map((b, i) => {
         const cost = costs[i];
         const overVenues = b.sim ? b.sim.legs.filter((l) => l.slippageExceeded).map((l) => prettyVenue(l.venue)) : [];
@@ -1786,7 +1787,6 @@ function RollCostCard({ batches, footer }: { batches: RollBatch[]; footer: React
       <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value={usdOrDash(sumUsd(costs.map((c) => c.feeUsd)))} />
       <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
         <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={usdOrDash(sumUsd(costs.map((c) => c.totalUsd)))} strong />
-        {footer}
       </div>
     </SummaryCard>
   );
@@ -2237,15 +2237,16 @@ export function RollOverModal({
 
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const [stepsSlot, setStepsSlot] = useState<HTMLDivElement | null>(null);
 
   return (
     <Modal
       title={
         picker !== null ? (
-          t('assetCard.actions.rollOver')
+          t('assetCard.roll.title')
         ) : (
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-            {t('assetCard.actions.rollOver')}
+            {t('assetCard.roll.title')}
             <span className="text-[14px] font-medium text-ink-200">
               <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} />
             </span>
@@ -2271,6 +2272,7 @@ export function RollOverModal({
                 { value: 'openOnly', label: t('assetCard.roll.modeOpenOnly') },
               ]}
             />
+            <div ref={setStepsSlot} className="empty:hidden" />
 
             <div className="flex flex-col gap-1.5">
               <span className={microLabelClass}>{sizeLabel}</span>
@@ -2280,7 +2282,7 @@ export function RollOverModal({
                 inputLabel={`${sizeLabel} (${collateral})`}
                 suffix={t('assetCard.roll.sizeSuffix', { coin: collateral, pct })}
                 bad={sizeStr !== '' && !sizeOk}
-                boxClassName="w-56"
+                boxClassName="w-48"
                 presetsLabel={t('assetCard.roll.shareShortcuts')}
                 preset={litShare}
                 onPreset={(share) => setSize(fmtSize(heldSize * (Number(share) / 100)))}
@@ -2301,7 +2303,7 @@ export function RollOverModal({
               </div>
             ) : (
               <div className="flex flex-col gap-1.5">
-                <div className={`${ROLL_OPTION_GRID} px-3 ${microLabelClass}`}>
+                <div className={`${ROLL_OPTION_GRID} pr-3 ${microLabelClass}`}>
                   <span>{t('assetCard.roll.rollInto')}</span>
                   <span className="text-right">
                     <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
@@ -2367,6 +2369,7 @@ export function RollOverModal({
               markets={markets ?? []}
               entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
               settling={size !== simSize}
+              stepsSlot={stepsSlot}
               onBusy={setBusy}
               onResult={setSent}
               onClose={onClose}
@@ -2385,6 +2388,7 @@ export function RollOverModal({
               exitSeedPct={plans?.exit ? +(plans.exit.toleranceApr * 100).toFixed(2) : undefined}
               entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
               settling={size !== simSize}
+              stepsSlot={stepsSlot}
               onBusy={setBusy}
               onResult={setSent}
               onClose={onClose}
@@ -2477,6 +2481,7 @@ function RollReview({
   exitSeedPct,
   entrySeedPct,
   settling,
+  stepsSlot,
   onBusy,
   onResult,
   onClose,
@@ -2496,6 +2501,7 @@ function RollReview({
   exitSeedPct?: number;
   entrySeedPct?: number;
   settling: boolean;
+  stepsSlot: HTMLElement | null;
   onBusy: (busy: boolean) => void;
   onResult: (shown: boolean) => void;
   onClose: () => void;
@@ -2725,7 +2731,6 @@ function RollReview({
   const exitPnl = exitPnlOf(exitSim, yuLegs, nowSec);
   const money = (n: number) =>
     px !== null && px > 0 ? <SignedNumber value={n * px} format={fmtUsd} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, collateral)} />;
-  const marginOk = marginNeed !== null && availableAfter !== null && marginShort === 0;
   const afterAvail = availableAfter ?? availableAfterExit;
   const blank = <span className="text-ink-500">{pending ? '…' : '—'}</span>;
   const reasons = [...new Set([...(exitSim?.reasons ?? []), ...(entrySim?.reasons ?? [])])];
@@ -2755,8 +2760,8 @@ function RollReview({
   return (
     <div className="flex flex-col gap-3">
       {roll.isError && <QueryError title={t('assetCard.review.quoteFailed')} error={roll.error} onRetry={() => roll.refetch()} />}
-      <RollSteps batches={batches} coin={collateral} busy={busy} />
-      <RollCostCard batches={batches} footer={<EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />} />
+      {stepsSlot && createPortal(<RollSteps batches={batches} coin={collateral} busy={busy} />, stepsSlot)}
+      <RollCostCard batches={batches} age={<EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />} />
 
       <SummaryCard title={t('accounts.moveCash.after')}>
         <div className="flex flex-col gap-1.5">
@@ -2779,23 +2784,6 @@ function RollReview({
         </div>
         <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
           <EstimateRow
-            label={t('assetCard.review.canFund')}
-            value={
-              marginShort > 0 ? (
-                <span className="text-rose-300">{t('assetCard.roll.fundShort', { qty: fmtTokenQty(marginShort, collateral) })}</span>
-              ) : marginOk ? (
-                <span className="inline-flex items-center gap-1 text-emerald-300">
-                  <Check size={12} aria-hidden />
-                  {t('assetCard.roll.fundYes')}
-                </span>
-              ) : (
-                blank
-              )
-            }
-            strong
-          />
-          {marginShort > 0 && <p className="text-[11px] leading-relaxed text-rose-200/90">{t('assetCard.roll.fundShortSub')}</p>}
-          <EstimateRow
             label={t('assetCard.review.requiredMargin')}
             value={
               marginNeed !== null ? (
@@ -2810,14 +2798,20 @@ function RollReview({
           />
           <EstimateRow
             label={
-              <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
-                {availableAfter === null && availableAfterExit !== null ? t('assetCard.review.availTitleExit') : t('assetCard.review.availTitleAfter')}
-              </HoverCard>
+              availableAfter === null && availableAfterExit !== null ? (
+                <HoverCard label={t('assetCard.review.availAfterClose')} widthPx={260}>
+                  {t('assetCard.review.availTitleExit')}
+                </HoverCard>
+              ) : (
+                <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
+                  {t('assetCard.review.availTitleAfter')}
+                </HoverCard>
+              )
             }
             value={
               availableBefore !== null && afterAvail !== null ? (
                 <span className={afterAvail < 0 || marginShort > 0 ? 'text-rose-300' : ''}>
-                  {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(afterAvail, collateral)}
+                  {availableAfter === null ? fmtTokenQty(afterAvail, collateral) : `${fmtTokenQty(availableBefore, collateral)} → ${fmtTokenQty(afterAvail, collateral)}`}
                   {usdNote(afterAvail)}
                 </span>
               ) : (
@@ -2913,6 +2907,7 @@ function OpenOnlyReview({
   markets,
   entrySeedPct,
   settling,
+  stepsSlot,
   onBusy,
   onResult,
   onClose,
@@ -2930,6 +2925,7 @@ function OpenOnlyReview({
    * APR — wider than the per-market seed when the size needed it. */
   entrySeedPct?: number;
   settling: boolean;
+  stepsSlot: HTMLElement | null;
   onBusy: (busy: boolean) => void;
   onResult: (shown: boolean) => void;
   onClose: () => void;
@@ -3079,8 +3075,8 @@ function OpenOnlyReview({
   return (
     <div className="flex flex-col gap-3">
       {sim.isError && <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />}
-      <RollSteps batches={[batch]} coin={collateral} busy={busy} />
-      <RollCostCard batches={[batch]} footer={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />} />
+      {stepsSlot && createPortal(<RollSteps batches={[batch]} coin={collateral} busy={busy} />, stepsSlot)}
+      <RollCostCard batches={[batch]} age={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />} />
 
       <SummaryCard title={t('accounts.moveCash.after')}>
         <div className="flex flex-col gap-1.5">
