@@ -522,7 +522,6 @@
     "upToShort": "最多 {{amount}}",
     "noUpnl": "没有可兑现的未实现盈亏。",
     "walletLabel": "钱包",
-    "walletOption": "{{wallet}} · 未实现盈亏 {{amount}} {{coin}}",
     "typeAmount": "输入要实现的金额。",
     "typeSlice": "输入大于 $0 的分片大小。",
     "customOverAll": "超过可实现金额。将实现全部 {{amount}} {{coin}}。"

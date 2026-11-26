@@ -6,6 +6,8 @@ import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as 
 import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
 import { ExecModeToggle } from '../components/ExecModeToggle';
+import { ListPicker } from '../components/ListPicker';
+import { SignedNumber } from '../components/SignedNumber';
 import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
@@ -67,18 +69,20 @@ function RealizeWallet({ view, pools, pool, onPick }: { view: RebalanceView; poo
   return (
     <div className="flex flex-col gap-1.5">
       <span className={microLabelClass}>{t('accounts.realizeTab.walletLabel')}</span>
-      <select
-        aria-label={t('accounts.realizeTab.walletLabel')}
-        className="input num h-8 !py-0 text-xs"
+      <ListPicker
+        label={t('accounts.realizeTab.walletLabel')}
         value={pool}
-        onChange={(e) => onPick(e.target.value as Pool)}
-      >
-        {shown.map((p) => (
-          <option key={p} value={p}>
-            {t('accounts.realizeTab.walletOption', { wallet: walletOf(p), amount: num(upnlOf(p), 0), coin: poolCoin(p) })}
-          </option>
-        ))}
-      </select>
+        onChange={onPick}
+        rows={shown.map((p) => ({
+          key: p,
+          name: walletOf(p),
+          value: (
+            <>
+              {t('accounts.balances.upnl')} <SignedNumber value={upnlOf(p)} format={(n) => num(n, 0)} /> {poolCoin(p)}
+            </>
+          ),
+        }))}
+      />
     </div>
   );
 }

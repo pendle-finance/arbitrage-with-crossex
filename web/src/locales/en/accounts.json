@@ -529,7 +529,6 @@
     "upToShort": "Up to {{amount}}",
     "noUpnl": "No uPnL to realize.",
     "walletLabel": "Wallet",
-    "walletOption": "{{wallet}} · uPnL {{amount}} {{coin}}",
     "typeAmount": "Type an amount to realize.",
     "typeSlice": "Type a slice size above $0.",
     "customOverAll": "More than you can realize. This realizes all {{amount}} {{coin}}."
