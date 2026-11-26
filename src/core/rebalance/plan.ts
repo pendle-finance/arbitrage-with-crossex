@@ -1215,6 +1215,7 @@ export interface FullPlan {
 
 export interface RealizeTab {
   pool: Pool;
+  pools: Pool[];
   clearDebt: RealizePlan | null;
   all: RealizePlan | null;
   custom: RealizePlan | null;
@@ -1254,12 +1255,11 @@ export function fullPlanOf(buckets: Bucket[], account: AccountLike, inputs: Plan
   };
 }
 
-function realizePoolOf(buckets: Bucket[], perps: RealizePerp[], folded: RealizePlan | null): Pool | null {
-  const lead = folded?.legs[0]?.pool;
-  if (lead) return lead;
-  const pools = POOLS.filter((pool) => perps.some((perp) => profitPoolOf(perp) === pool));
+function profitPoolsOf(buckets: Bucket[], perps: RealizePerp[], folded: RealizePlan | null): Pool[] {
   const upnlOf = (pool: Pool): number => buckets.find(isWallet(poolWallet(pool)))?.upnl ?? 0;
-  return pools.sort((a, b) => upnlOf(b) - upnlOf(a))[0] ?? null;
+  const lead = folded?.legs[0]?.pool;
+  const pools = POOLS.filter((pool) => pool === lead || perps.some((perp) => profitPoolOf(perp) === pool));
+  return pools.sort((a, b) => (a === lead ? -1 : b === lead ? 1 : upnlOf(b) - upnlOf(a)));
 }
 
 function leadSlicesOf(plan: RealizePlan | null, inputs: PlanInputs, customSliceUsd?: number): Pick<RealizeTab, 'sliceOptions' | 'defaultSliceUsd'> {
@@ -1285,13 +1285,17 @@ export function realizeTabOf(
   inputs: PlanInputs,
   customUsd: number | null,
   customSliceUsd?: number,
+  pickedPool?: Pool,
 ): RealizeTab | null {
   const sliced = customSliceUsd !== undefined && customSliceUsd > 0 ? { ...inputs, sliceUsd: customSliceUsd } : inputs;
   const folded = hasChargedBorrow(buckets) ? planMoves(buckets, account, sliced, REPAY_GOAL).realize : null;
-  const pool = realizePoolOf(buckets, inputs.perps ?? [], folded);
-  if (pool === null) return null;
+  const pools = profitPoolsOf(buckets, inputs.perps ?? [], folded);
+  const pool = pickedPool !== undefined && pools.includes(pickedPool) ? pickedPool : pools[0];
+  if (pool === undefined) return null;
+  const foldedPool = folded?.legs[0]?.pool ?? pools[0];
   const ownLegs = (folded?.legs ?? []).filter((leg) => leg.pool === pool);
-  const clearDebt = folded && (ownLegs.length > 0 || folded.refused !== null) ? realizePlanOf(ownLegs, folded.refused) : null;
+  const clearDebt =
+    folded && pool === foldedPool && (ownLegs.length > 0 || folded.refused !== null) ? realizePlanOf(ownLegs, folded.refused) : null;
   const cashUsd = cashOf(buckets, pool);
   const realizeUpTo = (moveUsd: number): RealizePlan | null =>
     planRealize(realizeInput(buckets, account, sliced, { from: pool, moveUsd, cashUsd }));
@@ -1299,7 +1303,7 @@ export function realizeTabOf(
   const allUsd = sum((all?.legs ?? []).map((leg) => Math.max(0, realizedNetUsd(leg))));
   const customAmount = customUsd !== null && customUsd > 0 ? (all ? Math.min(customUsd, allUsd) : customUsd) : 0;
   const custom = customAmount > 0 ? realizeUpTo(cashUsd + customAmount) : null;
-  return { pool, clearDebt, all, custom, ...leadSlicesOf(clearDebt?.legs.length ? clearDebt : all, inputs, customSliceUsd) };
+  return { pool, pools, clearDebt, all, custom, ...leadSlicesOf(clearDebt?.legs.length ? clearDebt : all, inputs, customSliceUsd) };
 }
 
 export function realizeTabEstimateOf(

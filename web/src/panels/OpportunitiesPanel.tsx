@@ -45,6 +45,7 @@ import type {
   OpportunityPair,
   Rebate,
 } from '../api/types';
+import { AmountPresets } from '../components/AmountPresets';
 import { Chip, type ChipTone } from '../components/Chip';
 import { EmptyState } from '../components/EmptyState';
 import { Notes } from '../components/Notes';
@@ -1141,39 +1142,26 @@ export function OpportunitiesPanel() {
       <div className={row}>
         <div className={field}>
           <div className={microLabelClass}>{t('common.capital')}</div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`flex h-[35px] w-[7.5rem] items-center gap-1 rounded border bg-wash/[0.05] px-2.5 focus-within:border-info/70 ${
-                sizeBad && sizeStr.trim() !== '' ? 'border-guava/60' : 'border-ink-700'
-              }`}
-            >
-              <span className="text-[11.5px] text-ink-400">$</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                aria-label={t('opportunities.panel.capitalAria')}
-                value={sizeShown}
-                onChange={(e) => setSizeStr(e.target.value)}
-                onFocus={() => setSizeFocused(true)}
-                onBlur={() => setSizeFocused(false)}
-                title={t('opportunities.panel.capitalTitle')}
-                className="num w-full min-w-0 bg-transparent text-sm font-semibold text-ink-50 outline-none placeholder:text-ink-500"
-              />
-            </span>
-            <SegmentedToggle<SizePreset | ''>
-              className="seg-info seg-lg max-sm:[&_.seg-btn]:px-3"
-              ariaLabel={t('opportunities.panel.capitalPresets')}
-              value={SIZE_PRESETS.find((o) => o.usd === sizeUsd)?.value ?? ''}
-              onChange={(v) => {
-                const usd = SIZE_PRESETS.find((o) => o.value === v)?.usd;
-                if (usd === undefined) return;
-                setSizeStr(String(usd));
-                setSize(usd);
-              }}
-              options={SIZE_PRESETS}
-            />
-          </div>
+          <AmountPresets<SizePreset>
+            value={sizeShown}
+            onChange={setSizeStr}
+            inputLabel={t('opportunities.panel.capitalAria')}
+            inputMode="numeric"
+            prefix="$"
+            title={t('opportunities.panel.capitalTitle')}
+            bad={sizeBad && sizeStr.trim() !== ''}
+            onFocus={() => setSizeFocused(true)}
+            onBlur={() => setSizeFocused(false)}
+            presetsLabel={t('opportunities.panel.capitalPresets')}
+            presets={SIZE_PRESETS}
+            preset={SIZE_PRESETS.find((o) => o.usd === sizeUsd)?.value ?? null}
+            onPreset={(v) => {
+              const usd = SIZE_PRESETS.find((o) => o.value === v)?.usd;
+              if (usd === undefined) return;
+              setSizeStr(String(usd));
+              setSize(usd);
+            }}
+          />
         </div>
 
         <div className={row}>

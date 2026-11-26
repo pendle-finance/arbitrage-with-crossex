@@ -4,7 +4,8 @@ import { describe, expect, it } from 'vitest';
 import type { EvenPlan, GoalKind, RebalanceBucket, RebalanceView } from '../api/types';
 import { rebalanceViews, rebased } from '../test/fixtures';
 import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, paybackDays, pickedRoute, realizeFeeUsd, realizeImpactUsd } from './RebalanceHovers';
-import { FeeCell } from './RebalanceRealizeBits';
+import { fmtUsd } from '../lib/fmt';
+import { costPartsUsd } from './RebalanceHovers';
 import { RebalanceInfo, roundOf, RouteRow, shownKeys, stopsPerDayOf, targetsOf, totalCostUsd, worthChip, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {
@@ -429,22 +430,18 @@ describe('the fee cell', () => {
   const rowText = (view: RebalanceView, route: 'loop' | 'convert') =>
     render(<RouteRow route={route} plan={view.plans.even} checked={false} onPick={() => {}} />).container.textContent;
 
-  it('route rows keep their fee and price impact lines', () => {
-    expect(rowText(rebalanceViews.ownerBook, 'loop')).toContain('Fee $6.00');
-    expect(rowText(rebalanceViews.ownerBook, 'convert')).not.toContain('price impact');
-  });
-
-  it('a fee with price impact reads two lines in one column', () => {
-    const { container } = render(<FeeCell feeUsd={102.39} impactUsd={18.88} />);
-    const cell = container.firstElementChild as HTMLElement;
-    expect(cell).toHaveClass('num', 'text-right');
-    expect(cell.textContent).toBe('Fee $102.39+ $18.88 price impact');
-    expect(cell.querySelector('span')?.textContent).toBe('+ $18.88 price impact');
-  });
-
-  it('no price impact line at zero', () => {
-    const { container } = render(<FeeCell feeUsd={0.6} impactUsd={0} />);
-    expect(container.textContent).toBe('Fee $0.60');
+  it('route rows show the total cost, then the fee and price impact under it', () => {
+    const plan = rebalanceViews.ownerBook.plans.even;
+    for (const route of ['loop', 'convert'] as const) {
+      const { feeUsd, impactUsd, totalUsd } = costPartsUsd(plan, plan.routes[route]!);
+      const row = rowText(rebalanceViews.ownerBook, route);
+      expect(feeUsd + impactUsd).toBeCloseTo(totalUsd, 6);
+      expect(row).toContain(fmtUsd(totalUsd));
+      expect(row).toContain(`Fee ${fmtUsd(feeUsd)} · Price impact ${fmtUsd(impactUsd)}`);
+    }
+    const flat = rebalanceViews.accountA.plans.even;
+    render(<RouteRow route="convert" plan={flat} checked={false} onPick={() => {}} />);
+    expect(screen.getByText(/Price impact \$0\.00/)).toBeInTheDocument();
   });
 });
 

@@ -281,6 +281,7 @@ export interface SliceOption {
 
 export interface RealizeTab {
   pool: Pool;
+  pools: Pool[];
   clearDebt: RealizePlan | null;
   all: RealizePlan | null;
   custom: RealizePlan | null;

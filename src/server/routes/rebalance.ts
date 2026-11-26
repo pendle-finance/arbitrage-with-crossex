@@ -106,6 +106,7 @@ const FIX_RUNNING = 'A fix is still running. Wait for it to finish.';
 const NOT_SLICED = 'Only a sliced run can pause.';
 const REALIZE_TARGET_NEEDED = 'Pick Clear debt, All or Custom before you realize.';
 const CUSTOM_NEEDS_USD = 'Enter the Custom amount before you realize.';
+const WALLET_HAS_NO_UPNL = 'This wallet has no uPnL to realize now. Pick another wallet.';
 const DELEVER_NEEDS = 'A Delever needs perps, Boros legs and an order mode.';
 const NO_BOROS_WALLET = 'The app has no Boros wallet to close the Boros share with.';
 const YEAR_SEC = 365 * 86_400;
@@ -266,6 +267,12 @@ function positiveQueryOf(raw: unknown, name: string): number | undefined {
   const value = typeof raw === 'string' ? Number(raw) : raw;
   if (!isPositive(value)) throw new CoreError(`${name} must be a positive number`);
   return value;
+}
+
+function poolQueryOf(raw: unknown): Pool | undefined {
+  if (raw === undefined) return undefined;
+  if (!isPool(raw)) throw new CoreError(`realizePool must be one of ${POOLS.join(', ')}`);
+  return raw;
 }
 
 function deleverRequestOf(value: unknown): DeleverRequest | null {
@@ -594,7 +601,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         ),
       );
 
-    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, sliceUsd?: number) => {
+    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, sliceUsd?: number, realizePool?: Pool) => {
       const account = await readAccount(fresh);
       const userId = account.value.userId ? String(account.value.userId) : null;
       const [positions, rates, paid, coins, rules, fees, tickers, depth] = await Promise.all([
@@ -646,7 +653,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         repay: planFor(buckets, account.value, inputs, REPAY_GOAL),
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
-      const realize = realizeTabOf(buckets, account.value, inputs, realizeUsd, sliceUsd);
+      const realize = realizeTabOf(buckets, account.value, inputs, realizeUsd, sliceUsd, realizePool);
       const fullPlan = fullPlanOf(buckets, account.value, inputs);
       const imUsed = imUsedOf(account.value);
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
@@ -767,11 +774,12 @@ export function rebalanceRoutes(deps: AppDeps) {
     };
 
     app.get('/rebalance', async (req, reply) => {
-      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; sliceUsd?: unknown };
+      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; sliceUsd?: unknown; realizePool?: unknown };
       const custom = customGoalOf(query);
       const realizeUsd = positiveQueryOf(query.realizeUsd, 'realizeUsd') ?? null;
       const sliceUsd = positiveQueryOf(query.sliceUsd, 'sliceUsd');
-      const { buckets, plans, realize, fullPlan, imUsed, stale } = await loadView(false, custom, realizeUsd, sliceUsd);
+      const realizePool = poolQueryOf(query.realizePool);
+      const { buckets, plans, realize, fullPlan, imUsed, stale } = await loadView(false, custom, realizeUsd, sliceUsd, realizePool);
       const job = jobs?.read() ?? null;
       const twapView = job && jobs && (job.kind === 'twap' || (job.kind === 'delever' && job.deleverTwap)) ? await twapViewFor(jobs, job) : {};
       return reply.ok(
@@ -818,6 +826,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       sliceUsd?: unknown;
       realizeUsd?: unknown;
       realizeTarget?: unknown;
+      realizePool?: unknown;
       delever?: unknown;
       clientId?: unknown;
       deal?: unknown;
@@ -915,13 +924,15 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (target === 'custom' && body.realizeUsd === undefined) throw new CoreError(CUSTOM_NEEDS_USD);
       const realizeUsd = target !== 'custom' ? null : isPositive(body.realizeUsd) ? body.realizeUsd : undefined;
       if (realizeUsd === undefined) return conflict(reply, RELOAD_TEXT);
+      const realizePool = poolQueryOf(body.realizePool);
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
       const shownSlice = isPositive(body.sliceUsd) ? body.sliceUsd : undefined;
-      const view = await catchRateLimit(loadView(true, null, realizeUsd, shownSlice));
+      const view = await catchRateLimit(loadView(true, null, realizeUsd, shownSlice, realizePool));
       if (!view) return conflict(reply, STALE_TEXT);
       const tab = view.realize;
+      if (tab && realizePool !== undefined && tab.pool !== realizePool) return conflict(reply, WALLET_HAS_NO_UPNL, PLAN_CHANGED_LABEL);
       const plan = tab ? tab[REALIZE_TARGETS[target]] : null;
       if (!tab || !plan) return conflict(reply, NOTHING_TO_REALIZE);
       if (plan.refused) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);

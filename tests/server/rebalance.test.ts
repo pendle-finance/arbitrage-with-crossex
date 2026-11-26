@@ -966,6 +966,33 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
+  it('a realize for a wallet with no uPnL is refused, and a wallet name the app does not know is a 400', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    expect(realize.pools).toEqual(['HYPERLIQUID']);
+
+    const view = await h.get('/api/rebalance?realizePool=LIGHTER');
+    const bad = await h.get('/api/rebalance?realizePool=BINANCE');
+    const start = await h.post('/api/rebalance', {
+      kind: 'realize', realizeTarget: 'all', realizePool: 'LIGHTER', exec: 'maker', costUsd: realize.all.estimates.maker.totalUsd,
+    });
+
+    expect(view.json().data.realize.pool).toBe('HYPERLIQUID');
+    expect(bad.statusCode).toBe(400);
+    expect(start.statusCode).toBe(409);
+    expect(start.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: 'This wallet has no uPnL to realize now. Pick another wallet.' });
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+
+    const own = await h.post('/api/rebalance', {
+      kind: 'realize', realizeTarget: 'all', realizePool: 'HYPERLIQUID', exec: 'maker', costUsd: realize.all.estimates.maker.totalUsd,
+    });
+    expect(own.statusCode).toBe(202);
+    expect(h.file().realize!.legs.every((leg) => leg.pool === 'HYPERLIQUID')).toBe(true);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
   it('realize cost counts in plan changed', async () => {
     mockAccount(ownerAccount());
     const h = boot();

@@ -1947,6 +1947,44 @@ describe('realizeTabOf', () => {
   it('with no perp in profit there is no tab', () => {
     expect(realizeTabOf(owner.buckets, owner.account, { ...owner.inputs, perps: [] }, null)).toBeNull();
   });
+
+  describe('two wallets in profit', () => {
+    const book = realizeBook({
+      usdt: { cash: -8_000, upnl: 2_000 },
+      usdc: { cash: 100, upnl: 10_000 },
+      availableMargin: 20_000,
+      perps: [
+        perp('HYPERLIQUID_FUTURE_ETH_USDC', -20, ETH_MARK + 500, ETH_MARK),
+        perp('GATE_FUTURE_ETH_USDT', 20, ETH_MARK, ETH_MARK),
+        perp('GATE_FUTURE_BTC_USDT', -1, BTC_MARK + 2_000, BTC_MARK),
+        perp('HYPERLIQUID_FUTURE_BTC_USDC', 1, BTC_MARK + 2_000, BTC_MARK),
+      ],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH, GATE_FUTURE_BTC_USDT: GATE_BTC, HYPERLIQUID_FUTURE_BTC_USDC: HL_BTC },
+      notionalUsd: 20 * ETH_MARK + BTC_MARK,
+    });
+
+    it('lists both wallets, the debt plan wallet first', () => {
+      const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
+      expect(tab?.pool).toBe('HYPERLIQUID');
+      expect(tab?.pools).toEqual(['HYPERLIQUID', 'CROSSEX']);
+      expect(tab?.clearDebt).not.toBeNull();
+    });
+
+    it('a picked wallet realizes only its own perps, and Clear debt stays with the debt plan wallet', () => {
+      const tab = realizeTabOf(book.buckets, book.account, book.inputs, 1_000, undefined, 'CROSSEX');
+      expect(tab?.pool).toBe('CROSSEX');
+      expect(tab?.clearDebt).toBeNull();
+      for (const plan of [tab?.all, tab?.custom]) {
+        expect(plan?.legs.map((leg) => leg.symbol)).toEqual(['GATE_FUTURE_BTC_USDT']);
+        expect(plan?.legs.every((leg) => leg.pool === 'CROSSEX')).toBe(true);
+      }
+      expect(tab?.sliceOptions.length).toBeGreaterThan(0);
+    });
+
+    it('a picked wallet with no perp in profit falls back to the first wallet', () => {
+      expect(realizeTabOf(book.buckets, book.account, book.inputs, null, undefined, 'LIGHTER')?.pool).toBe('HYPERLIQUID');
+    });
+  });
 });
 
 describe('imUsedOf', () => {
