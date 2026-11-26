@@ -298,6 +298,7 @@
       "hedge": "TWAP 已暂停：{{venue}} 拒绝了对冲 · {{what}} · 第 {{i}}/{{n}} 片",
       "error": "TWAP 已暂停：出错 · {{what}} · 第 {{i}}/{{n}} 片",
       "capped": "TWAP 已暂停：余量未平 · {{what}}",
+      "cappedOpen": "TWAP 已暂停：余量未开 · {{what}}",
       "boros": "TWAP 已暂停：Boros 平仓被拒 · {{what}}",
       "done": "TWAP 已完成 · {{what}}",
       "stopped": "TWAP 停在第 {{i}}/{{n}} 片 · {{what}}",
