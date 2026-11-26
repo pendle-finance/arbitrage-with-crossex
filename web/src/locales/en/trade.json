@@ -170,7 +170,6 @@
     "lmtAt": "Limit at {{price}}{{tif}}",
     "sumFees": "Fees <n>≈ {{fees}}</n>",
     "marginOf": "Margin <m>{{required}}</m><d> / {{available}}</d>",
-    "pricing": "Pricing…",
     "pressHold": "Press and hold to confirm"
   },
   "wizard": {

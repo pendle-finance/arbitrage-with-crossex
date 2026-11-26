@@ -597,7 +597,7 @@ function HoverCard({
           {isError
             ? t('pairTicket.bits.previewFailed')
             : estimating
-              ? t('trade.execute.pricing')
+              ? t('common.refreshing')
               : Number.isFinite(ageMs)
                 ? t('trade.execute.secondsAgo', { s: Math.floor(ageMs / 1000) })
                 : '—'}
@@ -660,7 +660,7 @@ function HoverCard({
         </div>
       ) : (
         <div className="py-2 text-center text-ink-500">
-          <Spinner className="inline h-3 w-3" /> <span className="ml-1 align-middle">{t('trade.execute.pricing')}</span>
+          <Spinner className="inline h-3 w-3" /> <span className="ml-1 align-middle">{t('common.refreshing')}</span>
         </div>
       )}
       {detail && <div className="mt-1.5 border-t border-ink-800 pt-1.5 text-[11px] text-ink-400">{detail}</div>}

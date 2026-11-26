@@ -147,7 +147,7 @@ export function MoveCashTab({
 
   let body: ReactNode;
   if (customPending) {
-    const hint = customMove === null ? t('accounts.rebalanceModal.typeAmount') : customQuery.isError ? customQuery.error.message : t('accounts.rebalanceModal.pricing');
+    const hint = customMove === null ? t('accounts.rebalanceModal.typeAmount') : customQuery.isError ? customQuery.error.message : t('common.refreshing');
     body = <p className="text-xs text-ink-400">{hint}</p>;
   } else if (goal === 'custom' && plan.balanced && !aboveMost) {
     body = <p className="text-xs text-ink-400">{isCashLimitedEven(plan) ? cashLimitedText(plan) : nothingToMove()}</p>;

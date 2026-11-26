@@ -231,7 +231,7 @@ describe('DeleverTab guards', () => {
     show(openPairs.btc900);
     await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to delever 180 BTC' })).toBeEnabled());
     await user.click(screen.getByRole('radio', { name: '30%' }));
-    expect(screen.getByRole('button', { name: 'Pricing the move.' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refreshing…' })).toBeDisabled();
     release();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Hold to delever 270 BTC' })).toBeEnabled());
   });

@@ -99,7 +99,7 @@ export function EstimateAge({
   const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
   return (
     <span className="num text-[11px] text-ink-400">
-      {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('trade.execute.pricing') : (
+      {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('common.refreshing') : (
         <>
           <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
         </>

@@ -3027,7 +3027,7 @@ function RollReview({
             {busy
               ? t('assetCard.review.rolling')
               : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
-                ? t('assetCard.review.refreshingQuote')
+                ? t('common.refreshing')
                 : t('assetCard.actions.rollOver')}
           </HoldToConfirmButton>
         )}
@@ -3289,7 +3289,7 @@ function OpenOnlyReview({
             {busy
               ? t('assetCard.openOnly.opening')
               : blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
-                ? t('assetCard.review.refreshingQuote')
+                ? t('common.refreshing')
                 : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
         )}
