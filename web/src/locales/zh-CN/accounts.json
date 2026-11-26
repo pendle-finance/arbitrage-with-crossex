@@ -300,7 +300,6 @@
     "priceBookedSince": "自 {{date}} 组合开仓以来两条永续腿的价格盈亏：本次平仓各腿实现的部分，加上之前平仓已实现的部分。未扣手续费。",
     "bookedBefore": "此前已实现",
     "after": {
-      "notInPair": "不属于此组合",
       "boros": "Boros",
       "perps": "永续",
       "borosUnhedged": "{{qty}} {{coin}} 固定利率 · 未对冲",

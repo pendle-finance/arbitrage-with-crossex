@@ -526,7 +526,6 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           dataUpdatedAt={preview.dataUpdatedAt}
           legLong={legLong}
           legShort={legShort}
-          mode={mode}
           leverage={leverageText}
           marginRequired={marginRequired}
           twapOn={twapOn}

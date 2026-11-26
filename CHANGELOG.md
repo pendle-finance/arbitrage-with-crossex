@@ -140,6 +140,20 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   default wallet.
 - **Close perps says when a part close is rounded to the lot**, with the size each leg
   will close.
+- **Roll over**: the two single legs line up in the steps. The header names the venues
+  without LONG and SHORT tags.
+- **Roll over refused**: one short red alert ("Roll not sent" and the reason). Retry is the
+  same size as Close and Back.
+- **Roll over done**: one green card for exit and re-entry.
+- **Close perps**: the After card shows only the legs in the pair.
+- **Hover labels**: no (i) mark beside an underlined label.
+- **Pair ticket**: the spread note sits in the Net entry spread hover. No "Open: 2 × taker"
+  line, and no "Size set to … so both legs trade the same amount" warning.
+- **TWAP running**: no empty header row. Pause and Hold to stop sit on one line, the order
+  count is a badge, and one keep-awake line sits above the buttons.
+- **Boros ticket**: slippage shows dollars. The hover holds Est and Max.
+- **Move cash**: one row per wallet when a side has more than one wallet.
+- **Slice table**: "Slice size" shows once.
 
 ## 1.7.9 — 2026-11-10
 

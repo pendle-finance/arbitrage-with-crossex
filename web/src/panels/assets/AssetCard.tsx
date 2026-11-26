@@ -72,6 +72,7 @@ import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
 import { aprCost, AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, MarginUsageRow, marketName, OpposingAcknowledgement, SpreadReadout, SuggestedTopUpLines, usdOf as simUsdOf } from '../../trade/BorosPairBits';
 import { EstimateAge, EstimateRow, SlippageLine, SummaryCard } from '../../trade/PairTicketBits';
 import { StepList } from '../RebalanceBits';
+import { StopBox } from '../RebalanceJobBits';
 import { AmountPresets } from '../../components/AmountPresets';
 import { SegmentedToggle } from '../../components/SegmentedToggle';
 import { QueryError } from '../../components/QueryError';
@@ -1660,16 +1661,18 @@ interface RollLeg {
   size: number;
 }
 
-function RollLegName({ leg, coin }: { leg: RollLeg; coin: string }) {
+function RollLegCells({ leg, coin }: { leg: RollLeg; coin: string }) {
   return (
-    <span className="flex min-w-0 items-center gap-1.5 text-ink-200">
-      {leg.spreadVenues ? <SpreadIcon venues={leg.spreadVenues} size={14} /> : <VenueIcon venue={leg.venue} size={14} />}
-      <span className="truncate">{leg.name}</span>
-      <Chip sm tone={leg.side === 'LONG' ? 'green' : 'red'} className="shrink-0 font-semibold">
+    <>
+      <span className="flex min-w-0 items-center gap-1.5 text-ink-200">
+        {leg.spreadVenues ? <SpreadIcon venues={leg.spreadVenues} size={14} /> : <VenueIcon venue={leg.venue} size={14} />}
+        <span className="truncate">{leg.name}</span>
+      </span>
+      <Chip sm tone={leg.side === 'LONG' ? 'green' : 'red'} className="justify-self-start font-semibold">
         {t(leg.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
       </Chip>
-      <span className="num shrink-0 text-ink-50">{exactQty(leg.size, coin)}</span>
-    </span>
+      <span className="num text-ink-50">{exactQty(leg.size, coin)}</span>
+    </>
   );
 }
 
@@ -1766,11 +1769,13 @@ function RollSteps({ batches, coin, busy }: { batches: RollBatch[]; coin: string
         key: b.key,
         coin,
         text: (
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
             <span className="font-semibold text-ink-50">{b.title}</span>
-            {b.legs.map((leg) => (
-              <RollLegName key={leg.marketId} leg={leg} coin={coin} />
-            ))}
+            <span className="grid min-w-0 grid-cols-[minmax(0,auto)_auto_auto] items-center gap-x-1.5 gap-y-1">
+              {b.legs.map((leg) => (
+                <RollLegCells key={leg.marketId} leg={leg} coin={coin} />
+              ))}
+            </span>
           </span>
         ),
         sub: null,
@@ -2356,7 +2361,7 @@ export function RollOverModal({
           <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
             {t('assetCard.roll.title')}
             <span className="text-[14px] font-medium text-ink-200">
-              <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} />
+              <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue} sides={false} />
             </span>
           </span>
         )
@@ -2528,21 +2533,23 @@ export function RollOverModal({
 /** One side of a roll (its two legs) as the venue reported them, coloured by
  * the roll's single all-or-nothing verdict — a roll fills whole or not at all,
  * so both sides share one status rather than each carrying its own. */
-function RollLegReport({
-  label,
-  legs,
-  collateral,
-  tone,
-  nameOf,
-}: {
+function withoutRollStep(message: string): string {
+  for (const word of ['exit', 'reEntry'] as const) {
+    const prefix = t('errors.rollStep', { stepWord: t(`errors.word.${word}`), inner: '' });
+    if (message.startsWith(prefix)) return message.slice(prefix.length);
+  }
+  return message;
+}
+
+interface RollLegSection {
   label: string;
   legs: BorosLegFill[];
-  collateral: string;
-  tone: 'green' | 'amber' | 'rose';
   /** The market each fill traded. A spread is one position, so "Leg A" would
    * name a second leg that does not exist. */
   nameOf?: (marketId: number) => string | null;
-}) {
+}
+
+function RollLegReport({ sections, collateral, tone }: { sections: RollLegSection[]; collateral: string; tone: 'green' | 'amber' | 'rose' }) {
   const box =
     tone === 'green'
       ? 'border-emerald-500/25 bg-emerald-500/5'
@@ -2550,13 +2557,17 @@ function RollLegReport({
         ? 'border-amber-500/30 bg-amber-500/[0.04]'
         : 'border-rose-500/30 bg-rose-500/[0.04]';
   return (
-    <div className={`rounded-lg border px-3 py-2.5 ${box}`} role="status">
-      <span className="text-[12px] font-semibold text-ink-100">{label}</span>
-      <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
-        {legs.map((fill, i) => (
-          <LegFillLine key={fill.marketId} label={nameOf?.(fill.marketId) ?? t('assetCard.legLetterLabel', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
-        ))}
-      </div>
+    <div className={`flex flex-col gap-3 rounded-lg border px-3 py-2.5 ${box}`} role="status">
+      {sections.map(({ label, legs, nameOf }) => (
+        <div key={label}>
+          <span className="text-[12px] font-semibold text-ink-100">{label}</span>
+          <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
+            {legs.map((fill, i) => (
+              <LegFillLine key={fill.marketId} label={nameOf?.(fill.marketId) ?? t('assetCard.legLetterLabel', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2818,10 +2829,14 @@ function RollReview({
     return (
       <div className="flex flex-col gap-2">
         {result && (
-          <>
-            <RollLegReport label={t('assetCard.roll.exit')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l)} collateral={collateral} tone={tone} nameOf={(id) => legMarketName(`exit:${id}`)} />
-            <RollLegReport label={t('assetCard.roll.reentry')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l)} collateral={collateral} tone={tone} nameOf={(id) => legMarketName(`entry:${id}`)} />
-          </>
+          <RollLegReport
+            sections={[
+              { label: t('assetCard.roll.exit'), legs: Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l), nameOf: (id) => legMarketName(`exit:${id}`) },
+              { label: t('assetCard.roll.reentry'), legs: Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l), nameOf: (id) => legMarketName(`entry:${id}`) },
+            ]}
+            collateral={collateral}
+            tone={tone}
+          />
         )}
         {status === 'rolled' && (
           <p className="text-[11.5px] text-ink-300" role="status">
@@ -2838,12 +2853,7 @@ function RollReview({
             {t('assetCard.review.unknown')}
           </p>
         )}
-        {'error' in out && (
-          <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
-            <span className="font-semibold text-rose-200">{t('assetCard.review.notSent')}</span>{' '}
-            <span className="text-rose-200/80">{out.error}</span>
-          </p>
-        )}
+        {'error' in out && <StopBox title={t('assetCard.review.notSent')} lines={[withoutRollStep(out.error)]} />}
         {payload?.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
             {t('assetCard.replayed')}
@@ -2859,7 +2869,7 @@ function RollReview({
             </button>
           )}
           {canRetry && (
-            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
+            <HoldToConfirmButton tone="cyan" compact disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
               {t('common.retry')}
             </HoldToConfirmButton>
           )}
@@ -3197,7 +3207,13 @@ function OpenOnlyReview({
     const retryable = 'error' in out || (result?.filledNothing ?? false);
     return (
       <div className="flex flex-col gap-2">
-        {result && <RollLegReport label={t('assetCard.openOnly.newLegs')} legs={result.legs} collateral={collateral} tone={tone} nameOf={(id) => simulation?.legs.find((l) => l.marketId === id)?.marketName ?? ('spreadVenues' in target ? spreadName(base, target.spreadVenues) : null)} />}
+        {result && (
+          <RollLegReport
+            sections={[{ label: t('assetCard.openOnly.newLegs'), legs: result.legs, nameOf: (id) => simulation?.legs.find((l) => l.marketId === id)?.marketName ?? ('spreadVenues' in target ? spreadName(base, target.spreadVenues) : null) }]}
+            collateral={collateral}
+            tone={tone}
+          />
+        )}
         {result && !result.filledNothing && !result.partial && (
           <p className="text-[11.5px] text-ink-300" role="status">
             {t('assetCard.openOnly.opened', { qty: exactQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity), old: fmtDateLocal(pair.soonestMaturitySec) })}
@@ -3213,11 +3229,7 @@ function OpenOnlyReview({
             {t('assetCard.openOnly.nothing')}
           </p>
         )}
-        {'error' in out && (
-          <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
-            <span className="font-semibold text-rose-200">{t('assetCard.openOnly.notSent')}</span> <span className="text-rose-200/80">{out.error}</span>
-          </p>
-        )}
+        {'error' in out && <StopBox title={t('assetCard.openOnly.notSent')} lines={[out.error]} />}
         {'payload' in out && out.payload.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
             {t('assetCard.replayed')}
@@ -3233,7 +3245,7 @@ function OpenOnlyReview({
             </button>
           )}
           {retryable && (
-            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
+            <HoldToConfirmButton tone="cyan" compact disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
               {t('common.retry')}
             </HoldToConfirmButton>
           )}

@@ -12,6 +12,7 @@ interface Props {
   tone?: 'green' | 'red' | 'cyan' | 'buy' | 'sell' | 'outline';
   /** Extra classes appended to the base button (e.g. width/margin). */
   className?: string;
+  compact?: boolean;
   /** Extra hover text, appended to the press-and-hold instruction — for a
    * guarantee about what confirming DOES (e.g. atomic acceptance). */
   title?: string;
@@ -38,7 +39,7 @@ const CIRC = 2 * Math.PI * R;
  * cancels. Deliberately NO keyboard activation — Enter/Space are swallowed so a
  * stray keypress can never send an order.
  */
-export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 'cyan', className, title, children }: Props) {
+export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 'cyan', className, compact = false, title, children }: Props) {
   const { t } = useTranslation();
   const [progress, setProgress] = useState(0);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -102,9 +103,9 @@ export function HoldToConfirmButton({ onConfirm, disabled, holdMs = 800, tone = 
         if (e.key === 'Enter' || e.key === ' ') e.preventDefault();
       }}
       onClick={(e) => e.preventDefault()}
-      className={`inline-flex select-none items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${TONES[tone]} ${className ?? ''}`}
+      className={`inline-flex select-none items-center justify-center border transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${compact ? 'h-9 gap-1.5 rounded px-4 text-[12px] font-medium' : 'gap-2 rounded-lg px-4 py-2 text-sm font-semibold'} ${TONES[tone]} ${className ?? ''}`}
     >
-      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden className="-ml-1 shrink-0">
+      <svg width={compact ? 14 : 18} height={compact ? 14 : 18} viewBox="0 0 18 18" aria-hidden className="-ml-1 shrink-0">
         <circle cx="9" cy="9" r={R} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2.5" />
         <circle
           cx="9"

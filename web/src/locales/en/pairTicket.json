@@ -48,8 +48,6 @@
     "bookHint": "Show or hide the live book and market-impact graph",
     "book": "Book",
     "tradeCost": "Trade cost",
-    "openMakerTaker": "Open: maker + taker",
-    "openTakerTwice": "Open: 2 × taker",
     "colLeg": "Leg",
     "colPrice": "Est. price",
     "colSlip": "Slippage",

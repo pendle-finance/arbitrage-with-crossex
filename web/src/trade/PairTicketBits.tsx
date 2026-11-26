@@ -240,6 +240,46 @@ export function LegCard({
  * button that reveals the tolerance editor (quick picks + a box). The same
  * shape on every close and ticket, whether the unit is % of price or APR.
  */
+export function SlippageCostHead({
+  name,
+  est,
+  max,
+  unit,
+  cost,
+  onToggle,
+  title,
+}: {
+  name: string;
+  est: string | null;
+  max: string;
+  unit?: string;
+  cost: string | null;
+  onToggle: () => void;
+  title?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-[12px] text-ink-200">
+        <HoverCard label={name} widthPx={240}>
+          <span className="num flex flex-col gap-0.5">
+            <span>{t('pairTicket.bits.est')} {est ?? '—'}</span>
+            <span>{t('pairTicket.bits.max')} {max}{unit ? ` ${unit}` : ''}</span>
+          </span>
+        </HoverCard>
+      </span>
+      <button
+        type="button"
+        className="num text-[12px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+        title={title ?? t('pairTicket.bits.changeTolerance')}
+        onClick={onToggle}
+      >
+        {cost ?? '—'}
+      </button>
+    </div>
+  );
+}
+
 export function SlippageLine({
   est,
   max,
@@ -283,24 +323,7 @@ export function SlippageLine({
   return (
     <div className="flex flex-col gap-1.5">
       {cost !== undefined ? (
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="text-[12px] text-ink-200">
-            <HoverCard label={name} widthPx={240}>
-              <span className="num flex flex-col gap-0.5">
-                <span>{t('pairTicket.bits.est')} {est ?? '—'}</span>
-                <span>{t('pairTicket.bits.max')} {max}{unit ? ` ${unit}` : ''}</span>
-              </span>
-            </HoverCard>
-          </span>
-          <button
-            type="button"
-            className="num text-[12px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
-            title={t('pairTicket.bits.changeTolerance')}
-            onClick={onToggle}
-          >
-            {cost ?? '—'}
-          </button>
-        </div>
+        <SlippageCostHead name={name} est={est} max={max} unit={unit} cost={cost} onToggle={onToggle} />
       ) : (
         <div className="flex items-baseline justify-between gap-3">
           <span className="text-[12px] text-ink-200" title={title}>
@@ -577,7 +600,6 @@ export function PairEstimate({
   dataUpdatedAt,
   legLong,
   legShort,
-  mode,
   leverage,
   marginRequired,
   twapOn = false,
@@ -590,7 +612,6 @@ export function PairEstimate({
   dataUpdatedAt: number;
   legLong: PreviewResult | undefined;
   legShort: PreviewResult | undefined;
-  mode: ExecMode;
   /** "10x long / 50x short" once both caps are known; null while loading. */
   leverage: string | null;
   /** Total initial margin the two legs post, in USD; null while unknown. */
@@ -645,8 +666,11 @@ export function PairEstimate({
 
             {spreadBps !== null && (
               <EstimateRow
-                label={t('pairTicket.bits.netSpread')}
-                sub={t('pairTicket.bits.netSpreadSub')}
+                label={
+                  <HoverCard label={t('pairTicket.bits.netSpread')} widthPx={240}>
+                    {t('pairTicket.bits.netSpreadSub')}
+                  </HoverCard>
+                }
                 value={
                   <span className={spreadBps <= 0 ? 'text-emerald-400' : 'text-rose-400'}>{spreadBps.toFixed(1)} bps</span>
                 }
@@ -655,7 +679,6 @@ export function PairEstimate({
             <div className="mt-0.5 border-t border-ink-800 pt-1.5">
               <EstimateRow
                 label={t('pairTicket.bits.tradeCost')}
-                sub={mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
                 value={fmtTradeCost(tradeCost)}
                 strong
               />

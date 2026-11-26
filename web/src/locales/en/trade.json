@@ -359,7 +359,7 @@
       "onResumeValue_one": "{{count}} slice, every {{interval}}",
       "onResumeValue_other": "{{count}} slices, every {{interval}}",
       "pausing": "Pausing: cancelling the slice {{i}} limit and hedging what filled",
-      "orders": "Orders {{n}}",
+      "orders": "Orders",
       "colVenue": "Venue",
       "colOrder": "Order",
       "colSize": "Size",
@@ -391,7 +391,6 @@
       "slippageSoFar": "Slippage so far"
     },
     "footer": {
-      "runsInApp": "Runs in the app on this computer. Closing this view does not stop it.",
       "awake": "Keeps this Mac awake until it ends. Closing the lid still sleeps it."
     }
   }
