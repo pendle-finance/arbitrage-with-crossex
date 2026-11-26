@@ -3,6 +3,62 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.8.0 — 2026-11-19
+
+TLDR: Rebalance can turn a perp's open profit into cash, and Delever makes a pair smaller. Large
+moves run in slices. TWAP splits a perp open or close into timed slices. A perp pair can close
+with Limit + hedge for lower fees. The roll-over signal compares against what holding still earns.
+
+- **Rebalance realizes profit.** When the paying wallet is short of cash, step 1 closes part of
+  the profitable perp, converts the cash and reopens the same size at once. Step 2 moves the rest.
+  A realize the plan refuses (price impact over 25 bp, no margin to reopen, past the book, over
+  the market-order cap) says why in one line, and the plain move still runs. The reopen retries
+  until it is whole and stops only for a reason it names. Resume checks both legs before it
+  reopens. The plan counts the reopen's Convert in the wallet it lands in and never closes more
+  than frees cash, so a plan with two borrowing wallets, or a custom move to Lighter, shows what
+  the run does.
+- **Close a perp pair with Limit + hedge.** The Close perps dialog has a `Perp exit` toggle. One
+  leg rests a reduce-only post-only order that follows the book; each fill closes on the other
+  leg at once with a market order. On Gate CrossEx that is 2 bp + 5 bp instead of 5 bp + 5 bp.
+  Limit + hedge is now the default on the open ticket and the close dialog.
+- **Roll-over compares against what holding still earns.** The banner, the card and the Telegram
+  roll alert used to charge the fees already paid to open the pair against "now". A lower later
+  rate could then read as better. They now compare against the locked rate less the settlement
+  fee.
+- **Telegram alerts set up only for the logged-in wallet.** When the browser shows a wallet other
+  than the one logged in, the Telegram row asks you to log in first. Before, the terminal linked
+  the logged-in wallet while the bot page signed in with the browser's.
+- **Aster perps.** Gate CrossEx now lists Aster BTC, ETH and HYPE perps. Fill estimates read
+  Aster's own order book. Aster margin and fees use the shared USDT · CrossEx wallet, so
+  Rebalance and Transfer need no change.
+- **TWAP for perp opens and closes.** A TWAP switch on the Pair ticket, the Single ticket, Close
+  perps, Close one leg, Delever and Realize uPnL splits the order into timed slices: you pick the
+  duration, the interval and the slice size. Each slice is one limit + hedge deal. A run view
+  shows the slice count, the next slice, fills, average prices, slippage and fees, with Pause,
+  Resume and Hold to stop. A strip on every tab shows a running, paused or stopped TWAP, and the
+  tickets wait until it ends. Unequal close legs close the matched size and name what is left.
+- **Rebalance has three tabs: Move cash, Realize uPnL and Delever.** The Borrow card says "Reduce
+  borrow recommended" only when the whole plan costs less than 30 days of interest. Delever makes
+  a Fixed Rate Pair smaller: the perps first, then the Boros share.
+- **Large realizes and Delevers run in slices** of $25k to $100k, maker or market. A run never
+  closes more than one slice plus one venue minimum at a time. A stopped run shows where the money
+  is, with one hold per fix and Abandon, which names any perp left uneven.
+- **Tickets show an Estimate card** with the trade cost, and prices and fees group thousands
+  (2,866.53, not 2866.53).
+- **Gate's "too many open orders" refusal stops the order and says so.** Before, the terminal sent
+  the order again every 90 s.
+- **A cleaner Rebalance popup.** The three tabs fill the top row, and a running job shows in its
+  tab. Move cash has two-line From and To cards and one head row for Route, Time and Est. cost.
+  Each route shows its fee and price impact under the cost. The After card ends with "Pays back
+  in N days". Realize uPnL picks its wallet and takes an amount box with Debt and All presets.
+  The hold buttons read "Hold to move" and "Hold to realize".
+- **Delever picks its size in the same amount box,** with 10%, 20% and 30% presets and the percent
+  inside the box. A preset value has its own fill, so it reads apart from a typed one. With TWAP
+  off, Delever sends one order in the mode you pick and splits only at a venue's order cap.
+  Realize uPnL can split the close into slices.
+- **Move cash Custom amount lines up.** The From and To cards each show a label row, the wallet
+  select and the amount at one height. "Max X" sits on the From label row.
+
 ## 1.7.9 — 2026-11-10
 
 TLDR: The terminal suggests a Boros liquidation buffer and says how much margin to add. A Boros

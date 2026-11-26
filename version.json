@@ -1,10 +1,12 @@
 {
-  "version": "1.7.9",
+  "version": "1.8.0",
   "highlights": [
-    "Fixed Rate Pairs shows a suggested Boros liquidation APR, and Add Boros margin gives the deposit that reaches it",
-    "A Boros pair order fills whole or does not send, so the two markets stay the same size",
-    "The pair ticket shows Liquidation APR, Margin usage and Available margin before → after",
-    "A blocked size names its reason, and one click sets the largest size that fills",
-    "Rebalance shows price impact apart from the fee and recommends by fee plus time"
+    "TWAP: split a perp open or close into timed slices, with Pause, Resume and Hold to stop",
+    "Rebalance has Move cash, Realize uPnL and Delever tabs; large moves run in slices",
+    "Rebalance can turn a perp's open profit into cash: it closes part of the profitable perp and reopens the same size at once",
+    "Close a perp pair with Limit + hedge: one leg rests as a maker order, the other hedges each fill, for lower fees",
+    "The roll-over banner and Telegram alert no longer count fees you already paid, so a lower later rate no longer reads as better",
+    "Telegram alerts set up only for the wallet logged in on the terminal",
+    "Aster perps on CrossEx get fill estimates from Aster's own order book"
   ]
 }
