@@ -451,7 +451,6 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
         value={mode}
         onChange={(m) => {
           setMode(m);
-          if (m === 'market') twap.setOn(false);
           setPricePinned(false);
         }}
         cost={pairModeFees([legLong, legShort], makerLeg !== 'auto' ? (makerLeg === 'a' ? 0 : 1) : autoPick ? (autoPick.auto === 'a' ? 0 : 1) : null)}

@@ -224,8 +224,10 @@ describe('DeleverTab guards', () => {
     server.use(
       http.post('/api/rebalance/delever/plan', async ({ request }) => {
         const body = (await request.json()) as DeleverRequest;
-        if (body.perps[0]?.qty === 270) await gate;
-        return HttpResponse.json(env({ ...deleverPlans.twentyPct, twapDefault: null }));
+        const qty = body.perps[0]?.qty ?? 0;
+        if (qty === 270) await gate;
+        const legs = deleverPlans.twentyPct.legs.map((leg) => ({ ...leg, closeQty: qty, after: leg.before - qty }));
+        return HttpResponse.json(env({ ...deleverPlans.twentyPct, legs, twapDefault: null }));
       }),
     );
     show(openPairs.btc900);
@@ -277,6 +279,17 @@ describe('DeleverTab size', () => {
     expect(sizeBox().nextElementSibling).toHaveTextContent('BTC · 50%');
     expect(within(group).getAllByRole('radio').every((r) => r.getAttribute('aria-checked') === 'false')).toBe(true);
     await waitFor(() => expect(sent.at(-1)?.perps.map((p) => p.qty)).toEqual([450, 450]));
+  });
+
+  it.each([1234.567, 1234.564])('Custom 100%% of a %s pair fills the exact pair size', async (size) => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show([{ ...BTC, size, perps: BTC.perps.map((p) => ({ ...p, qty: size })) }]);
+    const group = screen.getByRole('radiogroup', { name: 'Reduce by' });
+    await user.click(within(group).getByRole('radio', { name: 'Custom %' }));
+    await user.type(screen.getByRole('textbox', { name: 'Custom percent of the pair' }), '100{Enter}');
+    expect(sizeBox()).toHaveValue(String(size));
+    expect(screen.queryByText(/^Maximum is/)).toBeNull();
   });
 
   it('Escape closes the percent box and keeps the size', async () => {
@@ -472,6 +485,38 @@ describe('DeleverTab plan', () => {
     expect(starts[0]!.delever).not.toHaveProperty('sliceUsd');
   });
 
+  it('the hold names the lot-rounded size the plan closes, not the typed size', async () => {
+    const plan = deleverPlans.twentyPct;
+    servePlan({ ...plan, legs: plan.legs.map((leg) => ({ ...leg, closeQty: 179.5, after: leg.before - 179.5 })) });
+    show(openPairs.btc900);
+    expect(await screen.findByRole('button', { name: 'Hold to delever 179.5 BTC' })).toBeInTheDocument();
+  });
+
+  it('an empty size box names no size on the hold', async () => {
+    const user = userEvent.setup();
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await user.clear(sizeBox());
+    expect(screen.getByRole('button', { name: 'Hold to delever' })).toBeDisabled();
+  });
+
+  it('two perps of different sizes get one After row each', async () => {
+    const plan = deleverPlans.twentyPct;
+    servePlan({ ...plan, legs: plan.legs.map((leg, i) => (i === 1 ? { ...leg, before: 850, after: 670 } : leg)) });
+    show(openPairs.btc900);
+    const rows = await afterRows();
+    expect(rows).toEqual(expect.arrayContaining(['Hyperliquid Long 900 → 720 BTC', 'Gate Short 850 → 670 BTC']));
+    expect(rows.some((row) => row.includes('each'))).toBe(false);
+  });
+
+  it.each(['belowMin', 'sameSide'] as const)('a %s refusal hides the Orders group and the After card', async (key) => {
+    servePlan(deleverPlans[key]);
+    show(openPairs.btc900);
+    await screen.findByText(/Gate takes at least|same side/);
+    expect(screen.queryByRole('radiogroup', { name: 'Orders' })).toBeNull();
+    expect(screen.queryByText('Before')).toBeNull();
+  });
+
   it('a plan that fails shows the error, never a cost', async () => {
     servePlan({ error: 'No order book for GATE_FUTURE_BTC_USDT.' });
     show(openPairs.btc900);
@@ -541,8 +586,46 @@ describe('DeleverTab TWAP', () => {
     await waitFor(() => expect(hold).toBeEnabled());
     fireEvent.pointerDown(hold);
     await waitFor(() => expect(starts).toHaveLength(1));
-    expect(starts[0]!.delever.twap).toMatchObject({ durationSec: 14_400, slices: 48, repegBehindBp: 5 });
+    expect(starts[0]!.delever.twap).toMatchObject({ durationSec: 14_400, intervalSec: 300, repegBehindBp: 5 });
+    expect(starts[0]!.delever.twap).not.toHaveProperty('slices');
     expect(starts[0]!.delever.sliceUsd).toBeUndefined();
+  });
+
+  it('a twap start sends the slice size the plan was priced with', async () => {
+    const starts: { delever: DeleverRequest }[] = [];
+    server.use(
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as { delever: DeleverRequest });
+        return HttpResponse.json(env({ id: 'delv0004' }));
+      }),
+    );
+    const sent = servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    await screen.findByText(/^Slices 48/);
+    const priced = sent[sent.length - 1]!.twap;
+    const hold = await screen.findByRole('button', { name: 'Hold to delever 180 BTC · TWAP 4h' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(starts).toHaveLength(1));
+    expect(starts[0]!.delever.twap).toEqual(priced);
+  });
+
+  it('Boros gas counts in Total cost, the Orders price and the Boros step, not the perps step', async () => {
+    const plan = { ...deleverPlans.twentyPct, borosCloses: 48, borosGasUsd: 12 } as DeleverPlan;
+    servePlan(plan);
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    await screen.findByText('Boros gas · 48 closes');
+    const est = plan.estimates.maker;
+    const card = screen.getByText('Total cost').closest('.card') as HTMLElement;
+    expect(card).toHaveTextContent(fmtUsd(est.totalUsd + 12));
+    const orders = screen.getByRole('radiogroup', { name: 'Orders' });
+    expect(within(orders).getAllByRole('radio')[0]).toHaveTextContent(`about ${fmtUsd(plan.estimates.maker.totalUsd + 12, 0)}`);
+    const list = screen.getByText('Steps').closest('div')?.parentElement as HTMLElement;
+    const items = within(list).getAllByRole('listitem').map((li) => li.textContent ?? '');
+    expect(items[0]).toContain(fmtUsd(est.totalUsd - est.feeBorosUsd));
+    expect(items[1]).toContain(fmtUsd(est.feeBorosUsd + 12));
   });
 
   it('maker settings fold sends the taker wait and re-peg on the twap plan request', async () => {

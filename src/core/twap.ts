@@ -137,18 +137,28 @@ export function usdText(usd: number): string {
   return `$${usd.toLocaleString('en-US', { maximumFractionDigits: usd < 10 ? 2 : 0 })}`;
 }
 
+const capsOf = (rule: TwapLegRule): Fx[] =>
+  [rule.maxMarketSize, rule.maxLimitSize]
+    .filter((cap): cap is string => cap !== null)
+    .map(fxOf)
+    .filter((cap) => cap > 0n);
+
+export function sliceBoundsOf(rules: TwapLegRule[]): { lot: Fx; maxQty: Fx | null } {
+  const lots = rules.map((rule) => fxOf(rule.lot)).filter((lot) => lot > 0n);
+  const lot = lots.length ? lots.reduce((a, b) => (a / gcd(a, b)) * b) : fx(DEFAULT_STEP);
+  const caps = rules.flatMap(capsOf);
+  const maxQty = caps.length ? (caps.reduce(fxMin) / lot) * lot : 0n;
+  return { lot, maxQty: maxQty > 0n ? maxQty : null };
+}
+
 function contextOf(totalQty: string, rules: TwapLegRule[], mark: number, bookMaxQty: string | null | undefined): Context {
   if (rules.length === 0) throw new Error('twap: no legs');
   const markFx = Number.isFinite(mark) && mark > 0 ? fxOf(String(mark)) : 0n;
   if (markFx <= 0n) throw new Error(`twap: mark must be a positive number, got ${mark}`);
-  const lots = rules.map((rule) => fxOf(rule.lot)).filter((lot) => lot > 0n);
-  const lot = lots.length ? lots.reduce((a, b) => (a / gcd(a, b)) * b) : fx(DEFAULT_STEP);
+  const { lot } = sliceBoundsOf(rules);
   const legs = rules.map((rule): LegLimit => {
     const minQty = fxMax(fxOf(rule.minSize), ceilDiv(fxOf(rule.minNotional) * ONE, markFx));
-    const caps = [rule.maxMarketSize, rule.maxLimitSize]
-      .filter((cap): cap is string => cap !== null)
-      .map(fxOf)
-      .filter((cap) => cap > 0n);
+    const caps = capsOf(rule);
     return {
       venue: prettyVenue(rule.venue),
       minQty,
@@ -401,7 +411,7 @@ export function splitFixOf(input: TwapInput, lead: SplitLeg, legs: SplitLeg[], w
     try {
       const shape = planSlices(lead.qty, { durationSec: input.durationSec, slices: total }, lead.rules, lead.mark, lead.bookQty);
       if (!shape.plan || (!shape.ok && shape.refusal.field !== 'sliceSize')) continue;
-      const rows = splitPlans(shape.plan.intervalSec, splitSlices(total, weights), legs);
+      const rows = splitPlans(shape.plan.intervalSec, splitSlices(total, weights).map((count) => Math.max(2, count)), legs);
       if (rows.every((row) => row.plan && !row.refusal)) return { label: `Use ${total} slices`, patch: { durationSec: input.durationSec, slices: total } };
     } catch {
       continue;

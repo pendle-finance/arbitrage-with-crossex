@@ -65,7 +65,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   where its money sits.
 - **Order tickets show one leg list in the Cost card,** with the side toggle in each leg header and
   the spread as a plain row. The coin price sits right after the coin chips. The Boros pair ticket
-  lists only dates that have a spread, and shows Slippage, Trade fee and Total cost rows. Size per
+  lists the dates both markets share and the dates only a spread lists, and shows Slippage, Trade
+  fee and Total cost rows. Size per
   leg shows only when it differs from the size box. The maker price stays steady for 10 seconds
   when one order book read fails.
 - **Close perps, Close Boros and Roll over show a Cost card, then an After card.** The After card
@@ -78,9 +79,8 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   with its own Total cost, then "Can it fund?".
 - **Close perps and Close Boros drop the standing line under the button** ("Reduce-only…" and
   "Cancels resting orders…"). The orders they send are unchanged.
-- **Roll over takes a Custom %** after 25, 50, 75 and 100%. Close perps' After card shows
-  "Perps · Flat" when the whole pair closes and "Price PnL booked" with each leg in the hover, and
-  the Boros row shows its size, not hedged, in amber.
+- **Roll over takes a Custom %** after 25, 50, 75 and 100%. Close perps' After card shows the
+  Boros row's size, not hedged, in amber.
 - **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
   the sale adds up to the amount converted.
 - **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,
@@ -194,6 +194,25 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **The hold waits for the order book.** When a book read fails and no TWAP suggestion comes, the
   TWAP row says "Reading the order book… Turn TWAP on or off to go on." on the pair, single,
   close, perp-only close and Delever tickets. One click on the TWAP switch ends the wait.
+- **A stopping close gives up its hedge leg only after 10 reduce-only refusals in a row.** A
+  missed fill or a busy channel no longer counts. A close that turns to market after its resting
+  order fails says why, for example "too many open orders on this market".
+- **TWAP slices fit both venues.** Each slice is cut to the lot both legs accept and to the
+  smaller venue cap. The rest moves to the next slice, so a large last slice adds one more slice
+  instead of stopping the run. Added slices stop at 100, so a run whose slices fill nothing
+  stops with the rest not opened. A slice stuck behind a failing hedge stops the run.
+- **Rebalance after a restart:** a restart in the middle of a slice stops before the next slice
+  goes out, and says when the two perps differ. Resume resets the Convert top-up count. The
+  Convert cost counts in the total.
+- **Realize uPnL sends the amount it priced,** and its After card counts the Convert for Debt and
+  Custom too. Delever with TWAP sends the plan it priced, counts Boros gas in Total cost and shows
+  one After row per leg when the legs differ.
+- **Close perps and Close Boros read the live pair.** At 100% with legs of different sizes,
+  Limit + hedge closes the matched size on both legs, as in 1.7.9.
+- **A deal result is red when nothing filled and amber on a part fill.** When the two legs closed
+  different sizes, the headline names each leg.
+- **Chinese:** 55 more server messages show in Chinese, and two joined sentences no longer show
+  "。.".
 
 ## 1.7.9 — 2026-11-10
 

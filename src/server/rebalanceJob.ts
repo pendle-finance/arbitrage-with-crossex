@@ -232,7 +232,7 @@ export interface SizeRefusal {
 
 export const childIdFor = (jobId: string, slice: number, k: number): string => `${jobId}-s${slice}-${k}`;
 
-const CHILD_SUFFIX = /^(s[1-9]\d*-[1-9]\d*|f[1-9]\d*)$/;
+const CHILD_SUFFIX = /^(s[1-9]\d*-[1-9]\d*|f[1-9]\d*(-[1-9]\d*)?)$/;
 
 export const isChildOf = (jobId: string, dealId: string): boolean =>
   jobId !== '' && dealId.startsWith(`${jobId}-`) && CHILD_SUFFIX.test(dealId.slice(jobId.length + 1));
@@ -367,6 +367,7 @@ const TRANSFER_STATUSES: readonly string[] = ['moving', 'done', 'failed'];
 
 export const HALT_TEXT = {
   restart: 'The app restarted during the run. Nothing failed. Press Resume.',
+  restartGap: 'The app restarted in the middle of a slice. The two perps are not the same size yet. Press Resume to finish the slice.',
   marginTooLow: 'Not enough free margin for the next round.',
   cashTooLow: 'Not enough cash for an 11 USDC round.',
   unconfirmed: 'Gate did not confirm the last order. Press Resume to check again.',
@@ -493,6 +494,7 @@ export const REOPEN_HALT = {
       : 'Gate CrossEx takes no new orders on this contract. Resume when it does.',
   noCash: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
   marginLow: 'Not enough free margin for the next slice. Nothing is open. Add margin, then Resume.',
+  convertCap: `Gate still wants more margin after ${RETRY_CONVERT_CAP} Converts in this run. Add margin, then Resume.`,
   noHedgePerp: 'Could not find the other perp of this pair. Close the gap in Positions.',
   hedgeRefusedAgain: 'Gate refused the hedge again. Nothing else changed.',
   quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>

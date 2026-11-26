@@ -823,6 +823,30 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(0);
   });
 
+  it('a close and reopen on the same contract near the cap is not counted as new size', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/positions', { body: [{ symbol: A_CONTRACT, position_qty: '0.38', mark_price: '2500' }], times: 5 });
+    mockGateGet('/rule/risk_limits', { body: tieredLimits });
+
+    capReads();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({
+        a: { symbol: A_CONTRACT, side: 'SELL', reduceOnly: true },
+        b: { symbol: A_CONTRACT, side: 'BUY' },
+        pricePolicy: 'touch',
+        repegBehindBp: 5,
+      }),
+    });
+
+    expect(res.statusCode, res.body).toBe(202);
+  });
+
   it('a deal that shrinks an opposite position stays under the cap', async () => {
     const w = mkApp();
     app = w.app;
@@ -1183,17 +1207,37 @@ describe('deal commands + alerts', () => {
     expect(unknown.statusCode).toBe(400);
   });
 
-  it('repeg updates the price intent from the venue touch when no price is given', async () => {
+  it('repeg updates the price intent from the best price when no price is given and re-peg is on', async () => {
     const w = await mkWorking();
-    w.venue.touchA = '2499';
+    w.venue.bestA = '2499';
+    w.venue.touchA = '2498';
     const res = await app.inject({ method: 'POST', url: `/api/deals/${w.id}/repeg`, headers: HOST, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json().data.price).toBe('2499');
     expect(w.store.getPair(w.id)!.limitPrice).toBe('2499');
-    // Book unavailable → 400, intent untouched.
-    w.venue.touchA = null;
+    w.venue.bestA = null;
     const down = await app.inject({ method: 'POST', url: `/api/deals/${w.id}/repeg`, headers: HOST, payload: {} });
     expect(down.statusCode).toBe(400);
+  });
+
+  it('repeg with re-peg off reads the touch, and a missing book is refused', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload({ repegBehindBp: null }) });
+    await tickPair(w.loop, 'deal-000001');
+    w.venue.bestA = '2499';
+    w.venue.touchA = '2498';
+    const res = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: {} });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data.price).toBe('2498');
+    expect(w.store.getPair('deal-000001')!.repegBehindBp).toBeNull();
+    w.venue.touchA = null;
+    const down = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: {} });
+    expect(down.statusCode).toBe(400);
+    expect(down.json().error.message).toMatch(/book unavailable/);
   });
 
   // A pair ticket's maker leg is pricePolicy 'touch', and decide() re-derives
@@ -1231,7 +1275,7 @@ describe('deal commands + alerts', () => {
   it('re-peg to touch restores book tracking on a pinned deal', async () => {
     const w = await mkWorking();
     w.store.updatePair(w.id, { pricePolicy: 'fixed', limitPrice: '2470' });
-    w.venue.touchA = '2499';
+    w.venue.bestA = '2499';
     const res = await app.inject({ method: 'POST', url: `/api/deals/${w.id}/repeg`, headers: HOST, payload: {} });
     expect(res.statusCode).toBe(200);
     const pair = w.store.getPair(w.id)!;
@@ -1496,6 +1540,30 @@ describe('TWAP children, Taker after, maker leg and re-peg', () => {
     expect(pair.pricePolicy).toBe('touch');
     expect(pair.repegBehindBp).toBe(10);
     expect(pair.repegAutoBp).toBe(10);
+  });
+
+  it('re-peg to best replies with the price the engine rests at, and keeps a maker already there', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    w.venue.touchA = '2499';
+    w.venue.bestA = '2500';
+    const created = await post({ pricePolicy: 'touch', repegBehindBp: 10 });
+    expect(created.statusCode, created.body).toBe(202);
+    await tickPair(w.loop, 'deal-000001');
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    expect(maker.price).toBe('2500');
+
+    const res = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: {} });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data.price).toBe('2500');
+    for (let i = 0; i < 4; i++) {
+      await tickPair(w.loop, 'deal-000001');
+      w.clock.advance(1000);
+    }
+    expect(w.venue.liveOrder(A_CONTRACT)?.clientText).toBe(maker.clientText);
   });
 });
 

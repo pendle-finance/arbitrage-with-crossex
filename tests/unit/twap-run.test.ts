@@ -10,7 +10,7 @@ import { planSlices, type TwapLegRule } from '../../src/core/twap';
 import type { DealRequest } from '../../src/engine/create';
 import { Store } from '../../src/engine/db';
 import { commands } from '../../src/engine/loop';
-import type { OrderRow, PairMode, PairRow } from '../../src/engine/types';
+import { type OrderRow, type PairMode, type PairRow, TUNING } from '../../src/engine/types';
 import {
   childIdFor,
   dealLockFor,
@@ -936,5 +936,113 @@ describe('delever twap', () => {
       ['0.5', '1', '0.5'],
       ['0.5', '1', '0.5'],
     ]);
+  });
+});
+
+describe('twap slice lot and cap', () => {
+  const btcOpen = (totalQty: string): TwapDealTemplate => ({
+    a: { symbol: 'GATE_FUTURE_BTC_USDT', side: 'BUY' },
+    b: { symbol: 'BINANCE_FUTURE_BTC_USDT', side: 'SELL' },
+    execution: 'maker',
+    totalQty,
+    coin: 'BTC',
+    rules: BTC_RULES,
+  });
+
+  it('floors every slice to both legs lot after a part-filled pause, and ends on sub-lot dust', async () => {
+    const job = startJob(ethOpen('6'), { durationSec: 1800, slices: 6, makerLeg: 'b' });
+    for (let slice = 1; slice <= 3; slice += 1) {
+      await advance(job, T0 + (slice - 1) * 5 * MIN);
+      if (slice < 3) fill(childIdFor(job.id, slice, 1), '1', '3000');
+    }
+    const read = w.jobs.read() as Job;
+    w.jobs.write(requestPause(read));
+    await stopLiveChild(w.deps, read);
+    fill(childIdFor(job.id, 3, 1), '0.2345', '3000', { filledB: '0.234' });
+    const paused = await pass(job);
+    expect(paused).toMatchObject({ status: 'halted', paused: true });
+    paused.status = 'running';
+    paused.paused = false;
+    w.jobs.write(paused);
+    for (let slice = 4; slice <= 6; slice += 1) {
+      await advance(job, T0 + 20 * MIN + (slice - 4) * 5 * MIN);
+      const req = w.requests.at(-1) as DealRequest;
+      fill(req.id, req.qty, '3000');
+    }
+    const done = await advance(job, T0 + 40 * MIN);
+    expect(w.requests.slice(3).map((req) => req.qty)).toEqual(['1.255', '1.255', '1.255']);
+    expect(done.status).toBe('done');
+  });
+
+  it('a never slice sends on the lot and carries the sub-lot rest', async () => {
+    const job = startJob(ethOpen('6'), { durationSec: 1800, slices: 6, makerLeg: 'b', takerAfterSec: null });
+    await pass(job);
+    await advance(job, T0 + 5 * MIN);
+    fill(`${job.id}-s1-1`, '0.2345', '3000', { filledB: '0.234' });
+    await advance(job, T0 + 5 * MIN + 3000);
+    expect(w.requests[1]).toMatchObject({ id: `${job.id}-s2-1`, qty: '1.765' });
+    expect((w.jobs.read() as Job).status).toBe('running');
+  });
+
+  it('a slice over the venue cap sends the cap and carries the rest', async () => {
+    const job = startJob(btcOpen('1000'), { durationSec: 9 * 300, slices: 9 });
+    await pass(job);
+    fill(`${job.id}-s1-1`, '111.111', '3000');
+    await advance(job, T0 + 5 * MIN);
+    fill(`${job.id}-s2-1`, '100', '3000');
+    const third = await advance(job, T0 + 10 * MIN);
+    expect(third.status).toBe('running');
+    expect(w.requests[2]).toMatchObject({ id: `${job.id}-s3-1`, qty: '120' });
+    fill(`${job.id}-s3-1`, '120', '3000');
+    await advance(job, T0 + 15 * MIN);
+    expect(w.requests[3]).toMatchObject({ id: `${job.id}-s4-1`, qty: '113.333' });
+  });
+
+  it('a last slice over the cap adds one slice for the rest', async () => {
+    const job = startJob(btcOpen('230'), { durationSec: 600, slices: 2 });
+    await pass(job);
+    fill(`${job.id}-s1-1`, '100', '3000');
+    const last = await advance(job, T0 + 5 * MIN);
+    expect(w.requests[1]).toMatchObject({ id: `${job.id}-s2-1`, qty: '120' });
+    expect(last.twap).toMatchObject({ slices: 3, nextAt: T0 + 10 * MIN });
+    fill(`${job.id}-s2-1`, '120', '3000');
+    await advance(job, T0 + 10 * MIN);
+    expect(w.requests[2]).toMatchObject({ id: `${job.id}-s3-1`, qty: '10' });
+  });
+});
+
+describe('twap hedge wall while stopping', () => {
+  it('a pause whose hedge keeps failing halts the run as hedge-margin', async () => {
+    const job = startJob(ethOpen('60'));
+    await pass(job);
+    const id = `${job.id}-s1-1`;
+    const read = w.jobs.read() as Job;
+    w.jobs.write(requestPause(read));
+    await stopLiveChild(w.deps, read);
+    const maker = w.store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'maker', side: 'BUY', qty: '5', price: '3000', tif: 'poc', now: w.t });
+    w.store.updateOrder(id, 'A', maker.seq, { state: 'CLOSED', cumQty: '1.2', avgFillPrice: '3000', resolvedAt: w.t });
+    const hedge = w.store.insertPendingOrder({ pairId: id, leg: 'B', kind: 'taker', side: 'SELL', qty: '1.2', price: null, tif: 'ioc', now: w.t + 1 });
+    w.store.updateOrder(id, 'B', hedge.seq, { state: 'DEAD', closeReason: 'rejected:INSUFFICIENT_MARGIN', resolvedAt: w.t + 1 });
+    w.store.updatePair(id, { hedgeRejectStreak: TUNING.HEDGE_REJECT_HALT });
+    expect(w.store.getPair(id)?.mode).toBe('STOPPING');
+    const halted = await pass(job);
+    expect(halted).toMatchObject({ status: 'halted', haltKind: 'hedge-margin', haltReason: 'Hyperliquid refused the hedge in slice 1' });
+    expect(w.store.getPair(id)).toMatchObject({ mode: 'HALTED', haltKind: 'hedge-margin' });
+  });
+});
+
+describe('realize twap view', () => {
+  it('names each order by its own leg and shows the taker-after the runner sends', async () => {
+    const job = deleverJob({ durationSec: 4 * 3600, intervalSec: 300, slices: 48, takerAfterSec: null } as never);
+    const id = await deleverChild(job, 1);
+    fill(id, '0.625', '90000');
+    const realize = { ...(w.jobs.read() as Job), kind: 'realize' as const, delever: null };
+    w.jobs.write(realize);
+    const view = twapViewOf(realize, await loadTwapChildren(w.deps, realize));
+    expect(view.orders.map((order) => [order.kind, order.leg])).toEqual([
+      ['taker', 'B'],
+      ['maker', 'A'],
+    ]);
+    expect(view.twap?.takerAfterSec).toBeNull();
   });
 });

@@ -52,7 +52,7 @@ type RepegBp = DealOpts['repegBehindBp'];
  */
 export function ClosePairForm({
   base,
-  legs,
+  legs: liveLegs,
   livePositions,
   allowTwap = false,
   borosUnhedged = null,
@@ -73,6 +73,8 @@ export function ClosePairForm({
   const { t } = useTranslation();
   const flow = useTradeFlowOptional();
   const pairGroupId = useMemo(() => uuid(), []);
+  const [sentLegs, setSentLegs] = useState<typeof liveLegs | null>(null);
+  const legs = sentLegs ?? liveLegs;
   /**
    * The same control the single-leg close offers.
    *
@@ -109,9 +111,10 @@ export function ClosePairForm({
   const closeQtyOf = (legQty: number) => (atMax ? legQty : Math.min(qtyNum, legQty));
   const maker = mode === 'maker';
   const twapOn = allowTwap && maker && twap.on;
-  const oneSize = twapOn || !atMax;
+  const oneSize = maker || !atMax;
   const lotA = useSymbolDetail(oneSize ? (legs[0]?.symbol ?? null) : null).data?.lotSize;
   const lotB = useSymbolDetail(oneSize ? (legs[1]?.symbol ?? null) : null).data?.lotSize;
+  const lotsPending = oneSize && (lotA === undefined || lotB === undefined);
   const matched =
     oneSize && legs.length === 2 && !qtyInvalid
       ? matchedCloseOf(
@@ -120,6 +123,9 @@ export function ClosePairForm({
           [lotA, lotB],
         )
       : null;
+  const closedShare =
+    qtyInvalid || !(maxCloseQty > 0) ? 0 : atMax ? 1 : Math.min(1, (matched ? Number(matched.qty) : qtyNum) / maxCloseQty);
+  const borosLeft = borosUnhedged && closedShare > 0 ? { ...borosUnhedged, qty: borosUnhedged.qty * closedShare } : null;
   // null, not [] — ExecuteControl disables on `!actions`, and an empty array
   // is truthy, so [] would leave the button live with nothing to send.
   const actions: ActionInput[] | null =
@@ -284,7 +290,7 @@ export function ClosePairForm({
         totalPnl={totalPnl}
         legPnl={legPnl}
         rows={afterRows}
-        borosUnhedged={borosUnhedged}
+        borosUnhedged={borosLeft}
         bookedBefore={bookedBefore}
       />
 
@@ -330,12 +336,16 @@ export function ClosePairForm({
           decorate={decorate}
           dealOpts={dealOpts}
           twap={twapOn && plan ? { plan, blocked: twapBlocked } : null}
-          extraDisabled={(maker && (makerIdx === null || takerBlocked || twapWait)) || (twapOn && (twapBlocked || !plan))}
+          extraDisabled={lotsPending || (maker && (makerIdx === null || takerBlocked || twapWait)) || (twapOn && (twapBlocked || !plan))}
           buttonClassName="w-full"
           // The panel above already reviews this close; the hover card would
           // repeat it on top of the dialog. Errors still surface.
           hoverCard={false}
-          onSent={onSent}
+          onSent={() => {
+            setSentLegs(legs);
+            onSent?.();
+          }}
+          onExecuted={() => setSentLegs(null)}
         />
       </div>
     </div>

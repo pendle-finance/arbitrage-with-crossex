@@ -530,6 +530,26 @@ describe('CloseBorosForm — two legs close as one batch', () => {
     expect(screen.queryByText(/0\.011 ETH/)).toBeNull();
   });
 
+  it('a leg that closed in full shows a done step while the part-filled leg stays pending', async () => {
+    server.use(
+      ...quoted(),
+      executeReturns(
+        [
+          legFill(MARKET, 'short'),
+          legFill(OTHER, 'long', { filledSize: 0.004, shortfallSize: 0.006, failure: { code: 'insufficient-depth', message: 'book ran out' } }),
+        ],
+        [],
+      ),
+    );
+    renderWithClient(<CloseBorosForm legs={pairLegs()} />);
+    await holdBoth();
+    await screen.findByText(/0\.004/, {}, { timeout: 3_000 });
+    const dotOf = (name: string) =>
+      (within(screen.getByRole('list')).getByText(name).closest('li') as HTMLElement).querySelector('[data-step-dot]')?.getAttribute('data-step-dot');
+    await waitFor(() => expect(dotOf('Hyperliquid')).toBe('done'));
+    expect(dotOf('Gate')).toBe('pending');
+  });
+
   it('a full close of two legs shows each leg going to zero, not one shared size', async () => {
     server.use(...quoted());
     renderWithClient(<CloseBorosForm legs={pairLegs()} />);
@@ -1018,13 +1038,15 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     expect(row).toHaveAttribute('class', expect.stringContaining('border-ink-800'));
   });
 
-  it('shows the perps left on floating funding in After when the pair keeps its perps', async () => {
+  it('shows the perps left on floating funding in After, scaled by the share closed', async () => {
     server.use(...ready());
     renderWithClient(
-      <CloseBorosForm legs={[{ ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] }]} perpsUnhedged />,
+      <CloseBorosForm legs={[{ ...book(0.3, 0.255)[2], spreadVenues: ['HYPERLIQUID', 'GATE'] }]} perpsUnhedged={{ qty: 4, coin: 'ETH' }} />,
     );
     const after = await screen.findByRole('region', { name: 'After' });
     expect(within(after).getByText('Perps')).toBeInTheDocument();
-    expect(within(after).getByText('Open, not hedged, floating funding')).toBeInTheDocument();
+    expect(within(after).getByText('4 ETH · not hedged, floating funding')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: '25%' }));
+    expect(await within(after).findByText('1 ETH · not hedged, floating funding')).toBeInTheDocument();
   });
 });

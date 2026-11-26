@@ -175,26 +175,37 @@ describe('twap resume re-plans the rest', () => {
     w = makeWorld();
   });
 
-  it('a last slice over the venue max at $6M resumes as slices under the max', async () => {
+  it('a last slice over the venue max at $6M sends the max and adds one slice for the rest', async () => {
     const job = startJob(ethDeal('2033.333'), { durationSec: 3600, slices: 12 }, 3000, null);
     for (let slice = 1; slice <= 11; slice += 1) {
       await advance(job, T0 + (slice - 1) * 5 * MIN);
       fill(childIdFor(job.id, slice, 1), '0', '3000');
     }
-    const halted = await advance(job, T0 + 55 * MIN);
-    expect(halted).toMatchObject({ status: 'halted', haltKind: 'refused', haltReason: "Slice 12 is over Gate's 2,000 ETH maximum" });
-    expect(onResume(halted)).toBe(2);
-    const before = w.requests.length;
-    await resume();
-    w.t = T0 + 60 * MIN;
-    await runTwap(w.deps, job);
-    expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-s12-1`, qty: '1016.666' });
-    fill(childIdFor(job.id, 12, 1), '1016.666', '3000');
-    await advance(job, T0 + 65 * MIN);
-    expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-s13-1`, qty: '1016.667' });
-    expect(w.requests.slice(before).every((req) => Number(req.qty) <= 2000)).toBe(true);
-    fill(childIdFor(job.id, 13, 1), '1016.667', '3000');
-    expect((await advance(job, T0 + 70 * MIN)).status).toBe('done');
+    const capped = await advance(job, T0 + 55 * MIN);
+    expect(capped).toMatchObject({ status: 'running', haltKind: null });
+    expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-s12-1`, qty: '2000' });
+    expect(onResume(capped)).toBe(1);
+    fill(childIdFor(job.id, 12, 1), '2000', '3000');
+    await advance(job, T0 + 60 * MIN);
+    expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-s13-1`, qty: '33.333' });
+    expect(w.requests.every((req) => Number(req.qty) <= 2000)).toBe(true);
+    fill(childIdFor(job.id, 13, 1), '33.333', '3000');
+    expect((await advance(job, T0 + 65 * MIN)).status).toBe('done');
+  });
+
+  it('slices that fill nothing over the venue max stop at 100 slices with the rest not opened', async () => {
+    const job = startJob(ethDeal('6000'), { durationSec: 3600, slices: 12 }, 3000, null);
+    let last = read();
+    for (let slice = 1; slice <= 101 && last.status === 'running'; slice += 1) {
+      last = await advance(job, T0 + (slice - 1) * 5 * MIN);
+      if (last.status !== 'running') break;
+      fill(childIdFor(job.id, slice, 1), '0', '3000');
+    }
+    last = await advance(job, T0 + 101 * 5 * MIN);
+    expect(last).toMatchObject({ status: 'halted', haltKind: 'capped-rest', haltReason: '6000 ETH not opened' });
+    expect(last.twap?.sliceIndex).toBe(100);
+    expect(w.requests.length).toBe(100);
+    expect(w.requests.every((req) => Number(req.qty) <= 2000)).toBe(true);
   });
 
   it('a rest under the venue min at $50 joins fewer slices on resume', async () => {

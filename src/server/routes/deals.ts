@@ -152,9 +152,10 @@ export async function createDeal(deps: AppDeps, raw: DealBody): Promise<DealOutc
     }
   }
 
+  const reopensClosedSize = row.b !== null && row.a.reduceOnly === true && row.a.contract === row.b.contract;
   const breach = await perpLimitBreach(
     deps,
-    legs.filter(({ leg }) => !leg.reduceOnly).map(({ leg }) => ({ contract: leg.contract, side: leg.side, qty: Number(row.targetQty) })),
+    legs.filter(({ leg }) => !leg.reduceOnly && !reopensClosedSize).map(({ leg }) => ({ contract: leg.contract, side: leg.side, qty: Number(row.targetQty) })),
     { fresh: true },
   );
   if (breach?.reason === 'no-price') {
@@ -303,6 +304,7 @@ export function dealsRoutes(deps: AppDeps) {
       // whatever the market had moved to. The UI's own two buttons say exactly
       // this: "at YOUR price" vs "at the fresh same-side touch".
       const explicit = body.price !== undefined && body.price !== null && String(body.price).trim() !== '';
+      const repegBehindBp = explicit ? null : repegOnAgain(deps, pair);
       let price: string | null;
       if (explicit) {
         const n = Number(body.price);
@@ -315,11 +317,12 @@ export function dealsRoutes(deps: AppDeps) {
           throw new CoreError(`re-peg price ${n} is below one tick (${pair.a.tick})`, 'validation');
         }
       } else {
-        price = await deps.engine!.venue.touch(pair.a.contract, pair.a.side, pair.a.tick);
+        const { venue } = deps.engine!;
+        const { contract, side, tick } = pair.a;
+        price = repegBehindBp === null ? await venue.touch(contract, side, tick) : await venue.best(contract, side, tick);
       }
       if (!price) throw new CoreError('no fresh touch price available — re-peg aborted (book unavailable)');
       commands.repeg(deps.engine!.store, pair.id, price, explicit ? 'fixed' : 'touch');
-      const repegBehindBp = explicit ? null : repegOnAgain(deps, pair);
       if (repegBehindBp !== pair.repegBehindBp) deps.engine!.store.updatePair(pair.id, { repegBehindBp });
       deps.engine!.wake?.();
       return reply.ok({ id: pair.id, price });

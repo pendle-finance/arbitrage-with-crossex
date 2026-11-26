@@ -161,7 +161,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const customMissing = amount === 'custom' && customUsd === null;
   const customOverAll = amount === 'custom' && typedUsd !== null && customUsd !== null && typedUsd > customUsd;
   const active = amount === 'clear' ? shownClear : amount === 'all' ? shownAll : customMissing ? null : customPlan;
-  const pricing = twapPricing || (amount === 'custom' && customUsd !== null && (customUsd !== debouncedUsd || customQuery.isFetching));
+  const pricing = twapPricing || (amount === 'custom' && customUsd !== null && (customUsd !== debouncedUsd || customQuery.isPlaceholderData || customQuery.isPending));
   const slice = active ? sliceFor(active) : null;
   const cost = active ? costFor(active, exec) : null;
   const legCosts = active && cost && !pricing ? legCostsOf(active, exec, cost) : null;
@@ -197,7 +197,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       ]
     : [];
 
-  const converts = amount === 'all' && active ? active.legs.flatMap((leg) => (leg.convert ? [leg.convert] : [])) : [];
+  const converts = active ? active.legs.flatMap((leg) => (leg.convert ? [leg.convert] : [])) : [];
   const landed = converts.reduce((total, c) => total + c.amount - c.feeUsd, 0);
   const targetKey = poolKey(CONVERT_TO[tab.pool]);
   const target = landed > 0 ? view.buckets.find((b) => keyOf(b) === targetKey && b.borrow > 0) : undefined;
@@ -237,7 +237,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       {
         kind: 'realize',
         exec,
-        realizeUsd: net,
+        realizeUsd: amount === 'custom' ? (debouncedUsd ?? net) : net,
         realizeTarget: TARGET[amount],
         realizePool: tab.pool,
         costUsd: cost.totalUsd,

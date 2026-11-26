@@ -302,8 +302,7 @@
     "after": {
       "boros": "Boros",
       "perps": "永续",
-      "borosUnhedged": "{{qty}} {{coin}} 固定利率 · 未对冲",
-      "openFloating": "仍持仓，未对冲，资金费率浮动"
+      "borosUnhedged": "{{qty}} {{coin}} 固定利率 · 未对冲"
     },
     "head": {
       "leg": "腿",
@@ -430,8 +429,8 @@
     "reduce": "减少借款",
     "none": "无借款",
     "free": "低于 {{amount}} USDC 免息",
-    "recommended": "建议减少借款 · 总成本 {{cost}} = {{days}} 天利息",
-    "notRecommended": "不建议：总成本 {{cost}} = {{days}} 天利息（上限 {{limit}} 天）",
+    "recommended": "建议减少借款 · 总成本 {{cost}} = {{days}}利息",
+    "notRecommended": "不建议：总成本 {{cost}} = {{days}}利息（上限 {{limit}} 天）",
     "lineRealizeThenMove": "兑现未实现盈亏，再移动现金",
     "lineMove": "移动现金",
     "needs": "需要{{line}}",
@@ -467,7 +466,6 @@
     "convertFee": "兑换手续费",
     "priceImpact": "价格冲击",
     "totalCost": "总成本",
-    "paysBack": "{{days}} 天利息后回本",
     "paysBackLabel": "回本时间",
     "cashShort": "还剩 {{left}} {{coin}} 借款。{{wallet}} 已没有更多现金。",
     "cashShortLink": "兑现未实现盈亏",
@@ -529,6 +527,7 @@
     "afterPerps": "{{longVenue}} 做多 · {{shortVenue}} 做空 {{a}} → {{b}} {{coin}}（每条）",
     "perpsLabel": "{{longVenue}} 做多 · {{shortVenue}} 做空",
     "coinEach": "{{coin}}（每条）",
+    "perpLegLabel": "{{venue}} {{side}}",
     "borosLabel": "Boros",
     "yu": "YU",
     "imUsedLabel": "初始保证金占用 · {{account}}",
@@ -538,6 +537,7 @@
     "stepBoros": "平仓 Boros · {{qty}} YU",
     "stepBorosEach": "平仓 Boros · 各 {{qty}} YU",
     "hold": "长按降规模 {{qty}} {{coin}}",
+    "holdNoSize": "长按降规模",
     "noPairs": "没有持仓组合",
     "noPairsMatch": "没有匹配的组合",
     "belowMin": "{{venue}} 最少接受 {{min}} {{coin}}",
@@ -550,7 +550,7 @@
   "sliceRun": {
     "slice": "第 {{i}} 片（共 {{n}} 片）",
     "left": "预计剩余 {{time}}",
-    "realizedOf": "{{x}} / {{y}} USDC",
+    "realizedOf": "{{x}} / {{y}} {{coin}}",
     "notHedgedNow": "当前未对冲 {{qty}} {{coin}}（{{usd}}）",
     "feeSoFar": "已付手续费 {{fee}} · 预计共 {{est}}",
     "holdPause": "本片后暂停",
@@ -580,7 +580,7 @@
     "feeEst": "已付手续费 {{fee}} · 预计手续费 {{est}}",
     "imDone": "{{a}}% → {{b}}%",
     "totalCost": "{{real}}（预估 {{est}}）",
-    "realized": "已兑现 {{amount}} USDC",
+    "realized": "已兑现 {{amount}} {{coin}}",
     "done": "已完成",
     "next": "下一步：移动现金",
     "leftover": "上次移动在 Gate 现货中留下 {{amount}} USDC。",

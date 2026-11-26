@@ -85,7 +85,8 @@ export function pairPickerRowOf(pair: OpenPair, nowSec: number): PairPickerRow {
     shortVenue: pair.shortVenue,
     base: pair.base,
     maturityText: t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturitySec), left: daysLeftText(pair.maturitySec, nowSec) }),
-    sizeText: t('accounts.deleverTab.pairSize', { qty: sigGrouped(pair.size), coin: pair.base }),
+    sizeText:
+      pair.unit === 'usd' ? fmtUsdCompact(pair.size) : t('accounts.deleverTab.pairSize', { qty: sigGrouped(pair.size), coin: pair.base }),
     imText: fmtUsdCompact(pair.imUsd),
   };
 }

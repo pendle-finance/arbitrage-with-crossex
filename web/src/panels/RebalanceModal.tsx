@@ -69,7 +69,7 @@ export function RebalanceModal({
   useEffect(() => {
     if (shown && twapRun && ended) writeJson(RESULT_SEEN_KEY, job.id);
   }, [shown, twapRun, ended, job?.id]);
-  const lock = live ? t('accounts.rebalanceTabs.wait') : null;
+  const lock = job?.status === 'running' || job?.status === 'halted' ? t('accounts.rebalanceTabs.wait') : null;
   const onStarted = () => setStarted(true);
 
   const onError = (error: Error) => toast.push('error', apiErrorText(error));
@@ -110,7 +110,7 @@ export function RebalanceModal({
             options={TABS.map((value) => ({
               value,
               label: t(`accounts.rebalanceTabs.${value}`),
-              badge: shown && !twapRun && jobTab(job) === value ? <JobChip job={job} /> : undefined,
+              badge: shown && jobTab(job) === value ? <JobChip job={job} /> : undefined,
             }))}
           />
         </span>

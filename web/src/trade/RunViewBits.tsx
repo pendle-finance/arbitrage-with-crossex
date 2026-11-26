@@ -197,7 +197,7 @@ export function TwapActs({
   noResume = false,
 }: {
   jobId: string;
-  state: 'running' | 'halted';
+  state: 'running' | 'pausing' | 'halted';
   holds: { open: string; close: string } | null;
   borosHold: string | null;
   noResume?: boolean;
@@ -231,7 +231,7 @@ export function TwapActs({
           <button type="button" className="btn flex-1" disabled={pending} onClick={() => pause.mutate(jobId)}>
             {tr('trade.twap.run.pause')}
           </button>
-        ) : holds === null && borosHold === null && !noResume ? (
+        ) : state === 'halted' && holds === null && borosHold === null && !noResume ? (
           <button type="button" className="btn-primary flex-1" disabled={pending} onClick={() => resume.mutate(jobId)}>
             {tr('trade.twap.run.resume')}
           </button>

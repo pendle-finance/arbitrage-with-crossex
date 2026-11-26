@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { ActionInput, PreviewResponse, SymbolRule, TwapStartBody } from '../api/types';
+import type { ActionInput, DealRequest, PreviewResponse, SymbolRule, TwapStartBody } from '../api/types';
 import { baseHandlers, ETH_GATE, previewFor, symbolHandlers, TWAP_OFF } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -212,14 +212,59 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     await waitFor(() => expect(bodies[bodies.length - 1].actions.map((a) => ('qty' in a ? a.qty : undefined))).toEqual(['4.0315', '4.0315']));
   });
 
-  it('with twap off, unequal legs keep the whole close of each leg and show no rest', async () => {
+  it('Limit + hedge at 100% with 4.030 against 4.026 BTC closes 4.026 on both, names the 0.004 left and sends one deal', async () => {
+    const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
+    const deals: DealRequest[] = [];
+    server.use(
+      heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '4.03', HYPERLIQUID_FUTURE_BTC_USDT: '4.026' }, bodies),
+      http.post('/api/deals', async ({ request }) => {
+        deals.push((await request.json()) as DealRequest);
+        return HttpResponse.json(env({ id: 'd-1' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePairForm base="BTC" legs={btcLegs(4.03, 4.026)} allowTwap />);
+    expect(await screen.findByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
+    expect(await afterRow('0.004 BTC')).toMatch(/^LONG.*Gate/);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    expect(bodies[bodies.length - 1].actions[0]).toMatchObject({ symbol: 'GATE_FUTURE_BTC_USDT', qty: '4.026' });
+    expect(bodies[bodies.length - 1].actions[1]).not.toHaveProperty('qty');
+    expect(screen.queryByText(/Can't send as one deal/)).toBeNull();
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(deals).toHaveLength(1), { timeout: 4000 });
+    expect(deals[0]).toMatchObject({ qty: '4.026', execution: 'maker', a: { reduceOnly: true }, b: { reduceOnly: true } });
+  });
+
+  it('Limit + hedge keeps the hold off until both lot sizes are known', async () => {
+    let release: () => void = () => {};
+    const lotGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '4.03', HYPERLIQUID_FUTURE_BTC_USDT: '4.03' }),
+      http.get('/api/symbols/:symbol', async ({ params }) => {
+        const rule = RULES.find((r) => r.symbol === String(params.symbol)) ?? RULES[0];
+        if (rule.symbol.startsWith('HYPERLIQUID')) await lotGate;
+        return HttpResponse.json(env({ ...rule, leverageMax: 50 }));
+      }),
+    );
+    renderWithClient(<ClosePairForm base="BTC" legs={btcLegs(4.03, 4.03)} allowTwap />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await screen.findByText('Realized price PnL');
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(btn).toBeDisabled();
+    release();
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+  });
+
+  it('at market, unequal legs keep the whole close of each leg and show no rest', async () => {
     const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
     server.use(heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '4.4', HYPERLIQUID_FUTURE_BTC_USDT: '4.03' }, bodies));
     renderWithClient(<ClosePairForm base="BTC" legs={btcLegs(4.4, 4.03)} allowTwap />);
+    await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
     expect(await screen.findByText('Realized price PnL')).toBeInTheDocument();
-    await waitFor(() => expect(bodies.length).toBeGreaterThan(0), { timeout: 4000 });
-    expect(bodies[bodies.length - 1].actions.every((a) => !('qty' in a))).toBe(true);
-    expect(within(await afterCard()).queryAllByText(/→ (?!0 [A-Z])/)).toHaveLength(0);
+    await waitFor(() => expect(bodies.at(-1)?.actions.every((a) => !('qty' in a))).toBe(true), { timeout: 4000 });
+    await waitFor(() => expect(within(screen.getByRole('region', { name: 'After' })).queryAllByText(/→ (?!0 [A-Z])/)).toHaveLength(0), { timeout: 4000 });
   });
 
   it('with twap off, 25% of a 0.07 ETH pair floors both legs to the coarser lot, never one leg alone', async () => {

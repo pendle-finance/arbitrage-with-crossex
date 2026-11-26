@@ -68,7 +68,7 @@ export function RebalanceModalFooter(props: FooterProps) {
               {t('accounts.rebalanceModal.refreshQuote')}
             </button>
           ) : stale ? (
-            <button type="button" className="btn btn-primary num" onClick={onRefresh}>
+            <button type="button" className="btn btn-primary num w-full" onClick={onRefresh}>
               {modalRefreshRoute()}
             </button>
           ) : (
