@@ -300,15 +300,12 @@ export function aprCost(sim: BorosPairSimulation, parts: { apr: number; size: nu
 export const usdOf = (sim: BorosPairSimulation, n: number | null): number | null =>
   n === null || sim.collateralPriceUsd === null ? null : n * sim.collateralPriceUsd;
 
-export function TotalCostRow({ sim, slippage }: { sim: BorosPairSimulation; slippage: { est: number | null; max: number } }) {
+export function TotalCostRow({ sim, slippage }: { sim: BorosPairSimulation; slippage: number | null }) {
   const { t } = useTranslation();
-  const est = slippage.est === null ? null : sim.costToCrossSize + slippage.est;
-  const max = sim.costToCrossSize + slippage.max;
   return (
     <Row
       label={t('pairTicket.borosBits.totalCost')}
-      title={t('pairTicket.borosBits.totalCostHint', { max: `${size(max)} ${sim.collateral}` })}
-      value={<CollateralAmount n={est} sim={sim} />}
+      value={<CollateralAmount n={slippage === null ? null : sim.costToCrossSize + slippage} sim={sim} />}
       weight="strong"
     />
   );
@@ -351,19 +348,19 @@ export function SpreadReadout({
   return (
     <EstimateRow
       label={
-        <span
-          className={legs.length > 0 ? 'cursor-help' : undefined}
-          title={
-            legs.length > 0
-              ? t('pairTicket.borosBits.spreadHint', {
-                  rates: legs.map(([label, leg]) => `${label} ${pct(leg.execApr)}`).join('\n'),
-                })
-              : undefined
-          }
-        >
-          {solo ? t('pairTicket.borosBits.estimatedRate') : t('pairTicket.borosBits.estimatedSpread')}
-          {legs.length > 0 && <span className="ml-1 text-ink-400">ⓘ</span>}
-        </span>
+        legs.length > 0 ? (
+          <HoverCard label={t('pairTicket.borosBits.estimatedSpread')} widthPx={260}>
+            <span className="whitespace-pre-line">
+              {t('pairTicket.borosBits.spreadHint', {
+                rates: legs.map(([label, leg]) => `${label} ${pct(leg.execApr)}`).join('\n'),
+              })}
+            </span>
+          </HoverCard>
+        ) : solo ? (
+          t('pairTicket.borosBits.estimatedRate')
+        ) : (
+          t('pairTicket.borosBits.estimatedSpread')
+        )
       }
       value={<span className={`text-[14px] ${negative ? 'text-rose-300' : 'text-emerald-400'}`}>{pct(headline)}</span>}
       strong
@@ -564,7 +561,6 @@ export function PairCosts({
         />
         <Row
           label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
-          title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
           value={fee}
         />
       </div>
@@ -615,7 +611,6 @@ export function TradeFeeRow({
   return (
     <Row
       label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
-      title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
       value={<CollateralAmount n={sim.costToCrossSize} sim={sim} />}
       weight={weight}
     />
