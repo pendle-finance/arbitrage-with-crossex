@@ -257,7 +257,7 @@ async function readAccount(
   };
 }
 
-type SliceRule = { lot: string; tick: string; limits: PerpRule & { maxMarketSize?: string } };
+type SliceRule = { lot: string; tick: string; limits: PerpRule & { maxMarketSize?: string; maxLimitSize?: string } };
 type Engine = NonNullable<RunnerDeps['twap']>;
 type ChildLeg = Pick<StepPerp, 'symbol' | 'side' | 'reduceOnly'>;
 
@@ -1555,7 +1555,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
-  const sliceQtyOf = (step: Step, pairLeft: number, lot: string, rule: SliceRule, mid: number): { n: number; qty: number } => {
+  const sliceQtyOf = (step: Step, pairLeft: number, lot: string, rule: SliceRule, mid: number, capQty: number): { n: number; qty: number } => {
     const slice = job.slice ?? { index: 1, count: 1, sizeUsd: 0 };
     const firstEver = step.cut === null && job.steps.findIndex((candidate) => candidate.name === SLICE_STEP) === job.steps.indexOf(step);
     const n = firstEver ? slice.index : slice.index + 1;
@@ -1565,14 +1565,15 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       slice.count = Math.max(twap.slices, n);
       return { n, qty: Number(qtyText(Math.max(0, lots), lot)) };
     }
-    const qtys = sliceQtys(pairLeft, slice.sizeUsd > 0 ? slice.sizeUsd / mid : 0, minQtyOf(rule.limits, lot, mid), lot);
+    const askedQty = Math.min(slice.sizeUsd > 0 ? slice.sizeUsd / mid : Infinity, capQty);
+    const qtys = sliceQtys(pairLeft, Number.isFinite(askedQty) ? askedQty : 0, minQtyOf(rule.limits, lot, mid), lot);
     slice.count = Math.max(slice.count, n - 1 + qtys.length);
     return { n, qty: qtys[0] ?? 0 };
   };
 
-  const startSlice = async (step: Step, perp: StepPerp, follow: StepPerp, leg: RealizeJobLeg, pairLeft: number, lot: string, rule: SliceRule, mid: number): Promise<void> => {
+  const startSlice = async (step: Step, perp: StepPerp, follow: StepPerp, leg: RealizeJobLeg, pairLeft: number, lot: string, rule: SliceRule, mid: number, capQty: number): Promise<void> => {
     if (twap && step.cut && deps.now() < step.cut.at + twap.intervalSec * 1000) return deps.sleep(POLL_MS);
-    const { n, qty } = sliceQtyOf(step, pairLeft, lot, rule, mid);
+    const { n, qty } = sliceQtyOf(step, pairLeft, lot, rule, mid, capQty);
     const lots = lotsDownOf(qty, lot) > 0 ? lotsDownOf(qty, lot) : lotsDownOf(pairLeft, lot);
     const slice = job.slice ?? { index: n, count: 1, sizeUsd: 0 };
     slice.index = n;
@@ -1638,7 +1639,9 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         const mid = await midOf(deps, perp.symbol);
         if (mid === null) return deps.sleep(POLL_MS);
         if (job.kind === 'realize' && !(await mayStartSlice(step, leg))) return;
-        return await startSlice(step, perp, follow, leg, pairLeft, lot, rule, mid);
+        const capOf = (size: string | undefined): number => (positiveOf(size) > 0 ? positiveOf(size) : Infinity);
+        const capQty = Math.min(capOf(rule.limits.maxMarketSize), capOf(followRule.limits.maxMarketSize), job.exec === 'maker' ? capOf(rule.limits.maxLimitSize) : Infinity);
+        return await startSlice(step, perp, follow, leg, pairLeft, lot, rule, mid, capQty);
       }
       const excessLead = followWhole !== null && wholeLegOf(job, leg.symbol) !== null && leadLive > 0;
       const excessFollow = followWhole !== null && lotsDownOf(followLeft, followRule.lot) > 0;

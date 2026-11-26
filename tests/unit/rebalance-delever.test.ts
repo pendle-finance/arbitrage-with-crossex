@@ -7,7 +7,7 @@ import { floorToStep } from '../../src/core/numbers';
 import { type AccountLike, imUsedOf } from '../../src/core/rebalance/plan';
 import { type DeleverInput, type DeleverRequest, planDelever } from '../../src/core/rebalance/delever';
 import { minQtyOf } from '../../src/core/rebalance/realize';
-import { sliceQtys } from '../../src/core/rebalance/slices';
+import { ONE_ORDER_USD, sliceQtys } from '../../src/core/rebalance/slices';
 import { BTC_MARK, FEE_ROWS, GATE_BTC, HL_BTC, PERP_RULES } from './fixtures/realize-books';
 
 const HL = 'HYPERLIQUID_FUTURE_BTC_USDC';
@@ -332,6 +332,51 @@ describe('planDelever', () => {
     }
     const free = planDelever(inputOf({ sliceUsd: 50_000_000 }));
     expect(free.notHedgedMaxQty).toBe(180);
+  });
+
+  it('closes in one order when no slice size is sent, for both order modes', () => {
+    const plan = planDelever(inputOf());
+    const whole = plan.sliceOptions.find((option) => option.whole);
+    expect(plan.defaultSliceUsd).toBe(ONE_ORDER_USD);
+    expect(whole).toMatchObject({ sizeUsd: ONE_ORDER_USD, count: 1, notHedgedMaxQty: 180 });
+    expect(plan.notHedgedMaxQty).toBe(180);
+    const sliced = planDelever(inputOf({ sliceUsd: 25_000 }));
+    for (const exec of ['maker', 'market'] as const) {
+      expect(plan.estimates[exec].feePerpsUsd).toBeCloseTo(sliced.estimates[exec].feePerpsUsd, 6);
+      expect(plan.estimates[exec].impactUsd).toBeGreaterThan(sliced.estimates[exec].impactUsd);
+    }
+  });
+
+  it('one order still splits at the venue max order size', () => {
+    const rules = { ...PERP_RULES, [GATE]: { ...PERP_RULES[GATE], maxMarketSize: '50' } };
+    const plan = planDelever({ ...inputOf(), rules });
+    expect(plan.defaultSliceUsd).toBeCloseTo(50 * BTC_MARK, 6);
+    expect(plan.sliceOptions.find((option) => option.whole)?.count).toBe(4);
+    expect(plan.notHedgedMaxQty).toBeLessThanOrEqual(50);
+    expect(plan.notHedgedMaxQty).toBeGreaterThan(49);
+  });
+
+  it('one order splits at the Hyperliquid cap for the leg leverage, $2M at 10x', () => {
+    const input = inputOf();
+    const positions = input.positions.map((position) => (position.exchange === 'HYPERLIQUID' ? { ...position, maxLeverage: '10' } : position));
+    const plan = planDelever({ ...input, positions });
+    const closeUsd = 180 * BTC_MARK;
+    expect(closeUsd).toBeGreaterThan(2_000_000);
+    expect(plan.defaultSliceUsd).toBe(2_000_000);
+    expect(plan.sliceOptions.find((option) => option.whole)?.count).toBe(Math.ceil(closeUsd / 2_000_000));
+    expect(plan.notHedgedMaxQty * BTC_MARK).toBeLessThanOrEqual(2_000_000);
+  });
+
+  it('prices the TWAP slices it is given instead of one order', () => {
+    const input = inputOf();
+    const whole = planDelever(input);
+    const twap = planDelever(input, [45, 45, 45, 45]);
+    expect(twap.notHedgedMaxQty).toBe(45);
+    for (const exec of ['maker', 'market'] as const) {
+      expect(twap.estimates[exec].feePerpsUsd).toBeCloseTo(whole.estimates[exec].feePerpsUsd, 6);
+      expect(twap.estimates[exec].impactUsd).toBeLessThan(whole.estimates[exec].impactUsd);
+    }
+    expect(planDelever(input, []).notHedgedMaxQty).toBe(180);
   });
 });
 

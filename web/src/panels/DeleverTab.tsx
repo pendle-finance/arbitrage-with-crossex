@@ -1,24 +1,23 @@
 import { useState, type ReactNode } from 'react';
 import { useDeleverPlan, useStartRebalance } from '../api/queries';
-import type { DeleverPlan, DeleverRequest, RealizeExec, SliceOption } from '../api/types';
+import type { DeleverPlan, DeleverRequest, RealizeExec } from '../api/types';
 import { EmptyState } from '../components/EmptyState';
 import { HoverCard } from '../components/HoverCard';
 import { ExecModeToggle } from '../components/ExecModeToggle';
 import { PairPicker, type PairPickerRow } from '../components/PairPicker';
-import { SegmentedToggle } from '../components/SegmentedToggle';
+import { AmountPresets } from '../components/AmountPresets';
 import { Skeleton } from '../components/Skeleton';
 import { microLabelClass } from '../components/Th';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
 import { amountError } from '../lib/amount';
-import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sigGrouped, WALLET_SHORT } from '../lib/fmt';
+import { fmtAbout, fmtDateLocal, fmtUsd, fmtUsdCompact, prettyVenue, sig, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 import { apiErrorText } from '../lib/apiErrorText';
 import { useNow } from '../lib/useNow';
 import { BorosLogInButton } from '../trade/BorosAgentSetup';
 import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
 import { TwapArea, useTwapInput } from '../trade/TwapArea';
 import { useTakerAfter, useTwapTakerAfter } from '../trade/useTwapTakerAfter';
-import { AffixedInput } from '../trade/PairTicketBits';
 import { daysLeftText, useOpenPairs, type OpenPair } from './assets/pairs';
 import { RebalanceBeforeAfter, type ChangeRow, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
@@ -26,13 +25,11 @@ import { spanText } from '../lib/span';
 import { execModeLabel, poolKey } from './rebalanceCopy';
 import { SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { parsedAmount } from './rebalanceModalPlan';
 import { NotHedgedLine, realizeText, TotalCost, type CostRow } from './RebalancePlanBits';
-import { SliceSizeRow } from './SliceTable';
 import { useActiveWallet } from './trackedAddress';
 
-type Share = '10' | '20' | '30' | 'custom';
-type SlicePick = { kind: 'preset'; usd: number } | { kind: 'custom' } | null;
+type Share = '10' | '20' | '30';
+const SHARES: Share[] = ['10', '20', '30'];
 
 const largestIm = (pairs: OpenPair[]): OpenPair | null =>
   pairs.reduce<OpenPair | null>((best, p) => (best === null || p.imUsd > best.imUsd ? p : best), null);
@@ -53,9 +50,19 @@ function rowOf(pair: OpenPair, now: number): PairPickerRow {
   };
 }
 
-function closeOf(pair: OpenPair, share: Share, customText: string): { close: number | null; error: string | null } {
-  if (share !== 'custom') return { close: (pair.size * Number(share)) / 100, error: null };
-  const text = customText.trim();
+const shareQty = (pair: OpenPair, share: Share): number => (pair.size * Number(share)) / 100;
+const shareText = (pair: OpenPair, share: Share): string => sig(shareQty(pair, share));
+
+function litShare(pair: OpenPair, text: string): Share | null {
+  const trimmed = text.trim();
+  if (trimmed === '' || amountError(trimmed) !== null) return null;
+  return SHARES.find((share) => Number(shareText(pair, share)) === Number(trimmed)) ?? null;
+}
+
+function closeOf(pair: OpenPair, raw: string): { close: number | null; error: string | null } {
+  const lit = litShare(pair, raw);
+  if (lit !== null) return { close: shareQty(pair, lit), error: null };
+  const text = raw.trim();
   if (text === '') return { close: null, error: t('app.amount.notPositive') };
   const error = amountError(text);
   if (error !== null) return { close: null, error };
@@ -71,28 +78,14 @@ function requestOf(
   pair: OpenPair,
   close: number,
   exec: RealizeExec,
-  sliceUsd: number | null,
   twap: (DeleverRequest['twap'] & MakerOpts) | undefined,
 ): DeleverRequest {
   return {
     perps: pair.perps.map((p) => ({ symbol: p.symbol, qty: close })),
     boros: pair.boros.map((b) => ({ marketId: b.marketId, size: (b.size * close) / pair.size })),
     exec,
-    ...(sliceUsd !== null ? { sliceUsd } : {}),
     ...(twap ? { twap } : {}),
   };
-}
-
-function sliceUsdOf(pick: SlicePick, customText: string): number | null {
-  if (pick === null) return null;
-  return pick.kind === 'preset' ? pick.usd : parsedAmount(customText);
-}
-
-function optionOf(plan: DeleverPlan, pick: SlicePick): SliceOption | null {
-  const options = plan.sliceOptions;
-  const preset = (usd: number) => options.find((o) => !o.custom && o.sizeUsd === usd) ?? null;
-  if (pick?.kind === 'custom') return options.find((o) => o.custom) ?? preset(plan.defaultSliceUsd);
-  return preset(pick === null ? plan.defaultSliceUsd : pick.usd) ?? preset(plan.defaultSliceUsd);
 }
 
 const qtyRow = (label: string, before: number, after: number, suffix: string): ChangeRow => ({
@@ -135,17 +128,13 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
   const wallet = useActiveWallet();
   const { pairs: open, loading, failed, retry } = useOpenPairs();
   const [picked, setPicked] = useState<string | null>(pairKey);
-  const [share, setShare] = useState<Share>('20');
-  const [customText, setCustomText] = useState('');
+  const [typed, setTyped] = useState<string | null>(null);
   const [exec, setExec] = useState<RealizeExec>('maker');
-  const [slicePick, setSlicePick] = useState<SlicePick>(null);
-  const [sliceText, setSliceText] = useState('');
-  const [slicesOpen, setSlicesOpen] = useState(false);
   const pairs = open.filter((p) => p.unit === 'base');
   const pair = pairs.find((p) => p.key === picked) ?? largestIm(pairs);
-  const { close, error: amountText } = pair ? closeOf(pair, share, customText) : { close: null, error: null };
+  const amountText = typed ?? (pair ? shareText(pair, '20') : '');
+  const { close, error: amountProblem } = pair ? closeOf(pair, amountText) : { close: null, error: null };
   const twap = useTwapInput();
-  const sliceUsd = sliceUsdOf(slicePick, sliceText);
   const taker = useTakerAfter();
   const [repegBp, setRepegBp] = useState<number | null>(REPEG_DEFAULT_BP);
   const makerOpts: MakerOpts = {
@@ -153,7 +142,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     repegBehindBp: repegBp,
   };
   const twapSent = twap.on && !twap.startBlocked ? { ...twap.input, ...(exec === 'maker' ? makerOpts : {}) } : undefined;
-  const request = pair !== null && close !== null ? requestOf(pair, close, exec, twap.on ? null : sliceUsd, twapSent) : null;
+  const request = pair !== null && close !== null ? requestOf(pair, close, exec, twapSent) : null;
   const query = useDeleverPlan(request);
   const takerBad = useTwapTakerAfter(taker, twap.on, query.data?.twap?.plan?.takerAfterSec ?? null);
 
@@ -174,7 +163,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
 
   const plan = request !== null ? (query.data ?? null) : null;
   const pct = close === null ? 0 : (close / pair.size) * 100;
-  const option = plan ? optionOf(plan, slicePick) : null;
+  const option = plan?.sliceOptions.find((o) => o.whole) ?? null;
   const estimate = plan?.estimates[exec] ?? null;
   const borosGapYu = plan ? plan.boros.reduce((sum, b) => sum + b.closeSize, 0) : 0;
   const leadClose = plan?.legs[plan.makerLeg]?.closeQty ?? 0;
@@ -205,8 +194,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     !start.isPending &&
     walletReady;
 
-  const modeLabel = (mode: RealizeExec): string =>
-    execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(option ? option.seconds[mode] / Math.max(1, option.count) : 0));
+  const oneOrder = !twapPlan && option?.count === 1;
+  const orderSec = (mode: RealizeExec): number =>
+    twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : option ? option.seconds[mode] / Math.max(1, option.count) : 0;
+  const modeLabel = (mode: RealizeExec): string => execModeLabel(mode, fmtUsd(plan?.estimates[mode].totalUsd ?? 0, 0), fmtAbout(orderSec(mode)), oneOrder);
 
   const costRows: CostRow[] = estimate
     ? [
@@ -218,16 +209,18 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
       ]
     : [];
 
+  const typedQty = Number(amountText.trim());
+  const holdQty = close ?? (Number.isFinite(typedQty) ? typedQty : 0);
   const holdLabel =
     twapPlan
-      ? t('accounts.delever.holdTwap', { coin: pair.base, qty: qtyText(close ?? 0), duration: spanText(twapPlan.durationSec) })
-      : t('accounts.deleverTab.hold', { coin: pair.base, qty: qtyText(close ?? 0) });
+      ? t('accounts.delever.holdTwap', { coin: pair.base, qty: qtyText(holdQty), duration: spanText(twapPlan.durationSec) })
+      : t('accounts.deleverTab.hold', { coin: pair.base, qty: qtyText(holdQty) });
 
   const confirm = () => {
     if (request === null || estimate === null || close === null) return;
-    const delever = twapBody ? requestOf(pair, close, exec, null, twapBody) : request;
+    const delever = twapBody ? requestOf(pair, close, exec, twapBody) : request;
     start.mutate(
-      { kind: 'delever', exec, sliceUsd: twapBody ? undefined : (option?.sizeUsd ?? sliceUsd ?? undefined), delever, costUsd: estimate.totalUsd },
+      { kind: 'delever', exec, delever, costUsd: estimate.totalUsd },
       { onSuccess: onStarted, onError: (error) => toast.push('error', apiErrorText(error)) },
     );
   };
@@ -236,15 +229,28 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
     { value: '10', label: t('accounts.deleverTab.pct10') },
     { value: '20', label: t('accounts.deleverTab.pct20') },
     { value: '30', label: t('accounts.deleverTab.pct30') },
-    { value: 'custom', label: t('accounts.deleverTab.custom') },
   ];
 
   const planBody = (): ReactNode => {
-    if (request === null) return null;
+    if (request === null) {
+      return (
+        <RebalanceModalFooter
+          rows={[]}
+          holdLabel={holdLabel}
+          optional={false}
+          stale={false}
+          quoteStale={false}
+          lock={lock}
+          pricing={false}
+          disabled
+          holdMs={holdMs}
+          onRefresh={() => undefined}
+          onConfirm={() => undefined}
+        />
+      );
+    }
     if (query.isError && plan === null) return <VerdictAlert tone="warn" text={query.error.message} />;
     if (plan === null) return <Skeleton className="h-48 w-full" />;
-    const hedgeGapQty = twapPlan ? Number(twapPlan.sliceQty) : plan.notHedgedMaxQty;
-    const hedgeGapUsd = twapPlan ? (plan.notHedgedMaxUsd / plan.notHedgedMaxQty) * hedgeGapQty : plan.notHedgedMaxUsd;
     const costBox = costRows.length > 0 && !twapBlocked && !plan.refused && !slicePastBook ? <TotalCost rows={costRows} /> : null;
     const venue = plan.refused?.reason === 'below-min' ? prettyVenue(plan.refused.venue) : '';
     return (
@@ -267,28 +273,6 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           preview={plan.twap ?? null}
           impact={twapBlocked ? null : (plan.priceImpact ?? null)}
           coin={pair.base}
-          offLabel={
-            option && (
-              <SliceSizeRow
-                sizeUsd={option.sizeUsd}
-                count={option.count}
-                open={slicesOpen}
-                onToggle={() => setSlicesOpen((v) => !v)}
-                table={{
-                  options: plan.sliceOptions,
-                  value: slicePick?.kind === 'custom' ? (plan.sliceOptions.find((o) => o.custom)?.sizeUsd ?? -1) : option.sizeUsd,
-                  exec,
-                  onPick: (usd) => setSlicePick(plan.sliceOptions.some((o) => !o.custom && o.sizeUsd === usd) ? { kind: 'preset', usd } : { kind: 'custom' }),
-                  customText: sliceText,
-                  onCustom: (text) => {
-                    setSliceText(text);
-                    setSlicePick({ kind: 'custom' });
-                  },
-                  coin: pair.base,
-                }}
-              />
-            )
-          }
         />
         {twap.on && exec === 'maker' && (
           <MakerSettings
@@ -317,7 +301,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         <RebalanceBeforeAfter rows={afterChanges(plan, pair)} mode="after" />
         {plan.notHedgedMaxQty > 0 && (
           <NotHedgedLine
-            text={t('accounts.deleverTab.notHedged', { qty: qtyText(hedgeGapQty), coin: pair.base, usd: fmtUsd(hedgeGapUsd, 0) })}
+            text={t(oneOrder ? 'accounts.realizeTab.notHedgedWhole' : 'accounts.deleverTab.notHedged', { qty: qtyText(plan.notHedgedMaxQty), coin: pair.base, usd: fmtUsd(plan.notHedgedMaxUsd, 0) })}
           />
         )}
         {borosGapYu > 0 && (
@@ -340,7 +324,7 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
             }
           />
         ) : slicePastBook ? (
-          <VerdictAlert tone="warn" text={realizeText('bookTitle')} sub={realizeText('sliceBookBody')} />
+          <VerdictAlert tone="warn" text={realizeText('bookTitle')} sub={t('accounts.deleverTab.bookBody')} />
         ) : walletBlocked && wallet.loginLabel ? (
           <BorosLogInButton />
         ) : (
@@ -369,8 +353,10 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
           rows={pairs.map((p) => rowOf(p, now))}
           value={pair.key}
           onChange={(key) => {
+            const next = pairs.find((p) => p.key === key);
+            const lit = litShare(pair, amountText);
             setPicked(key);
-            setCustomText('');
+            setTyped(next && lit ? shareText(next, lit) : '');
           }}
           label={t('accounts.deleverTab.pair')}
           searchLabel={t('accounts.deleverTab.search')}
@@ -379,24 +365,26 @@ export function DeleverTab({ pairKey, holdMs, lock, onStarted }: { pairKey: stri
         />
       </Field>
       <Field label={t('accounts.deleverTab.reduceBy')}>
-        <SegmentedToggle<Share> ariaLabel={t('accounts.deleverTab.reduceBy')} fill value={share} onChange={setShare} options={shareOptions} />
-        {share === 'custom' && (
-          <div className="flex items-center gap-3">
-            <div className="w-48">
-              <AffixedInput affix={pair.base}>
-                <input
-                  className="input num h-8 w-full pr-12"
-                  inputMode="decimal"
-                  aria-label={t('accounts.deleverTab.custom')}
-                  value={customText}
-                  onChange={(e) => setCustomText(e.target.value)}
-                />
-              </AffixedInput>
-            </div>
-            {close !== null && <span className="num text-xs text-ink-100">{t('accounts.deleverTab.customPct', { pct: pctText(pct) })}</span>}
-          </div>
-        )}
-        {share === 'custom' && amountText !== null && <p className="text-xs text-gold">{amountText}</p>}
+        <AmountPresets<Share>
+          value={amountText}
+          onChange={setTyped}
+          inputLabel={t('accounts.deleverTab.amountAria')}
+          suffix={close !== null ? t('accounts.deleverTab.sizeSuffix', { coin: pair.base, pct: pctText(pct) }) : pair.base}
+          bad={amountProblem !== null && amountText.trim() !== ''}
+          boxClassName="w-60"
+          presetsLabel={t('accounts.deleverTab.reduceBy')}
+          preset={litShare(pair, amountText)}
+          onPreset={(share) => setTyped(shareText(pair, share))}
+          presets={shareOptions}
+          custom={{
+            label: t('accounts.deleverTab.custom'),
+            unit: '%',
+            inputLabel: t('accounts.deleverTab.customPctAria'),
+            max: 100,
+            onApply: (pctPicked) => setTyped(sig((pair.size * pctPicked) / 100)),
+          }}
+        />
+        {amountProblem !== null && amountText.trim() !== '' && <p className="num text-xs text-guava">{amountProblem}</p>}
       </Field>
       {planBody()}
     </div>

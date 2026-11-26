@@ -1444,8 +1444,7 @@ describe('RebalanceModal presets and custom amount', () => {
     await user.type(screen.getByRole('textbox', { name: 'Amount' }), '60');
     // The last quote stays on screen, but it was priced for 50: the hold
     // waits rather than send it, and says why.
-    expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeDisabled();
-    expect(screen.getByText('Pricing the move.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pricing the move.' })).toBeDisabled();
     await waitFor(() => expect(screen.getByRole('button', { name: /^Hold to move/ })).toBeEnabled(), { timeout: 3000 });
     expect(screen.queryByRole('button', { name: 'Refresh route' })).toBeNull();
     expect(screen.queryByText('Pricing the move.')).toBeNull();
@@ -1707,6 +1706,7 @@ describe('RebalanceModal Realize uPnL tab', () => {
   const nameOf = (el: HTMLElement) =>
     el.closest('label')?.textContent ?? '';
   const pick = ownerSlices.find((option) => option.sizeUsd === owner.realize!.defaultSliceUsd)!;
+  const impactPair = () => screen.getAllByText('Price impact').map((el) => el.closest('span.ml-auto')).find((el) => el !== null) as HTMLElement;
 
   it('limit + hedge first and default', () => {
     showOn(owner);
@@ -1730,7 +1730,8 @@ describe('RebalanceModal Realize uPnL tab', () => {
     showOn(view, 'realize');
     expect(orders()[0]!.textContent).toContain(`${fmtAbout(300)} per slice`);
     expect(orders()[0]!.textContent).not.toContain(fmtAbout(option.seconds.maker));
-    expect(screen.getByText(`Slice size ${fmtNotionalShort(50_000)} · ${option.count} slices`)).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'true');
+    expect(nameOf(slices().find((radio) => (radio as HTMLInputElement).checked)!)).toContain(fmtNotionalShort(50_000));
   });
 
   it('a custom slice below the venue minimum shows the slice raised to the minimum', async () => {
@@ -1739,10 +1740,9 @@ describe('RebalanceModal Realize uPnL tab', () => {
     serve({});
     server.use(http.get('/api/rebalance', () => HttpResponse.json(env(sliced))));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
     await userEvent.type(screen.getByRole('textbox', { name: 'Custom' }), '1');
-    expect(await screen.findByText(`Slice size ${fmtNotionalShort(11)} · 640 slices`, {}, { timeout: 3000 })).toBeInTheDocument();
-    expect(screen.queryByText(/^Slice size \$1 · /)).toBeNull();
+    await waitFor(() => expect(nameOf(slices().at(-1)!)).toContain('640'), { timeout: 3000 });
+    expect(slices().at(-1)).toBeChecked();
   });
 
   it('a non-default preset slice judges the plan the server prices at that slice', async () => {
@@ -1760,7 +1760,6 @@ describe('RebalanceModal Realize uPnL tab', () => {
       return HttpResponse.json(env(sliced));
     }));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
     await userEvent.click(slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!);
     await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${other.sizeUsd}`))).toBe(true), { timeout: 3000 });
     expect(await screen.findByText('Order book too thin to price.', {}, { timeout: 3000 })).toBeInTheDocument();
@@ -1774,7 +1773,6 @@ describe('RebalanceModal Realize uPnL tab', () => {
     serve({});
     server.use(http.get('/api/rebalance', () => HttpResponse.json(env(marked))));
     renderWithClient(<RebalanceModal view={marked} onClose={vi.fn()} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
     await userEvent.click(slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!);
     expect(await screen.findByText('Pick a smaller slice size.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
@@ -1793,13 +1791,15 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(chips.map((chip) => chip.textContent)).toEqual([expect.stringMatching(/^Debt \([\d,]+ USDC\)$/), expect.stringMatching(/^All \([\d,]+ USDC\)$/)]);
     expect(chips[0]).toHaveAttribute('aria-checked', 'true');
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
-    expect(box).toHaveValue(chips[0]!.textContent!.match(/[\d,]+/)![0]);
+    expect(box).toHaveValue(chips[0]!.textContent!.match(/[\d,]+/)![0].replaceAll(',', ''));
     await userEvent.click(chips[1]!);
-    const allText = chips[1]!.textContent!.match(/[\d,]+/)![0];
+    const allText = chips[1]!.textContent!.match(/[\d,]+/)![0].replaceAll(',', '');
     expect(box).toHaveValue(allText);
-    expect(allText).toContain(',');
     await userEvent.type(box, '{backspace}');
+    expect(amountPresets().every((chip) => chip.getAttribute('aria-checked') === 'false')).toBe(true);
     expect(screen.queryByText('Type an amount to realize.')).toBeNull();
+    await userEvent.type(box, allText.slice(-1));
+    expect(amountPresets()[1]).toHaveAttribute('aria-checked', 'true');
     await userEvent.clear(box);
     await userEvent.type(box, '999999999');
     expect(amountPresets().every((chip) => chip.getAttribute('aria-checked') === 'false')).toBe(true);
@@ -1866,28 +1866,93 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
   });
 
-  it('while a new custom amount prices, the hold shows the pricing label, not the old amount', async () => {
+  it('while a new custom amount prices, the hold reads Pricing and nothing above or below it moves', async () => {
     serve({});
     server.use(http.get('/api/rebalance', () => new Promise(() => {})));
     renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
+    const hedged = (await screen.findByText(/^Not hedged during each slice/)).textContent;
     const box = screen.getByRole('textbox', { name: 'Amount to realize' });
     await userEvent.clear(box);
     await userEvent.type(box, '5000');
     expect(screen.queryByRole('button', { name: 'Hold to realize' })).toBeNull();
-    expect(screen.getAllByText('Pricing the move.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Pricing the move.')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Pricing the move\./ })).toBeDisabled();
+    expect(screen.getByText(/^Not hedged during each slice/).textContent).toBe(hedged);
   });
 
-  it('slice rows', async () => {
+  it('slice rows show one row per slice count, smallest size first, then Custom', async () => {
     showOn(owner);
-    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
+    expect(ownerSlices.filter((o) => !o.custom && !o.whole).map((o) => o.count)).toEqual([2, 1, 1, 1]);
     const names = slices().map(nameOf);
-    expect(names).toHaveLength(5);
-    ['$25k', '$50k', '$100k', '$250k', 'Custom'].forEach((label, index) => expect(names[index]).toContain(label));
+    expect(names).toHaveLength(3);
+    ['$25k', '$50k', 'Custom'].forEach((label, index) => expect(names[index]).toContain(label));
+  });
+
+  it('Split the close is on by default when the recommended size gives 2 or more slices, with price impact one order to sliced', () => {
+    showOn(owner);
+    const whole = ownerSlices.find((o) => o.whole)!;
+    expect(pick.count).toBeGreaterThan(1);
+    expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'true');
+    const pair = impactPair();
+    expect(pair).toHaveTextContent(`${fmtUsd(whole.reopenImpactUsd, 0)}`);
+    expect(pair.querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
+  });
+
+  it('Split the close off hides the table, keeps price impact one order to recommended, and starts one order', async () => {
+    const starts: { sliceUsd?: number }[] = [];
+    const asked: string[] = [];
+    serve({});
+    server.use(
+      http.get('/api/rebalance', ({ request }) => {
+        asked.push(new URL(request.url).search);
+        return HttpResponse.json(env(owner));
+      }),
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as { sliceUsd?: number });
+        return HttpResponse.json(env({ id: 'real0001' }));
+      }),
+    );
+    renderWithClient(<RebalanceModal view={owner} onClose={vi.fn()} />);
+    const whole = ownerSlices.find((o) => o.whole)!;
+    await userEvent.click(screen.getByRole('switch', { name: 'Split the close' }));
+    expect(screen.getByRole('switch', { name: 'Split the close' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('radiogroup', { name: 'Slice size' })).toBeNull();
+    const pair = impactPair();
+    expect(pair.querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
+    expect(orders()[0]!.textContent).not.toContain('per slice');
+    expect(screen.getByText(/^Not hedged during the order: max /).textContent).toContain(fmtUsd(whole.notHedgedMaxUsd, 0));
+    await waitFor(() => expect(asked.some((query) => query.includes(`sliceUsd=${whole.sizeUsd}`))).toBe(true));
+    const hold = screen.getByRole('button', { name: 'Hold to realize' });
+    await waitFor(() => expect(hold).toBeEnabled());
+    fireEvent.pointerDown(hold);
+    await waitFor(() => expect(starts).toHaveLength(1));
+    expect(starts[0]!.sliceUsd).toBe(whole.sizeUsd);
+  });
+
+  it('Split the close cannot turn on when every size gives one slice, and the hover says why', async () => {
+    const single = ownerSlices.map((o) => ({ ...o, count: 1 }));
+    const small = { ...owner, realize: { ...owner.realize!, sliceOptions: single } };
+    showOn(small);
+    const toggle = screen.getByRole('switch', { name: 'Split the close' });
+    expect(toggle).toBeDisabled();
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('radiogroup', { name: 'Slice size' })).toBeNull();
+    fireEvent.mouseEnter(toggle.parentElement as HTMLElement);
+    expect(await screen.findByText('Too small to split. One order of this size fits in one slice.')).toBeInTheDocument();
+  });
+
+  it('one order past the book with Split the close off points at the switch', async () => {
+    const marked = { ...owner, realize: { ...owner.realize!, sliceOptions: ownerSlices.map((o) => (o.whole ? { ...o, pastBook: true } : o)) } };
+    showOn(marked);
+    await userEvent.click(screen.getByRole('switch', { name: 'Split the close' }));
+    expect(await screen.findByText('Turn on Split the close.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
+    const pair = impactPair();
+    expect(pair).toHaveTextContent('Book too thin to price');
   });
 
   it('slice columns', async () => {
     showOn(owner);
-    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
     ['Count', 'Est. time', 'Price impact', 'Max not hedged', 'Max slippage 0.25%'].forEach((head) => expect(screen.getAllByText(head).length).toBeGreaterThan(0));
     const before = nameOf(slices()[0]!);
     await userEvent.click(orders()[1]!);
@@ -1896,26 +1961,58 @@ describe('RebalanceModal Realize uPnL tab', () => {
 
   it('slice default row', async () => {
     showOn(owner);
-    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
     const checked = slices().find((radio) => (radio as HTMLInputElement).checked);
     expect(nameOf(checked!)).toContain(fmtNotionalShort(owner.realize!.defaultSliceUsd));
   });
 
   it('slice row updates cost', async () => {
     showOn(owner);
-    await userEvent.click(screen.getByRole('button', { name: 'Change' }));
     const other = ownerSlices.find((option) => !option.custom && option.sizeUsd !== pick.sizeUsd && option.notHedgedMaxUsd !== pick.notHedgedMaxUsd)!;
     const before = totalCard().textContent;
     const row = slices().find((radio) => nameOf(radio).includes(fmtNotionalShort(other.sizeUsd)))!;
     await userEvent.click(row);
-    expect(screen.getByText(/^Not hedged during each slice: max /).textContent).toContain(fmtUsd(other.notHedgedMaxUsd, 0));
+    expect(screen.getByText(/^Not hedged during (each slice|the order): max /).textContent).toContain(fmtUsd(other.notHedgedMaxUsd, 0));
     if (other.impactUsd !== pick.impactUsd) expect(totalCard().textContent).not.toBe(before);
   });
 
-  it('a refused realize shows why in place of the hold', () => {
+  it('a realize past the book shows why in place of the hold and keeps the split controls', () => {
     showOn(rebalanceViews.realizeRefused);
     expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
+    expect(screen.getAllByText('Order book too thin to price.').length).toBeGreaterThan(0);
+    expect(screen.getByRole('radiogroup', { name: 'Orders' })).toBeInTheDocument();
+    expect(screen.getByRole('switch', { name: 'Split the close' })).toBeInTheDocument();
+  });
+
+  it('a margin refusal wins over a thin book, and hides the orders', () => {
+    const view = rebalanceViews.imFull;
+    const options = view.realize!.sliceOptions.map((o) => ({ ...o, pastBook: true }));
+    showOn({ ...view, realize: { ...view.realize!, sliceOptions: options } });
+    expect(screen.queryByText('Order book too thin to price.')).toBeNull();
     expect(screen.queryByRole('radiogroup', { name: 'Orders' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Hold to realize/ })).toBeNull();
+  });
+
+  it('a recommended size that is not a preset starts with Split the close off, and on picks the largest size that splits', async () => {
+    const view = { ...owner, realize: { ...owner.realize!, defaultSliceUsd: 40_000 } };
+    showOn(view);
+    const toggle = screen.getByRole('switch', { name: 'Split the close' });
+    expect(toggle).toBeEnabled();
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    expect(impactPair().querySelector('.text-grass')).toHaveTextContent(fmtUsd(pick.reopenImpactUsd, 0));
+    fireEvent.mouseEnter(toggle.parentElement as HTMLElement);
+    expect(await screen.findByText(new RegExp(`Recommended: ${fmtNotionalShort(pick.sizeUsd).replace('$', '\\$')}, ${pick.count} slices`))).toBeInTheDocument();
+    await userEvent.click(toggle);
+    const checked = slices().find((radio) => (radio as HTMLInputElement).checked);
+    expect(nameOf(checked!)).toContain(fmtNotionalShort(pick.sizeUsd));
+  });
+
+  it('All can split when the debt amount fits in one slice', async () => {
+    const single = ownerSlices.map((o) => ({ ...o, count: 1 }));
+    const small = { ...owner, realize: { ...owner.realize!, sliceOptions: single } };
+    showOn(small);
+    expect(screen.getByRole('switch', { name: 'Split the close' })).toBeDisabled();
+    await userEvent.click(amountPresets()[1]!);
+    expect(screen.getByRole('switch', { name: 'Split the close' })).toBeEnabled();
   });
 });
 

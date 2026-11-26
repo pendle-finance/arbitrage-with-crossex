@@ -309,12 +309,18 @@ const belowMinText = (refused: NonNullable<DeleverPlan['refused']>): string =>
     : `${refused.venue} takes at least ${refused.minQty} ${refused.coin}.`;
 
 const cappedSliceOf = (options: SliceOption[], asked: number): number =>
-  Math.min(asked, options.find((option) => option.custom)?.sizeUsd ?? asked);
+  options.some((option) => !option.custom && option.sizeUsd === asked)
+    ? asked
+    : Math.min(asked, options.find((option) => option.custom)?.sizeUsd ?? asked);
+
+const twapQtysOf = (plan: { slices: number; sliceQty: string; lastQty: string }): number[] =>
+  plan.slices > 0 ? [...Array.from({ length: plan.slices - 1 }, () => Number(plan.sliceQty)), Number(plan.lastQty)] : [];
 
 interface LivePerp extends JobPerp {
   base: string;
   markPrice: number;
   initialMargin: number;
+  maxLeverage?: string;
 }
 
 const livePerpsOf = (perps: RealizePerp[]): LivePerp[] =>
@@ -323,7 +329,7 @@ const livePerpsOf = (perps: RealizePerp[]): LivePerp[] =>
     if (!perp.symbol || !Number.isFinite(qty) || qty === 0) return [];
     const { exchange, base } = parseSymbol(perp.symbol);
     const side: PerpSide = qty < 0 ? 'SHORT' : 'LONG';
-    return [{ symbol: perp.symbol, exchange, base, side, qty: Math.abs(qty), markPrice: positiveOf(perp.markPrice), initialMargin: positiveOf(perp.initialMargin) }];
+    return [{ symbol: perp.symbol, exchange, base, side, qty: Math.abs(qty), markPrice: positiveOf(perp.markPrice), initialMargin: positiveOf(perp.initialMargin), maxLeverage: perp.maxLeverage }];
   });
 
 const jobPerpsOf = (perps: RealizePerp[]): JobPerp[] =>
@@ -718,7 +724,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         rules: perpRulesOf(rules.value),
         account: account.value,
       };
-      return { plan: planDelever(input), userId: account.value.userId ? String(account.value.userId) : null, account: account.value, perps: positions.value ?? [] };
+      return { input, plan: planDelever(input), userId: account.value.userId ? String(account.value.userId) : null, account: account.value, perps: positions.value ?? [] };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -806,8 +812,9 @@ export function rebalanceRoutes(deps: AppDeps) {
       const request = deleverRequestOf(req.body);
       if (!request) throw new CoreError(DELEVER_NEEDS);
       const twapInput = twapInputOf((req.body as { twap?: unknown } | undefined)?.twap);
-      const { plan, perps } = await loadDelever(request, false);
-      const twapped = await deleverTwapOf(plan, perps, twapInput, false);
+      const { input, plan: whole, perps } = await loadDelever(request, false);
+      const twapped = await deleverTwapOf(whole, perps, twapInput, false);
+      const plan = twapped.twap?.plan ? planDelever(input, twapQtysOf(twapped.twap.plan)) : whole;
       const borosCloses = twapped.twap?.plan ? twapped.twap.plan.slices * plan.boros.filter((row) => row.closeSize > 0).length : 0;
       const perCloseUsd = borosCloses > 0 ? await borosOrderGasUsd() : 0;
       return reply.ok({ ...plan, ...twapped, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
@@ -981,13 +988,14 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (locked) return conflict(reply, locked);
       const loaded = await catchRateLimit(loadDelever(request, true));
       if (!loaded) return conflict(reply, STALE_TEXT);
-      const { plan, userId, account } = loaded;
-      if (plan.refused) return conflict(reply, belowMinText(plan.refused));
-      if (plan.legs.every((leg) => leg.closeQty <= 0)) return conflict(reply, NOTHING_TO_CLOSE);
+      const { userId, account } = loaded;
+      if (loaded.plan.refused) return conflict(reply, belowMinText(loaded.plan.refused));
+      if (loaded.plan.legs.every((leg) => leg.closeQty <= 0)) return conflict(reply, NOTHING_TO_CLOSE);
       const askedTwap = (body.delever as { twap?: { takerAfterSec?: number | null; repegBehindBp?: 2 | 5 | 10 | null } | null } | undefined)?.twap;
       const twapInput = twapInputOf(askedTwap);
-      const { twap } = await deleverTwapOf(plan, loaded.perps, twapInput, true);
+      const { twap } = await deleverTwapOf(loaded.plan, loaded.perps, twapInput, true);
       if (twap?.refusal) return refuse400(reply, twap.refusal.text);
+      const plan = twap?.plan ? planDelever(loaded.input, twapQtysOf(twap.plan)) : loaded.plan;
       const takerAfterSec = twap?.plan ? takerAfterOf({ timeoutSec: askedTwap?.takerAfterSec }, twap.plan) : null;
       const repegBehindBp = repegOf({ repegBehindBp: askedTwap?.repegBehindBp });
       const cost = plan.estimates[exec];
@@ -996,7 +1004,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
       const sliceUsd = cappedSliceOf(plan.sliceOptions, shownSlice ?? plan.defaultSliceUsd);
-      if (plan.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      if (!twap?.plan && plan.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lead = plan.legs[plan.makerLeg];
       const leadUsd = lead ? (lead.closeQty * plan.notHedgedMaxUsd) / Math.max(plan.notHedgedMaxQty, Number.EPSILON) : 0;
       const livePerps = jobPerpsOf(loaded.perps);

@@ -9,7 +9,7 @@ import { walkBook } from '../estimate/fill';
 import { coarsestLot, DEFAULT_STEP, floorToStep, roundToStep } from '../numbers';
 import { type AccountLike, imUsedOf, type Pool } from './plan';
 import { lotOf, marketCapUsd, minQtyOf, type PerpRule, type PerpSide, positiveOf, type RealizeExec } from './realize';
-import { impactOf, type SliceOption, sliceOptions, sliceQtys, sliceSizeOf } from './slices';
+import { impactOf, oneOrderUsdOf, type SliceOption, sliceOptions, sliceQtys } from './slices';
 
 export interface DeleverRequest {
   perps: { symbol: string; qty: number }[];
@@ -52,6 +52,7 @@ export interface DeleverInput {
     qty: number;
     markPrice: number;
     initialMargin: number;
+    maxLeverage?: string;
   }[];
   boros: {
     marketId: number;
@@ -75,6 +76,7 @@ interface Leg {
   held: number;
   asked: number;
   mark: number;
+  maxLeverage?: string;
   initialMargin: number;
   rule: PerpRule;
   lot: string;
@@ -114,6 +116,7 @@ function legOf(input: DeleverInput, asked: DeleverRequest['perps'][number]): Leg
     held: positiveOf(Math.abs(position.qty)),
     asked: positiveOf(asked.qty),
     mark: position.markPrice,
+    maxLeverage: position.maxLeverage,
     initialMargin: positiveOf(position.initialMargin),
     rule,
     lot: lotOf(rule),
@@ -217,7 +220,7 @@ function assertDistinct(request: DeleverRequest): void {
   if (new Set(markets).size !== markets.length) throw new CoreError('A Boros market is listed twice.');
 }
 
-export function planDelever(input: DeleverInput): DeleverPlan {
+export function planDelever(input: DeleverInput, twapQtys?: number[]): DeleverPlan {
   const { request } = input;
   assertDistinct(request);
   const legs = request.perps.map((asked) => legOf(input, asked));
@@ -230,11 +233,11 @@ export function planDelever(input: DeleverInput): DeleverPlan {
   const minQty = Math.max(...legs.map((leg) => minQtyOf(leg.rule, lot, leg.mark)));
   const mid = follow.mid;
   const slice = { book: follow.book, side: closeSideOf(follow), mid };
-  const defaultSliceUsd = sliceSizeOf({ ...slice, totalUsd: closeQty * mid });
-  const maxUsd = Math.min(...legs.map((leg) => marketCapUsd({}, leg.rule, leg.exchange, leg.mark)));
+  const maxUsd = Math.min(...legs.map((leg) => marketCapUsd({ maxLeverage: leg.maxLeverage }, leg.rule, leg.exchange, leg.mark)));
+  const defaultSliceUsd = oneOrderUsdOf(maxUsd);
   const customUsd = request.sliceUsd !== undefined && request.sliceUsd > 0 ? Math.min(request.sliceUsd, maxUsd) : undefined;
   const chosenUsd = Math.min(customUsd ?? defaultSliceUsd, maxUsd);
-  const qtys = sliceQtys(closeQty, chosenUsd > 0 ? chosenUsd / mid : 0, minQty, lot);
+  const qtys = twapQtys && twapQtys.length > 0 ? twapQtys : sliceQtys(closeQty, chosenUsd > 0 ? chosenUsd / mid : 0, minQty, lot);
   const notHedgedMaxQty = qtys.reduce((max, qty) => Math.max(max, qty), 0);
   const whole = legs.map((leg) => closeQty > 0 && closesWhole(legs, leg, closeQty, lot));
   const heldOf = (marketId: number): number => Math.abs(input.boros.find((row) => row.marketId === marketId)?.size ?? 0);

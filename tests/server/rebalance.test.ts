@@ -1058,6 +1058,19 @@ describe('POST /api/rebalance with a close and reopen', () => {
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
+  it.each(['market', 'maker'] as const)('a delever with TWAP off starts one order in the picked mode (%s)', async (exec) => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec, costUsd: plan.estimates[exec].totalUsd, delever: DELEVER_ASK });
+    expect(res.statusCode).toBe(202);
+    expect(h.file()).toMatchObject({ exec, slice: { count: 1 } });
+    expect(h.file().deleverTwap ?? null).toBeNull();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
   const DELEVER_TWAP = { durationSec: 3600, slices: 12 };
 
   it('delever plan with twap', async () => {
@@ -1124,7 +1137,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
     return { h, ask, half, plan: planned.json().data };
   }
 
-  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start of %d USD sizes its slices and IM used from the plan', async (usd) => {
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start of %d USD closes in one order and sizes IM used from the plan', async (usd) => {
     const { h, ask, half, plan } = await deleverPlanAt(usd);
 
     const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: ask });
@@ -1133,9 +1146,9 @@ describe('POST /api/rebalance with a close and reopen', () => {
     const job = h.file();
     const closeUsd = half * OWNER_MARK;
     for (const leg of job.delever!.legs) expect(leg.before - leg.after).toBeCloseTo(half, 8);
-    expect(job.slice!.sizeUsd).toBeLessThanOrEqual(100_000);
-    expect(job.slice!.count * job.slice!.sizeUsd).toBeGreaterThanOrEqual(closeUsd * 0.99);
-    expect((job.slice!.count - 1) * job.slice!.sizeUsd).toBeLessThan(closeUsd * 1.01);
+    expect(job.slice!.count).toBe(1);
+    expect(job.slice!.sizeUsd).toBeGreaterThanOrEqual(closeUsd);
+    expect(plan.notHedgedMaxQty).toBeCloseTo(half, 8);
     expect(job.costUsd).toBeGreaterThan(0);
     expect(job.costUsd).toBeLessThan(closeUsd * 0.01);
     expect(job.imUsedEnd![0].pct).toBeLessThanOrEqual(job.imUsedStart![0].pct);
@@ -1167,6 +1180,26 @@ describe('POST /api/rebalance with a close and reopen', () => {
 
     expect(res.statusCode, res.body).toBe(202);
     expect(h.file().deleverTwap).toEqual({ durationSec: 3600, intervalSec: 1800, slices: 2, takerAfterSec: 600, repegBehindBp: 2 });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([100_000, 6_000_000])('a delever TWAP plan at %d USD prices the TWAP slices, not one order', async (usd) => {
+    const { h, ask, plan } = await deleverPlanAt(usd);
+    const twap = { durationSec: 3600, slices: 4 };
+
+    const planned = await h.post('/api/rebalance/delever/plan', { ...ask, twap });
+
+    expect(planned.statusCode, planned.body).toBe(200);
+    const twapped = planned.json().data;
+    expect(twapped.twap.plan.slices).toBe(4);
+    expect(twapped.notHedgedMaxQty).toBeCloseTo(Math.max(Number(twapped.twap.plan.sliceQty), Number(twapped.twap.plan.lastQty)), 8);
+    for (const exec of ['maker', 'market'] as const) {
+      expect(twapped.estimates[exec].feePerpsUsd).toBeCloseTo(plan.estimates[exec].feePerpsUsd, 6);
+      expect(twapped.estimates[exec].impactUsd).toBeLessThanOrEqual(plan.estimates[exec].impactUsd);
+    }
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'market', costUsd: twapped.estimates.market.totalUsd, delever: { ...ask, twap } });
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().costUsd).toBeCloseTo(twapped.estimates.market.totalUsd, 6);
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
@@ -1267,6 +1300,41 @@ describe('POST /api/rebalance with a close and reopen', () => {
     const started = await startAt(inside!.sizeUsd);
 
     expect(started.statusCode).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever on a thin book refuses one order, and the same close with TWAP on starts', async () => {
+    mockShallowHlBook();
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
+    expect((plan.sliceOptions as SliceOption[]).find((option) => option.whole)?.pastBook).toBe(true);
+
+    const refused = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
+
+    expect(refused.statusCode).toBe(409);
+    const twap = { durationSec: 3600, slices: 40 };
+    const twapped = (await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, twap })).json().data;
+    expect(twapped.twap.refusal).toBeNull();
+    const started = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: twapped.estimates.maker.totalUsd, delever: { ...DELEVER_ASK, twap } });
+    expect(started.statusCode, started.body).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize start with Split the close off runs one order', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const whole = (realize.sliceOptions as SliceOption[]).find((option) => option.whole)!;
+    expect(whole.count).toBe(1);
+    const plan = (await h.get(`/api/rebalance?sliceUsd=${whole.sizeUsd}`)).json().data.realize.all;
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', sliceUsd: whole.sizeUsd, costUsd: plan.estimates.maker.totalUsd });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().slice).toMatchObject({ count: 1, sizeUsd: whole.sizeUsd });
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 
