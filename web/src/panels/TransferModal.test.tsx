@@ -1,13 +1,14 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
+import { useLayoutEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useStartTransfer } from '../api/queries';
 import type { TransferView } from '../api/types';
 import { REBALANCE_NOW, rebalanceHandler, rebalanceViews, transferPostHandler, transferViews } from '../test/fixtures';
 import { server } from '../test/server';
 import { renderWithClient } from '../test/utils';
-import { TransferModal } from './TransferModal';
+import { TransferModal, type TransferPick } from './TransferModal';
 
 const FAIL_TEXT = 'Gate refused the move: free margin or wallet cash is too low.';
 
@@ -255,6 +256,31 @@ describe('TransferModal', () => {
 
     expect(screen.getByRole('button', { name: 'Hold to send 1,000.00 USDT to USDT · CrossEx' })).toBeEnabled();
     expect(facts()).toHaveProperty('You get', '1,000.00 USDT');
+  });
+
+  it('a pick shows on the first frame, before any effect runs', async () => {
+    server.use(rebalanceHandler(rebalanceViews.accountB));
+    const firstFrame: string[] = [];
+    function FirstFrame() {
+      useLayoutEffect(() => {
+        firstFrame.push(...Array.from(document.querySelectorAll<HTMLInputElement>('[role=radio][aria-checked=true], input[type=radio]:checked'), (el) => el.getAttribute('aria-label') ?? el.closest('label')?.textContent ?? el.textContent ?? ''));
+      }, []);
+      return null;
+    }
+    function PickHost({ pick }: { pick: TransferPick }) {
+      const start = useStartTransfer();
+      return (
+        <>
+          <TransferModal view={transferViews.spotBoth} onClose={() => {}} holdMs={50} start={start} pick={pick} />
+          <FirstFrame />
+        </>
+      );
+    }
+    renderWithClient(<PickHost pick={{ coin: 'USDC', wallet: 'CROSSEX_HYPERLIQUID', nonce: 1 }} />);
+    await screen.findByRole('dialog');
+    expect(screen.getByRole('radio', { name: 'USDC · Hyperliquid' })).toBeChecked();
+    expect(firstFrame.join(' | ')).toContain('Into CrossEx');
+    expect(firstFrame.join(' | ')).toContain('USDC · Hyperliquid');
   });
 });
 
