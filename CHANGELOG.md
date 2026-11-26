@@ -63,6 +63,11 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Move cash drops the wallet bar chart** from the running, stopped and finished views, as the
   plan view already did. The running step names the money on the way, and a stopped move says
   where its money sits.
+- **Order tickets show one leg list in the Cost card,** with the side toggle in each leg header and
+  the spread as a plain row. The coin price sits right after the coin chips. The Boros pair ticket
+  lists only dates that have a spread, and shows Slippage, Trade fee and Total cost rows. Size per
+  leg shows only when it differs from the size box. The maker price stays steady for 10 seconds
+  when one order book read fails.
 - **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
   the sale adds up to the amount converted.
 - **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,

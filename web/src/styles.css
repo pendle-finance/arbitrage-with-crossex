@@ -95,8 +95,13 @@
      grey fill read as disabled next to the info-tinted tabs and chips. */
   /* The mock's chosen cell: a neutral white fill and medium weight — the
      selection reads by weight + fill, so the blue stays reserved for actions. */
-  .seg-btn[data-active='true'] {
+  .seg-btn[data-active='true'],
+  .pick-chip[data-active='true'] {
     @apply relative z-[1] bg-wash/[0.15] font-medium text-ink-300;
+  }
+
+  .pick-chip {
+    @apply inline-flex items-center gap-1 rounded border border-ink-700 bg-transparent px-2.5 py-[3px] text-[11px] font-normal text-ink-500 transition-colors hover:bg-wash/[0.05] disabled:cursor-not-allowed disabled:opacity-35;
   }
 
   /* Full-row variant (SegmentedToggle `fill`): the mock's ticket switches are

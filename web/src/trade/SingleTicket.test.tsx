@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it } from 'vitest';
@@ -174,9 +174,8 @@ describe('SingleTicket', () => {
     await marketMode();
     await userEvent.type(screen.getByLabelText('Size'), '100');
 
-    expect(await screen.findByText(/Est\. avg fill/)).toBeInTheDocument();
-    expect(screen.getByText('65,010.5')).toBeInTheDocument();
-    expect(screen.getByText(/Thin book/)).toBeInTheDocument();
+    expect(await screen.findByText('65,010.5')).toBeInTheDocument();
+    expect(screen.getByText(/thin book/)).toBeInTheDocument();
     expect(screen.getByText('≈ 0.05 USDT')).toBeInTheDocument();
     expect(screen.getByText('Taker')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Execute now' })).toBeEnabled();
@@ -237,7 +236,7 @@ describe('SingleTicket', () => {
     await userEvent.type(screen.getByLabelText('Size'), '100');
 
     expect(await screen.findByText('≈ 0.02 USDT')).toBeInTheDocument();
-    expect(screen.getByText('Maker')).toBeInTheDocument();
+    expect(screen.getAllByText('Maker')).toHaveLength(2);
     expect(screen.queryByText(/maker–taker/i)).not.toBeInTheDocument();
     expect(screen.getByText(/Limit orders are post-only/)).toBeInTheDocument();
   });
@@ -290,26 +289,27 @@ describe('no Review card on a single order', () => {
 describe('SingleTicket: the Estimate card', () => {
   const fees = { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { maker: 13.84, taker: 34.6 } };
 
-  it('limit shows the maker trade cost, the plan line, a Book button, leverage and margin', async () => {
+  it('limit: Cost holds the leg row as maker and the maker trade cost; After holds size, leverage and margin', async () => {
     server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), echoPreviewHandler({ overrides: { fees, qty: '1.5' } }));
     renderWithClient(<SingleTicket />);
     await pickBinanceBtc();
     await userEvent.type(screen.getByPlaceholderText(/Size \(BTC\)/), '1.5');
 
     expect(await screen.findByText('≈ 13.84 USDT')).toBeInTheDocument();
-    expect(screen.getByText('Trade cost')).toBeInTheDocument();
-    expect(screen.getByText('Maker')).toBeInTheDocument();
-    expect(screen.getByText(/Binance · rests as maker/)).toBeInTheDocument();
-    expect(screen.getByText('1.5 BTC')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Book' })).toHaveAttribute('aria-pressed', 'false');
-    expect(screen.getByText('Leverage')).toBeInTheDocument();
-    expect(screen.getByText('Margin')).toBeInTheDocument();
-    expect(screen.queryByText('Rests at')).toBeNull();
-    expect(screen.queryByText('Est. fee')).toBeNull();
-    expect(screen.queryByText('Margin required')).toBeNull();
+    const cost = screen.getByRole('region', { name: 'Cost' });
+    expect(within(cost).getByText('Trade cost')).toBeInTheDocument();
+    const leg = within(cost).getAllByRole('row')[1];
+    expect(leg).toHaveTextContent(/LONG\s*Binance\s*Maker/);
+    expect(leg).toHaveTextContent('Rests');
+    const after = screen.getByRole('region', { name: 'After' });
+    expect(within(after).getByText('1.5 BTC')).toBeInTheDocument();
+    expect(within(after).getByText('Leverage')).toBeInTheDocument();
+    expect(within(after).getByText('Margin')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
+    expect(document.querySelector('[data-price-graph]')).toBeNull();
   });
 
-  it('market shows the taker trade cost and the at-market plan line', async () => {
+  it('market: the leg row has no maker chip and the trade cost is taker', async () => {
     server.use(...baseHandlers(), ...btcSymbolHandlers(), bookHandler(), echoPreviewHandler({ overrides: { fees, qty: '1.5' } }));
     renderWithClient(<SingleTicket />);
     await pickBinanceBtc();
@@ -318,7 +318,9 @@ describe('SingleTicket: the Estimate card', () => {
 
     expect(await screen.findByText('≈ 34.60 USDT')).toBeInTheDocument();
     expect(screen.getByText('Taker')).toBeInTheDocument();
-    expect(screen.getByText(/Binance · at market/)).toBeInTheDocument();
+    const leg = within(screen.getByRole('region', { name: 'Cost' })).getAllByRole('row')[1];
+    expect(leg).toHaveTextContent(/LONG\s*Binance/);
+    expect(leg).not.toHaveTextContent('Maker');
   });
 });
 

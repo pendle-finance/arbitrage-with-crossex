@@ -79,10 +79,7 @@
     "marginTitle": "Initial margin this leg posts — its notional over the venue max leverage",
     "executeNow": "Execute now",
     "levDetail": "Leverage {{lev}}x (venue max)",
-    "notHedged": "This leg is not hedged.",
-    "side": "Side",
-    "long": "Long",
-    "short": "Short"
+    "notHedged": "This leg is not hedged."
   },
   "ticketEstimate": {
     "taker": "Taker",

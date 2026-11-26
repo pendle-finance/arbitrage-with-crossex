@@ -3189,7 +3189,7 @@ function OpenOnlyReview({
           <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />
         ) : simulation ? (
           <>
-            <SpreadReadout sim={simulation} boxed />
+            <SpreadReadout sim={simulation} />
             <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
               <LiquidationLines sim={simulation} warn={liqWarnOf(sim.data?.gate.funding)} />
             </div>

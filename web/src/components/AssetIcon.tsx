@@ -23,6 +23,9 @@
  * self-hosted too.
  */
 import { useEffect, useState } from 'react';
+import asterIcon from '../assets/venues/aster.png';
+import deribitIcon from '../assets/venues/deribit.png';
+import krakenIcon from '../assets/venues/kraken.svg';
 
 const BUCKET = 'https://storage.googleapis.com/boros-prod';
 
@@ -58,9 +61,16 @@ export function tokenIconUrl(symbol: string): string | null {
   return file ? `${BUCKET}/${encodeURIComponent(file)}` : null;
 }
 
+const LOCAL_VENUE_ICON: Record<string, string> = {
+  ASTER: asterIcon,
+  DERIBIT: deribitIcon,
+  KRAKEN: krakenIcon,
+};
+
 export function venueIconUrl(venue: string): string | null {
-  const file = VENUE_FILE[venue.trim().toUpperCase()];
-  return file ? `${BUCKET}/${encodeURIComponent(file)}` : null;
+  const key = venue.trim().toUpperCase();
+  const file = VENUE_FILE[key];
+  return file ? `${BUCKET}/${encodeURIComponent(file)}` : (LOCAL_VENUE_ICON[key] ?? null);
 }
 
 function Fallback({ label, size, title }: { label: string; size: number; title?: string }) {
