@@ -109,10 +109,11 @@ export function ClosePairForm({
   const closeQtyOf = (legQty: number) => (atMax ? legQty : Math.min(qtyNum, legQty));
   const maker = mode === 'maker';
   const twapOn = allowTwap && maker && twap.on;
-  const lotA = useSymbolDetail(twapOn ? (legs[0]?.symbol ?? null) : null).data?.lotSize;
-  const lotB = useSymbolDetail(twapOn ? (legs[1]?.symbol ?? null) : null).data?.lotSize;
+  const oneSize = twapOn || !atMax;
+  const lotA = useSymbolDetail(oneSize ? (legs[0]?.symbol ?? null) : null).data?.lotSize;
+  const lotB = useSymbolDetail(oneSize ? (legs[1]?.symbol ?? null) : null).data?.lotSize;
   const matched =
-    twapOn && legs.length === 2 && !qtyInvalid
+    oneSize && legs.length === 2 && !qtyInvalid
       ? matchedCloseOf(
           legs.map((l) => l.qty),
           atMax ? null : qtyNum,

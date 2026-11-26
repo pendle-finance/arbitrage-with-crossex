@@ -551,6 +551,7 @@
     "steps": "步骤",
     "stepPerps": "平仓 {{pair}} · 各 {{qty}} {{coin}}",
     "stepBoros": "平仓 Boros · {{qty}} YU",
+    "stepBorosEach": "平仓 Boros · 各 {{qty}} YU",
     "hold": "长按降规模 {{qty}} {{coin}}",
     "noPairs": "没有持仓组合",
     "noPairsMatch": "没有匹配的组合",

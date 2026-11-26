@@ -222,6 +222,27 @@ describe('ClosePairForm, close perps with TWAP and unequal legs', () => {
     expect(within(await afterCard()).queryAllByText(/→ (?!0 [A-Z])/)).toHaveLength(0);
   });
 
+  it('with twap off, 25% of a 0.07 ETH pair floors both legs to the coarser lot, never one leg alone', async () => {
+    const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
+    server.use(heldPreviewHandler({ GATE_FUTURE_ETH_USDT: '0.07', HYPERLIQUID_FUTURE_ETH_USDT: '0.07' }, bodies));
+    renderWithClient(
+      <ClosePairForm
+        base="ETH"
+        legs={[
+          { symbol: 'GATE_FUTURE_ETH_USDT', qty: 0.07, venue: 'GATE' },
+          { symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', qty: 0.07, venue: 'HYPERLIQUID' },
+        ]}
+        allowTwap
+      />,
+    );
+    const shortcuts = await screen.findByRole('radiogroup', { name: 'Share shortcuts' });
+    await userEvent.click(within(shortcuts).getByRole('radio', { name: '25%' }));
+    await waitFor(() => expect(bodies[bodies.length - 1].actions.map((a) => ('qty' in a ? a.qty : undefined))).toEqual(['0.017', '0.017']), {
+      timeout: 4000,
+    });
+    expect(bodies[bodies.length - 1].twap).toBeUndefined();
+  });
+
   it('equal legs with twap on send no size and show no rest', async () => {
     const bodies: Array<{ actions: ActionInput[]; twap?: unknown }> = [];
     server.use(heldPreviewHandler({ GATE_FUTURE_BTC_USDT: '4.03', HYPERLIQUID_FUTURE_BTC_USDT: '4.03' }, bodies));

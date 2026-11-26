@@ -364,6 +364,17 @@ describe('DeleverTab plan', () => {
     expect(within(list).getByText('Cost')).toBeInTheDocument();
   });
 
+  it.each([
+    ['twoBorosEqual', 'Close Boros · 90 YU each'],
+    ['twoBoros', 'Close Boros · 100 + 80 YU'],
+  ] as const)('the Boros step of %s names each leg, never the legs added', async (key, text) => {
+    servePlan(deleverPlans[key]);
+    show(openPairs.btc900);
+    const list = (await screen.findByText('Steps')).closest('div')?.parentElement as HTMLElement;
+    const items = within(list).getAllByRole('listitem').map((li) => li.textContent ?? '');
+    expect(items[1]).toContain(text);
+  });
+
   it('Delever shows no Max not hedged, no Boros gap and no yellow warning', async () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
