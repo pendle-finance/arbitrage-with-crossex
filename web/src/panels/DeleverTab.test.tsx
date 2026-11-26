@@ -68,10 +68,6 @@ function show(pairs: OpenPair[], pairKey: string | null = null, onStarted = () =
 }
 
 const trigger = () => screen.getByRole('button', { name: 'Pair' });
-async function factValue(label: string): Promise<string> {
-  const row = (await screen.findByText(label)).closest('.justify-between');
-  return row?.querySelector('.num')?.textContent ?? '';
-}
 async function afterRows(): Promise<string[]> {
   const table = (await screen.findByText('Before')).closest<HTMLElement>('[role="table"]')!;
   return within(table)
@@ -357,21 +353,22 @@ describe('DeleverTab plan', () => {
     expect(rows).toEqual(['IM used · CrossEx 91.2% → 74.2%']);
   });
 
-  it('the Boros gap is a quiet row in the TWAP box, with the full sentence in its hover', async () => {
-    const plan = deleverPlans.twentyPct;
-    servePlan(plan);
-    show(openPairs.btc900);
-    const time = fmtAbout(defaultOption(plan).seconds.maker);
-    expect(await factValue('Boros not hedged')).toBe(`up to 180 YU · ${time}`);
-    expect(screen.queryByText(/^Boros closes after the perps/)).toBeNull();
-    fireEvent.mouseEnter(screen.getByText('Boros not hedged'));
-    expect(await screen.findByText(`Boros closes after the perps. Until then, the YU with no perp behind it grows to 180 by the end (${time}).`)).toBeInTheDocument();
-  });
-
-  it('Delever shows no Max not hedged and no yellow warning', async () => {
+  it('steps close the perps first, then Boros, each with its cost', async () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
-    await factValue('Boros not hedged');
+    const list = (await screen.findByText('Steps')).closest('div')?.parentElement as HTMLElement;
+    const items = within(list).getAllByRole('listitem').map((li) => li.textContent ?? '');
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatch(/Close .*180 BTC each.*\$/);
+    expect(items[1]).toMatch(/Close Boros · .* YU.*\$/);
+    expect(within(list).getByText('Cost')).toBeInTheDocument();
+  });
+
+  it('Delever shows no Max not hedged, no Boros gap and no yellow warning', async () => {
+    servePlan(deleverPlans.twentyPct);
+    show(openPairs.btc900);
+    await screen.findByText('Steps');
+    expect(screen.queryByText('Boros not hedged')).toBeNull();
     expect(screen.queryByText('Max not hedged')).toBeNull();
     expect(document.querySelector('.text-gold')).toBeNull();
   });
@@ -493,13 +490,12 @@ describe('DeleverTab TWAP', () => {
     expect(screen.queryByText('Boros close per slice')).not.toBeInTheDocument();
   });
 
-  it('twap area with boros per slice', async () => {
+  it('twap area shows the slices and no Boros per slice row', async () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
     await turnTwapOn('4h', '5m');
     expect(await screen.findByText(/^Slices 48/)).toBeInTheDocument();
-    expect(screen.getByText('Boros close per slice')).toBeInTheDocument();
-    expect(screen.getByText('3.75 YU')).toBeInTheDocument();
+    expect(screen.queryByText('Boros close per slice')).toBeNull();
     expect(screen.queryByText(/^Slice size \$/)).not.toBeInTheDocument();
   });
 
