@@ -532,6 +532,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           leverage={leverageText}
           marginRequired={marginRequired}
           twapOn={twapOn}
+          typedQty={sizeUnit === 'base' ? notionalStr : null}
         />
       )}
 

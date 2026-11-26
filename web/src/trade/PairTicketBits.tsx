@@ -552,6 +552,7 @@ export function PairEstimate({
   leverage,
   marginRequired,
   twapOn = false,
+  typedQty = null,
 }: {
   previews: PreviewResult[] | undefined;
   isError: boolean;
@@ -566,9 +567,12 @@ export function PairEstimate({
   /** Total initial margin the two legs post, in USD; null while unknown. */
   marginRequired: number | null;
   twapOn?: boolean;
+  typedQty?: string | null;
 }) {
   const { t } = useTranslation();
   const sharedQty = legLong?.qty || legShort?.qty || '';
+  const rounded = typedQty !== null && Number(typedQty) !== Number(sharedQty);
+  const showQty = sharedQty !== '' && (typedQty === null || rounded);
   const base = legLong ? parseSymbol(legLong.symbol).base : legShort ? parseSymbol(legShort.symbol).base : '';
   const binding = useMemo(() => {
     if (!legLong?.rule || !legShort?.rule) return null;
@@ -635,10 +639,10 @@ export function PairEstimate({
 
       {previews && (
         <SummaryCard title={t('accounts.moveCash.after')}>
-          {sharedQty && (
+          {showQty && (
             <EstimateRow
               label={t('pairTicket.bits.sharedQty')}
-              sub={binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
+              sub={rounded && binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
               value={`${qtyGrouped(sharedQty)}${base ? ` ${base}` : ''}`}
             />
           )}

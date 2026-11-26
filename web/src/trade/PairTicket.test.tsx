@@ -58,6 +58,7 @@ function previewHandler(opts: {
   touch?: typeof TOUCH;
   makerLeg?: MakerLegPreview;
   twapCalls?: TwapInput[];
+  rules?: Record<string, SymbolRule>;
 }) {
   const rates = opts.rates ?? {
     GATE: { maker: 0.0002, taker: 0.0005 },
@@ -72,6 +73,7 @@ function previewHandler(opts: {
       const venue = a.symbol.split('_')[0];
       const r = rates[venue];
       const feesBase = { makerRate: r.maker, takerRate: r.taker, specialOverride: false, quote: 'USDT' };
+      const rule = opts.rules?.[venue];
       // Echo the action's leverage like the real resolver — the ticket's margin
       // line divides estNotional by it.
       const leverage =
@@ -87,6 +89,7 @@ function previewHandler(opts: {
           qty: '0.4',
           estNotional: 1000,
           leverage,
+          ...(rule ? { rule } : {}),
           restEstimate: touch,
           fees: { ...feesBase, est: { maker: 1000 * r.maker } },
         });
@@ -96,6 +99,7 @@ function previewHandler(opts: {
         qty: '0.4',
         estNotional: 1000,
         leverage,
+        ...(rule ? { rule } : {}),
         fillEstimate: {
           qty: '0.4',
           avgPrice: 2500.5,
@@ -145,7 +149,7 @@ async function setupTwoVenuePair() {
 
 /** Wait for the initial preview to land (fees become known). */
 async function waitForFirstPreview() {
-  await screen.findByText(/Shared size/, undefined, { timeout: 4000 });
+  await screen.findByText('Margin required', undefined, { timeout: 4000 });
 }
 
 const foldRow = () => screen.getByRole('button', { name: /Maker settings/ });
@@ -203,6 +207,28 @@ describe('PairTicket size unit', () => {
       // The pin: the USD key must be absent, not merely also-present.
       expect(action).not.toHaveProperty('notional');
     }
+  });
+
+  it('shows Size per leg only when it differs from the box, and the lot note only when it rounded', async () => {
+    const calls: ActionInput[][] = [];
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls, rules: { GATE: ETH_GATE, OKX: ETH_OKX } }));
+    renderWithClient(<PairTicket />);
+    await userEvent.click(await screen.findByRole('button', { name: 'ETH' }));
+    await pickVenues('GATE_FUTURE_ETH_USDT', 'OKX_FUTURE_ETH_USDT');
+    const after = () => screen.getByRole('region', { name: 'After' });
+
+    await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '0.4');
+    await waitFor(() => expect(after()).toHaveTextContent('Margin required'), { timeout: 4000 });
+    expect(within(after()).queryByText('Size per leg')).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '004');
+    await waitFor(() => expect(within(after()).getByText('Size per leg')).toBeInTheDocument(), { timeout: 4000 });
+    expect(after()).toHaveTextContent(`Rounded to Gate lot ${ETH_GATE.lotSize}`);
+    expect(after()).toHaveTextContent('0.4 ETH');
+
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Size unit' })).getByRole('radio', { name: 'USDT' }));
+    await waitFor(() => expect(after()).not.toHaveTextContent(/Rounded to/), { timeout: 4000 });
+    expect(within(after()).getByText('Size per leg')).toBeInTheDocument();
   });
 });
 
