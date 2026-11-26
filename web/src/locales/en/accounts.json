@@ -297,8 +297,6 @@
   },
   "closePair": {
     "sizeLabel": "Close size",
-    "maxTitle": "Close the whole pair",
-    "max": "Max",
     "sizeAria": "Close size, applied to both legs",
     "sizeInvalid": "Size must be above 0 and at most {{max}} {{base}}.",
     "priceBooked": "Price PnL booked",
@@ -544,7 +542,7 @@
     "pct20": "20%",
     "pct30": "30%",
     "amountAria": "Size to delever, each leg",
-    "custom": "Custom",
+    "custom": "Custom %",
     "customPctAria": "Custom percent of the pair",
     "sizeSuffix": "{{coin}} · {{pct}}%",
     "tradingFeePerps": "Trading fee · perps",

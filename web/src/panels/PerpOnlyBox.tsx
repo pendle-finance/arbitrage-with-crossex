@@ -16,10 +16,9 @@ import { ExecuteControl } from '../trade/ExecuteControl';
 import { MakerSettings, REPEG_DEFAULT_BP } from '../trade/MakerSettings';
 import { type ExecMode, SlippageLine, storedExecMode } from '../trade/PairTicketBits';
 import { pairModeFees, ViolationList } from '../trade/previewBits';
-import { type CloseAfterRow, ClosePairAfter, ClosePairCost, matchedCloseOf } from './ClosePairFormBits';
+import { type CloseAfterRow, ClosePairAfter, ClosePairCost, CloseSizePresets, matchedCloseOf } from './ClosePairFormBits';
 import {
   buildCloseActions,
-  CloseSizeField,
   closeCosts,
   decorateClose,
   shownLegOf,
@@ -194,13 +193,21 @@ export function ClosePairForm({
 
   return (
     <div className="flex flex-col gap-4">
-      <CloseSizeField
-        base={base}
-        qtyStr={qtyStr}
-        qtyInvalid={qtyInvalid}
-        maxCloseQty={maxCloseQty}
+      <CloseSizePresets
+        label={t('accounts.closePair.sizeLabel')}
+        inputLabel={t('accounts.closePair.sizeAria')}
+        coin={base}
+        max={maxCloseQty}
+        value={qtyStr}
+        invalid={qtyInvalid}
         onChange={setQtyEdited}
-      />
+      >
+        {qtyInvalid && (
+          <span className="text-[11px] text-rose-300">
+            {t('accounts.closePair.sizeInvalid', { max: sig(maxCloseQty), base })}
+          </span>
+        )}
+      </CloseSizePresets>
 
       <OrdersGroup
         value={mode}

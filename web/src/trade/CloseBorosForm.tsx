@@ -30,9 +30,9 @@ import { daysToMaturity, knownRate } from '../lib/boros';
 import { spreadName } from '../lib/spread';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
 import { Chip } from '../components/Chip';
-import { AffixedInput, EstimateAge, EstimateRow, SlippageLine, SummaryCard } from './PairTicketBits';
+import { EstimateAge, EstimateRow, SlippageLine, SummaryCard } from './PairTicketBits';
 import { TotalCostRow, TradeFeeRow } from './BorosPairBits';
-import { FieldLabel } from './SymbolCombobox';
+import { CloseSizePresets } from '../panels/ClosePairFormBits';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -626,30 +626,15 @@ export function CloseBorosForm({
     <div className="flex flex-col gap-4">
       <StepList rows={stepRows} />
 
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <FieldLabel htmlFor="boros-close-size">{closable.length > 2 ? t('pairTicket.closeBoros.closeSizeAll') : closable.length > 1 ? t('pairTicket.closeBoros.closeSizeBoth') : t('pairTicket.closeBoros.closeSize')}</FieldLabel>
-          <button
-            type="button"
-            className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-            onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
-          >
-            {t('common.max')}{' '}
-            <span className="text-link underline decoration-link/40 underline-offset-2">
-              {`${sigGrouped(maxCloseSize)} ${unit0}`}
-            </span>
-          </button>
-        </div>
-        <AffixedInput affix={unit0 ? <span>{unit0}</span> : null}>
-          <input
-            id="boros-close-size"
-            className={`input num pr-16 ${anySizeInvalid ? '!border-rose-500/60' : ''}`}
-            inputMode="decimal"
-            value={shownSize()}
-            onChange={(e) => setSizeEdited(e.target.value)}
-            aria-label={t('pairTicket.closeBoros.sizeAria')}
-          />
-        </AffixedInput>
+      <CloseSizePresets
+        label={closable.length > 2 ? t('pairTicket.closeBoros.closeSizeAll') : closable.length > 1 ? t('pairTicket.closeBoros.closeSizeBoth') : t('pairTicket.closeBoros.closeSize')}
+        inputLabel={t('pairTicket.closeBoros.sizeAria')}
+        coin={unit0}
+        max={maxCloseSize}
+        value={shownSize()}
+        invalid={anySizeInvalid}
+        onChange={setSizeEdited}
+      >
         {anySizeInvalid ? (
           <span className="text-[11px] text-rose-300">
             {t('pairTicket.closeBoros.sizeInvalid', { max: sigGrouped(maxCloseSize), unit: unit0 })}
@@ -657,7 +642,7 @@ export function CloseBorosForm({
         ) : (
           atMax && sharedLeg && <span className="text-[11px] text-ink-400">{t('pairTicket.closeBoros.sharedLabel')}</span>
         )}
-      </div>
+      </CloseSizePresets>
 
       <SummaryCard
         title={t('accounts.moveCash.cost')}
