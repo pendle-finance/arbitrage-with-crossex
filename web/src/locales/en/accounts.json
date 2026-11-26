@@ -302,6 +302,7 @@
     "sizeAria": "Close size, applied to both legs",
     "sizeInvalid": "Size must be above 0 and at most {{max}} {{base}}.",
     "pnlToRealise": "PnL to realize",
+    "pnlSub": "Both legs · before fees",
     "after": {
       "left": "left",
       "notInPair": "not in this pair",

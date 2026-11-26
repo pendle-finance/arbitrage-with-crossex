@@ -121,7 +121,7 @@ export function ClosePairAfter({
     <SummaryCard title={t('accounts.moveCash.after')}>
       <EstimateRow
         label={t('accounts.closePair.pnlToRealise')}
-        sub={twapOn ? t('accounts.closePair.twap.headlineSub') : undefined}
+        sub={t(twapOn ? 'accounts.closePair.twap.headlineSub' : 'accounts.closePair.pnlSub')}
         value={totalPnl !== null ? <SignedNumber value={totalPnl} format={(n) => fmtUsd(n)} /> : '—'}
         strong
       />

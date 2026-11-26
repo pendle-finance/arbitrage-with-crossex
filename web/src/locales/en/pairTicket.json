@@ -87,6 +87,7 @@
     "sharedOpen": "Shared part stays open",
     "quoteFailed": "Couldn’t quote this close",
     "estPnl": "Est. PnL",
+    "beforeFee": "Before fee",
     "legClosedYours": "{{prefix}}Closed. You left {{amount}} open.",
     "bookShort": "{{prefix}}The book fills only {{amount}} {{unit}} of this size.",
     "bookUnavailable": "{{prefix}}No order book. No rate to quote.",

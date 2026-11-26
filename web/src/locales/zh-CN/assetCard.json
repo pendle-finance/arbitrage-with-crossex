@@ -120,6 +120,7 @@
     "matures": "到期",
     "fundYes": "是",
     "fundShort": "否，缺 {{qty}}",
+    "fundShortSub": "交易所会拒绝此展期。请先充值，或减小展期规模。",
     "openOrders": "挂单 · {{date}}",
     "cancelled": "已取消",
     "cancelledPart": "已取消，保留部分的挂单也会取消",

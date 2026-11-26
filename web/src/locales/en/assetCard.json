@@ -120,6 +120,7 @@
     "matures": "Matures",
     "fundYes": "Yes",
     "fundShort": "No, {{qty}} short",
+    "fundShortSub": "The venue refuses the roll. Top up first, or roll a smaller size.",
     "openOrders": "Open orders · {{date}}",
     "cancelled": "Cancelled",
     "cancelledPart": "Cancelled, also on the part kept",

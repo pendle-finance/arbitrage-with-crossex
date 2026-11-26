@@ -809,6 +809,7 @@ describe('RollOverModal — the review page', () => {
     // Before → after, as the venue simulated it.
     expect(within(dialog).getByText(/4 ETH → -2 ETH/)).toBeInTheDocument();
     expect(within(dialog).getByText('No, 2 ETH short')).toBeInTheDocument();
+    expect(within(dialog).getByText('The venue refuses the roll. Top up first, or roll a smaller size.')).toBeInTheDocument();
   });
 
   it('a batch the venue refused for margin shows the account once the old legs are closed, and the shortfall from it', async () => {
@@ -829,6 +830,7 @@ describe('RollOverModal — the review page', () => {
     expect(await within(dialog).findByText(/Not enough margin/)).toBeInTheDocument();
     expect(within(dialog).getByText(/0\.0525 ETH → 0\.084 ETH/)).toBeInTheDocument();
     expect(within(dialog).getByText('No, 0.029 ETH short')).toBeInTheDocument();
+    expect(within(dialog).getByText(/Top up first, or roll a smaller size/)).toBeInTheDocument();
     await user.hover(within(dialog).getByText('Available margin'));
     expect(await screen.findByText(/once the old positions close/)).toBeInTheDocument();
     expect(within(dialog).queryByText('Simulation failed')).not.toBeInTheDocument();
@@ -847,6 +849,7 @@ describe('RollOverModal — the review page', () => {
     expect(within(row).getByText('5 ETH')).toBeInTheDocument();
     expect(within(dialog).getByText(/895 ETH → 900 ETH/)).toBeInTheDocument();
     expect(within(dialog).queryByText(/^No, .* short$/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Top up first/)).not.toBeInTheDocument();
     expect(await within(dialog).findByText('Yes')).toBeInTheDocument();
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });

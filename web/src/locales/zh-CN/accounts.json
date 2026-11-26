@@ -298,6 +298,7 @@
     "sizeAria": "平仓规模，同时用于两条腿",
     "sizeInvalid": "规模须大于 0 且不超过 {{max}} {{base}}",
     "pnlToRealise": "预计实现盈亏",
+    "pnlSub": "两条腿 · 未扣手续费",
     "after": {
       "left": "剩余",
       "notInPair": "不属于此组合",

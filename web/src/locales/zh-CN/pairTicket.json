@@ -86,6 +86,7 @@
     "sharedOpen": "共用部分继续持有",
     "quoteFailed": "无法为此平仓报价",
     "estPnl": "预估盈亏",
+    "beforeFee": "未扣手续费",
     "legClosedYours": "{{prefix}}已平仓。您保留了 {{amount}} 未平。",
     "bookShort": "{{prefix}}订单簿只能承接此规模中的 {{amount}} {{unit}}。",
     "bookUnavailable": "{{prefix}}无订单簿，无法报价利率。",

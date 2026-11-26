@@ -733,6 +733,7 @@ export function CloseBorosForm({
         <EstimateRow
           strong
           label={t('pairTicket.closeBoros.estPnl')}
+          sub={t('pairTicket.closeBoros.beforeFee')}
           value={totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
         />
         {closable.length > 1 &&

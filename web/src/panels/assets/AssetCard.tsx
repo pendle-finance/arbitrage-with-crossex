@@ -2833,6 +2833,7 @@ function RollReview({
           )}
           <EstimateRow
             label={t('assetCard.review.canFund')}
+            sub={marginShort > 0 ? t('assetCard.roll.fundShortSub') : undefined}
             value={
               marginShort > 0 ? (
                 <span className="text-rose-300">{t('assetCard.roll.fundShort', { qty: fmtTokenQty(marginShort, collateral) })}</span>
@@ -6405,8 +6406,6 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
-            {/* The form's own leg rows say which leg is a pair slice of a
-                larger venue position and how much of it. */}
             <ClosePairForm
               base={group.base}
               legs={pairPerpCloseLegs(closePerps)}
