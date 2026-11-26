@@ -772,8 +772,12 @@ describe('evaluatePairGate', () => {
     const needA = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost + sim.legs[0].fillVsMarkCost;
     const needB = sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost + sim.legs[1].fillVsMarkCost;
     const hold = sim.legs[0].marginRequired!;
-    const sameSide = sim.legs[0].sizing.resultingSize > 0 ? { long: hold, short: 0 } : { long: 0, short: hold };
-    const otherSide = { long: sameSide.short, short: sameSide.long };
+    const size = Math.abs(sim.legs[0].sizing.resultingSize);
+    const sameSide =
+      sim.legs[0].sizing.resultingSize > 0
+        ? { long: hold, short: 0, longSize: size, shortSize: 0 }
+        : { long: 0, short: hold, longSize: 0, shortSize: size };
+    const otherSide = { long: sameSide.short, short: sameSide.long, longSize: sameSide.shortSize, shortSize: sameSide.longSize };
     const cross = { available: needA + needB + hold, availableWithOrders: needA + needB - hold / 2, hasPositionOrOrders: true };
 
     const same = evaluatePairGate(gateInput({ legA: leg({ restingOrderMargin: sameSide }), account: account({ cross }) }));
@@ -785,6 +789,39 @@ describe('evaluatePairGate', () => {
 
     const other = evaluatePairGate(gateInput({ legA: leg({ restingOrderMargin: otherSide }), account: account({ cross }) }));
     expect(codes(other)).not.toContain('cross-short-margin');
+  });
+
+  it('counts opposite resting orders as the venue does: only once their size is above the position', () => {
+    const base = gateInput().simulation.legs[0];
+    const at = (currentSize: number, resultingSize: number, marginRequired: number) => ({
+      ...base,
+      marginRequired,
+      takerFeeCost: 0,
+      fillVsMarkCost: 0,
+      sizing: { ...base.sizing, currentSize, resultingSize },
+    });
+    const shorts = (short: number, shortSize: number) => ({ long: 0, short, longSize: 0, shortSize });
+
+    expect(legMarginNeed(at(0, 10, 2), 0, shorts(5, 10))).toBeCloseTo(2 - 5, 9);
+    expect(legMarginNeed(at(0, 10, 2), 0, shorts(5, 12))).toBeCloseTo(3 - 5, 9);
+    expect(legMarginNeed(at(0, 10, 2), 0, { long: 1, short: 0, longSize: 4, shortSize: 0 })).toBeCloseTo(3 - 1, 9);
+    expect(legMarginNeed(at(4, 10, 2), 1, shorts(5, 6))).toBeCloseTo(2 - 5 + 1, 9);
+    expect(legMarginNeed(at(-10, -12, 3), 2.5, { long: 4, short: 0, longSize: 11, shortSize: 0 })).toBeCloseTo(3 - 2.5, 9);
+    expect(legMarginNeed(at(0, 10, 2), 0, shorts(0, 0))).toBeCloseTo(2, 9);
+  });
+
+  it('with no order-aware free cash, an open ignores resting orders on both sides of the check', () => {
+    const sim = gateInput().simulation;
+    const needA = sim.legs[0].marginRequired! + sim.legs[0].takerFeeCost + sim.legs[0].fillVsMarkCost;
+    const needB = sim.legs[1].marginRequired! + sim.legs[1].takerFeeCost + sim.legs[1].fillVsMarkCost;
+    const size = Math.abs(sim.legs[0].sizing.resultingSize);
+    const big = sim.legs[0].sizing.resultingSize > 0
+      ? { long: 0, short: 10 * needA, longSize: 0, shortSize: 10 * size }
+      : { long: 10 * needA, short: 0, longSize: 10 * size, shortSize: 0 };
+    const g = evaluatePairGate(
+      gateInput({ legA: leg({ restingOrderMargin: big }), account: account({ cross: { available: (needA + needB) / 2, hasPositionOrOrders: true } }) }),
+    );
+    expect(codes(g)).toContain('cross-short-margin');
   });
 
   it('charges only the INCREMENTAL margin when a leg already posts some', () => {

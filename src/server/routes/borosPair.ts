@@ -374,7 +374,13 @@ function readAccount(zones: BorosCollateralZone[]): AccountView {
       }
       for (const p of zone.cross.marketPositions) {
         if (p.restingOrderMargin) {
-          view.orderMarginByMarket.set(p.marketId, { long: norm18(p.restingOrderMargin.long), short: norm18(p.restingOrderMargin.short) });
+          const o = p.restingOrderMargin;
+          view.orderMarginByMarket.set(p.marketId, {
+            long: norm18(o.long),
+            short: norm18(o.short),
+            longSize: norm18(o.longSize),
+            shortSize: norm18(o.shortSize),
+          });
         }
         view.positionByMarket.set(p.marketId, norm18(p.notionalSize));
         view.positionRawByMarket.set(p.marketId, String(p.notionalSize ?? '0'));
@@ -871,7 +877,7 @@ export function borosPairRoutes(deps: AppDeps) {
         spreadMarkets,
         crossByToken: [...account.crossByToken.entries()].map(([tokenId, b]) => ({
           tokenId,
-          available: b.available,
+          available: b.availableWithOrders ?? b.available,
         })),
         isolatedByMarket: [...account.isolatedByMarket.entries()].map(([marketId, b]) => ({
           marketId,
