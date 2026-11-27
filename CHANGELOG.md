@@ -5,7 +5,8 @@ in-app update check compares against).
 
 ## 1.7.10 — 2026-11-27
 
-TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets in Single mode.
+TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets, in Single mode or as a
+Gate + Hyperliquid pair on the HL-GATE spread.
 
 - **Jan 2027 Hyperliquid markets show.** Boros lists Hyperliquid ETH and BTC for 29 Jan 2027,
   and the HL-GATE spreads for the same date, but no Gate market. Before, the terminal hid a Boros
