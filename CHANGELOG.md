@@ -14,6 +14,9 @@ TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets in Single 
 - **Single mode opens them.** Single mode now sends one Boros order on its own when no other
   market shares its collateral and date. Before, it could only quote a market that had such a
   partner, so a Jan Hyperliquid leg showed no quote and could not be sent.
+- **A switch to Single clears an armed completion.** Before, after `Complete now at market` armed
+  one leg of a part-filled pair, a switch to Single kept it armed. The order could then go to a
+  different market at the same date than the leg that fell short.
 
 ## 1.7.9 — 2026-11-10
 
