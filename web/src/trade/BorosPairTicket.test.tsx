@@ -1262,9 +1262,13 @@ describe('BorosPairTicket', () => {
       await user.click(screen.getByRole('radio', { name: 'Single' }));
       expect(screen.getByRole('button', { name: 'Complete now at market' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
+      expect(screen.getByText(/now shows another trade/)).toBeInTheDocument();
 
       await user.click(screen.getByRole('radio', { name: 'Pair' }));
+      // Complete sets its own size, so an empty box does not block it.
+      await user.clear(screen.getByLabelText(/^Size per market/));
       expect(screen.getByRole('button', { name: 'Complete now at market' })).toBeEnabled();
+      expect(screen.queryByText(/now shows another trade/)).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Complete now at market' }));
       await waitFor(() => {
         const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { marketId: number }[] };
@@ -1284,11 +1288,21 @@ describe('BorosPairTicket', () => {
 
       await user.click(screen.getByRole('radio', { name: 'Single' }));
       expect(screen.queryByText(/Completing market B only/i)).not.toBeInTheDocument();
-      await waitFor(() => {
-        const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { marketId: number }[] };
-        expect(last.onlyLeg).toBe(0);
-        expect(last.legs[0].marketId).toBe(HL);
-      });
+      // The 40k residual was for leg B; on leg A it would widen the gap.
+      expect(screen.getByLabelText(/^Size/)).toHaveValue('');
+    });
+
+    it("a card's Open ends the report and starts the card's trade", async () => {
+      const user = userEvent.setup();
+      server.use(...handlers({ execute: legBShort }));
+      renderWithClient(
+        <BorosPrefillHarness prefill={{ base: 'ETH', longVenue: 'Binance', shortVenue: 'Hyperliquid', size: 1000 }} />,
+      );
+      await sendPair(user);
+
+      await user.click(screen.getByRole('button', { name: 'fire' }));
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Complete now at market' })).not.toBeInTheDocument());
+      expect(screen.getByRole('button', { name: /Boros market order/i })).toBeInTheDocument();
     });
   });
 
