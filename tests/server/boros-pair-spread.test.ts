@@ -140,6 +140,17 @@ describe('GET /api/boros/pair/context with spread markets', () => {
     expect(spreads.find((m) => m.marketId === SPREAD)?.spreadVenues).toEqual(['HYPERLIQUID', 'GATE']);
   });
 
+  it('keeps a single whose only partner at its date is a spread over its venue', async () => {
+    // Jan 2027: HL singles + the HL-GATE spread, no Gate single.
+    const results = fixture.results.filter((m) => m.marketId !== GATE_SINGLE);
+    app = makeTestApp({ borosFetch: borosStub({ ...bodies(), '/apis/v1/markets': { results, total: results.length, skip: 0 } }) });
+    const res = await app.inject({ method: 'GET', url: `/api/boros/pair/context?address=${ADDRESS}`, headers: HOST });
+    expect(res.statusCode, res.body).toBe(200);
+    const ids = res.json().data.markets.map((m: { marketId: number }) => m.marketId);
+    expect(ids).toContain(HL_SINGLE);
+    expect(ids).not.toContain(GATE_SINGLE);
+  });
+
   it('lists a paused or close-only spread the trader does not hold as close-only, and refuses to open it', async () => {
     const placed: Placed[] = [];
     makeApp([], recordingClient(placed), { [SPREAD]: 0, 63: 1 });

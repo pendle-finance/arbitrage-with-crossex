@@ -870,8 +870,10 @@ export function borosPairRoutes(deps: AppDeps) {
               spreadVenues: m.spreadVenues,
       });
       const byName = (x: { name: string }, y: { name: string }): number => x.name.localeCompare(y.name);
-      const spreadMarkets = markets
-        .filter((m) => isSpreadMarket(m) && m.maturity > nowSec && (isSupportedCoin(normalizeUnderlying(m.base)) || holds(m)))
+      const listedSpreads = markets.filter(
+        (m) => isSpreadMarket(m) && m.maturity > nowSec && (isSupportedCoin(normalizeUnderlying(m.base)) || holds(m)),
+      );
+      const spreadMarkets = listedSpreads
         .map((m) => ({ ...toRow(m), closeOnly: m.state !== 'Normal' }))
         .sort(byName);
 
@@ -899,14 +901,24 @@ export function borosPairRoutes(deps: AppDeps) {
          * cross-base "spread" is not a spread — the legs face unrelated
          * funding curves and no CrossEx perp pair can hedge the result.
          */
-        .filter((m, _i, all) =>
-          all.some(
-            (o) =>
-              o.marketId !== m.marketId &&
-              o.tokenId === m.tokenId &&
-              o.maturity === m.maturity &&
-              o.base.toLowerCase() === m.base.toLowerCase(),
-          ),
+        // A listed spread over the market's venue is a partner too: the HL Jan
+        // singles have no Gate Jan single, only the HL-GATE spread.
+        .filter(
+          (m, _i, all) =>
+            all.some(
+              (o) =>
+                o.marketId !== m.marketId &&
+                o.tokenId === m.tokenId &&
+                o.maturity === m.maturity &&
+                o.base.toLowerCase() === m.base.toLowerCase(),
+            ) ||
+            listedSpreads.some(
+              (s) =>
+                s.tokenId === m.tokenId &&
+                s.maturity === m.maturity &&
+                s.base.toLowerCase() === m.base.toLowerCase() &&
+                (s.spreadVenues ?? []).some((v) => normalizeVenue(v) === normalizeVenue(m.venue)),
+            ),
         )
         .map(toRow)
         .sort(byName);
