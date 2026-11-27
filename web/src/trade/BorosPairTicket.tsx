@@ -338,6 +338,8 @@ export function BorosPairTicket({
   /** True when the report on screen is a REPLAY of an earlier submission —
    * the server answered from its memo and no new order went out. */
   const [reportReplayed, setReportReplayed] = useState(false);
+  /** The markets, sides and intent the report's order went out with. */
+  const [reportOf, setReportOf] = useState<string | null>(null);
   /** Set by "complete now at market": trade only the leg that filled LESS. */
   /**
    * Set by a PARTIAL FILL: "the pair half-filled, send the deficient leg".
@@ -647,7 +649,7 @@ export function BorosPairTicket({
     if (modeProp) settleLegsFor(modeProp);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeProp]);
-  const pairSpread =!isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
+  const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
   const spreadOnly =
     mode === 'pair' && onlyLeg === null
       ? spreadsOver(slotA, slotB).filter((m) => (wantSpread(m) || m.marketId === marketA) && !maturities.includes(m.maturity))
@@ -902,7 +904,7 @@ export function BorosPairTicket({
   // intent makes it meaningless, so it must not survive into a normal ticket.
   useEffect(() => {
     setOnlyLeg(null);
-  }, [marketA, marketB, dirA, dirB, intent]);
+  }, [marketA, marketB, dirA, dirB, intent, mode]);
 
   const execute = useExecuteBorosPair();
 
@@ -978,13 +980,21 @@ export function BorosPairTicket({
     !execute.isPending &&
     closeOnlyLeg === null;
 
+  const legsKey = (r: BorosPairRequest | null) =>
+    r ? [mode, r.intent, ...r.legs.map((l) => `${l.marketId}:${l.direction}`)].join('|') : null;
+  /** Complete and Retry re-send on the form's markets, so they act only while
+   * the form still shows the mode, markets, sides and intent that part-filled. */
+  const reportFits = report !== null && legsKey(request) === reportOf;
+
   const onConfirm = () => {
     if (!request) return;
+    const sentKey = legsKey(request);
     execute.mutate(
       { ...request, legs: request.legs.map((leg, i) => ({ ...leg, clientOrderId: orderIds[i] })) },
       {
         onSuccess: (res) => {
           setReport(res.result);
+          setReportOf(sentKey);
           setReportReplayed(Boolean(res.replayed));
           // A replay is the EARLIER submission's result — it already fired.
           // The server's own pre-trade estimate rides along: its per-leg
@@ -1471,7 +1481,7 @@ export function BorosPairTicket({
           collateral={simulation?.collateral ?? ''}
           legName={legName}
           fee={simulation?.costToCrossSize ?? null}
-          busy={execute.isPending}
+          busy={execute.isPending || !reportFits}
           onComplete={() => {
             // The gap is closed by adding to the leg that filled LESS — which
             // is the OPPOSITE of `unhedgedLeg`, the one carrying the surplus.

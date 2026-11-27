@@ -1223,6 +1223,75 @@ describe('BorosPairTicket', () => {
     });
   });
 
+  describe('a completion trades only the part-filled pair', () => {
+    // Leg B filled less, so Complete arms leg B: the leg Single mode hides.
+    const legBShort = () =>
+      HttpResponse.json(
+        env({
+          result: {
+            legs: [
+              { marketId: HL, direction: 'short', filledSize: 100_000, shortfallSize: 0, execApr: 0.089, feeSize: 2, failure: null },
+              { marketId: BN, direction: 'long', filledSize: 60_000, shortfallSize: 40_000, execApr: 0.042, feeSize: 4, failure: null },
+            ],
+            hedgedSize: 60_000,
+            unhedgedSize: 40_000,
+            unhedgedLeg: 0,
+            realisedSpreadApr: 0.044,
+            partial: true,
+            allLegsSubmitted: true,
+          },
+          estimate: simulation(),
+          warnings: [],
+        }),
+      );
+    const sendPair = async (user: ReturnType<typeof userEvent.setup>) => {
+      await fillTicket(user);
+      const confirm = await screen.findByRole('button', { name: /2 Boros market orders/i });
+      await waitFor(() => expect(confirm).not.toBeDisabled());
+      await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Complete now at market' })).toBeInTheDocument(), { timeout: 3_000 });
+    };
+
+    it('Complete and Retry wait while the form shows another trade, and complete on the pair once it is back', async () => {
+      const user = userEvent.setup();
+      const bodies: Record<string, unknown>[] = [];
+      server.use(...handlers({ onSimulate: (b) => bodies.push(b), execute: legBShort }));
+      renderWithClient(<BorosPairTicket />);
+      await sendPair(user);
+
+      await user.click(screen.getByRole('radio', { name: 'Single' }));
+      expect(screen.getByRole('button', { name: 'Complete now at market' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
+
+      await user.click(screen.getByRole('radio', { name: 'Pair' }));
+      expect(screen.getByRole('button', { name: 'Complete now at market' })).toBeEnabled();
+      await user.click(screen.getByRole('button', { name: 'Complete now at market' }));
+      await waitFor(() => {
+        const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { marketId: number }[] };
+        expect(last.onlyLeg).toBe(1);
+        expect(last.legs.map((l) => l.marketId)).toEqual([HL, BN]);
+      });
+    });
+
+    it('an armed completion ends on a switch to Single', async () => {
+      const user = userEvent.setup();
+      const bodies: Record<string, unknown>[] = [];
+      server.use(...handlers({ onSimulate: (b) => bodies.push(b), execute: legBShort }));
+      renderWithClient(<BorosPairTicket />);
+      await sendPair(user);
+      await user.click(screen.getByRole('button', { name: 'Complete now at market' }));
+      expect(screen.getByText(/Completing market B only/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('radio', { name: 'Single' }));
+      expect(screen.queryByText(/Completing market B only/i)).not.toBeInTheDocument();
+      await waitFor(() => {
+        const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { marketId: number }[] };
+        expect(last.onlyLeg).toBe(0);
+        expect(last.legs[0].marketId).toBe(HL);
+      });
+    });
+  });
+
   it('retries only the LEG that fell short — never on top of a finished fill', async () => {
     const user = userEvent.setup();
     const bodies: Record<string, unknown>[] = [];
