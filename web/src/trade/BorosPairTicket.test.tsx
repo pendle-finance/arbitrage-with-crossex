@@ -2161,6 +2161,78 @@ describe('BorosPairTicket — spread ticket', () => {
     );
   });
 
+  describe('Single back to Pair after leg A moved on its own', () => {
+    const LATER = SPREAD_OPP_MATURITY + 64 * 86_400;
+    const janSetup = (bodies: Record<string, unknown>[], spread: Record<string, unknown> = {}) =>
+      server.use(
+        ...spreadHandlers((b) => bodies.push(b), {
+          extraMarkets: [marketRow({ marketId: 219, name: 'Hyperliquid ETH 29 Jan 2027', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: LATER })],
+          extraSpreads: [spreadRow({ marketId: 299, name: 'ETH Spread HL-GATE 29 Jan 2027', maturity: LATER, ...spread })],
+        }),
+      );
+    const chips = () => within(screen.getByRole('group', { name: 'Maturity' })).getAllByRole('button');
+    const single = () => screen.getByLabelText('Market') as HTMLSelectElement;
+    const options = (label: string) => [...(screen.getByLabelText(label) as HTMLSelectElement).options].map((o) => o.value);
+
+    it('leg B on the same venue as the new leg A clears, and both pickers list every venue', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      await user.click(screen.getByRole('radio', { name: 'Single' }));
+      await user.selectOptions(single(), '209');
+      await user.click(screen.getByRole('radio', { name: 'Pair' }));
+
+      expect(screen.getByLabelText('Market A')).toHaveValue('209');
+      expect(screen.getByLabelText('Market B')).toHaveValue('');
+      expect(options('Market B')).toContain('211');
+      expect(screen.queryByText(/cannot offset itself/)).not.toBeInTheDocument();
+      await user.selectOptions(screen.getByLabelText('Market B'), '211');
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+    });
+
+    it('leg A moved to a date leg B lacks takes the spread at that date', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      // Swap so HL is leg A, then Single keeps HL and moves it to Jan.
+      await user.click(screen.getByRole('button', { name: /swap/i }));
+      await user.click(screen.getByRole('radio', { name: 'Single' }));
+      expect(single()).toHaveValue('209');
+      await user.click(chips()[1]);
+      expect(single()).toHaveValue('219');
+      await user.click(screen.getByRole('radio', { name: 'Pair' }));
+
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByLabelText('Market A')).toHaveValue('219');
+      expect(screen.getByLabelText('Market B')).toHaveValue('211');
+      await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+      await waitFor(() =>
+        expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: 299, size: 0.121 })]),
+      );
+    });
+
+    it('a spread at a date only it lists stays picked when it stops taking the trade, never moving to another date', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      await user.click(chips()[1]);
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+      // Reduce-only with no Jan spread held: the spread no longer takes it.
+      await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
+
+      expect(tradeOn()).toBeInTheDocument();
+      expect(chips()).toHaveLength(1);
+      expect(within(screen.getByRole('group', { name: 'Maturity' })).queryByRole('button', { pressed: true })).toBeNull();
+      expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled();
+    });
+  });
+
   it('keeps the two single markets when the venues list no spread at that maturity', async () => {
     const bodies: Record<string, unknown>[] = [];
     const LATER = SPREAD_OPP_MATURITY + 86_400;

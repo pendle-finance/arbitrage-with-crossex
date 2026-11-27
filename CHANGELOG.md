@@ -14,10 +14,16 @@ Gate + Hyperliquid pair on the HL-GATE spread.
   spread over the market's venue counts as its partner.
 - **Single mode opens them.** Single mode now sends one Boros order on its own when no other
   market shares its collateral and date. Before, it could only quote a market that had such a
-  partner, so a Jan Hyperliquid leg showed no quote and could not be sent.
+  partner.
 - **A Gate + Hyperliquid pair offers 29 Jan 2027.** The pair ticket shows a date chip where Boros
   lists the HL-GATE spread but no Gate market. Picking it sends one order on that spread. Before,
-  the ticket only offered dates where both venues list a market.
+  the ticket only offered dates where both venues list a market. If that spread stops taking the
+  order, the ticket stays on it and says why, instead of moving to another date.
+- **Switching from Single back to Pair keeps both pickers usable.** Before, a market picked in
+  Single mode on the other leg's venue (Hyperliquid when the pair was Gate + Hyperliquid) left both
+  legs on one venue: each picker hid it, both showed "Select market", and the ticket said "a market
+  cannot offset itself". Now the other leg clears, or moves to the new date, or the pair takes the
+  spread at that date.
 
 ## 1.7.9 — 2026-11-10
 
