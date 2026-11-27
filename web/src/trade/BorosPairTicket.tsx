@@ -311,6 +311,9 @@ export function BorosPairTicket({
     }
     if (!spread?.spreadVenues) setBehind(null);
     setIntent('open');
+    // A new trade: the last order's report and any completion end here.
+    setReport(null);
+    setOnlyLeg(null);
     setOverlaps(openPrefill.overlaps ?? []);
     /**
      * A Boros size is denominated in the market's COLLATERAL, so the collateral
@@ -902,8 +905,13 @@ export function BorosPairTicket({
 
   // A completion is armed for ONE specific residual; changing the pair or the
   // intent makes it meaningless, so it must not survive into a normal ticket.
+  // The size box holds that residual, sized for the leg that fell short; on
+  // any other trade (Single trades leg A, the leg that filled more) it would
+  // widen the gap, so it clears with the completion.
   useEffect(() => {
+    if (onlyLeg !== null) setSizeStr('');
     setOnlyLeg(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marketA, marketB, dirA, dirB, intent, mode]);
 
   const execute = useExecuteBorosPair();
@@ -980,15 +988,22 @@ export function BorosPairTicket({
     !execute.isPending &&
     closeOnlyLeg === null;
 
-  const legsKey = (r: BorosPairRequest | null) =>
-    r ? [mode, r.intent, ...r.legs.map((l) => `${l.marketId}:${l.direction}`)].join('|') : null;
+  /**
+   * The trade the form shows: wallet, mode, intent and each shown leg's market
+   * and side. Not the size (Complete and Retry set their own) and not Single's
+   * zero-size partner (never traded).
+   */
+  const formKey =
+    marketA === null
+      ? null
+      : [address, mode, intent, `${marketA}:${dirA}`, ...(mode === 'pair' && !isSpread ? [`${marketB}:${dirB}`] : [])].join('|');
   /** Complete and Retry re-send on the form's markets, so they act only while
-   * the form still shows the mode, markets, sides and intent that part-filled. */
-  const reportFits = report !== null && legsKey(request) === reportOf;
+   * the form still shows the trade that part-filled. */
+  const reportFits = report !== null && formKey === reportOf;
 
   const onConfirm = () => {
     if (!request) return;
-    const sentKey = legsKey(request);
+    const sentKey = formKey;
     execute.mutate(
       { ...request, legs: request.legs.map((leg, i) => ({ ...leg, clientOrderId: orderIds[i] })) },
       {
@@ -1539,6 +1554,11 @@ export function BorosPairTicket({
             setReport(null);
           }}
         />
+      )}
+      {report?.partial && !reportFits && (
+        <p className="text-[11px] leading-relaxed text-ink-300" role="status">
+          {t('pairTicket.boros.reportOtherTrade')}
+        </p>
       )}
 
       {/* --- Confirm ------------------------------------------------------- */}
