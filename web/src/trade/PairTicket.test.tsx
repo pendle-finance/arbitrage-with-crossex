@@ -3,9 +3,19 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { OPPORTUNITIES_STORAGE_KEY } from '../lib/storage';
-import type { ActionInput, DealRequest, PreviewResponse, PreviewResult, SymbolRule } from '../api/types';
-import { baseHandlers, BTC_BINANCE, ETH_GATE, previewFor, symbolHandlers } from '../test/fixtures';
+import type {
+  ActionInput,
+  DealRequest,
+  MakerLegPreview,
+  PreviewResponse,
+  PreviewResult,
+  SymbolRule,
+  TwapPlanPreview,
+} from '../api/types';
+import type { TwapInput } from './TwapArea';
+import { baseHandlers, BTC_BINANCE, ETH_GATE, previewFor, symbolHandlers, TWAP_OFF } from '../test/fixtures';
 import { env, server } from '../test/server';
+import { pickOption } from '../test/picker';
 import { renderWithClient } from '../test/utils';
 import { PairTicket } from './PairTicket';
 import { useTradeFlow, type PairPrefill } from './TradeFlow';
@@ -26,10 +36,30 @@ const TOUCH = { bestBid: 2499, bestAsk: 2501, mid: 2500 };
  * market legs answer with taker fees + a fill estimate, the maker (open-limit
  * POC) leg with maker-only fees + the venue touch (restEstimate).
  */
+function planFor(input: TwapInput): TwapPlanPreview {
+  const intervalSec = input.intervalSec ?? 300;
+  const durationSec = input.durationSec ?? 3_600;
+  return {
+    plan: {
+      slices: Math.round(durationSec / intervalSec),
+      sliceQty: '0.033',
+      lastQty: '0.037',
+      intervalSec,
+      durationSec,
+      takerAfterSec: Math.floor(intervalSec * 0.8),
+    },
+    refusal: null,
+  };
+}
+
 function previewHandler(opts: {
   calls: ActionInput[][];
   rates?: Record<string, VenueRates>;
   touch?: typeof TOUCH;
+  makerLeg?: MakerLegPreview;
+  twapCalls?: TwapInput[];
+  rules?: Record<string, SymbolRule>;
+  twapOn?: boolean;
 }) {
   const rates = opts.rates ?? {
     GATE: { maker: 0.0002, taker: 0.0005 },
@@ -37,12 +67,14 @@ function previewHandler(opts: {
   };
   const touch = opts.touch ?? TOUCH;
   return http.post('/api/preview', async ({ request }) => {
-    const { actions } = (await request.json()) as { actions: ActionInput[] };
+    const { actions, twap } = (await request.json()) as { actions: ActionInput[]; twap?: TwapInput };
     opts.calls.push(actions);
+    if (twap) opts.twapCalls?.push(twap);
     const previews = actions.map((a, i): PreviewResult => {
       const venue = a.symbol.split('_')[0];
       const r = rates[venue];
       const feesBase = { makerRate: r.maker, takerRate: r.taker, specialOverride: false, quote: 'USDT' };
+      const rule = opts.rules?.[venue];
       // Echo the action's leverage like the real resolver — the ticket's margin
       // line divides estNotional by it.
       const leverage =
@@ -58,6 +90,7 @@ function previewHandler(opts: {
           qty: '0.4',
           estNotional: 1000,
           leverage,
+          ...(rule ? { rule } : {}),
           restEstimate: touch,
           fees: { ...feesBase, est: { maker: 1000 * r.maker } },
         });
@@ -67,6 +100,7 @@ function previewHandler(opts: {
         qty: '0.4',
         estNotional: 1000,
         leverage,
+        ...(rule ? { rule } : {}),
         fillEstimate: {
           qty: '0.4',
           avgPrice: 2500.5,
@@ -80,17 +114,21 @@ function previewHandler(opts: {
         fees: { ...feesBase, est: { taker: 1000 * r.taker } },
       });
     });
-    return HttpResponse.json(env<PreviewResponse>({ previews }));
+    return HttpResponse.json(
+      env<PreviewResponse>({
+        previews,
+        makerLeg: opts.makerLeg ?? { auto: 'a', why: 'book' },
+        priceImpact: { whole: 12, sliced: 3, slicedLegs: [3] }, twapDefault: { ...TWAP_OFF, on: opts.twapOn === true },
+        twap: planFor(twap ?? {}),
+      }),
+    );
   });
 }
 
-/** The venues are dropdowns keyed by full symbol; the option for a symbol only
- * exists once that base's rules have loaded, so wait for it. */
 async function pickVenues(longSymbol: string, shortSymbol: string) {
-  const longSel = (await screen.findByLabelText('Long venue')) as HTMLSelectElement;
-  await waitFor(() => expect(longSel.querySelector(`option[value="${longSymbol}"]`)).not.toBeNull());
-  await userEvent.selectOptions(longSel, longSymbol);
-  await userEvent.selectOptions(screen.getByLabelText('Short venue'), shortSymbol);
+  const user = userEvent.setup();
+  await pickOption(user, 'Long venue', longSymbol);
+  await pickOption(user, 'Short venue', shortSymbol);
 }
 
 /** Fill an already-mounted ticket: ETH via quick-pick, GATE as the LONG venue,
@@ -112,10 +150,29 @@ async function setupTwoVenuePair() {
 
 /** Wait for the initial preview to land (fees become known). */
 async function waitForFirstPreview() {
-  await screen.findByText(/Shared size/, undefined, { timeout: 4000 });
+  await screen.findByText('Margin required', undefined, { timeout: 4000 });
 }
 
-const makerPanel = () => screen.getByText('Maker leg').parentElement as HTMLElement;
+const foldRow = () => screen.getByRole('button', { name: /Maker settings/ });
+const openFold = () => userEvent.click(foldRow());
+const twapSwitch = () => screen.getByRole('switch', { name: 'TWAP' });
+const limitPrice = () => screen.getByLabelText('Limit price');
+const takerGroup = () => screen.getByRole('radiogroup', { name: 'Taker after' });
+const OVER_4M = 'Must be 80% of the interval or less (4m)';
+
+function dealCapture(dealCalls: DealRequest[]) {
+  return http.post('/api/deals', async ({ request }) => {
+    dealCalls.push((await request.json()) as DealRequest);
+    return HttpResponse.json(env({ id: dealCalls.at(-1)!.id }), { status: 202 });
+  });
+}
+
+async function holdExecute(name: string, count: number, dealCalls: unknown[]) {
+  const btn = screen.getByRole('button', { name });
+  await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+  fireEvent.pointerDown(btn);
+  await waitFor(() => expect(dealCalls).toHaveLength(count), { timeout: 2_000 });
+}
 
 /** The book+impact graph fetches a live touch per leg via GET /api/books/:symbol.
  * A default two-sided quote (bid 2499 / ask 2501, mid 2500) for every test; a
@@ -141,7 +198,7 @@ describe('PairTicket size unit', () => {
 
     // Base is the DEFAULT — the label says so without anything being clicked.
     await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '0.4');
-    await userEvent.click(screen.getByRole('radio', { name: '2 market orders' }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
 
     await waitFor(() => expect(calls.at(-1)?.[0]).toMatchObject({ qty: '0.4' }), {
       timeout: 4000,
@@ -152,6 +209,28 @@ describe('PairTicket size unit', () => {
       expect(action).not.toHaveProperty('notional');
     }
   });
+
+  it('shows Size per leg only when it differs from the box, and the lot note only when it rounded', async () => {
+    const calls: ActionInput[][] = [];
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls, rules: { GATE: ETH_GATE, OKX: ETH_OKX } }));
+    renderWithClient(<PairTicket />);
+    await userEvent.click(await screen.findByRole('button', { name: 'ETH' }));
+    await pickVenues('GATE_FUTURE_ETH_USDT', 'OKX_FUTURE_ETH_USDT');
+    const after = () => screen.getByRole('region', { name: 'After' });
+
+    await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '0.4');
+    await waitFor(() => expect(after()).toHaveTextContent('Margin required'), { timeout: 4000 });
+    expect(within(after()).queryByText('Size per leg')).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText('Size per leg (ETH)'), '004');
+    await waitFor(() => expect(within(after()).getByText('Size per leg')).toBeInTheDocument(), { timeout: 4000 });
+    expect(after()).toHaveTextContent(`Rounded to Gate lot ${ETH_GATE.lotSize}`);
+    expect(after()).toHaveTextContent('0.4 ETH');
+
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Size unit' })).getByRole('radio', { name: 'USDT' }));
+    await waitFor(() => expect(after()).not.toHaveTextContent(/Rounded to/), { timeout: 4000 });
+    expect(within(after()).getByText('Size per leg')).toBeInTheDocument();
+  });
 });
 
 describe('PairTicket execution modes', () => {
@@ -160,7 +239,7 @@ describe('PairTicket execution modes', () => {
     await setupTwoVenuePair();
 
     expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: '2 market orders' })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /^Market/ })).toHaveAttribute('aria-checked', 'false');
   });
 
   it('starts on "2 market orders" when picked on Opportunities; it previews two plain open-market legs', async () => {
@@ -169,7 +248,7 @@ describe('PairTicket execution modes', () => {
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
     await setupTwoVenuePair();
 
-    expect(screen.getByRole('radio', { name: '2 market orders' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /^Market/ })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'false');
 
     await waitFor(
@@ -198,39 +277,23 @@ describe('PairTicket execution modes', () => {
     expect(actions[1].pairGroupId).toBe(actions[0].pairGroupId);
   });
 
-  it('shows the book + market-impact graph, and a limit line only in maker mode', async () => {
+  it('Cost lists both legs with their fill price and no book graph; the maker chip shows only in maker mode', async () => {
     const calls: ActionInput[][] = [];
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
     await setupTwoVenuePair();
     await waitForFirstPreview();
 
-    // 2 market orders: the live two-sided quote (2499/2501 from the book handler)
-    // and the market-order fill (2500.5 from the preview's fillEstimate) on
-    // both legs.
-    await userEvent.click(screen.getByRole('radio', { name: '2 market orders' }));
-    expect(document.querySelector('[data-price-graph]')).not.toBeNull();
-    await waitFor(() =>
-      expect(
-        document.querySelector('[data-leg="long"] [data-mark="fill"]')?.getAttribute('data-price'),
-      ).toBe('2500.5'),
-    );
-    expect(
-      document.querySelector('[data-leg="short"] [data-mark="fill"]')?.getAttribute('data-price'),
-    ).toBe('2500.5');
-    expect(document.querySelector('[data-leg="long"] [data-mark="bid"]')?.getAttribute('data-price')).toBe('2499');
-    // The redundant per-leg footer rows are gone — exact numbers live on the
-    // axis gutter and the marks' hover titles.
-    expect(screen.queryByText('2499 / 2501')).toBeNull();
-    // Both-market mode has no resting limit.
-    expect(document.querySelector('[data-mark="limit"]')).toBeNull();
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
+    const legRows = () => within(screen.getByRole('region', { name: 'Cost' })).getAllByRole('row').slice(1);
+    await waitFor(() => expect(legRows()[0]).toHaveTextContent('2,500.5'));
+    expect(legRows()[1]).toHaveTextContent('2,500.5');
+    expect(legRows().some((row) => /Maker/.test(row.textContent ?? ''))).toBe(false);
+    expect(document.querySelector('[data-price-graph]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
 
-    // Limit + hedge (equal fees → the long leg rests): a cyan limit line appears
-    // on the maker leg once the price auto-tracks the touch.
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
-    await waitFor(() =>
-      expect(document.querySelector('[data-leg="long"] [data-mark="limit"]')).not.toBeNull(),
-    );
-    expect(document.querySelector('[data-leg="short"] [data-mark="limit"]')).toBeNull();
+    await waitFor(() => expect(legRows()[0]).toHaveTextContent(/LONG\s*Gate\s*Maker/));
+    expect(legRows()[1]).not.toHaveTextContent('Maker');
   });
 
   it('leverage is PER LEG at each venue max (never min of the two, no input)', async () => {
@@ -269,22 +332,17 @@ describe('PairTicket execution modes', () => {
     await setupTwoVenuePair();
     await waitForFirstPreview();
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
-    // Price auto-tracks one gap behind the bid (unpinned): 2499 − 2 = 2497.
-    await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
 
-    const btn = screen.getByRole('button', { name: 'Execute pair' });
-    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
-    fireEvent.pointerDown(btn); // hold-to-confirm (default 800ms)
-    await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
+    await holdExecute('Execute pair', 1, dealCalls);
 
-    // The tracking ticket maps to a maker deal: pricePolicy 'touch' (the engine
-    // re-pegs at submit), the tracked book-offset as the fallback price, the
-    // hedge leg opposite, and the ticket's timeout carried through.
     expect(dealCalls[0]).toMatchObject({
       execution: 'maker',
       pricePolicy: 'touch',
-      price: '2497',
+      price: '2499',
       timeoutSec: 300,
+      repegBehindBp: 5,
+      makerLeg: 'a',
       a: { side: 'BUY' },
       b: { side: 'SELL' },
     });
@@ -298,16 +356,14 @@ describe('PairTicket execution modes', () => {
 
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
 
-    // Equal venue rates → auto-choice settles on the LONG leg (GATE, BUY maker),
-    // so the tracked price is one gap behind the bid: 2499 − 2 = 2497.
-    const priceInput = await screen.findByLabelText(/Maker price/);
-    await waitFor(() => expect(priceInput).toHaveValue('2497'), { timeout: 4000 });
+    const priceInput = await screen.findByLabelText('Limit price');
+    await waitFor(() => expect(priceInput).toHaveValue('2,499.00'), { timeout: 4000 });
 
     await waitFor(
       () => {
         const pair = calls.find((c) => {
           const a = c[0];
-          return a?.kind === 'open-limit' && a.price === '2497';
+          return a?.kind === 'open-limit' && a.price === '2499';
         });
         expect(pair).toBeDefined();
       },
@@ -315,7 +371,7 @@ describe('PairTicket execution modes', () => {
     );
     const pair = calls.find((c) => {
       const a = c[0];
-      return a?.kind === 'open-limit' && a.price === '2497';
+      return a?.kind === 'open-limit' && a.price === '2499';
     })!;
     // Positional order stays [LONG leg, SHORT leg] even though roles are attached.
     expect(pair[0]).toMatchObject({
@@ -326,7 +382,7 @@ describe('PairTicket execution modes', () => {
       pairRole: 'maker',
       makerTimeoutSec: 300,
       notional: '1000',
-      price: '2497',
+      price: '2499',
     });
     expect(pair[1]).toMatchObject({
       kind: 'open-market',
@@ -338,31 +394,18 @@ describe('PairTicket execution modes', () => {
     expect(pair[1].pairGroupId).toBe(pair[0].pairGroupId);
   });
 
-  it('auto-chooses the cheaper maker venue and shows the saving — no swap override', async () => {
+  it('rests the maker on the leg the preview picks on Auto', async () => {
     const calls: ActionInput[][] = [];
     server.use(
       ...baseHandlers(),
       ...ethSymbolHandlers(),
-      previewHandler({
-        calls,
-        // GATE (long): maker 2bps / taker 4.8bps · OKX (short): maker 0bps / taker 5bps
-        // maker-on-GATE = 2 + 5 = 7bps · maker-on-OKX = 0 + 4.8 = 4.8bps → OKX wins.
-        rates: { GATE: { maker: 0.0002, taker: 0.00048 }, OKX: { maker: 0, taker: 0.0005 } },
-      }),
+      previewHandler({ calls, makerLeg: { auto: 'b', why: 'fees' } }),
     );
     await setupTwoVenuePair();
     await waitForFirstPreview();
 
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
-
-    const panel = makerPanel();
-    expect(within(panel).getByText('OKX')).toBeInTheDocument();
-    expect(within(panel).getByText('Auto')).toBeInTheDocument();
-    // (4.8+5 − 4.8) bps × $1000 = $0.5
-    expect(screen.getByText(/Saves ≈ 0\.5 USDT/)).toBeInTheDocument();
-    // The auto-choice is authoritative — there is no swap/override control.
-    expect(within(panel).queryByRole('button', { name: 'swap' })).toBeNull();
-    expect(within(panel).queryByText('manual')).toBeNull();
+    await waitFor(() => expect(foldRow()).toHaveTextContent('OKX maker'), { timeout: 4000 });
 
     await waitFor(
       () => {
@@ -385,6 +428,35 @@ describe('PairTicket execution modes', () => {
     );
   });
 
+  it('an Auto price from an off-step mid goes out on the maker venue step, so no rounding warning shows', async () => {
+    const calls: ActionInput[][] = [];
+    server.use(
+      ...baseHandlers(),
+      ...ethSymbolHandlers(),
+      previewHandler({
+        calls,
+        makerLeg: { auto: 'b', why: 'book' },
+        touch: { bestBid: 2499.99, bestAsk: 2500.02, mid: 2500.005 },
+      }),
+    );
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+
+    await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
+    await waitFor(() => expect(foldRow()).toHaveTextContent('OKX maker'), { timeout: 4000 });
+    await waitFor(
+      () => {
+        const sent = calls.flat().filter((a) => a.kind === 'open-limit' && a.price);
+        expect(sent.length).toBeGreaterThan(0);
+      },
+      { timeout: 4000 },
+    );
+
+    const prices = calls.flat().flatMap((a) => (a.kind === 'open-limit' && a.price ? [a.price] : []));
+    expect(prices).not.toContain('2500.005');
+    for (const price of prices) expect(Number((Number(price) * 100).toFixed(6)) % 1).toBe(0);
+  });
+
   it('picking a timeout sends makerTimeoutSec on the maker leg', async () => {
     const calls: ActionInput[][] = [];
     server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls }));
@@ -392,14 +464,14 @@ describe('PairTicket execution modes', () => {
     await waitForFirstPreview();
 
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
-    const timeoutGroup = screen.getByRole('radiogroup', { name: 'Convert to taker after' });
-    await userEvent.click(within(timeoutGroup).getByRole('radio', { name: '15m' }));
-    expect(within(timeoutGroup).getByRole('radio', { name: '15m' })).toHaveAttribute('aria-checked', 'true');
+    await openFold();
+    await userEvent.click(within(takerGroup()).getByRole('radio', { name: '10m' }));
+    expect(within(takerGroup()).getByRole('radio', { name: '10m' })).toHaveAttribute('aria-checked', 'true');
 
     await waitFor(
       () => {
         const hit = calls.find((c) =>
-          c.some((a) => a.kind === 'open-limit' && a.makerTimeoutSec === 900),
+          c.some((a) => a.kind === 'open-limit' && a.makerTimeoutSec === 600),
         );
         expect(hit).toBeDefined();
       },
@@ -414,14 +486,13 @@ describe('PairTicket execution modes', () => {
     await waitForFirstPreview();
 
     await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
-    const priceInput = await screen.findByLabelText(/Maker price/);
-    // One gap behind the touch: bid 2499 − (2501 − 2499) = 2497.
-    await waitFor(() => expect(priceInput).toHaveValue('2497'), { timeout: 4000 });
-    expect(screen.getByText(/Tracking the book/)).toBeInTheDocument();
+    const priceInput = await screen.findByLabelText('Limit price');
+    await waitFor(() => expect(priceInput).toHaveValue('2,499.00'), { timeout: 4000 });
+    expect(screen.queryByRole('button', { name: 'Use the book price again' })).toBeNull();
 
     await userEvent.clear(priceInput);
     await userEvent.type(priceInput, '2450');
-    expect(screen.getByText(/Pinned —/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use the book price again' })).toBeInTheDocument();
 
     // Another preview cycle completes for the typed price (its response still
     // reports the touch at 2499/2501) — the pinned input must NOT be overwritten.
@@ -439,9 +510,26 @@ describe('PairTicket execution modes', () => {
     expect(priceInput).toHaveValue('2450');
 
     // Un-pinning resumes tracking: the input snaps back to the book offset.
-    await userEvent.click(screen.getByRole('button', { name: 'track book' }));
-    await waitFor(() => expect(priceInput).toHaveValue('2497'), { timeout: 4000 });
-    expect(screen.getByText(/Tracking the book/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Use the book price again' }));
+    await waitFor(() => expect(priceInput).toHaveValue('2,499.00'), { timeout: 4000 });
+  });
+
+  it('a typed price does not follow the trader to another coin: the new coin tracks its own book', async () => {
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [] }));
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+
+    await userEvent.click(screen.getByRole('radio', { name: /Limit \+ hedge/ }));
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
+    await userEvent.clear(limitPrice());
+    await userEvent.type(limitPrice(), '2450');
+    expect(screen.getByRole('button', { name: 'Use the book price again' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'BTC' }));
+    await fillTwoVenuePair();
+
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
+    expect(screen.queryByRole('button', { name: 'Use the book price again' })).toBeNull();
   });
 });
 
@@ -485,7 +573,7 @@ describe('PairTicket idempotency across remount', () => {
     // First mount: fill the ticket and confirm — the response is lost.
     const first = renderWithClient(<PairTicket />);
     await fillTwoVenuePair();
-    await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
     const btn1 = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn1).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn1); // hold-to-confirm (default 800ms)
@@ -496,7 +584,7 @@ describe('PairTicket idempotency across remount', () => {
     first.unmount();
     renderWithClient(<PairTicket />);
     await fillTwoVenuePair();
-    await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
     const btn2 = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn2);
@@ -535,7 +623,7 @@ describe('PairTicket idempotency across remount', () => {
 
     renderWithClient(<PairTicket />);
     await fillTwoVenuePair(); // leaves the box in USDT at 1000
-    await waitFor(() => expect(screen.getByLabelText(/Maker price/)).toHaveValue('2497'), { timeout: 4000 });
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
     const btn = screen.getByRole('button', { name: 'Execute pair' });
     await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
     fireEvent.pointerDown(btn);
@@ -648,9 +736,8 @@ describe('PairTicket prefill', () => {
     await waitFor(() =>
       expect(screen.getByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true'),
     );
-    expect(screen.getByRole('radio', { name: '2 market orders' })).toHaveAttribute('aria-checked', 'false');
-    // Same invariant as the manual toggle: the maker price is not pinned.
-    expect(screen.getByText(/Tracking the book/)).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Market/ })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.queryByRole('button', { name: 'Use the book price again' })).toBeNull();
     await waitFor(() => expect(screen.getByLabelText('Size per leg (USDT)')).toHaveValue('1000'));
   });
 
@@ -801,5 +888,264 @@ describe('PairTicket — the size unit follows the coin', () => {
     // The unit follows the new coin — and the old coin's figure does not.
     const ethBox = await screen.findByLabelText('Size per leg (ETH)');
     expect(ethBox).toHaveValue('');
+  });
+});
+
+describe('PairTicket layout C', () => {
+  beforeEach(() => {
+    localStorage.setItem(OPPORTUNITIES_STORAGE_KEY, JSON.stringify({ entryMode: 'maker-hedge' }));
+  });
+
+  async function ready(opts: { twapCalls?: TwapInput[]; dealCalls?: DealRequest[] } = {}) {
+    server.use(
+      ...baseHandlers(),
+      ...ethSymbolHandlers(),
+      previewHandler({ calls: [], twapCalls: opts.twapCalls }),
+      dealCapture(opts.dealCalls ?? []),
+    );
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+  }
+
+  async function twapOn() {
+    await userEvent.click(twapSwitch());
+    await waitFor(() => expect(foldRow()).toHaveTextContent('taker 4m'), { timeout: 4000 });
+  }
+
+  it('no TWAP switch when the caller turns TWAP off', async () => {
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [] }));
+    renderWithClient(<PairTicket allowTwap={false} />);
+    await fillTwoVenuePair();
+    expect(screen.getByRole('radio', { name: /^Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByRole('switch', { name: 'TWAP' })).toBeNull();
+  });
+
+  it('estimate card reads total only with twap on', async () => {
+    await ready();
+    expect(screen.queryByText('total')).toBeNull();
+    await twapOn();
+    expect((await screen.findAllByText('total')).length).toBeGreaterThan(0);
+  });
+
+  it('never says it cannot send as one deal on a twap ticket', async () => {
+    await ready();
+    await twapOn();
+    expect(screen.queryByText("Can't send as one deal. Send each leg on its own.")).toBeNull();
+  });
+
+  it('order type labels', async () => {
+    await ready();
+    expect(screen.getByRole('radio', { name: /^Limit \+ hedge/ })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /^Market/ })).toBeInTheDocument();
+    expect(screen.queryByText('2 market orders')).toBeNull();
+    expect(screen.queryByText(/Perp entry/)).toBeNull();
+  });
+
+  it('each order choice shows its fee and time, and the Orders hover explains both', async () => {
+    const user = userEvent.setup();
+    await ready();
+    const orders = screen.getByRole('radiogroup', { name: 'Orders' });
+    expect(within(orders).getAllByRole('radio').map((r) => r.textContent)).toEqual([
+      'Limit + hedge about $0.90 · 5 min',
+      'Market about $1.20 · 2s',
+    ]);
+    const trigger = screen.getByRole('button', { name: 'Orders' });
+    await user.hover(trigger);
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent('One leg rests as a post-only limit order at the maker fee.');
+    expect(card).toHaveTextContent('Both legs fill at market at once, at the taker fee.');
+  });
+
+  it('maker labels renamed', async () => {
+    await ready();
+    expect(limitPrice()).toBeInTheDocument();
+    await openFold();
+    expect(takerGroup()).toBeInTheDocument();
+    expect(screen.queryByText('Maker price')).toBeNull();
+    expect(screen.queryByText('Convert to taker after')).toBeNull();
+  });
+
+  it('maker settings fold row', async () => {
+    await ready();
+    await userEvent.click(twapSwitch());
+    await waitFor(() => expect(foldRow()).toHaveTextContent('Gate maker · taker 4m · re-peg 0.05%'), { timeout: 4000 });
+  });
+
+  it('fold opens three controls', async () => {
+    await ready();
+    expect(screen.queryByRole('radiogroup', { name: 'Taker after' })).toBeNull();
+    await openFold();
+    expect(screen.getByRole('radiogroup', { name: 'Maker leg' })).toBeInTheDocument();
+    expect(takerGroup()).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Re-peg if behind' })).toBeInTheDocument();
+  });
+
+  it('maker leg auto chip', async () => {
+    await ready();
+    await openFold();
+    const group = screen.getByRole('radiogroup', { name: 'Maker leg' });
+    expect(within(group).getByRole('radio', { name: 'Gate Long' })).toHaveAttribute('aria-checked', 'true');
+    expect(within(group).getByRole('radio', { name: 'OKX Short' })).toHaveAttribute('aria-checked', 'false');
+    expect(group.parentElement).toHaveTextContent(/Maker leg.*Auto/);
+    expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull();
+  });
+
+  it('manual maker leg shows reset', async () => {
+    const dealCalls: DealRequest[] = [];
+    await ready({ dealCalls });
+    await openFold();
+    await userEvent.click(screen.getByRole('radio', { name: 'OKX Short' }));
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeInTheDocument();
+    await holdExecute('Execute pair', 1, dealCalls);
+    expect(dealCalls[0]).toMatchObject({ makerLeg: 'b', b: { symbol: 'OKX_FUTURE_ETH_USDT', side: 'SELL' } });
+  });
+
+  it('taker after choices', async () => {
+    await ready();
+    await openFold();
+    const names = within(takerGroup()).getAllByRole('radio').map((r) => r.textContent);
+    expect(names).toEqual(['5m', '10m', 'Never', 'Custom']);
+    expect(within(takerGroup()).getByRole('radio', { name: '5m' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.queryByLabelText('Taker after, custom time')).toBeNull();
+  });
+
+  it('custom shows the time box', async () => {
+    await ready();
+    await openFold();
+    await userEvent.click(within(takerGroup()).getByRole('radio', { name: 'Custom' }));
+    expect(screen.getByLabelText('Taker after, custom time')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Execute pair' })).toBeDisabled();
+  });
+
+  it('taker after greys choices over 80% of the interval', async () => {
+    await ready();
+    await twapOn();
+    await openFold();
+    for (const name of ['5m', '10m']) {
+      const radio = within(takerGroup()).getByRole('radio', { name });
+      expect(radio).toBeDisabled();
+      expect(radio).toHaveAttribute('title', OVER_4M);
+    }
+  });
+
+  it('taker after defaults to 80% of the interval', async () => {
+    await ready();
+    await twapOn();
+    await openFold();
+    await waitFor(() => expect(within(takerGroup()).getByRole('radio', { name: 'Custom' })).toHaveAttribute('aria-checked', 'true'));
+    expect(screen.getByLabelText('Taker after, custom time')).toHaveValue('4m');
+  });
+
+  it('12m interval enables 5m only', async () => {
+    const twapCalls: TwapInput[] = [];
+    await ready({ twapCalls });
+    await twapOn();
+    const interval = screen.getByRole('textbox', { name: 'Interval' });
+    await userEvent.clear(interval);
+    await userEvent.type(interval, '12m');
+    await waitFor(() => expect(twapCalls.at(-1)).toMatchObject({ intervalSec: 720 }), { timeout: 4000 });
+    await openFold();
+    await waitFor(() => expect(within(takerGroup()).getByRole('radio', { name: '10m' })).toBeDisabled(), { timeout: 4000 });
+    expect(within(takerGroup()).getByRole('radio', { name: '5m' })).toBeEnabled();
+    expect(screen.getByLabelText('Taker after, custom time')).toHaveValue('9m 36s');
+  });
+
+  it('re-peg choices', async () => {
+    await ready();
+    await openFold();
+    const group = screen.getByRole('radiogroup', { name: 'Re-peg if behind' });
+    expect(within(group).getAllByRole('radio').map((r) => r.textContent)).toEqual(['0.02%', '0.05%', '0.1%', 'Off']);
+    expect(within(group).getByRole('radio', { name: '0.05%' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('re-peg maps to repegBehindBp', async () => {
+    const dealCalls: DealRequest[] = [];
+    await ready({ dealCalls });
+    await holdExecute('Execute pair', 1, dealCalls);
+    expect(dealCalls[0]).toMatchObject({ repegBehindBp: 5 });
+    await openFold();
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Re-peg if behind' })).getByRole('radio', { name: 'Off' }));
+    await holdExecute('Execute pair', 2, dealCalls);
+    expect(dealCalls[1].repegBehindBp).toBeNull();
+  });
+
+  it('typed price turns re-peg off', async () => {
+    const dealCalls: DealRequest[] = [];
+    await ready({ dealCalls });
+    await waitFor(() => expect(limitPrice()).toHaveValue('2,499.00'), { timeout: 4000 });
+    await userEvent.clear(limitPrice());
+    await userEvent.type(limitPrice(), '2450');
+    expect(foldRow()).toHaveTextContent('re-peg off');
+    await holdExecute('Execute pair', 1, dealCalls);
+    expect(dealCalls[0]).toMatchObject({ pricePolicy: 'fixed', price: '2450', repegBehindBp: null });
+  });
+
+  it('twap on hides limit price', async () => {
+    await ready();
+    expect(limitPrice()).toBeInTheDocument();
+    await userEvent.click(twapSwitch());
+    expect(screen.queryByLabelText('Limit price')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Start TWAP' })).toBeInTheDocument();
+  });
+
+  it("the Cost card's leg rows mark the maker leg", async () => {
+    await ready();
+    const legRows = () => within(screen.getByRole('region', { name: 'Cost' })).getAllByRole('row').slice(1);
+    await waitFor(() => expect(legRows()[0]).toHaveTextContent(/LONG\s*Gate\s*Maker/), { timeout: 4000 });
+    expect(legRows()[1]).toHaveTextContent(/SHORT\s*OKX/);
+    expect(legRows()[1]).not.toHaveTextContent('Maker');
+  });
+
+  it('auto-chooses the cheaper maker venue and shows the saving', async () => {
+    server.use(
+      ...baseHandlers(),
+      ...ethSymbolHandlers(),
+      previewHandler({
+        calls: [],
+        makerLeg: { auto: 'b', why: 'fees' },
+        rates: { GATE: { maker: 0.0002, taker: 0.00048 }, OKX: { maker: 0, taker: 0.0005 } },
+      }),
+    );
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+    await openFold();
+    await waitFor(() => expect(screen.getByText(/Saves ≈ 0\.5 USDT/)).toBeInTheDocument(), { timeout: 4000 });
+    expect(screen.getByText(/vs 2 taker orders/)).toBeInTheDocument();
+  });
+
+  it('switching to Market and back keeps the TWAP the trader turned on', async () => {
+    await ready();
+    await twapOn();
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
+    expect(twapSwitch()).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('switching to Market and back keeps the book-sized TWAP default', async () => {
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [], twapOn: true }));
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'true'), { timeout: 4000 });
+    await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
+    await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'true'), { timeout: 4000 });
+  });
+
+  it('an empty size box drops the TWAP the book suggested', async () => {
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [], twapOn: true }));
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+    await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'true'), { timeout: 4000 });
+    await userEvent.clear(screen.getByLabelText('Size per leg (USDT)'));
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'false'), { timeout: 4000 });
+  });
+
+  it('leverage is venue max with no control', async () => {
+    await ready();
+    await waitFor(() => expect(screen.getByText('Leverage')).toBeInTheDocument(), { timeout: 4000 });
+    expect(document.body).toHaveTextContent(/Leverage\s*\d+x Long \/ \d+x Short\s*· venue max/);
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+    expect(screen.queryByRole('textbox', { name: /leverage/i })).toBeNull();
   });
 });

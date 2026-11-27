@@ -6,15 +6,18 @@
  * "respected" because it could not be expressed. The single-leg ClosePopover
  * always had the control; this is the two-leg surface catching up.
  */
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { describe, expect, it } from 'vitest';
-import type { ActionInput, DealRequest, PreviewResponse } from '../api/types';
-import { account, baseHandlers, previewFor } from '../test/fixtures';
+import { useState } from 'react';
+import { beforeEach, describe, expect, it } from 'vitest';
+import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse } from '../api/types';
+import { account, baseHandlers, ETH_GATE, previewFor, symbolHandlers } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ClosePairForm } from './PerpOnlyBox';
+
+beforeEach(() => server.use(...symbolHandlers([{ ...ETH_GATE, lotSize: '0.0001', minSize: '0.0001' }])));
 
 const LEGS = [
   { symbol: 'BYBIT_FUTURE_HYPE_USDT', qty: 1.89, venue: 'BYBIT' },
@@ -28,6 +31,7 @@ function previewSpy(seen: ActionInput[][]) {
     seen.push(actions);
     return HttpResponse.json(
       env<PreviewResponse>({
+        makerLeg: { auto: 'a', why: 'fees' },
         previews: actions.map((a) =>
           previewFor(a, {
             side: 'SELL',
@@ -57,8 +61,9 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
       as.map((a) => (a.kind === 'close-position' ? a.slippagePct : undefined));
     expect(slipOf(seen.at(-1)!)).toEqual([0.5, 0.5]);
 
-    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Max slippage %');
+    await pickMarket();
+    await openSlippage();
+    const slip = screen.getByLabelText('Market slippage');
     await userEvent.clear(slip);
     await userEvent.type(slip, '2');
 
@@ -80,6 +85,7 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
       }),
     );
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    await pickMarket();
 
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
     const btn = screen.getByRole('button', { name: /Close both/ });
@@ -103,8 +109,9 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
     await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
 
-    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Max slippage %');
+    await pickMarket();
+    await openSlippage();
+    const slip = screen.getByLabelText('Market slippage');
     await userEvent.clear(slip);
     await userEvent.type(slip, '50');
 
@@ -114,20 +121,6 @@ describe('ClosePairForm — the slippage the user sets is the slippage sent', ()
     );
   });
 
-  it('states that only the first leg carries the band', async () => {
-    // The old copy promised "mark ± slippage" for the whole close, but the
-    // hedge leg is deliberately a plain MARKET IOC (see decide.ts) — a
-    // book-mid limit band gets price-limit-rejected and would strand it.
-    server.use(...baseHandlers(), previewSpy([]));
-    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
-    // The full note rides as the tooltip on the footer line under the
-    // button, so assert the title rather than visible text.
-    const badge = (await screen.findByText(/^Reduce-only$/)).closest('p') as HTMLElement;
-    expect(badge).toHaveAttribute(
-      'title',
-      expect.stringContaining("Second leg: market, inside the venue's price limit."),
-    );
-  });
 });
 
 describe('ClosePairForm — one size, both legs, never a naked remainder', () => {
@@ -162,6 +155,8 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
         ]}
       />,
     );
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([String(gate), String(gate)]), { timeout: 4000 });
+    await pickMarket();
     await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([String(gate), String(hl)]), { timeout: 4000 });
     first.unmount();
 
@@ -175,10 +170,20 @@ describe('ClosePairForm — one size, both legs, never a naked remainder', () =>
         ]}
       />,
     );
-    await waitFor(() => expect(seen.length).toBeGreaterThan(0), { timeout: 4000 });
-    expect(qtysOf(seen.at(-1))).toEqual([undefined, undefined]);
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([undefined, String(gate)]), { timeout: 4000 });
+    await pickMarket();
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual([undefined, undefined]), { timeout: 4000 });
   });
 });
+
+/** The close defaults to Limit + hedge; market-mode cases pick it first. */
+async function pickMarket(): Promise<void> {
+  await userEvent.click(await screen.findByRole('radio', { name: /^Market/ }));
+}
+
+async function openSlippage(): Promise<void> {
+  await userEvent.click(await screen.findByRole('button', { name: '0.5%' }));
+}
 
 const qtysOf = (as: ActionInput[] | undefined) => as?.map((a) => (a.kind === 'close-position' ? a.qty : undefined));
 
@@ -210,10 +215,8 @@ describe('ClosePairForm — slippage is part of the close intent', () => {
     fireEvent.pointerDown(btn);
     await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
 
-    await userEvent.click(await screen.findByRole('button', { name: /^0\.5%$/ }));
-    const slip = screen.getByLabelText('Max slippage %');
-    await userEvent.clear(slip);
-    await userEvent.type(slip, '2');
+    await userEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    await userEvent.click(screen.getByRole('radio', { name: '2%' }));
 
     const btn2 = screen.getByRole('button', { name: /Close both/ });
     await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
@@ -224,4 +227,289 @@ describe('ClosePairForm — slippage is part of the close intent', () => {
     // cannot dedupe the 2% close into the 0.5% one.
     expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
   }, 15_000);
+});
+
+describe('ClosePairForm — the pair shrinks behind the form', () => {
+  const SHARED = LEGS.map((l) => ({ ...l, partial: true }));
+
+  function Shrinking() {
+    const [legs, setLegs] = useState(SHARED);
+    return (
+      <>
+        <button type="button" onClick={() => setLegs(SHARED.map((l) => ({ ...l, qty: 0.95 })))}>
+          Shrink
+        </button>
+        <ClosePairForm base="HYPE" legs={legs} />
+      </>
+    );
+  }
+
+  it('after a lost response, the retry keeps the deal id and the size it was sent with', async () => {
+    const seen: ActionInput[][] = [];
+    const dealCalls: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy(seen),
+      http.post('/api/deals', async ({ request }) => {
+        dealCalls.push((await request.json()) as DealRequest);
+        return HttpResponse.json({ ok: false, error: { category: 'network', message: 'socket hang up', retryable: true } }, { status: 500 });
+      }),
+    );
+    renderWithClient(<Shrinking />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Shrink' }));
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });
+    expect(dealCalls[1].id).toBe(dealCalls[0].id);
+    expect(qtysOf(seen.at(-1))).toEqual(['1.89', '1.89']);
+  }, 15_000);
+
+  it('after a send lands, the next close uses the new size', async () => {
+    const seen: ActionInput[][] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy(seen),
+      http.post('/api/deals', () => HttpResponse.json(env({ id: 'd-1' }), { status: 202 })),
+    );
+    renderWithClient(<Shrinking />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeInTheDocument(), { timeout: 4000 });
+    await userEvent.click(screen.getByRole('button', { name: 'Shrink' }));
+    await waitFor(() => expect(qtysOf(seen.at(-1))).toEqual(['0.95', '0.95']), { timeout: 4000 });
+  }, 15_000);
+});
+
+describe('ClosePairForm — Limit + hedge close', () => {
+  it('defaults to Limit + hedge and sends a reduce-only maker deal that keeps the slippage cap', async () => {
+    const posted: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', async ({ request }) => {
+        posted.push((await request.json()) as DealRequest);
+        return HttpResponse.json(env({ id: 'd-maker' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+
+    expect(await screen.findByRole('radio', { name: /Limit \+ hedge/ })).toHaveAttribute('aria-checked', 'true');
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(posted).toHaveLength(1), { timeout: 4000 });
+    expect(posted[0]).toMatchObject({
+      a: { reduceOnly: true },
+      b: { reduceOnly: true },
+      qty: '1.89',
+      execution: 'maker',
+      pricePolicy: 'touch',
+      price: '80',
+      timeoutSec: 300,
+      repegBehindBp: 5,
+      makerLeg: 'a',
+      clipBandPct: 0.5,
+    });
+    // $100k slices at $80 = 1,250 HYPE per order.
+    expect(Number(posted[0].maxClip)).toBe(1250);
+  });
+
+  it('a refused maker close shows the error alone, not the market preview rows', async () => {
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', () =>
+        HttpResponse.json(
+          { ok: false, error: { category: 'validation', message: 'You must accept the disclaimer before placing any order.', retryable: false } },
+          { status: 403 },
+        ),
+      ),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    const card = await screen.findByRole('tooltip', {}, { timeout: 4000 });
+    await waitFor(() => expect(card).toHaveTextContent('You must accept the disclaimer'));
+    expect(card).not.toHaveTextContent('IOC at');
+    expect(card).not.toHaveTextContent('Review');
+  });
+
+  it('a market close of the same size gets a different deal id than a maker close', async () => {
+    const dealCalls: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', async ({ request }) => {
+        dealCalls.push((await request.json()) as DealRequest);
+        return HttpResponse.json(
+          { ok: false, error: { category: 'network', message: 'socket hang up', retryable: true } },
+          { status: 500 },
+        );
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(dealCalls).toHaveLength(1), { timeout: 2_000 });
+
+    await pickMarket();
+    const btn2 = screen.getByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn2).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn2);
+    await waitFor(() => expect(dealCalls).toHaveLength(2), { timeout: 2_000 });
+    expect(dealCalls[0].execution).toBe('maker');
+    expect(dealCalls[1].execution).toBe('taker');
+    expect(dealCalls[1].id).not.toBe(dealCalls[0].id);
+  }, 15_000);
+});
+
+describe('ClosePairForm: After card', () => {
+  it('names the open Boros side, with its size, only when the caller says it stays unhedged', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const first = renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(within(after).queryByText(/not hedged/)).toBeNull();
+    first.unmount();
+
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} borosUnhedged={{ qty: 1.89, coin: 'HYPE' }} />);
+    const after2 = await screen.findByRole('region', { name: 'After' });
+    const boros = within(after2).getByText('1.89 HYPE fixed rate · not hedged');
+    expect(boros).toHaveClass('text-amber-300');
+  });
+
+  it('a 25% close says only 25% of the Boros loses its hedge', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} borosUnhedged={{ qty: 1.89, coin: 'HYPE' }} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(within(after).getByText('1.89 HYPE fixed rate · not hedged')).toBeInTheDocument();
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Share shortcuts' })).getByRole('radio', { name: '25%' }));
+    expect(await within(after).findByText('0.4725 HYPE fixed rate · not hedged', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(within(after).queryByText('1.89 HYPE fixed rate · not hedged')).toBeNull();
+  });
+
+  it('a full close shows each leg going to 0 and the price PnL label lists each leg', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const live = new Map([
+      ['BYBIT_FUTURE_HYPE_USDT', { symbol: 'BYBIT_FUTURE_HYPE_USDT', positionQty: '1.89', upnl: '-5' }],
+      ['HYPERLIQUID_FUTURE_HYPE_USDC', { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', positionQty: '-1.89', upnl: '2' }],
+    ]) as unknown as Map<string, CrossexPosition>;
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} livePositions={live} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    await waitFor(() => expect(within(after).getAllByText('1.89 HYPE → 0 HYPE')).toHaveLength(2));
+    expect(within(after).queryByText('Flat')).toBeNull();
+    expect(within(after).queryByText('Both legs · before fees')).toBeNull();
+    await userEvent.setup().hover(await within(after).findByText('Realized price PnL'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent('The price gain or loss on each leg, realized when it closes. Before fees.');
+    expect(card).toHaveTextContent('Bybit LONG');
+    expect(card).toHaveTextContent('Hyperliquid SHORT');
+  });
+
+  it('the price PnL adds what earlier closes booked since the pair opened, and the hover shows it', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const live = new Map([
+      ['BYBIT_FUTURE_HYPE_USDT', { symbol: 'BYBIT_FUTURE_HYPE_USDT', positionQty: '1.89', upnl: '-50500' }],
+      ['HYPERLIQUID_FUTURE_HYPE_USDC', { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', positionQty: '-1.89', upnl: '21000' }],
+    ]) as unknown as Map<string, CrossexPosition>;
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} livePositions={live} bookedBefore={{ usd: 29_530, sinceSec: 1_792_108_800 }} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    expect(await within(after).findByText('$30.00')).toBeInTheDocument();
+    expect(within(after).queryByText('-$29,500.00')).toBeNull();
+    await userEvent.setup().hover(within(after).getByText('Realized price PnL'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent(/since the pair opened on 2026-10-16/);
+    expect(card).toHaveTextContent(/Realized earlier\s*\+?\$29,530\.00/);
+  });
+
+  it('says on this perp when the earlier closes are shared with another pair', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const live = new Map([
+      ['BYBIT_FUTURE_HYPE_USDT', { symbol: 'BYBIT_FUTURE_HYPE_USDT', positionQty: '1.89', upnl: '-50500' }],
+      ['HYPERLIQUID_FUTURE_HYPE_USDC', { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', positionQty: '-1.89', upnl: '21000' }],
+    ]) as unknown as Map<string, CrossexPosition>;
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} livePositions={live} bookedBefore={{ usd: 29_530, sinceSec: 1_792_108_800, shared: true }} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    await userEvent.setup().hover(await within(after).findByText('Realized price PnL'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent(/Realized earlier on this perp\s*\+?\$29,530\.00/);
+  });
+
+  it('keeps the Close both hold off when the pair is already closed', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} closed />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(btn).toBeDisabled();
+  });
+
+  it('a partial size shows what stays open on each leg', async () => {
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const { actions } = (await request.json()) as { actions: ActionInput[] };
+        return HttpResponse.json(
+          env<PreviewResponse>({
+            makerLeg: { auto: 'a', why: 'fees' },
+            previews: actions.map((a) =>
+              previewFor(a, { side: 'SELL', reduceOnly: true, qty: ('qty' in a && a.qty) || '1.89', price: '80' }),
+            ),
+          }),
+        );
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    fireEvent.change(screen.getByLabelText('Close size, applied to both legs'), { target: { value: '1' } });
+    const after = await screen.findByRole('region', { name: 'After' });
+    await waitFor(() => expect(within(after).getAllByText(/^1\.89 HYPE → 0\.89 HYPE$/)).toHaveLength(2), { timeout: 4000 });
+    expect(screen.queryByText(/rounds down to its lot size/)).toBeNull();
+  });
+});
+
+describe('ClosePairForm: the maker leg comes from the preview', () => {
+  it('a manual pick of the second leg rests that leg', async () => {
+    const posted: DealRequest[] = [];
+    server.use(
+      ...baseHandlers(),
+      previewSpy([]),
+      http.post('/api/deals', async ({ request }) => {
+        posted.push((await request.json()) as DealRequest);
+        return HttpResponse.json(env({ id: 'd-b' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    await userEvent.click(await screen.findByRole('button', { name: /Maker settings/ }));
+    await userEvent.click(screen.getByRole('radio', { name: /Hyperliquid/ }));
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(posted).toHaveLength(1), { timeout: 4000 });
+    expect(posted[0]).toMatchObject({ makerLeg: 'b', execution: 'maker' });
+  });
+
+  it('no maker leg in the preview keeps the maker close disabled', async () => {
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const { actions } = (await request.json()) as { actions: ActionInput[] };
+        return HttpResponse.json(
+          env<PreviewResponse>({
+            makerLeg: null,
+            previews: actions.map((a) => previewFor(a, { side: 'SELL', reduceOnly: true, qty: '1.89', price: '80' })),
+          }),
+        );
+      }),
+    );
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(btn).toBeDisabled();
+  });
 });

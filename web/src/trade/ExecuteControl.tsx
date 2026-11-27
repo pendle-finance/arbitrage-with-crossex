@@ -25,24 +25,49 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { ApiError, postJson } from '../api/client';
-import { useAccount, usePositions } from '../api/queries';
-import type { ActionInput, DealResponse, PreviewResult } from '../api/types';
+import { useAccount, usePositions, useRebalance, useStartRebalance } from '../api/queries';
+import type { ActionInput, DealResponse, PreviewResult, RebalanceJob, TwapPlanView } from '../api/types';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
+import { ResultBox } from '../components/ResultBox';
 import { Spinner } from '../components/Spinner';
 import { SymbolCell } from '../components/VenueChip';
-import { fmtUsd, parseSymbol, sig } from '../lib/fmt';
+import { fmtUsd, groupedExact, parseSymbol, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { uuid } from '../lib/uuid';
 import { useNow } from '../lib/useNow';
-import { dealFromActions } from './deal';
+import { dealFromActions, twapStartFrom, type DealOpts } from './deal';
 import { finalizeActions } from './finalize';
 import { clearPendingBasket, readPendingBasket, writePendingBasket } from './pendingBasket';
 import { ActionKindChip, estFeeOf, estimateMargin, feeText, SlippageBadge, ViolationList } from './previewBits';
 import { useTradeFlow } from './TradeFlow';
+import { liveTwapJob } from './twapJob';
 import { usePreviewDebounced } from './usePreview';
 import { withinTrackedDrift } from './trackedPriceDrift';
 import { useActiveWallet } from '../panels/trackedAddress';
+import { useRebalanceOpener } from '../panels/rebalanceOpener';
 
 const STALE_MS = 10_000;
+
+type TwapLock = 'running' | 'paused' | 'error' | 'errorOrders';
+
+const LOCK_TEXT = {
+  running: 'trade.twap.lock.running',
+  paused: 'trade.twap.lock.paused',
+  error: 'trade.twap.lock.error',
+  errorOrders: 'trade.twap.lock.errorOrders',
+} as const;
+
+const ERROR_HALTS: readonly (RebalanceJob['haltKind'] | undefined)[] = ['error', 'hedge-margin'];
+
+function twapLockOf(found: RebalanceJob | null | undefined): TwapLock | null {
+  const job = liveTwapJob(found);
+  if (!job || job.kind !== 'twap') return null;
+  const childLive = job.child != null && job.child.mode !== 'DONE';
+  if (job.status === 'halted') {
+    if (childLive) return 'error';
+    return ERROR_HALTS.includes(job.haltKind) ? 'errorOrders' : 'paused';
+  }
+  return job.paused && !childLive ? 'paused' : 'running';
+}
 
 interface Props {
   /** react-query preview scope — match the caller's own ticket preview to dedupe. */
@@ -59,6 +84,7 @@ interface Props {
   detail?: ReactNode;
   /** Fired after a successful 202 (e.g. bump the ticket's pairGroup nonce). */
   onExecuted?: () => void;
+  onSent?: () => void;
   /** Stable identity of the USER'S intent — a change to it mints a fresh
    * basketId (so an edited order after a lost response isn't deduped against the
    * original). Defaults to the serialized actions. Callers whose `actions`
@@ -84,6 +110,8 @@ interface Props {
    * ticket) — the hover review card is then redundant. Execution errors still
    * open the card: they must never be silent. */
   hoverCard?: boolean;
+  dealOpts?: DealOpts;
+  twap?: { plan: TwapPlanView; blocked: boolean } | null;
 }
 
 export function ExecuteControl({
@@ -95,6 +123,7 @@ export function ExecuteControl({
   decorate,
   detail,
   onExecuted,
+  onSent,
   intentKey,
   extraDisabled = false,
   previewOpts,
@@ -103,6 +132,8 @@ export function ExecuteControl({
   buttonClassName,
   holdMs,
   hoverCard = true,
+  dealOpts,
+  twap = null,
 }: Props) {
   const { t } = useTranslation();
   const flow = useTradeFlow();
@@ -111,6 +142,11 @@ export function ExecuteControl({
   const account = useAccount();
   const positions = usePositions();
   const now = useNow(1_000);
+  const rebalance = useRebalance();
+  const lock = twapLockOf(rebalance.data?.job);
+  const lockUnknown = rebalance.isError && !rebalance.data;
+  const openRebalance = useRebalanceOpener();
+  const startTwap = useStartRebalance();
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hovering, setHovering] = useState(false);
   const basketIdRef = useRef<string | null>(null);
@@ -138,6 +174,7 @@ export function ExecuteControl({
   const preview = usePreviewDebounced(scope, previewActions, {
     debounceMs: previewOpts?.debounceMs ?? 400,
     refetchInterval: previewOpts?.refetchInterval ?? 3_000,
+    twap: twap ? { durationSec: twap.plan.durationSec, slices: twap.plan.slices } : undefined,
     tolerate:
       trackedPriceTolerance !== undefined
         ? (shown, current) => withinTrackedDrift(shown, current, trackedPriceTolerance)
@@ -262,13 +299,14 @@ export function ExecuteControl({
    * genuinely needs the hedge loop that one deal buys.
    */
   const splitClose =
+    !twap &&
     !!actions &&
     !!previews &&
     !!probeActions &&
     !preview.estimating &&
     actions.length === 2 &&
     actions.every((a) => a.kind === 'close-position') &&
-    dealFromActions('probe-0', probeActions, previews) === null &&
+    dealFromActions('probe-0', probeActions, previews, dealOpts) === null &&
     dealFromActions('probe-a', [probeActions[0]], [previews[0]]) !== null &&
     dealFromActions('probe-b', [probeActions[1]], [previews[1]]) !== null;
   const mappable =
@@ -276,7 +314,7 @@ export function ExecuteControl({
     !previews ||
     preview.estimating ||
     !probeActions ||
-    dealFromActions('probe-0', probeActions, previews) !== null ||
+    dealFromActions('probe-0', probeActions, previews, dealOpts) !== null ||
     splitClose;
   const disabled =
     !actions ||
@@ -284,6 +322,8 @@ export function ExecuteControl({
     extraDisabled ||
     execute.isPending ||
     executeSplit.isPending ||
+    startTwap.isPending ||
+    (twap?.blocked ?? false) ||
     previewMissing ||
     hasViolations ||
     marginBlocked ||
@@ -300,7 +340,23 @@ export function ExecuteControl({
     // (pegToTouch), then map the confirmed intent onto the deal contract.
     const base = finalizeActions(previews);
     const decorated = decorate ? decorate(base) : base;
-    const deal = dealFromActions(basketIdRef.current, decorated, previews);
+    const deal = dealFromActions(basketIdRef.current, decorated, previews, dealOpts);
+    if (twap) {
+      if (!deal) return;
+      const clientId = basketIdRef.current;
+      setPlacedResting(null);
+      setReplayedDeal(null);
+      onSent?.();
+      startTwap.mutate(twapStartFrom(deal, twap.plan, clientId), {
+        onSuccess: () => {
+          basketIdRef.current = null;
+          clearPendingBasket(inflightIntentRef.current);
+          onExecuted?.();
+          openRebalance();
+        },
+      });
+      return;
+    }
     if (!deal && splitClose) {
       // Two single-leg deals under ONE basket: ids derived from the basket id
       // so a retry after a lost response re-sends the same two ids and the
@@ -313,6 +369,7 @@ export function ExecuteControl({
       placedSummaryRef.current = null;
       setPlacedResting(null);
       setReplayedDeal(null);
+      onSent?.();
       executeSplit.mutate([a, b]);
       return;
     }
@@ -329,13 +386,14 @@ export function ExecuteControl({
       : null;
     setPlacedResting(null);
     setReplayedDeal(null);
+    onSent?.();
     execute.mutate(deal);
   };
 
-  const anyError = execute.error ?? executeSplit.error;
+  const anyError = execute.error ?? executeSplit.error ?? startTwap.error;
   const errMsg =
     anyError instanceof ApiError ? anyError.message : (anyError as Error | null)?.message ?? null;
-  const cardOpen = (hoverCard && hovering) || execute.isError || executeSplit.isError;
+  const cardOpen = lock === null && ((hoverCard && hovering) || execute.isError || executeSplit.isError || startTwap.isError);
 
   return (
     <div
@@ -346,32 +404,37 @@ export function ExecuteControl({
       onFocusCapture={() => setHovering(true)}
       onBlurCapture={() => setHovering(false)}
     >
-      <HoldToConfirmButton tone={tone} disabled={disabled} holdMs={holdMs} onConfirm={onConfirm} className={buttonClassName}>
-        {execute.isPending || executeSplit.isPending ? (
-          <span className="inline-flex items-center gap-1.5">
-            <Spinner className="h-3.5 w-3.5" /> {t('trade.execute.executing')}
-          </span>
-        ) : (
-          label
-        )}
-      </HoldToConfirmButton>
+      {lock !== null ? (
+        <p role="status" className="flex flex-wrap items-baseline gap-x-2 text-xs text-ink-400">
+          {t(LOCK_TEXT[lock])}
+          <button type="button" className="btn-link" onClick={() => openRebalance()}>
+            {t('trade.recovery.view')}
+          </button>
+        </p>
+      ) : (
+        <HoldToConfirmButton tone={tone} disabled={disabled} holdMs={holdMs} onConfirm={onConfirm} className={buttonClassName}>
+          {execute.isPending || executeSplit.isPending || startTwap.isPending ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Spinner className="h-3.5 w-3.5" /> {t('trade.execute.executing')}
+            </span>
+          ) : (
+            label
+          )}
+        </HoldToConfirmButton>
+      )}
+      {lockUnknown && <p role="status" className="mt-1 text-[11px] text-amber-200">{t('trade.twap.lock.unknown')}</p>}
       {viewOnly && <p className="mt-1 text-[11px] text-ink-400">{t('trade.execute.viewOnly')}</p>}
       {placedResting && (
-        <div
-          role="status"
-          className="mt-1 flex items-start justify-between gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/5 px-2 py-1.5 text-[11px] text-emerald-300"
-        >
-          <span>
-            <Trans
-              i18nKey="trade.execute.placed"
-              values={{ summary: placedResting }}
-              components={{ b: <span className="font-medium" />, n: <span className="num" /> }}
-            />
-          </span>
+        <div className="relative mt-1">
+          <ResultBox
+            tone="done"
+            title={t('trade.execute.placedTitle')}
+            lines={[placedResting, t('trade.execute.placedLine')]}
+          />
           <button
             type="button"
             aria-label={t('common.dismiss')}
-            className="px-1 leading-none text-emerald-400/70 transition-colors hover:text-emerald-200"
+            className="absolute right-2 top-2 px-1 leading-none text-grass/70 transition-colors hover:text-grass"
             onClick={() => setPlacedResting(null)}
           >
             <X size={12} aria-hidden />
@@ -397,7 +460,7 @@ export function ExecuteControl({
           </button>
         </div>
       )}
-      {marginBlocked && (
+      {lock === null && marginBlocked && (
         <div role="alert" className="mt-1 text-[11px] text-rose-400">
           {t('trade.execute.marginBlocked', {
             required: fmtUsd(margin.gateRequired),
@@ -405,7 +468,7 @@ export function ExecuteControl({
           })}
         </div>
       )}
-      {!mappable && (
+      {lock === null && !mappable && (
         <div role="alert" className="mt-1 text-[11px] text-amber-400">
           {t('trade.execute.notMappable')}
         </div>
@@ -448,6 +511,7 @@ export function ExecuteControl({
           marginExceeds={marginBlocked}
           detail={detail}
           execError={errMsg}
+          errorOnly={!hoverCard}
         />
       )}
     </div>
@@ -468,6 +532,7 @@ function HoverCard({
   marginExceeds,
   detail,
   execError,
+  errorOnly,
 }: {
   anchorRef: React.RefObject<HTMLElement>;
   previews: PreviewResult[] | undefined;
@@ -479,6 +544,10 @@ function HoverCard({
   marginExceeds: boolean;
   detail: ReactNode;
   execError: string | null;
+  /** The caller's own panel reviews the legs. Its rows can differ from the raw
+   * preview (a maker close rests one leg; the preview prices both as IOC), so
+   * an error card must not repeat them. */
+  errorOnly: boolean;
 }) {
   const { t } = useTranslation();
   const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
@@ -514,13 +583,17 @@ function HoverCard({
           {execError}
         </div>
       )}
+      {errorOnly ? (
+        detail && <div className="text-[11px] text-ink-400">{detail}</div>
+      ) : (
+        <>
       <div className="mb-1.5 flex items-center justify-between text-[12px] font-normal text-ink-300">
         <span>{t('trade.execute.review')}</span>
         <span className="num">
           {isError
             ? t('pairTicket.bits.previewFailed')
             : estimating
-              ? t('trade.execute.pricing')
+              ? t('common.refreshing')
               : Number.isFinite(ageMs)
                 ? t('trade.execute.secondsAgo', { s: Math.floor(ageMs / 1000) })
                 : '—'}
@@ -535,22 +608,22 @@ function HoverCard({
                   <ActionKindChip input={p.input} />
                   <SymbolCell symbol={p.symbol} />
                 </span>
-                <span className="num text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
+                <span className="num text-ink-100">{p.qty ? qtyGrouped(p.qty) : '—'}</span>
               </div>
               <div className="flex items-center justify-between gap-2 text-[11px] text-ink-400">
                 <span className="num">
                   {p.type === 'MARKET'
                     ? t('trade.execute.mkt')
                     : p.input.kind === 'close-position'
-                      ? t('trade.execute.iocAt', { price: p.price ?? '—' })
+                      ? t('trade.execute.iocAt', { price: p.price ? groupedExact(p.price) : '—' })
                       : t('trade.execute.lmtAt', {
-                          price: p.price ?? '—',
+                          price: p.price ? groupedExact(p.price) : '—',
                           tif: p.tif && p.tif !== 'GTC' ? ` ${p.tif}` : '',
                         })}
                   {p.fillEstimate && (
                     <>
                       {' · '}
-                      {sig(p.fillEstimate.avgPrice)} <SlippageBadge est={p.fillEstimate} />
+                      {sigGrouped(p.fillEstimate.avgPrice)} <SlippageBadge est={p.fillEstimate} />
                     </>
                   )}
                 </span>
@@ -583,11 +656,13 @@ function HoverCard({
         </div>
       ) : (
         <div className="py-2 text-center text-ink-500">
-          <Spinner className="inline h-3 w-3" /> <span className="ml-1 align-middle">{t('trade.execute.pricing')}</span>
+          <Spinner className="inline h-3 w-3" /> <span className="ml-1 align-middle">{t('common.refreshing')}</span>
         </div>
       )}
       {detail && <div className="mt-1.5 border-t border-ink-800 pt-1.5 text-[11px] text-ink-400">{detail}</div>}
       <div className="mt-1.5 text-center text-[10px] text-ink-500">{t('trade.execute.pressHold')}</div>
+        </>
+      )}
     </div>,
     document.body,
   );

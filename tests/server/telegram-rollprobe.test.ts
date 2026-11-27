@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../web/src/api/types';
+import type { AssetBorosOpen, AssetGroup, AssetPerpOpen, Rebate } from '../../web/src/api/types';
 import type { BorosMarket } from '../../src/core/boros/client';
 import type { BorosPairSimulation, SimulatedLeg } from '../../src/core/boros/pair';
 import type { AssetViewOut } from '../../src/server/routes/assetView';
@@ -194,10 +194,12 @@ const deps = (over: {
   price?: (body: PairSimulateBody) => Promise<{ simulation: BorosPairSimulation }>;
   address?: string | null;
   markets?: BorosMarket[];
+  rebate?: Rebate | null;
 }) => ({
   borosAddress: () => (over.address === undefined ? ADDRESS : over.address),
   buildAssetView: async () => view(over.assets ?? [group('ETH', [1, 2])]),
   loadMarkets: async () => over.markets ?? markets,
+  loadRebate: async () => over.rebate ?? null,
   price:
     over.price ??
     (async (body: PairSimulateBody) => ({ simulation: simulation({ intent: body.intent }) })),
@@ -244,6 +246,143 @@ describe('the roll probe on the server', () => {
     expect(entry?.legs.map((l) => [l.marketId, l.direction])).toEqual([[60, 'short']]);
     const exit = priced.find((b) => b.intent === 'close');
     expect(exit?.legs.map((l) => [l.marketId, l.direction])).toEqual([[59, 'long']]);
+  });
+
+  it('fees already paid to open the pair do not make a lower later rate look better', async () => {
+    // Held spread at 3.62% on $250k notional, $60k capital: holding still earns
+    // 15.08% on capital. $300 of Boros fees paid to open it drag the life-of-pair
+    // figure to about 5%. The later market quotes 3% (about 14.3% on capital).
+    const held = {
+      ...spreadGroup(),
+      borosOpen: [
+        yu({ marketId: 59, venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SOON, entryApr: 0.0362, spreadVenues: ['HYPERLIQUID', 'GATE'] }),
+      ],
+      borosHistory: [
+        {
+          marketId: 59,
+          venue: 'HYPERLIQUID',
+          spreadVenues: ['HYPERLIQUID', 'GATE'],
+          maturity: SOON,
+          settleUsd: 0,
+          settleFeeUsd: 0,
+          rebateUsd: 0,
+          tradePnlUsd: -300,
+          tradeFeeUsd: 300,
+          peakSizeToken: 100,
+          peakNotionalUsd: 250_000,
+          firstEventSec: NOW - 10 * DAY,
+          entryApr: 0.0362,
+          side: 'SHORT',
+        },
+      ],
+    } as AssetGroup;
+    const quoting = (newRate: number) => async (body: PairSimulateBody) => ({
+      simulation: simulation({
+        intent: body.intent,
+        estSpreadApr: newRate,
+        legs: body.legs.map((l) =>
+          leg({ marketId: l.marketId, direction: l.direction, marginRequired: 1, ...(body.intent === 'close' ? { execApr: 0.0362 } : {}) }),
+        ),
+        receiveLeg: 0,
+      }),
+    });
+    const run = (newRate: number) =>
+      createRollProbe(
+        deps({ assets: [held], markets: [spreadMarket(59, SOON), spreadMarket(60, LATER)], price: quoting(newRate) }),
+      )();
+
+    const lower = await run(0.03);
+    expect(lower).toHaveLength(1);
+    expect(lower[0].targets).toEqual([]);
+
+    const higher = await run(0.04);
+    expect(higher[0].targets.map((t) => t.maturity)).toEqual([LATER]);
+    expect(higher[0].targets[0].currentApr).toBeCloseTo(0.0362 * 250_000 / 60_000, 6);
+  });
+
+  describe('the settlement rebate counts as the roll banner counts it', () => {
+    const fullRebateOn = (marketId: number): Rebate => ({
+      mode: 'relative',
+      settlementFeePercentage: 0,
+      rebateBps: 10_000,
+      startTimestamp: null,
+      endTimestamp: null,
+      marketIds: [marketId],
+      marketFeeOverrides: [],
+      active: true,
+    });
+    const heldSpread = (settleFeeApr: number): AssetGroup => ({
+      ...spreadGroup(),
+      borosOpen: [
+        yu({ marketId: 59, venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100, maturity: SOON, entryApr: 0.0362, spreadVenues: ['HYPERLIQUID', 'GATE'], settleFeeApr }),
+      ],
+    });
+    const quoting = (newRate: number) => async (body: PairSimulateBody) => ({
+      simulation: simulation({
+        intent: body.intent,
+        estSpreadApr: newRate,
+        legs: body.legs.map((l) =>
+          leg({ marketId: l.marketId, direction: l.direction, marginRequired: 1, ...(body.intent === 'close' ? { execApr: 0.0362 } : {}) }),
+        ),
+        receiveLeg: 0,
+      }),
+    });
+    const run = (assets: AssetGroup[], spreadMarkets: BorosMarket[], rebate: Rebate | null, newRate: number) =>
+      createRollProbe(deps({ assets, markets: spreadMarkets, price: quoting(newRate), rebate }))();
+
+    it('a rebate on the old market raises what holding earns, so a roll that only beat the fee says keep', async () => {
+      const book = [heldSpread(0.002)];
+      const listed = [spreadMarket(59, SOON), spreadMarket(60, LATER)];
+      const unrebated = await run(book, listed, null, 0.031);
+      expect(unrebated[0].targets.map((t) => t.maturity)).toEqual([LATER]);
+      const rebated = await run(book, listed, fullRebateOn(59), 0.031);
+      expect(rebated).toHaveLength(1);
+      expect(rebated[0].targets).toEqual([]);
+    });
+
+    it('a rebate on the new market adds its settlement fee back to the roll rate', async () => {
+      const book = [heldSpread(0)];
+      const listed = [spreadMarket(59, SOON), { ...spreadMarket(60, LATER), settleFeeApr: 0.004 }];
+      expect((await run(book, listed, null, 0.031))[0].targets).toEqual([]);
+      const rebated = await run(book, listed, fullRebateOn(60), 0.031);
+      expect(rebated[0].targets.map((t) => t.maturity)).toEqual([LATER]);
+      expect(rebated[0].targets[0].apr).toBeCloseTo(((0.031 + 0.004) * 250_000) / 52_500, 6);
+    });
+
+    it('the rate is the same at $500 and at $6,000,000 of notional', async () => {
+      const at = async (scale: number) => {
+        const book: AssetGroup = {
+          ...heldSpread(0),
+          perpOpen: [perp({ venue: 'GATE', side: 'LONG', qty: 100 * scale }), perp({ venue: 'HYPERLIQUID', side: 'SHORT', qty: 100 * scale })],
+          borosOpen: [
+            yu({ marketId: 59, venue: 'HYPERLIQUID', side: 'SHORT', sizeToken: 100 * scale, maturity: SOON, entryApr: 0.0362, spreadVenues: ['HYPERLIQUID', 'GATE'] }),
+          ],
+        };
+        const price = async (body: PairSimulateBody) => ({
+          simulation: simulation({
+            intent: body.intent,
+            estSpreadApr: 0.031,
+            legs: body.legs.map((l) =>
+              leg({
+                marketId: l.marketId,
+                direction: l.direction,
+                marginRequired: scale,
+                depth: [[0.001, 1_000 * scale]],
+                estFillSize: 100 * scale,
+                sizing: { ...leg().sizing, deltaSize: 100 * scale, resultingSize: 100 * scale },
+                ...(body.intent === 'close' ? { execApr: 0.0362 } : {}),
+              }),
+            ),
+            receiveLeg: 0,
+          }),
+        });
+        const listed = [spreadMarket(59, SOON), { ...spreadMarket(60, LATER), settleFeeApr: 0.004 }];
+        const out = await createRollProbe(deps({ assets: [book], markets: listed, price, rebate: fullRebateOn(60) }))();
+        return out[0].targets[0]?.apr ?? null;
+      };
+      expect(await at(0.002)).toBeCloseTo(((0.031 + 0.004) * 250_000) / 52_500, 6);
+      expect(await at(24)).toBeCloseTo(((0.031 + 0.004) * 250_000) / 52_500, 6);
+    });
   });
 
   it('case 3: twin pairs at one date are priced apart, and only the singles twin rolls', async () => {

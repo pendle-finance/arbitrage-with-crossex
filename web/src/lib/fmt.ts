@@ -39,6 +39,29 @@ export function sigGrouped(value: number | string, maxDp = 8): string {
   return frac === undefined ? grouped : `${grouped}.${frac}`;
 }
 
+export function qtyGrouped(value: number | string, maxDp = 8): string {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  const abs = Number(Math.abs(n).toPrecision(12));
+  const dp = abs >= 1000 ? 3 : abs >= 1 ? 4 : maxDp;
+  const plain = String(abs);
+  const [whole = '0', frac = ''] = (/e/i.test(plain) ? abs.toFixed(20) : plain).split('.');
+  const kept = frac.slice(0, dp).replace(/0+$/, '');
+  const body = groupedExact(kept ? `${whole}.${kept}` : whole);
+  return n < 0 && /[1-9]/.test(body) ? `-${body}` : body;
+}
+
+export function groupedExact(text: string): string {
+  const m = /^(-?)(\d+)(\.\d+)?$/.exec(text);
+  if (!m) return text;
+  return `${m[1]}${m[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${m[3] ?? ''}`;
+}
+
+export function padTwo(text: string): string {
+  const [whole = '', frac = ''] = text.split('.');
+  return frac.length >= 2 ? text : `${whole}.${frac.padEnd(2, '0')}`;
+}
+
 export const FIELD_SIG_FIGS = 8;
 
 export function fieldValue(value: number, sigFigs: number = FIELD_SIG_FIGS): string {
@@ -118,8 +141,9 @@ export function fmtNotionalShort(n: number): string {
   if (!Number.isFinite(n)) return '—';
   const sign = n < 0 ? '-' : '';
   const abs = Math.abs(n);
-  if (abs >= 1e6) return `${sign}$${+(abs / 1e6).toFixed(abs >= 1e7 ? 0 : 1)}M`;
-  if (abs >= 1e3) return `${sign}$${+(abs / 1e3).toFixed(abs >= 1e5 ? 0 : 1)}k`;
+  const k = +(abs / 1e3).toFixed(abs >= 1e5 ? 0 : 1);
+  if (abs >= 1e6 || k >= 1000) return `${sign}$${+(abs / 1e6).toFixed(abs >= 1e7 ? 0 : 1)}M`;
+  if (abs >= 1e3) return `${sign}$${k}k`;
   return fmtUsd(n, 0);
 }
 
@@ -212,16 +236,20 @@ function ageBucket(ms: number): { value: number; unit: 's' | 'm' | 'h' | 'd'; re
   return { value: Math.floor(h / 24), unit: 'd', rest: 0 };
 }
 
-export function fmtAbout(seconds: number): string {
-  if (seconds < 60) return t('app.about.seconds', { n: Math.round(seconds) });
-  if (seconds < 600) return t('app.about.minutes', { n: Math.round(seconds / 30) / 2 });
+type SpanKey = 'seconds' | 'minutes' | 'hours' | 'hoursMinutes';
+
+function spanOf(seconds: number, say: (key: SpanKey, values: Record<string, number>) => string): string {
+  if (seconds < 60) return say('seconds', { n: Math.round(seconds) });
+  if (seconds < 600) return say('minutes', { n: Math.round(seconds / 30) / 2 });
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return t('app.about.minutes', { n: minutes });
+  if (minutes < 60) return say('minutes', { n: minutes });
   const rest = minutes % 60;
-  return rest === 0
-    ? t('app.about.hours', { n: minutes / 60 })
-    : t('app.about.hoursMinutes', { h: Math.floor(minutes / 60), m: rest });
+  return rest === 0 ? say('hours', { n: minutes / 60 }) : say('hoursMinutes', { h: Math.floor(minutes / 60), m: rest });
 }
+
+export const fmtAbout = (seconds: number): string => spanOf(seconds, (key, values) => t(`app.about.${key}`, values));
+
+export const fmtApprox = (seconds: number): string => spanOf(seconds, (key, values) => t(`app.approx.${key}`, values));
 
 /** Unix seconds → UTC "YYYY-MM-DD" (maturities are quoted in UTC). */
 export function fmtDateUtc(unixSec: number): string {

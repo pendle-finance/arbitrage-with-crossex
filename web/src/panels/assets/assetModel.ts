@@ -106,6 +106,27 @@ export function pairPerpCloseLegs(pair: Pick<PairEstimate, 'legs'>): PerpCloseLe
     .map((l) => ({ symbol: l.symbol as string, qty: l.sizeToken, venue: l.venue, partial: !sameSize(l.share, 1) }));
 }
 
+export function pairPerpBookedUsd(
+  pair: Pick<PairEstimate, 'legs' | 'borosOpenedSec'>,
+  group: Pick<AssetGroup, 'perpClosed'>,
+): { usd: number; sinceSec: number; shared: boolean } | null {
+  const since = pair.borosOpenedSec;
+  if (since === null) return null;
+  let usd = 0;
+  let shared = false;
+  for (const leg of pair.legs) {
+    if (leg.kind !== 'perp' || leg.symbol === undefined) continue;
+    if (!sameSize(leg.share, 1)) shared = true;
+    for (const closed of group.perpClosed) {
+      if (closed.symbol !== leg.symbol) continue;
+      for (const row of closed.rows) {
+        if (row.closedAt !== null && row.closedAt >= since) usd += row.priceUsd;
+      }
+    }
+  }
+  return { usd, sinceSec: since, shared };
+}
+
 /** The Boros legs of a pair as the close form's StrategyLeg rows: the
  * pair's attributed slice (a shared leg closes only its share), in the
  * collateral token, with the venue leg's own rates and maturity. A market

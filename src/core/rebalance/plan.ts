@@ -1,6 +1,41 @@
-import { parseBinanceBook } from '../estimate/books';
+import { type NormalizedBook, parseBinanceBook, touchOf } from '../estimate/books';
+import type { VenueFeeRow } from '../estimate/fees';
 import { walkBook } from '../estimate/fill';
 import { floorDecimalString, floorToStep, roundToStep } from '../numbers';
+import {
+  borrowImRateOf,
+  convertMinOf,
+  lotOf,
+  MARGIN_CONVERT_FEE,
+  marketCapUsd,
+  minQtyOf,
+  type PerpRule,
+  planRealize,
+  positiveOf,
+  profitPoolOf,
+  type RealizeEstimate,
+  type RealizeExec,
+  type RealizeLeg,
+  type RealizePerp,
+  type RealizePlan,
+  realizePlanOf,
+  type RealizeRefusal,
+  realizedNetUsd,
+  slicedEstimateOf,
+  twapEstimateOf,
+} from './realize';
+import {
+  needsTwap,
+  oneOrderUsdOf,
+  type SliceOption,
+  sliceOptions,
+  twapCountOf,
+  type TwapDefault,
+  twapDefaultOf,
+  twapQtysFor,
+  twapSlicesOf,
+  type WholeOrder,
+} from './slices';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
 export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
@@ -16,8 +51,8 @@ export const HYPERLIQUID_DEPOSIT_FEE_USD = 0.05;
 export const HYPERLIQUID_WITHDRAW_FEE_USD = 1;
 export const HYPERLIQUID_MIN_USDC = 11;
 export const LIGHTER_DEPOSIT_FEE_USD = 1.03;
-const APP_FLOOR = 1.12;
-const BORROW_INITIAL_MARGIN = 0.2;
+export const APP_FLOOR = 1.12;
+export const BORROW_INITIAL_MARGIN = 0.2;
 export const MIN_TRANSFER = 0.00001;
 export const SPOT_MIN_QUOTE_USDT = 3;
 export const SPOT_ORDER_MAX_USDC = 4_900_000;
@@ -41,6 +76,8 @@ const GATE_HOP_SECONDS = 5;
 export type Pool = 'CROSSEX' | 'HYPERLIQUID' | 'LIGHTER';
 export type Venue = Exclude<Pool, 'CROSSEX'>;
 export const POOLS: readonly Pool[] = ['CROSSEX', 'HYPERLIQUID', 'LIGHTER'];
+
+export const CONVERT_TO: Record<Pool, Pool> = { CROSSEX: 'HYPERLIQUID', HYPERLIQUID: 'CROSSEX', LIGHTER: 'CROSSEX' };
 const VENUES: readonly Venue[] = ['HYPERLIQUID', 'LIGHTER'];
 
 interface VenueRule {
@@ -197,6 +234,12 @@ export interface RoutePlan {
   savesPerDayUsd: number;
   after: WalletAfter[];
   steps: PlannedStep[];
+  idleSale: IdleSale | null;
+}
+
+export interface IdleSale {
+  usdc: number;
+  at: number;
 }
 
 export interface EvenPlan {
@@ -214,6 +257,8 @@ export interface EvenPlan {
   targets: WalletTarget[];
   routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
+  realize: RealizePlan | null;
+  customMaxUsd: number | null;
 }
 
 export interface PlanInputs {
@@ -225,6 +270,15 @@ export interface PlanInputs {
   asks?: BookLevel[];
   bids?: BookLevel[];
   notional: Readonly<Record<string, number>>;
+  perps?: RealizePerp[];
+  books?: Record<string, NormalizedBook | null>;
+  feeRows?: VenueFeeRow[];
+  perpRules?: Record<string, PerpRule>;
+  availableMargin?: number;
+  twapSlices?: number;
+  twapSliceSec?: number;
+  realizeExec?: RealizeExec;
+  realizeTakerAfterSec?: number | null;
 }
 
 export type BookLevel = [price: number, size: number];
@@ -495,6 +549,7 @@ interface Run extends Wallets {
   /** The share of costUsd that is price impact, not fee. */
   impactUsd: number;
   steps: PlannedStep[];
+  idleSale: IdleSale | null;
   cashLimited: boolean;
   usdtShort: boolean;
   beyondBook: boolean;
@@ -616,6 +671,7 @@ function roundInto(book: Book, run: Run, move: Move, size: number): void {
 
 function sellUsdc(book: Book, run: Run, move: Move, arrived: number): void {
   const sold = arrived + run.gateMovable;
+  if (run.gateMovable > 0 && run.idleSale === null) run.idleSale = { usdc: floorCents(run.gateMovable), at: run.steps.length + (arrived > 0 ? 1 : 0) };
   const sale = priced(book.bids, sold, book.bid);
   const gained = sale.usdt * (1 - book.takerRate);
   run.usdt = shifted(run.usdt, gained);
@@ -699,6 +755,7 @@ function startRun(book: Book): Run {
     costUsd: 0,
     impactUsd: 0,
     steps: [],
+    idleSale: null,
     cashLimited: false,
     usdtShort: false,
     beyondBook: false,
@@ -805,6 +862,7 @@ function routePlan(book: Book, run: Run, reason: string | null): RoutePlan {
     savesPerDayUsd: nearestCents(freed.savesPerDayUsd),
     after: afterOf(book, run),
     steps: run.steps,
+    idleSale: run.idleSale,
   };
 }
 
@@ -891,6 +949,8 @@ const balancedPlan = (book: Book, shortOfEven: number, noLegs: boolean): EvenPla
   targets: targetRows(book),
   routes: { mix: null, loop: idleRoute(book), convert: idleRoute(book) },
   recommended: null,
+  realize: null,
+  customMaxUsd: null,
 });
 
 const equityTargets = (wallets: Wallets, pools: Pool[]): Record<Pool, number> => ({
@@ -902,7 +962,11 @@ const equityTargets = (wallets: Wallets, pools: Pool[]): Record<Pool, number> =>
 /** Every negative pool to 0. The largest positive pool pays first, up to its
  * cash and its equity (see `sendingCash`); what it cannot cover moves to the
  * next. Debt past that stays, and the solve reports it as the short. */
-function repayTargets(wallets: Wallets & { gateMovable: number }, pools: Pool[]): Record<Pool, number> {
+function repayTargets(
+  wallets: Wallets & { gateMovable: number },
+  pools: Pool[],
+  realizable: ReadonlySet<Pool>,
+): Record<Pool, number> {
   const targets = equityTargets(wallets, pools);
   let debt = 0;
   for (const pool of pools) {
@@ -915,6 +979,12 @@ function repayTargets(wallets: Wallets & { gateMovable: number }, pools: Pool[])
   for (const pool of senders) {
     if (debt <= 0) break;
     const gives = floorCents(Math.min(debt, sendableCash(wallets, pool), targets[pool]));
+    targets[pool] -= gives;
+    debt -= gives;
+  }
+  for (const pool of senders.filter((sender) => realizable.has(sender))) {
+    if (debt <= 0) break;
+    const gives = floorCents(Math.min(debt, targets[pool]));
     targets[pool] -= gives;
     debt -= gives;
   }
@@ -955,7 +1025,413 @@ function roundBudgets(moves: Move[]): number[][] {
 
 const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0);
 
+export interface Paying {
+  from: Pool;
+  moveUsd: number;
+  cashUsd: number;
+}
+
+function payingOf(book: Book, moves: Move[], start: number[], realizable: ReadonlySet<Pool>): Paying | null {
+  const senders = [...new Set(moves.map((move) => move.from))].filter((from) => realizable.has(from)).map((from): Paying & { gap: number } => {
+    const moveUsd = sum(moves.flatMap((move, index) => (move.from === from ? [start[index]] : [])));
+    const cashUsd = sendableCash(book, from);
+    return { from, moveUsd, cashUsd, gap: moveUsd - cashUsd };
+  });
+  const widest = senders.sort((a, b) => b.gap - a.gap)[0];
+  return widest && widest.gap >= DUST_USDC ? widest : null;
+}
+
+const hasChargedBorrow = (buckets: Bucket[]): boolean =>
+  buckets.some((bucket) => isPoolBucket(bucket) && chargedBorrow(bucket, bucket.borrow) > 0);
+
+const isPoolBucket = (bucket: Bucket): boolean => POOLS.some((pool) => isWallet(poolWallet(pool))(bucket));
+
+export function realizeInput(
+  buckets: Bucket[],
+  account: AccountLike,
+  inputs: PlanInputs,
+  paying: Paying,
+): Parameters<typeof planRealize>[0] {
+  const receiver = buckets.find(isWallet(poolWallet(CONVERT_TO[paying.from])));
+  const payer = buckets.find(isWallet(poolWallet(paying.from)));
+  return {
+    pool: paying.from,
+    moveUsd: paying.moveUsd,
+    cashUsd: paying.cashUsd,
+    borrowUsd: receiver?.borrow ?? 0,
+    availableMargin: inputs.availableMargin ?? num(account.availableMargin),
+    ...(payer ? { equityUsd: payer.equity, convertCashUsd: payer.cash } : {}),
+    marginBalance: num(account.marginBalance),
+    initialMargin: num(account.initialMargin),
+    borrowImRate: borrowImRateOf(receiver?.imHeldUsd ?? 0, receiver?.borrow ?? 0),
+    perps: inputs.perps ?? [],
+    books: inputs.books ?? {},
+    feeRows: inputs.feeRows ?? [],
+    rules: inputs.perpRules ?? {},
+    twapSlices: inputs.twapSlices,
+    twapSliceSec: inputs.twapSliceSec,
+    exec: inputs.realizeExec,
+    takerAfterSec: inputs.realizeTakerAfterSec,
+  };
+}
+
+function scaledBorrow(bucket: Bucket, repaid: number): Bucket {
+  const borrow = Math.max(0, bucket.borrow - repaid);
+  const share = bucket.borrow > 0 ? borrow / bucket.borrow : 1;
+  const chargedBefore = chargedBorrow(bucket, bucket.borrow);
+  return {
+    ...bucket,
+    borrow,
+    imHeldUsd: bucket.imHeldUsd * share,
+    mmHeldUsd: bucket.mmHeldUsd * share,
+    interestPerDayUsd: chargedBefore > 0 ? (bucket.interestPerDayUsd * chargedBorrow(bucket, borrow)) / chargedBefore : 0,
+  };
+}
+
+function afterStepOne(buckets: Bucket[], account: AccountLike, paying: Paying, realize: RealizePlan) {
+  const legs = realize.legs;
+  const cashIn = sum(legs.map((leg) => leg.realizedUsd - leg.closeFeeUsd - leg.reopenFeeUsd - leg.closeImpactUsd));
+  const upnlOut = sum(legs.map((leg) => leg.realizedUsd + leg.reopenImpactUsd));
+  const converted = sum(legs.map((leg) => leg.convert?.amount ?? 0));
+  const arrives = converted * (1 - CONVERT_RATE);
+  const payer = isWallet(poolWallet(paying.from));
+  // The job sends every realize Convert to CONVERT_TO, not to the move's receiver.
+  const receiver = isWallet(poolWallet(CONVERT_TO[paying.from]));
+  const freed = repayment(buckets.find(receiver), arrives).marginFreedUsd;
+  const adjusted = buckets.map((bucket): Bucket => {
+    if (payer(bucket)) {
+      const gained = cashIn - converted;
+      return {
+        ...scaledBorrow(bucket, Math.max(0, gained)),
+        cash: bucket.cash + gained,
+        upnl: bucket.upnl - upnlOut,
+        equity: bucket.equity + gained - upnlOut,
+      };
+    }
+    if (!receiver(bucket)) return bucket;
+    return { ...scaledBorrow(bucket, arrives), cash: bucket.cash + arrives, equity: bucket.equity + arrives };
+  });
+  const costs = sum(legs.map((leg) => leg.realizedUsd - realizedNetUsd(leg)));
+  const marginBalance = num(account.marginBalance) - costs;
+  const initialMargin = num(account.initialMargin) - freed;
+  return {
+    buckets: adjusted,
+    account: {
+      ...account,
+      marginBalance: String(marginBalance),
+      initialMargin: String(initialMargin),
+      availableMargin: String(marginBalance - initialMargin),
+    },
+  };
+}
+
+function repaidBy(route: RoutePlan, buckets: Bucket[]) {
+  return POOLS.reduce(
+    (total, pool) => {
+      const wallet = poolWallet(pool);
+      const bucket = buckets.find(isWallet(wallet));
+      if (!bucket) return total;
+      const receives = Math.max(0, (route.after.find(isWallet(wallet))?.cash ?? bucket.cash) - bucket.cash);
+      const repaid = repayment(bucket, receives);
+      return {
+        savesPerDayUsd: total.savesPerDayUsd + repaid.savesPerDayUsd,
+        marginFreedUsd: total.marginFreedUsd + repaid.marginFreedUsd,
+        chargedLeftUsd: total.chargedLeftUsd + chargedBorrow(bucket, Math.max(0, bucket.borrow - receives)),
+      };
+    },
+    { savesPerDayUsd: 0, marginFreedUsd: 0, chargedLeftUsd: 0 },
+  );
+}
+
+function restated(route: RoutePlan, buckets: Bucket[]): RoutePlan {
+  const saved = repaidBy(route, buckets);
+  return {
+    ...route,
+    savesPerDayUsd: nearestCents(saved.savesPerDayUsd),
+    marginFreedUsd: nearestCents(saved.marginFreedUsd),
+  };
+}
+
+function planAfterRealize(
+  buckets: Bucket[],
+  account: AccountLike,
+  inputs: PlanInputs,
+  paying: Paying,
+  realize: RealizePlan,
+): EvenPlan {
+  const next = afterStepOne(buckets, account, paying, realize);
+  const others = (inputs.perps ?? []).filter((perp) => profitPoolOf(perp) !== paying.from);
+  const plan = planMoves(
+    next.buckets,
+    next.account,
+    { ...inputs, perps: others, availableMargin: num(next.account.availableMargin) },
+    REPAY_GOAL,
+  );
+  const nested = plan.realize?.refused === null ? plan.realize.legs : [];
+  const restOf = (route: RoutePlan): RoutePlan =>
+    restated(plan.balanced ? { ...route, available: true, reason: null, costUsd: 0, steps: [], idleSale: null } : route, buckets);
+  const routes = {
+    mix: plan.routes.mix && restOf(plan.routes.mix),
+    loop: plan.routes.loop && restOf(plan.routes.loop),
+    convert: restOf(plan.routes.convert),
+  };
+  return {
+    ...plan,
+    balanced: false,
+    routes,
+    recommended: plan.balanced ? recommend(routes) : plan.recommended,
+    realize: realizePlanOf([...realize.legs, ...nested], realize.refused),
+  };
+}
+
+const REALIZE_PASSES = 4;
+
+function debtLeftOf(after: WalletAfter[]): number {
+  const walletOf = (wallet: { coin: string; venue: string }) => after.find(isWallet(wallet));
+  const equityOfPool = (pool: Pool): number =>
+    (walletOf(poolWallet(pool))?.equity ?? 0) + (pool === 'CROSSEX' ? (walletOf(GATE_WALLET)?.cash ?? 0) : 0);
+  return sum(POOLS.map((pool) => Math.max(0, -equityOfPool(pool))));
+}
+
+function leftoverOf(plan: EvenPlan): number {
+  const route = plan.routes[plan.recommended ?? 'convert'];
+  return Math.max(plan.shortOfEven, debtLeftOf(route?.after ?? []));
+}
+
+function flooredRealize(buckets: Bucket[], account: AccountLike, paying: Paying, realize: RealizePlan, wholeDebt: boolean): RealizePlan {
+  const last = realize.legs.filter((leg) => leg.pool === paying.from).at(-1);
+  if (!last) return realize;
+  const next = afterStepOne(buckets, account, paying, realize);
+  const receiver = next.buckets.find(isWallet(poolWallet(CONVERT_TO[paying.from])));
+  const payer = next.buckets.find(isWallet(poolWallet(paying.from)));
+  if (!receiver || !payer || !(receiver.borrow > 0)) return realize;
+  const lift = APP_FLOOR * borrowImRateOf(receiver.imHeldUsd, receiver.borrow) * (1 - CONVERT_RATE) - MARGIN_CONVERT_FEE;
+  const short = APP_FLOOR * num(next.account.initialMargin) - num(next.account.marginBalance);
+  if ((!wholeDebt && !(short > 0)) || !(lift > 0)) return realize;
+  const debt = floorCents(receiver.borrow / (1 - CONVERT_RATE));
+  const extra = Math.min(wholeDebt ? debt : ceilCents(short / lift), debt, floorCents(Math.max(0, payer.cash)));
+  const amount = (last.convert?.amount ?? 0) + extra;
+  if (!(amount >= convertMinOf(paying.from)) || !(extra > 0)) return realize;
+  const convert = { amount, count: Math.ceil(amount / CONVERT_MAX), feeUsd: amount * CONVERT_RATE };
+  return realizePlanOf(realize.legs.map((leg) => (leg === last ? { ...leg, convert } : leg)), realize.refused);
+}
+
+function routedAfterRealize(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, paying: Paying, realize: RealizePlan): EvenPlan {
+  let plan = planAfterRealize(buckets, account, inputs, paying, realize);
+  for (const wholeDebt of [false, true]) {
+    if (leftoverOf(plan) < REPAY_DUST_USDC) return plan;
+    const floored = flooredRealize(buckets, account, paying, realize, wholeDebt);
+    const next = floored === realize ? plan : planAfterRealize(buckets, account, inputs, paying, floored);
+    if (leftoverOf(next) < leftoverOf(plan)) plan = next;
+  }
+  return plan;
+}
+
+function realizedPlan(
+  buckets: Bucket[],
+  account: AccountLike,
+  inputs: PlanInputs,
+  paying: Paying,
+  first: RealizePlan,
+): EvenPlan {
+  let plan = routedAfterRealize(buckets, account, inputs, paying, first);
+  let moveUsd = paying.moveUsd;
+  for (let pass = 1; pass < REALIZE_PASSES && leftoverOf(plan) >= REPAY_DUST_USDC; pass += 1) {
+    moveUsd += leftoverOf(plan) / (1 - CONVERT_RATE);
+    const grown = planRealize(realizeInput(buckets, account, inputs, { ...paying, moveUsd }));
+    const ownLegs = plan.realize?.legs.filter((leg) => leg.pool === paying.from) ?? [];
+    const sameSize = grown?.legs.map((leg) => leg.qty).join() === ownLegs.map((leg) => leg.qty).join();
+    if (!grown || grown.refused !== null || sameSize) return plan;
+    plan = routedAfterRealize(buckets, account, inputs, paying, grown);
+  }
+  return plan;
+}
+
+function cashOf(buckets: Bucket[], pool: Pool): number {
+  const holding = (wallet: { coin: string; venue: string }): Holding => holdingOf(buckets.find(isWallet(wallet)));
+  const gateCash = holding(GATE_WALLET).cash;
+  return sendableCash(
+    {
+      usdt: holding(USDT_WALLET),
+      gate: holding(GATE_WALLET),
+      venues: { HYPERLIQUID: holding(USDC_WALLET), LIGHTER: holding(LIGHTER_WALLET) },
+      gateMovable: gateCash >= DUST_USDC ? gateCash : 0,
+    },
+    pool,
+  );
+}
+
 export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, goal: Goal = EVEN_GOAL): EvenPlan {
+  const plan = planMoves(buckets, account, { ...inputs, perps: [] }, goal);
+  return goal.kind === 'custom' ? { ...plan, customMaxUsd: floorCents(cashOf(buckets, goal.from)) } : plan;
+}
+
+const MONTH_DAYS = 30;
+
+export interface FullPlan {
+  costUsd: number;
+  days: number | null;
+  clearsBorrow: boolean;
+  needsRealize: boolean;
+  moveCostUsd: number;
+  realizeCostUsd: number;
+  interestPerMonthUsd: number;
+  refused: RealizeRefusal | null;
+}
+
+export interface RealizeTab {
+  pool: Pool;
+  pools: Pool[];
+  clearDebt: RealizePlan | null;
+  all: RealizePlan | null;
+  custom: RealizePlan | null;
+  sliceOptions: SliceOption[];
+  defaultSliceUsd: number;
+  twapDefault: Record<'clearDebt' | 'all' | 'custom', TwapDefault>;
+}
+
+export interface ImUsedRow {
+  account: Pool;
+  pct: number;
+}
+
+export function fullPlanOf(buckets: Bucket[], account: AccountLike, inputs: PlanInputs): FullPlan | null {
+  if (!hasChargedBorrow(buckets)) return null;
+  const whole = planMoves(buckets, account, inputs, REPAY_GOAL);
+  const twapSlices = whole.realize?.refused?.reason === 'past-book' ? twapCountOf(realizeTwapNeedOf(whole.realize, inputs).slices) : undefined;
+  const plan = twapSlices === undefined ? whole : planMoves(buckets, account, { ...inputs, twapSlices }, REPAY_GOAL);
+  if (plan.balanced) return null;
+  const route = plan.routes[plan.recommended ?? 'convert'] ?? plan.routes.convert;
+  const refused = plan.realize?.refused ?? null;
+  const realizeLegs = refused === null ? (plan.realize?.legs ?? []) : [];
+  const moveCostUsd = nearestCents(route.costUsd);
+  const realizePlan = realizePlanOf(realizeLegs, null);
+  const realizeCostUsd = nearestCents(realizeMakerCostOf(realizePlan, inputs, twapSlices).totalUsd);
+  const costUsd = nearestCents(moveCostUsd + realizeCostUsd);
+  const repaid = repaidBy(route, buckets);
+  const perDayUsd = sum(buckets.filter(isPoolBucket).map((bucket) => bucket.interestPerDayUsd));
+  return {
+    costUsd,
+    days: repaid.savesPerDayUsd > 0 ? Math.ceil(Math.round((costUsd / repaid.savesPerDayUsd) * 1e6) / 1e6) : null,
+    clearsBorrow: route.available && refused === null && repaid.chargedLeftUsd < DUST_USDC,
+    needsRealize: plan.realize !== null,
+    moveCostUsd,
+    realizeCostUsd,
+    interestPerMonthUsd: nearestCents(perDayUsd * MONTH_DAYS),
+    refused,
+  };
+}
+
+function profitPoolsOf(buckets: Bucket[], perps: RealizePerp[], folded: RealizePlan | null): Pool[] {
+  const upnlOf = (pool: Pool): number => buckets.find(isWallet(poolWallet(pool)))?.upnl ?? 0;
+  const lead = folded?.legs[0]?.pool;
+  const pools = POOLS.filter((pool) => pool === lead || perps.some((perp) => profitPoolOf(perp) === pool));
+  return pools.sort((a, b) => (a === lead ? -1 : b === lead ? 1 : upnlOf(b) - upnlOf(a)));
+}
+
+function realizeTwapNeedOf(plan: RealizePlan | null, inputs: PlanInputs): { on: boolean; slices: number } {
+  const ordersOf = (leg: RealizeLeg): WholeOrder[] => {
+    const book = inputs.books?.[leg.symbol] ?? null;
+    const mid = touchOf(book)?.mid ?? null;
+    const close = leg.side === 'SHORT' ? 'BUY' : 'SELL';
+    return [
+      { book, side: close, mid, qty: leg.qty },
+      { book, side: close === 'BUY' ? 'SELL' : 'BUY', mid, qty: leg.qty },
+    ];
+  };
+  const legs = (plan?.legs ?? []).map(ordersOf);
+  const on = plan?.refused?.reason === 'past-book' || legs.some((orders) => orders.some(needsTwap));
+  return { on, slices: legs.reduce((total, orders) => total + Math.max(...orders.map(twapSlicesOf)), 0) };
+}
+
+function realizeTwapDefaultOf(plan: RealizePlan | null, inputs: PlanInputs): TwapDefault {
+  const need = realizeTwapNeedOf(plan, inputs);
+  return twapDefaultOf(need.on, need.slices);
+}
+
+function legMarketOf(leg: RealizeLeg, inputs: PlanInputs) {
+  const book = inputs.books?.[leg.symbol] ?? null;
+  const mid = touchOf(book)?.mid ?? 0;
+  const side: 'BUY' | 'SELL' = leg.side === 'SHORT' ? 'BUY' : 'SELL';
+  const rule = inputs.perpRules?.[leg.symbol] ?? {};
+  const lot = lotOf(rule);
+  const perp = (inputs.perps ?? []).find((row) => row.symbol === leg.symbol) ?? {};
+  const mark = positiveOf(perp.markPrice) || mid;
+  return { book, mid, side, lot, mark, minQty: minQtyOf(rule, lot, mark), maxUsd: marketCapUsd(perp, rule, leg.exchange, mark) };
+}
+
+function leadSlicesOf(plan: RealizePlan | null, inputs: PlanInputs): Pick<RealizeTab, 'sliceOptions' | 'defaultSliceUsd'> {
+  const leg = plan?.legs[0];
+  if (!leg) return { sliceOptions: [], defaultSliceUsd: 0 };
+  const { book, mid, side, lot, minQty, maxUsd } = legMarketOf(leg, inputs);
+  return {
+    sliceOptions: sliceOptions({ book, side, mid, totalQty: leg.qty, minQty, lot, maxUsd, reopenSide: side === 'BUY' ? 'SELL' : 'BUY' }),
+    defaultSliceUsd: oneOrderUsdOf(maxUsd),
+  };
+}
+
+function realizeMakerCostOf(plan: RealizePlan, inputs: PlanInputs, twapSlices: number | undefined): RealizeEstimate {
+  if (twapSlices === undefined) return slicedEstimateOf(plan, 'maker', leadSlicesOf(plan, inputs).sliceOptions[0] ?? null);
+  const qtysBySymbol = Object.fromEntries(
+    plan.legs.map((leg) => {
+      const { lot, mark, minQty, maxUsd } = legMarketOf(leg, inputs);
+      return [leg.symbol, twapQtysFor(leg.qty, twapSlices, lot, minQty, mark > 0 ? maxUsd / mark : Infinity)];
+    }),
+  );
+  return twapEstimateOf(plan, 'maker', inputs.books ?? {}, qtysBySymbol);
+}
+
+export function realizeTabOf(
+  buckets: Bucket[],
+  account: AccountLike,
+  inputs: PlanInputs,
+  customUsd: number | null,
+  pickedPool?: Pool,
+): RealizeTab | null {
+  const folded = hasChargedBorrow(buckets) ? planMoves(buckets, account, inputs, REPAY_GOAL).realize : null;
+  const pools = profitPoolsOf(buckets, inputs.perps ?? [], folded);
+  const pool = pickedPool !== undefined && pools.includes(pickedPool) ? pickedPool : pools[0];
+  if (pool === undefined) return null;
+  const foldedPool = folded?.legs[0]?.pool ?? pools[0];
+  const ownLegs = (folded?.legs ?? []).filter((leg) => leg.pool === pool);
+  const clearDebt =
+    folded && pool === foldedPool && (ownLegs.length > 0 || folded.refused !== null) ? realizePlanOf(ownLegs, folded.refused) : null;
+  const cashUsd = cashOf(buckets, pool);
+  const realizeUpTo = (moveUsd: number): RealizePlan | null =>
+    planRealize(realizeInput(buckets, account, inputs, { from: pool, moveUsd, cashUsd }));
+  const all = realizeUpTo(Infinity);
+  const allUsd = sum((all?.legs ?? []).map((leg) => Math.max(0, realizedNetUsd(leg))));
+  const customAmount = customUsd !== null && customUsd > 0 ? (all ? Math.min(customUsd, allUsd) : customUsd) : 0;
+  const custom = customAmount > 0 ? realizeUpTo(cashUsd + customAmount) : null;
+  return {
+    pool,
+    pools,
+    clearDebt,
+    all,
+    custom,
+    ...leadSlicesOf(clearDebt?.legs.length ? clearDebt : all, inputs),
+    twapDefault: { clearDebt: realizeTwapDefaultOf(clearDebt, inputs), all: realizeTwapDefaultOf(all, inputs), custom: realizeTwapDefaultOf(custom, inputs) },
+  };
+}
+
+export function realizeTabEstimateOf(
+  tab: Pick<RealizeTab, 'clearDebt' | 'all' | 'sliceOptions'>,
+  plan: RealizePlan,
+  exec: RealizeExec,
+): RealizeEstimate {
+  const priced = tab.clearDebt?.legs.length ? tab.clearDebt : tab.all;
+  const slice = plan === priced ? (tab.sliceOptions[0] ?? null) : null;
+  return slicedEstimateOf(plan, exec, slice);
+}
+
+export function imUsedOf(account: AccountLike): ImUsedRow[] {
+  const marginBalance = num(account.marginBalance);
+  const initialMargin = Math.max(0, num(account.initialMargin));
+  if (marginBalance > 0) return [{ account: 'CROSSEX', pct: initialMargin / marginBalance }];
+  return [{ account: 'CROSSEX', pct: initialMargin > 0 ? 1 : 0 }];
+}
+
+function planMoves(buckets: Bucket[], account: AccountLike, inputs: PlanInputs, goal: Goal): EvenPlan {
   const bucketOf = (wallet: { coin: string; venue: string }) => buckets.find(isWallet(wallet));
   const poolBuckets: Partial<Record<Pool, Bucket>> = {
     CROSSEX: bucketOf(USDT_WALLET),
@@ -988,9 +1464,11 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const shares = { CROSSEX: shareOf('CROSSEX'), HYPERLIQUID: shareOf('HYPERLIQUID'), LIGHTER: shareOf('LIGHTER') };
   const gateMovable = gateCash >= DUST_USDC ? gateCash : 0;
   const equity = sum(pools.map((pool) => equityOf(wallets, pool)));
+  const mayRealize = goal.kind === 'repay' && hasChargedBorrow(buckets);
+  const realizable = new Set(mayRealize ? (inputs.perps ?? []).flatMap((perp) => profitPoolOf(perp) ?? []) : []);
   const targets: Record<Pool, number> =
     goal.kind === 'repay'
-      ? repayTargets({ ...wallets, gateMovable }, pools)
+      ? repayTargets({ ...wallets, gateMovable }, pools, realizable)
       : goal.kind === 'custom'
         ? customTargets(wallets, pools, goal)
         : { CROSSEX: equity * shares.CROSSEX, HYPERLIQUID: equity * shares.HYPERLIQUID, LIGHTER: equity * shares.LIGHTER };
@@ -1025,6 +1503,11 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
 
   const start = moves.map((move) => floorCents(Math.abs(gaps[move.check])));
   const need = sum(moves.map((move) => Math.abs(gaps[move.check])));
+  const paying = payingOf(book, moves, start, realizable);
+  const realize = paying ? planRealize(realizeInput(buckets, account, inputs, paying)) : null;
+  if (paying && realize && realize.refused === null) {
+    return realizedPlan(buckets, account, inputs, paying, realize);
+  }
   // A custom amount is sent as given, not searched for: the run moves it, or
   // as much of it as cash allows, and the rest is the short.
   const run = (maxRounds: number[], size: Sizer): Run => {
@@ -1066,7 +1549,7 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
   const firstOpen = (['mix', 'loop', 'convert'] as const).find((name) => routes[name]?.available);
   const picked = runs[recommended ?? firstOpen ?? 'convert'];
   const moved = floorCents(sum(picked.steps.map((step) => step.move)));
-  if (moved < dust) return balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, noLegs);
+  if (moved < dust) return { ...balancedPlan(book, picked.cashLimited ? floorCents(need) : 0, noLegs), realize };
   return {
     goal,
     balanced: false,
@@ -1078,6 +1561,8 @@ export function planFor(buckets: Bucket[], account: AccountLike, inputs: PlanInp
     targets: targetRows(book),
     routes,
     recommended,
+    realize,
+    customMaxUsd: null,
   };
 }
 

@@ -16,6 +16,7 @@ import {
   keptSlice,
   pairBorosCloseLegs,
   pairLockedSpread,
+  pairPerpBookedUsd,
   pairPerpCloseLegs,
   pairRollDue,
   perpKey,
@@ -737,6 +738,27 @@ describe('closing from a pair row', () => {
       { symbol: 'GATE_HYPE', qty: 100, venue: 'GATE', partial: false },
       { symbol: 'HL_HYPE', qty: 100, venue: 'HYPERLIQUID', partial: false },
     ]);
+  });
+
+  it('booked perp price PnL counts every close on the pair perps since the Boros open, and flags a perp two pairs share', () => {
+    const d = deriveAsset(hype, {}, 0, NOW);
+    const row = (closedAt: number | null, priceUsd: number) => ({ closedAt, qty: 1, openPx: 1, closePx: 1, priceUsd, fundingUsd: 0, feesUsd: 0, complete: true, dedupedIntoOpen: false });
+    const closed = (symbol: string, venue: string, rows: ReturnType<typeof row>[]) => ({ symbol, venue, closedPnlUsd: 0, fundingUsd: 0, feesUsd: 0, count: rows.length, lastClosedAt: null, rows });
+    const group = {
+      perpClosed: [
+        closed('HL_HYPE', 'HYPERLIQUID', [row(900, 7), row(1_000, 29_500), row(null, 3)]),
+        closed('GATE_HYPE', 'GATE', [row(2_000, -100)]),
+        closed('BYBIT_HYPE', 'BYBIT', [row(2_000, 50)]),
+      ],
+    };
+    const pair = { ...d.pairs[0], borosOpenedSec: 1_000 };
+    expect(pairPerpBookedUsd(pair, group)).toEqual({ usd: 29_400, sinceSec: 1_000, shared: false });
+    const half = { ...pair, legs: pair.legs.map((l) => (l.kind === 'perp' ? { ...l, share: 0.5 } : l)) };
+    expect(pairPerpBookedUsd(half, group)).toEqual({ usd: 29_400, sinceSec: 1_000, shared: true });
+    const big = (n: number) => ({ perpClosed: [closed('HL_HYPE', 'HYPERLIQUID', [row(1_000, n)]), closed('GATE_HYPE', 'GATE', [row(2_000, -n / 3)])] });
+    expect(pairPerpBookedUsd(pair, big(50))?.usd).toBeCloseTo(50 - 50 / 3, 9);
+    expect(pairPerpBookedUsd(pair, big(6_000_000))?.usd).toBeCloseTo(6_000_000 - 2_000_000, 6);
+    expect(pairPerpBookedUsd({ ...pair, borosOpenedSec: null }, group)).toBeNull();
   });
 
   it('Boros close legs carry the collateral-token size and the same slice in dollars', () => {

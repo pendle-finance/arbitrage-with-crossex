@@ -38,6 +38,8 @@ const LOCK_LINE: Readonly<Record<TransferLock, string>> = {
   get rebalance() { return t('accounts.transfer.lock.rebalance'); },
   get halted() { return t('accounts.transfer.lock.halted'); },
   get deal() { return t('accounts.transfer.lock.deal'); },
+  get twapRunning() { return t('trade.twap.lock.running'); },
+  get twapError() { return t('trade.twap.lock.error'); },
 };
 
 export interface TransferPick {
@@ -185,14 +187,14 @@ export function TransferModal({
   start: ReturnType<typeof useStartTransfer>;
 }) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<Tab>('out');
-  const [wallet, setWallet] = useState<CrossexWallet>('CROSSEX');
+  const [tab, setTab] = useState<Tab>(pick && pick.wallet !== 'SPOT' ? 'into' : 'out');
+  const [wallet, setWallet] = useState<CrossexWallet>(pick && pick.wallet !== 'SPOT' ? pick.wallet : 'CROSSEX');
   const [typed, setTyped] = useState('');
   const [retriedId, setRetriedId] = useState<string | null>(null);
   const buckets = useRebalance().data?.buckets;
   const now = useNow(1_000);
   const inputId = useId();
-  const appliedNonce = useRef<number | null>(null);
+  const appliedNonce = useRef<number | null>(pick?.nonce ?? null);
 
   useEffect(() => {
     if (!pick || pick.nonce === appliedNonce.current) return;

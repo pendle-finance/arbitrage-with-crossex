@@ -41,6 +41,7 @@ export type ErrorCategory =
   | 'rate-limited'
   | 'symbol-invalid'
   | 'venue-rejected'
+  | 'order-allowance'
   | 'validation'
   | 'network'
   | 'unknown';
@@ -105,6 +106,11 @@ export interface UpdateStatus {
   updateAvailable: boolean;
   /** The latest version's feature list — only when updateAvailable. */
   highlights: string[];
+  /** False when this copy never reads GitHub (UPDATE_CHECK=0 or no local version). */
+  checkOn: boolean;
+  /** Only on `?fresh=1`: the read ran, failed (the last good answer stands),
+   * or was skipped because one ran in the last 5 minutes. */
+  freshRead: 'ok' | 'failed' | 'skipped' | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +222,288 @@ export interface RoutePlan {
   savesPerDayUsd: number;
   after: WalletAfter[];
   steps: PlannedStep[];
+  idleSale?: { usdc: number; at: number } | null;
+}
+
+export type PerpSide = 'LONG' | 'SHORT';
+
+export interface RealizeConvert {
+  amount: number;
+  count: number;
+  feeUsd: number;
+}
+
+export interface RealizeMargin {
+  at: 'before' | 'gap';
+  amount: number;
+  firstQty: number;
+  impactUsd?: number;
+  impactBp?: number;
+  closeWalkUsd?: number;
+  reopenWalkUsd?: number;
+}
+
+export interface RealizeLeg {
+  pool: Pool;
+  symbol: string;
+  exchange: string;
+  base: string;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  realizedUsd: number;
+  convert: RealizeConvert | null;
+  margin?: RealizeMargin | null;
+  closeFeeUsd: number;
+  closeMakerFeeUsd?: number;
+  reopenFeeUsd: number;
+  closeImpactUsd: number;
+  reopenImpactUsd: number;
+  impactBp: number;
+}
+
+export type RealizeExec = 'maker' | 'market';
+
+export type RealizeRefusalReason = 'no-fee-rate' | 'no-margin' | 'past-book' | 'over-cap';
+
+export interface RealizeRefusal {
+  reason: RealizeRefusalReason;
+  bp: number | null;
+  capUsd?: number;
+}
+
+export interface RealizeEstimate {
+  feeUsd: number;
+  impactUsd: number;
+  totalUsd: number;
+}
+
+export interface RealizePlan {
+  legs: RealizeLeg[];
+  refused: RealizeRefusal | null;
+  estimates?: { maker: RealizeEstimate; market: RealizeEstimate };
+}
+
+export interface SliceOption {
+  sizeUsd: number;
+  custom: boolean;
+  whole: boolean;
+  count: number;
+  impactBp: number;
+  impactUsd: number;
+  reopenImpactUsd: number;
+  pastBook: boolean;
+  notHedgedMaxQty: number;
+  notHedgedMaxUsd: number;
+  seconds: { maker: number; market: number };
+}
+
+export interface RealizeTab {
+  pool: Pool;
+  pools: Pool[];
+  clearDebt: RealizePlan | null;
+  all: RealizePlan | null;
+  custom: RealizePlan | null;
+  sliceOptions: SliceOption[];
+  defaultSliceUsd: number;
+  twapDefault: Record<'clearDebt' | 'all' | 'custom', TwapDefault>;
+}
+
+export interface RealizeTwap extends TwapPlanPreview {
+  price: number;
+  legs: { symbol: string; slices: number; plan: TwapPlanView | null }[];
+  estimates: { maker: RealizeEstimate; market: RealizeEstimate } | null;
+}
+
+export interface RealizeTwapTargets {
+  clearDebt: RealizeTwap | null;
+  all: RealizeTwap | null;
+  custom: RealizeTwap | null;
+}
+
+export interface ProfitStop {
+  symbol: string;
+  exchange: string;
+  base: string;
+  side: PerpSide;
+  entry: number;
+  mark: number;
+  closedQty: number;
+  plannedQty: number;
+  at: number;
+}
+
+export interface FullPlan {
+  costUsd: number;
+  days: number | null;
+  clearsBorrow: boolean;
+  needsRealize: boolean;
+  moveCostUsd: number;
+  realizeCostUsd: number;
+  interestPerMonthUsd: number;
+  refused: RealizeRefusal | null;
+}
+
+export interface ImUsedRow {
+  account: Pool;
+  pct: number;
+}
+
+export interface DeleverRequest {
+  perps: { symbol: string; qty: number }[];
+  boros: { marketId: number; size: number }[];
+  exec: RealizeExec;
+  twap?: {
+    durationSec?: number;
+    intervalSec?: number;
+    slices?: number;
+    sliceQty?: string;
+    takerAfterSec?: number | null;
+    repegBehindBp?: number | null;
+  };
+}
+
+export interface DeleverEstimate {
+  feePerpsUsd: number;
+  feeBorosUsd: number;
+  impactUsd: number;
+  impactBorosUsd?: number;
+  totalUsd: number;
+}
+
+export interface DeleverPlan {
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number; closeAll?: boolean }[];
+  boros: { marketId: number; before: number; after: number; closeSize: number; name?: string | null }[];
+  imUsed: { account: Pool; before: number; after: number }[];
+  makerLeg: 0 | 1;
+  sliceOptions: SliceOption[];
+  defaultSliceUsd: number;
+  estimates: { maker: DeleverEstimate; market: DeleverEstimate };
+  notHedgedMaxQty: number;
+  notHedgedMaxUsd: number;
+  refused: { reason: 'below-min'; venue: string; minQty: number; coin: string } | { reason: 'same-side'; coin: string } | null;
+  twap?: (TwapPlanPreview & { price: number }) | null;
+  priceImpact?: PriceImpactPreview | null;
+  twapDefault?: TwapDefault | null;
+  borosCloses?: number;
+  borosGasUsd?: number | null;
+}
+
+export type RebalanceFixAction = 'market' | 'limit' | 'boros-retry' | 'add-back' | 'unwind';
+
+export type HaltKind = 'margin' | 'not-hedged' | 'boros' | 'restart' | 'other';
+
+export type JobHaltKind =
+  | 'refused'
+  | 'hedge-margin'
+  | 'sleep'
+  | 'restart'
+  | 'error'
+  | 'boros'
+  | 'capped-rest'
+  | 'margin'
+  | 'not-hedged'
+  | 'other';
+
+export interface TwapPlanView {
+  slices: number;
+  sliceQty: string;
+  lastQty: string;
+  intervalSec: number;
+  durationSec: number;
+  takerAfterSec: number;
+}
+
+export interface TwapRefusalView {
+  field: 'duration' | 'interval' | 'sliceSize';
+  text: string;
+  fix: { label: string; patch: { durationSec?: number; intervalSec?: number; sliceQty?: string } } | null;
+}
+
+export interface TwapView {
+  slice: number;
+  of: number;
+  nextAt: number | null;
+  durationSec: number;
+  intervalSec: number;
+  startedAt: number;
+  carryQty: string;
+  behindQty: string;
+  makerLeg: 'a' | 'b';
+  repegBehindBp: number | null;
+  takerAfterSec: number | null;
+}
+
+export interface TwapChildView {
+  id: string;
+  mode: DealMode;
+  slice: number;
+  makerLeg: 'a' | 'b';
+  side: Side;
+  restPrice: string | null;
+  bestPrice: string | null;
+  behindPct: number | null;
+  repegRefused: { kind: string; at: number } | null;
+}
+
+export interface RunLegView {
+  name: string;
+  exchange: string;
+  symbol: string;
+  reduceOnly: boolean;
+  side: PerpSide;
+  filledQty: string;
+  plannedQty: string;
+  avgPrice: string | null;
+  beforeQty?: string;
+  nowQty?: string;
+}
+
+export interface TwapBorosView {
+  refused: boolean;
+  slice: number;
+  leftYu: number;
+  beforeYu: number;
+  nowYu: number;
+}
+
+export interface RunOrderView {
+  venue: string;
+  leg: 'A' | 'B';
+  kind: 'maker' | 'taker';
+  slice: number | null;
+  price: string | null;
+  qty: string;
+  filledQty: string;
+  state: DealOrderState;
+  createdAt: number;
+}
+
+export interface MakerLegPreview {
+  auto: 'a' | 'b';
+  why: 'fees' | 'book';
+}
+
+export interface TwapSpan {
+  durationSec: number;
+  intervalSec: number;
+}
+
+export interface TwapDefault {
+  on: boolean;
+  maker: TwapSpan;
+  market: TwapSpan;
+}
+
+export interface PriceImpactPreview {
+  whole: number | null;
+  sliced: number;
+  slicedLegs: number[];
+}
+
+export interface TwapPlanPreview {
+  plan: TwapPlanView | null;
+  refusal: TwapRefusalView | null;
 }
 
 export interface EvenPlan {
@@ -233,6 +521,8 @@ export interface EvenPlan {
   targets: WalletTarget[];
   routes: { mix: RoutePlan | null; loop: RoutePlan | null; convert: RoutePlan };
   recommended: RouteName | null;
+  realize?: RealizePlan | null;
+  customMaxUsd?: number | null;
 }
 
 export interface RebalanceStep {
@@ -253,6 +543,30 @@ export interface RebalanceStep {
   to: Pool;
   cashBefore?: number;
   sentAt?: number;
+  perp?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; reduceOnly: boolean } | null;
+  nextTryAt?: number | null;
+  retry?: { reason: 'margin'; convertAmount: number } | null;
+  phase?: 'realize' | 'route';
+  addBack?: { qty: number; legs: { symbol: string; filled: number }[] } | null;
+}
+
+export interface RealizeJobLeg {
+  symbol: string;
+  base: string;
+  exchange: string;
+  pool: Pool;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  filledQty: number;
+  realizedUsd: number;
+  closeFeeUsd?: number;
+  reopenFeeUsd?: number;
+  closeImpactUsd?: number;
+  reopenImpactUsd?: number;
+  convert?: { amount: number; feeUsd: number } | null;
+  hedge?: string | null;
+  margin?: RealizeMargin | null;
 }
 
 export interface RebalanceJob {
@@ -270,6 +584,63 @@ export interface RebalanceJob {
   createdAt: number;
   updatedAt: number;
   inTransit: { coin: 'USDC'; qty: number; at: 'SPOT' | 'MOVING' } | null;
+  realize?: { legs: RealizeJobLeg[]; costUsd?: number } | null;
+  before?: RebalanceBefore | null;
+  routeImpactUsd?: number;
+  openGaps?: RebalanceOpenGap[];
+  kind?: 'move' | 'realize' | 'delever' | 'twap';
+  exec?: RealizeExec;
+  maker?: { takerAfterSec: number | null; repegBehindBp: number | null } | null;
+  slice?: { index: number; count: number; sizeUsd: number; qty?: number } | null;
+  notHedgedQty?: number;
+  followMisses?: number;
+  follow?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; qty: number; reduceOnly: boolean } | null;
+  unwindTarget?: { symbol: string; exchange: string; side: 'BUY' | 'SELL'; qty: number; reduceOnly: boolean } | null;
+  borosGapYu?: number;
+  borosLeftYu?: number;
+  feeSoFarUsd?: number;
+  estimate?: RealizeEstimate | null;
+  pauseRequested?: boolean;
+  paused?: boolean;
+  delever?: {
+    pct: number;
+    legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeAll?: boolean }[];
+    boros: { marketId: number; before: number; after: number; closed: number }[];
+  } | null;
+  imUsedNow?: ImUsedRow[] | null;
+  imUsedEnd?: ImUsedRow[] | null;
+  imUsedStart?: ImUsedRow[] | null;
+  totalCostUsd?: number | null;
+  haltKind?: JobHaltKind | null;
+  sizeRefusal?: { slice: number; venue: string; limit: string; bound: 'min' | 'max'; wholeRest: boolean } | null;
+  sleptFrom?: number | null;
+  sleptTo?: number | null;
+  profitStops?: ProfitStop[];
+  twap?: TwapView | null;
+  child?: TwapChildView | null;
+  legs?: RunLegView[];
+  fees?: { readUsd: number; estUsd: number; totalUsd: number; est: boolean };
+  slippage?: { pct: number; usd: number } | null;
+  orders?: RunOrderView[];
+  boros?: TwapBorosView | null;
+}
+
+export interface RebalanceOpenGap {
+  leg: Pick<RealizeJobLeg, 'symbol' | 'base' | 'exchange' | 'side' | 'positionQty'> & { hedge?: string | null };
+  qty: number;
+  hedges: PerpSize[];
+}
+
+export interface PerpSize {
+  symbol: string;
+  exchange: string;
+  side: PerpSide;
+  qty: number;
+}
+
+export interface RebalanceBefore {
+  buckets: RebalanceBucket[];
+  perps: PerpSize[];
 }
 
 export interface RebalancePlans {
@@ -282,6 +653,10 @@ export interface RebalancePlans {
 export interface RebalanceView {
   buckets: RebalanceBucket[];
   plans: RebalancePlans;
+  realize?: RealizeTab | null;
+  realizeTwap?: RealizeTwapTargets | null;
+  fullPlan?: FullPlan | null;
+  imUsed?: ImUsedRow[];
   job: RebalanceJob | null;
 }
 
@@ -314,7 +689,7 @@ export interface TransferJob {
   doneAt: number | null;
 }
 
-export type TransferLock = 'rebalance' | 'halted' | 'deal';
+export type TransferLock = 'rebalance' | 'halted' | 'deal' | 'twapRunning' | 'twapError';
 
 export interface TransferView {
   spot: SpotBalance[] | null;
@@ -807,6 +1182,18 @@ export interface ClosePositionAction {
   /** Marketable-limit protection band, percent. Default 0.5, bounded (0, 10]. */
   slippagePct?: number;
   pairGroupId?: string;
+  /**
+   * Maker + hedge close, set at confirm only (never sent to /preview): the
+   * 'maker' leg rests reduce-only post-only at the touch, the 'hedge' leg
+   * closes at market as it fills. Both legs carry the role.
+   */
+  pairRole?: 'maker' | 'hedge';
+  /** Starting price for the maker leg; the engine re-pegs it to the touch. */
+  makerPrice?: string;
+  /** Seconds before the rest closes at market. */
+  makerTimeoutSec?: number;
+  /** Largest single order on either leg, in base units. */
+  maxClip?: string;
 }
 
 export type ActionInput = OpenMarketAction | OpenLimitAction | ClosePositionAction;
@@ -904,6 +1291,10 @@ export interface PreviewResult extends ResolvedAction {
 /** POST /api/preview response body. */
 export interface PreviewResponse {
   previews: PreviewResult[];
+  makerLeg?: MakerLegPreview | null;
+  priceImpact?: PriceImpactPreview | null;
+  twapDefault?: TwapDefault | null;
+  twap?: TwapPlanPreview | null;
 }
 
 /** POST /api/deals response (202; duplicate = idempotent replay). */
@@ -989,6 +1380,10 @@ export interface DealView {
   pair: DealPair;
   orders: DealOrder[];
   projection: DealProjection;
+  fees: { readUsd: number; estUsd: number; totalUsd?: number; est: boolean };
+  avgPrice: { a: string | null; b: string | null };
+  endedAt: number | null;
+  repegRefused?: string | null;
 }
 
 export interface DealReport {
@@ -1020,10 +1415,24 @@ export interface DealRequest {
   execution: 'maker' | 'taker';
   price?: string;
   pricePolicy?: 'fixed' | 'touch';
-  timeoutSec?: number;
+  timeoutSec?: number | null;
+  repegBehindBp?: 2 | 5 | 10 | null;
+  makerLeg?: 'auto' | 'a' | 'b';
   maxClip?: string;
   clipBandPct?: number;
   leverage?: { a?: number; b?: number };
+}
+
+export type DealBody = DealRequest;
+
+export interface TwapStartBody {
+  kind: 'twap';
+  clientId: string;
+  deal: Omit<DealBody, 'id'>;
+  durationSec: number;
+  slices: number;
+  intervalSec?: number;
+  sliceQty?: string;
 }
 
 /** GET /api/books/:symbol — the venue's live touch (re-peg decision data). */
@@ -1073,6 +1482,7 @@ export interface BorosPairMarketRow {
    * current rate plus the taker fee, both linear in size. Null when the market
    * carries no margin inputs. Optional: an older server does not send it. */
   openCostPerSize?: number | null;
+  settleFeeApr?: number;
 }
 
 /** GET /api/boros/pair/context */
@@ -1240,6 +1650,7 @@ export interface BorosPairSimulateResponse {
   /** Prepaid relayer gas in USD — a DIFFERENT pot from trading collateral.
    * null when the install cannot read it. */
   gasBalanceUsd: number | null;
+  cancelOrdersOn?: number[];
 }
 
 export type BorosLegFailureCode =
@@ -1752,4 +2163,11 @@ export interface TelegramLinkStatus {
   status: 'none' | 'pending' | 'confirmed' | 'expired';
   url: string | null;
   expiresAt: number | null;
+}
+
+export interface TwapInput {
+  durationSec?: number;
+  intervalSec?: number;
+  sliceQty?: string;
+  slices?: number;
 }

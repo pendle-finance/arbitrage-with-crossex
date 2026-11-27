@@ -146,11 +146,11 @@ describe('PriceImpactGraph', () => {
     // the ask, i.e. its container starts higher (smaller top%) than the ask.
     const askTop = (container.querySelector('[data-leg="long"] [data-mark="ask"]') as HTMLElement).style.top;
     const arrowLong = container.querySelector('[data-leg="long"] [data-mark="impact"]') as HTMLElement;
-    expect(arrowLong.querySelector('.border-b-rose-400, .border-b-amber-400, .border-b-emerald-400')).not.toBeNull(); // up head
+    expect(arrowLong.querySelector('.border-b-rose-400, .border-b-amber-400, .border-b-cyan-400')).not.toBeNull();
     expect(parseFloat(arrowLong.style.top)).toBeLessThanOrEqual(parseFloat(askTop));
     // Short SELL fill (58.93) is BELOW its bid → a down head.
     const arrowShort = container.querySelector('[data-leg="short"] [data-mark="impact"]') as HTMLElement;
-    expect(arrowShort.querySelector('.border-t-rose-400, .border-t-amber-400, .border-t-emerald-400')).not.toBeNull(); // down head
+    expect(arrowShort.querySelector('.border-t-rose-400, .border-t-amber-400, .border-t-cyan-400')).not.toBeNull();
   });
 
   it('captions each column with its venue and shows the limit direction arrow', () => {
@@ -179,5 +179,46 @@ describe('PriceImpactGraph', () => {
     expect(fill.getAttribute('title')).toContain('partial depth');
     expect(document.querySelector('[data-leg="short"] [data-mark="bid"]')).toBeNull();
     expect(document.querySelector('[data-leg="short"] [data-mark="ask"]')).toBeNull();
+  });
+
+  it('one-leg mode', () => {
+    render(<PriceImpactGraph long={longLeg()} short={shortLeg()} oneLeg="short" updatedAt={1} staleError={false} onRefetch={noop} />);
+    expect(document.querySelectorAll('[data-leg]')).toHaveLength(1);
+    expect(document.querySelector('[data-leg="short"]')).not.toBeNull();
+  });
+
+  it('one tag per column', () => {
+    render(
+      <PriceImpactGraph long={longLeg({ limitPx: 59.0, avgFill: null, worst: null })} short={shortLeg()} updatedAt={1} staleError={false} onRefetch={noop} />,
+    );
+    const tags = (leg: string, mark: string) => document.querySelector(`[data-leg="${leg}"] [data-mark="${mark}"] span`);
+    expect(tags('long', 'bid')?.textContent).toBe('Bid');
+    expect(tags('long', 'ask')).toBeNull();
+    expect(tags('short', 'bid')?.textContent).toBe('Bid');
+    expect(tags('short', 'ask')).toBeNull();
+  });
+
+  it('new captions', () => {
+    render(
+      <PriceImpactGraph long={longLeg({ limitPx: 59.0, avgFill: null, worst: null })} short={shortLeg()} updatedAt={1} staleError={false} onRefetch={noop} />,
+    );
+    expect(screen.getByText('Limit order')).toBeInTheDocument();
+    expect(screen.getByText('Market hedge')).toBeInTheDocument();
+  });
+
+  it('tags at 10.5 px', () => {
+    render(
+      <PriceImpactGraph long={longLeg({ limitPx: 59.0 })} short={shortLeg()} updatedAt={1} staleError={false} onRefetch={noop} />,
+    );
+    expect(document.querySelector('[data-leg="long"] [data-mark="bid"] span')!.className).toContain('text-[10.5px]');
+    expect(screen.getByText('Limit order').className).toContain('text-[10.5px]');
+  });
+
+  it('mkt line blue under 0.05%', () => {
+    render(
+      <PriceImpactGraph long={longLeg({ avgFill: 59.03 })} short={shortLeg()} updatedAt={1} staleError={false} onRefetch={noop} />,
+    );
+    expect(document.querySelector('[data-leg="long"] [data-mark="fill"] div')!.className).toContain('border-cyan-400');
+    expect(document.querySelector('[data-leg="long"] [data-mark="impact"] .bg-cyan-400')).not.toBeNull();
   });
 });

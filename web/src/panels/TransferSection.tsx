@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useStartTransfer, useTransfer } from '../api/queries';
+import { useRebalance, useStartTransfer, useTransfer } from '../api/queries';
 import type { TransferJob, TransferLock } from '../api/types';
 import { useToast } from '../components/Toast';
 import { t } from '../i18n';
@@ -14,6 +14,8 @@ const LOCK_SHORT: Readonly<Record<TransferLock, string>> = {
   get rebalance() { return waitsForRebalance(); },
   get halted() { return waitsForStoppedRebalance(); },
   get deal() { return waitsForDeal(); },
+  get twapRunning() { return t('accounts.rebalance.waits.twapRunning'); },
+  get twapError() { return t('accounts.rebalance.waits.twapError'); },
 };
 
 function doneText(transfer: TransferJob): string {
@@ -34,6 +36,8 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
   const loadError = useSettledError(query.status, query.error);
   const view = query.data;
   const job = view?.transfer ?? null;
+  const rebalanceJob = useRebalance().data?.job;
+  const twapRunning = rebalanceJob?.kind === 'twap' && rebalanceJob.status === 'running';
 
   useEffect(() => {
     if (!pick || pick.nonce === appliedNonce.current) return;
@@ -74,6 +78,7 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
     );
   }
 
+  const lock: TransferLock | null = view.lock ?? (twapRunning ? 'twapRunning' : null);
   const moving = job?.status === 'moving' ? job : null;
   const failed = job !== null && job.status === 'failed' && job.failText !== null ? job : null;
 
@@ -102,9 +107,9 @@ export function TransferSection({ holdMs, pick }: { holdMs?: number; pick?: Tran
       </button>
     );
   } else {
-    if (view.lock) note = <span className="text-xs text-ink-500">{LOCK_SHORT[view.lock]}</span>;
+    if (lock) note = <span className="text-xs text-ink-500">{LOCK_SHORT[lock]}</span>;
     button = (
-      <button type="button" className="btn" disabled={view.lock !== null} onClick={openModal}>
+      <button type="button" className="btn" disabled={lock !== null} onClick={openModal}>
         {transferCta()}
       </button>
     );

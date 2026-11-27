@@ -5,12 +5,15 @@
  *
  * All numbers arrive derived (assetModel.ts) — this file only renders.
  */
-import { cloneElement, createContext, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { cloneElement, createContext, type ReactNode, useContext, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { t } from '../../i18n';
 import { Modal } from '../../components/Modal';
 import type {
+  ActionInput,
   CrossexPosition,
+  RebalanceJob,
   AssetBorosHistory,
   AssetBorosOpen,
   AssetGroup,
@@ -41,8 +44,9 @@ import { Skeleton } from '../../components/Skeleton';
 import { microLabelClass } from '../../components/Th';
 import { SharePositionModal } from '../SharePositionModal';
 import { ClosePairForm } from '../PerpOnlyBox';
+import { ClosePairModal, RollPairModal } from './ClosePairModal';
 import { BorosLogInButton } from '../../trade/BorosAgentSetup';
-import { CloseBorosForm } from '../../trade/CloseBorosForm';
+import { CloseBorosForm, seedBorosSlipPct } from '../../trade/CloseBorosForm';
 import { pickOpenMarkets } from '../../trade/BorosPairTicket';
 import { ClosePopover } from '../../trade/ClosePopover';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
@@ -56,10 +60,23 @@ import {
   useExecuteBorosPair,
   useExecuteBorosRoll,
   usePositions,
+  useRebalance,
+  useRebate,
 } from '../../api/queries';
+import { loadControls } from '../OpportunitiesPanel';
+import { closeCosts } from '../ClosePairParts';
+import { legNotional } from '../../trade/previewBits';
+import { usePreviewDebounced } from '../../trade/usePreview';
+import { ApiError } from '../../api/client';
 import { HoldToConfirmButton } from '../../components/HoldToConfirmButton';
-import { AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, marketName, OpposingAcknowledgement, PairCosts, PositionArithmetic, SpreadReadout, SuggestedTopUpLines } from '../../trade/BorosPairBits';
-import { EstimateCard, EstimateRow, SlippageLine, StepBadge } from '../../trade/PairTicketBits';
+import { aprCost, AvailableMarginLines, BlockerList, LegFillLine, legLetter, LiquidationLines, liqWarnOf, MarginUsageRow, marketName, OpposingAcknowledgement, SpreadReadout, SuggestedTopUpLines, usdOf as simUsdOf } from '../../trade/BorosPairBits';
+import { EstimateAge, EstimateRow, SlippageLine, SummaryCard } from '../../trade/PairTicketBits';
+import { StepList } from '../RebalanceBits';
+import { StopBox } from '../RebalanceJobBits';
+import { ResultBox } from '../../components/ResultBox';
+import { FoldRow } from '../../trade/FoldRow';
+import { AmountPresets } from '../../components/AmountPresets';
+import { SegmentedToggle } from '../../components/SegmentedToggle';
 import { QueryError } from '../../components/QueryError';
 import { uuid } from '../../lib/uuid';
 import { useNow } from '../../lib/useNow';
@@ -77,6 +94,7 @@ import {
   sigGrouped,
   parseDateLocal,
   prettyVenue,
+  fieldValue,
 } from '../../lib/fmt';
 import { lineDetail, lineLabel, unknownLabel, type LiquidationLine } from '../../lib/liquidation';
 import {
@@ -102,7 +120,6 @@ import {
   exclusionQty,
   keptSlice,
   perpKey,
-  pairBorosCloseLegs,
   pairCanRoll,
   pairRollDue,
   pairTimelineAxis,
@@ -110,12 +127,14 @@ import {
   type TimelineAxis,
   pairLockedSpread,
   pairPerpCloseLegs,
-  entryAprOf,
   perpOnlyCloseLegs,
   type BorosOnlyPair,
   sizeIn,
 } from './assetModel';
 import { DUST_USD, sameSize } from './grouping';
+import { daysLeftText, openPairKey, pairKey } from './pairs';
+import { useRebalanceOpener } from '../rebalanceOpener';
+import { PairTitle } from '../../components/PairTitle';
 import { DropdownMenu } from '../../components/DropdownMenu';
 import { exclusionAfter, legVenueName } from './excludeLeg';
 import { daysToMaturity, knownRate } from '../../lib/boros';
@@ -123,10 +142,29 @@ import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
-import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
+import {
+  ROLL_OPPORTUNITY_SHARE,
+  exitLegBodies,
+  exitPnlOf,
+  fitAtBand,
+  fitLegsAtBand,
+  inRollUnits,
+  maxRollSize,
+  pairRollGeometry,
+  planBatch,
+  rollFigures,
+  rollOpportunities,
+  rollPart,
+  rollRebateApr,
+  suggestedRollSize,
+  type BatchLimit,
+  type RollOpportunity,
+  type RollProbeResult,
+  type RollRateInputs,
+} from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 import { localizeServerText } from '../../i18n/serverMessages';
-import { ArrowDown, ArrowLeft, ArrowRight, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
+import { ArrowDown, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
 
 interface Props {
   group: AssetGroup;
@@ -346,12 +384,6 @@ const exactUsd = (usd: number): string => fmtUsd(usd);
  * "20k SOL" for a $20k position. */
 const exactSize = (size: number, unit: 'base' | 'usd', base: string): string =>
   unit === 'base' ? exactQty(size, base) : exactUsd(size);
-
-/** "16d left" / "matured" — the term in the unit a trader thinks in. */
-const daysLeftText = (maturitySec: number, nowSec: number): string => {
-  const days = daysToMaturity(maturitySec, nowSec);
-  return days > 0 ? t('assetCard.daysLeft', { days }) : t('assetCard.matured');
-};
 
 /** The pair's term as one bar on the asset's shared time axis: it starts when
  * the pair was hedged and ends at maturity, the filled part is the time that
@@ -704,6 +736,14 @@ function MenuCell({ show, cell, children }: { show: boolean; cell: string; child
   return show ? <td className={`${cell} ${MENU_CELL}`}>{children}</td> : null;
 }
 
+function deleverJobOf(job: RebalanceJob | null, pair: PairEstimate): RebalanceJob | null {
+  if (!job?.delever || job.kind !== 'delever' || (job.status !== 'running' && job.status !== 'halted')) return null;
+  const perps = new Set(pairPerpCloseLegs(pair).map((l) => l.symbol));
+  const markets = new Set(pair.legs.flatMap((l) => (l.kind === 'yu' && l.marketId !== undefined ? [l.marketId] : [])));
+  const sameSet = <T,>(set: Set<T>, items: T[]) => items.length === set.size && items.every((x) => set.has(x));
+  return sameSet(perps, job.delever.legs.map((l) => l.symbol)) && sameSet(markets, job.delever.boros.map((b) => b.marketId)) ? job : null;
+}
+
 function PairCard({
   pair,
   base,
@@ -712,6 +752,8 @@ function PairCard({
   borosOpen,
   defaultOpen,
   showRollNonce = 0,
+  onDelever,
+  deleverJob = null,
   onClosePerps,
   onCloseBoros,
   onRollOver,
@@ -733,6 +775,8 @@ function PairCard({
   /** This card is the one "Show me" scrolls to — the first that can roll,
    * with `scroll-mt-36` clearing the sticky header and the column band. */
   focusOnShow?: boolean;
+  onDelever: () => void;
+  deleverJob?: RebalanceJob | null;
   onClosePerps: () => void;
   onCloseBoros: () => void;
   /** Opens the roll-over popup for this pair (offered until it matures). */
@@ -744,6 +788,9 @@ function PairCard({
   excludeMenu: ExcludeMenu;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const wallet = useActiveWallet();
+  const deleverBlocked =
+    deleverJob === null && pair.legs.some((l) => l.kind === 'yu') && wallet.state !== null && !wallet.canTrade;
   // The roll is OFFERED on any live pair; everything that reminds — the
   // chips, the probes, "Show me", the button's colour — waits for the window.
   const canRoll = pairCanRoll(pair, nowSec);
@@ -824,13 +871,12 @@ function PairCard({
 
   // ---- the roll signal ----------------------------------------------------
   /**
-   * Inside the window, each later maturity both venues list is probed at a
-   * FIFTH of the position: the entry legs alone (the round trip's fees are
-   * deliberately left out — the question is whether the market offers a
-   * better rate, not what today's exit costs), against the rate this row
-   * shows NET of the fees its own switches charge. A target that fills that
-   * fifth inside its tolerance at a better rate is an opportunity; the best
-   * one goes up to the banner (his call 2026-09-20).
+   * Inside the window, each later maturity both venues list is probed and
+   * priced net of the roll's own costs, against what holding still earns
+   * (`lockedAprFwd`). Fees already paid to open this pair are left out of
+   * that: rolling cannot get them back, so charging them to "keep" made a
+   * lower later rate look better. A target that fills inside its tolerance
+   * at a better rate is an opportunity; the best one goes up to the banner.
    */
   const rollAddress = useTrackedAddressOptional()?.address ?? null;
   const rollCtx = useBorosPairContext(rollDue ? rollAddress : null);
@@ -840,7 +886,7 @@ function PairCard({
   );
   // A pair with no rate (under $100, or a rate unknown) has nothing to compare
   // a probe against, so it sends none: each probe is a paid Boros simulate.
-  const probing = rollDue && netApr !== null;
+  const probing = rollDue && lockedAprFwd !== null;
   const probeTargets = useMemo(
     () => (probing && rollMarkets ? rollTargetsFor(rollMarkets, pair, base, soonest) : []),
     [probing, rollMarkets, pair, base, soonest],
@@ -850,8 +896,8 @@ function PairCard({
   // Results from before a no-rate spell must not price a later chip.
   if (!probing && Object.keys(probes).length > 0) setProbes({});
   const opportunities = useMemo(
-    () => rollOpportunities(probes, probeTargets, netApr, soonest),
-    [probes, probeTargets, netApr, soonest],
+    () => rollOpportunities(probes, probeTargets, lockedAprFwd, soonest),
+    [probes, probeTargets, lockedAprFwd, soonest],
   );
   const opportunity = opportunities[0] ?? null;
   const signalRef = useRef(onRollSignal);
@@ -904,6 +950,7 @@ function PairCard({
   // full-round pill was this app's own shape; dapp-nitro keeps the 5px radius
   // on every button, and reserves colour for what the action does.
   const pill = 'btn !h-[30px] !px-3 !text-[12px]';
+  const rollRates = useRollRateInputs(pair, rollMarkets, rollHeldSize, ROLL_PROBE_POLL_MS, probeTargets.length > 0, 'hold');
 
   return (
     <div ref={rootRef} className="scroll-mt-36 overflow-x-auto rounded border border-wash/[0.16] bg-wash/[0.03]">
@@ -920,6 +967,7 @@ function PairCard({
           exitSlippageApr={seedSlipPctFor(rollMarkets ?? [], rollYuLegs.map((l) => l.marketId).filter((id): id is number => id !== undefined)) / 100}
           entrySlippageApr={seedSlipPctFor(rollMarkets ?? [], targetMarketIds(tg)) / 100}
           nowSec={nowSec}
+          rates={rollRates}
           onResult={(r) =>
             setProbes((prev) => {
               const cur = prev[tg.maturity];
@@ -947,18 +995,7 @@ function PairCard({
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.longVenue} size={18} />
-                  {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
-                </span>
-                <span className="text-ink-600">/</span>
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.shortVenue} size={18} />
-                  {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
-                </span>
+                <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue}>
                 {rollDue && opportunity !== null && (
                   <Chip
                     sm
@@ -990,7 +1027,7 @@ function PairCard({
                   sm
                   legs={borosOpen.filter((b) => pair.legs.some((l) => l.kind === 'yu' && l.marketId === b.marketId))}
                 />
-                </span>
+                </PairTitle>
                 {/* One maturity per pair, by construction: a 4-leg unit settles
                     on a single day, and a laddered book is several rows. It
                     rides under the venues as the pair's own sub-line (the
@@ -1157,6 +1194,21 @@ function PairCard({
             <span className="inline-flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                className={pill}
+                disabled={pair.unit !== 'base' || deleverBlocked}
+                title={
+                  pair.unit !== 'base'
+                    ? t('assetCard.actions.closePerpsUsdTitle')
+                    : deleverBlocked
+                      ? (wallet.loginLabel ?? t('pairTicket.closeBoros.agentReason'))
+                      : t('assetCard.actions.deleverTitle')
+                }
+                onClick={onDelever}
+              >
+                {t('assetCard.actions.delever')}
+              </button>
+              <button
+                type="button"
                 className={`${pill} hover:!border-guava/60 hover:!text-guava`}
                 disabled={pair.unit !== 'base'}
                 title={
@@ -1311,6 +1363,7 @@ function PairCard({
  * fell back to "waiting for a quote".
  */
 const ROLL_POLL_MS = 10_000;
+const QUOTE_WAIT_CODES: ReadonlySet<string> = new Set(['no-quote', 'stale-simulation']);
 /**
  * Longer than the ticket's 12 s (SIMULATION_MAX_AGE_MS): the roll polls every
  * 10 s, so 12 s would flag a slow poll as out of date. The send re-fetches
@@ -1320,44 +1373,8 @@ const ROLL_POLL_MS = 10_000;
 const ROLL_QUOTE_MAX_AGE_MS = 25_000;
 /** The ticket's cap on the tolerance, in % APR. */
 const ROLL_MAX_SLIP_PCT = 10;
-/** Used when no market on a batch reports a usable deviation cap — the same
- * fallback the close form takes (CloseBorosForm's FALLBACK_SLIPPAGE_PCT). */
-const ROLL_FALLBACK_SLIP_PCT = 1;
-/** The slider's shortcuts, as shares of the position. */
-const ROLL_SHARE_STEPS = [0.25, 0.5, 0.75, 1] as const;
-/** One key per pair, for the cards and the roll signals alike. */
-const pairKey = (p: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'soonestMaturitySec' | 'kind'>): string =>
-  `${p.longVenue}:${p.shortVenue}:${p.soonestMaturitySec}:${p.kind}`;
-
-/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8) — the
- * ticket's and the close form's own rounding, so the three seed alike. Down
- * rather than to-nearest: a seeded bound must stay inside the venue's cap. */
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  // toPrecision trims the binary noise `Math.floor(x / step) * step` leaves.
-  return Number((Math.floor(x / step) * step).toPrecision(12));
-}
-
-/**
- * The tolerance a batch is seeded with, in % APR: half each market's own
- * max rate deviation, averaged over the batch's markets, floored to one
- * significant figure — the same seed the ticket and the close form take
- * (`seedFor` there). The batch's worst case is twice it, i.e. the two legs'
- * combined deviation cap over two. The server's flat `defaultSlippageApr`
- * was 0.25% whatever the market, which on a normal book is tighter than the
- * fill and tripped "slippage past the bound" on rolls that were perfectly
- * fine (his catch 2026-09-18). Markets without a usable cap fall back to
- * the close form's 1%.
- */
 function seedSlipPctFor(markets: ReadonlyArray<BorosPairMarketRow>, ids: number[]): number {
-  const caps = ids
-    .map((id) => markets.find((m) => m.marketId === id)?.maxRateDeviationApr)
-    .filter((c): c is number => typeof c === 'number' && c > 0);
-  if (caps.length === 0) return ROLL_FALLBACK_SLIP_PCT;
-  const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-  const pctVal = floorTo1Sf(meanHalf * 100);
-  return pctVal > 0 ? pctVal : ROLL_FALLBACK_SLIP_PCT;
+  return seedBorosSlipPct(ids.map((id) => markets.find((m) => m.marketId === id)?.maxRateDeviationApr));
 }
 
 /**
@@ -1408,88 +1425,8 @@ function rollTargetsFor(
   return targets;
 }
 
-function pairExposure(pair: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'legs'>): { long: number; short: number } {
-  const sameVenue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-  let long = 0;
-  let short = 0;
-  for (const l of pair.legs) {
-    if (l.kind !== 'yu') continue;
-    if (l.spreadVenues) {
-      long += l.sizeToken;
-      short += l.sizeToken;
-    } else if (sameVenue(l.venue, pair.longVenue)) long += l.sizeToken;
-    else if (sameVenue(l.venue, pair.shortVenue)) short += l.sizeToken;
-  }
-  return { long, short };
-}
-
-/** What a roll moves and what stays: the rate legs, the size held (the
- * larger venue's Boros exposure) and the perps' margin, which a roll
- * never touches. */
-function pairRollGeometry(pair: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'legs'>): {
-  yuLegs: PairLegDetail[];
-  heldSize: number;
-  exposure: { long: number; short: number };
-  pairPerpImUsd: number;
-} {
-  const yuLegs = pair.legs.filter((l) => l.kind === 'yu');
-  const perpLegs = pair.legs.filter((l) => l.kind === 'perp');
-  const exposure = pairExposure(pair);
-  return {
-    yuLegs,
-    heldSize: Math.max(exposure.long, exposure.short),
-    exposure,
-    pairPerpImUsd: perpLegs.reduce((t, l) => t + l.imUsd, 0),
-  };
-}
-
-/** The share of a pair the roll signal prices: "at least a fifth of the
- * position rolls at a better rate" is what makes an opportunity. */
-const ROLL_OPPORTUNITY_SHARE = 0.2;
-
-/** One maturity's answer from a probe: whether the roll the modal would
- * open on fills inside tolerance, the NET rate it locks, and that size. */
-interface RollProbeResult {
-  ok: boolean;
-  rate: number | null;
-  size: number;
-}
-
-/** The best maturity a pair could roll into at a better rate than it earns
- * today — the banner's reason to shout. */
-export interface RollOpportunity {
-  maturity: number;
-  /** The rate the modal opens on for this maturity: NET of the round trip,
-   * at the size it defaults to. */
-  rate: number;
-  /** What the pair earns now, net of the fees its row charges. */
-  current: number;
-  /** When the pair being held settles — the banner reads the two rates with
-   * the days each one runs for, so a bigger number over a shorter term
-   * cannot masquerade as the better deal. */
-  currentMaturity: number;
-  /** The size that rate is quoted at, collateral tokens. */
-  size: number;
-}
-
-function rollOpportunities(
-  probes: Record<number, RollProbeResult>,
-  targets: RollTarget[],
-  current: number | null,
-  currentMaturity: number,
-): RollOpportunity[] {
-  if (current === null) return [];
-  const found: RollOpportunity[] = [];
-  for (const t of targets) {
-    const r = probes[t.maturity];
-    if (!r || !r.ok || r.rate === null || !(r.rate > current)) continue;
-    found.push({ maturity: t.maturity, rate: r.rate, current, currentMaturity, size: r.size });
-  }
-  return found.sort((a, b) => b.rate - a.rate);
-}
-
 /**
- * One maturity, priced for the banner EXACTLY as the modal will price it.
+ * One maturity, priced for the banner as the modal prices it at the default settings.
  * Renders nothing; slow poll — it is a signal, the modal re-prices live.
  *
  * Two stages. First a quote at a FIFTH of the position: its ladders say how
@@ -1498,7 +1435,7 @@ function rollOpportunities(
  * to — the smaller of that and the position. A default under a fifth is no opportunity: the market cannot
  * take a meaningful slice. Then a quote AT that default size, both batches,
  * through the same `rollFigures` the option card uses, so the banner's rate
- * is the modal's opening headline to the decimal.
+ * is the modal's opening headline at the default settings.
  */
 function RollProbe({
   target,
@@ -1510,6 +1447,7 @@ function RollProbe({
   exitSlippageApr,
   entrySlippageApr,
   nowSec,
+  rates,
   onResult,
 }: {
   target: RollTarget;
@@ -1521,6 +1459,7 @@ function RollProbe({
   exitSlippageApr: number;
   entrySlippageApr: number;
   nowSec: number;
+  rates: RollRateInputs;
   onResult: (r: RollProbeResult) => void;
 }) {
   const reqs = (
@@ -1586,6 +1525,7 @@ function RollProbe({
     maturity: target.maturity,
     heldLegs: yuLegs,
     nowSec,
+    rates,
   });
   const cb = useRef(onResult);
   cb.current = onResult;
@@ -1596,20 +1536,204 @@ function RollProbe({
   }, [settled, ok, netRate, size]);
   return null;
 }
-/** What an open-only roll leaves: the perps hedge the later legs first, so
- * the old legs show as their own card with perps missing (mozzarella 2026-10-17). */
-function OpenOnlyNote({ oldMaturity, className }: { oldMaturity: number; className: string }) {
-  const old = fmtDateLocal(oldMaturity);
+interface BatchCost {
+  feeUsd: number | null;
+  estSlipUsd: number | null;
+  maxSlipUsd: number | null;
+  totalUsd: number | null;
+}
+
+function batchCost(sim: BorosPairSimulation | null | undefined, toleranceApr: number): BatchCost {
+  if (!sim) return { feeUsd: null, estSlipUsd: null, maxSlipUsd: null, totalUsd: null };
+  const sizes = sim.legs.map((l) => Math.abs(l.sizing.deltaSize));
+  const traded = sizes.length > 0 ? Math.max(...sizes) : 0;
+  const feeUsd = simUsdOf(sim, sim.costToCrossSize);
+  const estSlipUsd = sim.slippageApr == null ? null : simUsdOf(sim, aprCost(sim, [{ apr: sim.slippageApr, size: traded }]));
+  const maxSlipUsd = simUsdOf(sim, aprCost(sim, sizes.map((size) => ({ apr: toleranceApr, size }))));
+  return { feeUsd, estSlipUsd, maxSlipUsd, totalUsd: feeUsd !== null && estSlipUsd !== null ? feeUsd + estSlipUsd : null };
+}
+
+const sumUsd = (parts: Array<number | null>): number | null =>
+  parts.every((p): p is number => p !== null) ? parts.reduce((a, p) => a + p, 0) : null;
+
+const usdOrDash = (usd: number | null): string => (usd === null ? '—' : fmtUsd(usd));
+
+const ROLL_SHARES = ['25', '50', '75', '100'] as const;
+const ROLL_OPTION_GRID = 'grid grid-cols-[minmax(0,1fr)_6rem_7rem_5.5rem] items-center gap-x-3';
+type RollShare = (typeof ROLL_SHARES)[number];
+
+interface RollLeg {
+  marketId: number;
+  name: string;
+  venue: string;
+  spreadVenues: readonly [string, string] | null;
+  side: 'LONG' | 'SHORT';
+  size: number;
+}
+
+function RollLegCells({ leg, coin }: { leg: RollLeg; coin: string }) {
   return (
-    // The box (when the caller draws one) wraps the list, so its padding
-    // never fights the list's own indent: the bullets sat on the border.
-    <div className={`text-[11.5px] leading-relaxed ${className}`}>
-      <ul className="list-disc pl-4">
-        <li>{t('assetCard.roll.openOnly1', { old })}</li>
-        <li>{t('assetCard.roll.openOnly2', { old })}</li>
-        <li>{t('assetCard.roll.openOnly3', { old })}</li>
-      </ul>
-    </div>
+    <>
+      <span className="flex min-w-0 items-center gap-1.5 text-ink-200">
+        {leg.spreadVenues ? <SpreadIcon venues={leg.spreadVenues} size={14} /> : <VenueIcon venue={leg.venue} size={14} />}
+        <span className="truncate">{leg.name}</span>
+      </span>
+      <Chip sm tone={leg.side === 'LONG' ? 'green' : 'red'} className="justify-self-start font-semibold">
+        {t(leg.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
+      </Chip>
+      <span className="num text-ink-50">{exactQty(leg.size, coin)}</span>
+    </>
+  );
+}
+
+const MATURITY_SUFFIX = /\s+\d{1,2} [A-Za-z]{3,4} \d{4}$/;
+const heldSide = (b: BorosPairLegBody): 'LONG' | 'SHORT' => (b.direction === 'short' ? 'LONG' : 'SHORT');
+const openSide = (b: BorosPairLegBody): 'LONG' | 'SHORT' => (b.direction === 'long' ? 'LONG' : 'SHORT');
+
+function rollLegsOf(
+  bodies: BorosPairLegBody[] | null,
+  markets: ReadonlyArray<BorosPairMarketRow>,
+  sideOf: (body: BorosPairLegBody) => 'LONG' | 'SHORT',
+  fallbackVenue: (i: number) => string,
+): RollLeg[] {
+  return (bodies ?? []).map((body, i) => {
+    const m = markets.find((x) => x.marketId === body.marketId);
+    const venue = m?.venue ?? fallbackVenue(i);
+    return {
+      marketId: body.marketId,
+      name: m ? (m.spreadVenues ? spreadName(m.base, m.spreadVenues) : m.name.replace(MATURITY_SUFFIX, '')) : prettyVenue(venue),
+      venue,
+      spreadVenues: m?.spreadVenues ?? null,
+      side: sideOf(body),
+      size: body.size,
+    };
+  });
+}
+
+function HoverRows({ lead, rows }: { lead?: string; rows: Array<[string, string]> }) {
+  return (
+    <span className="flex flex-col gap-1">
+      {lead && <span>{lead}</span>}
+      {rows.map(([label, value]) => (
+        <span key={label} className="flex justify-between gap-4">
+          <span>{label}</span>
+          <span className="num">{value}</span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+function AfterRates({ sim, legs, liqWarn }: { sim: BorosPairSimulation | null; legs: RollLeg[]; liqWarn: (leg: BorosSimulatedLeg) => boolean }) {
+  if (sim) {
+    return (
+      <>
+        <SpreadReadout sim={sim} />
+        <LiquidationLines sim={sim} warn={liqWarn} />
+      </>
+    );
+  }
+  return (
+    <>
+      <EstimateRow label={t('pairTicket.borosBits.estimatedSpread')} value="—" strong />
+      {legs.length === 1 ? (
+        <EstimateRow label={t('pairTicket.borosBits.liquidationApr')} value="—" strong />
+      ) : (
+        legs.map((leg) => (
+          <EstimateRow key={leg.marketId} label={t('pairTicket.borosBits.venueLiquidationApr', { venue: leg.venue })} value="—" strong />
+        ))
+      )}
+    </>
+  );
+}
+
+function RollFixedAprRow({ rate }: { rate: number | null }) {
+  return (
+    <EstimateRow
+      label={
+        <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
+          {t('assetCard.roll.fixedAprHint')}
+        </HoverCard>
+      }
+      value={rate !== null ? <SignedNumber value={rate} format={fmtPct} /> : '—'}
+      strong
+    />
+  );
+}
+
+interface RollBatch {
+  key: string;
+  title: string;
+  legs: RollLeg[];
+  sim: BorosPairSimulation | null;
+  slip: BatchSlip;
+  slipLabel?: string;
+  slipAria: string;
+  slipHint: string;
+}
+
+function RollSteps({ batches, coin, busy }: { batches: RollBatch[]; coin: string; busy: boolean }) {
+  return (
+    <StepList
+      rows={batches.map((b) => ({
+        key: b.key,
+        coin,
+        text: (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="min-w-[8.5rem] font-semibold text-ink-50">{b.title}</span>
+            <span className="grid min-w-0 grid-cols-[minmax(0,auto)_auto_auto] items-center gap-x-1.5 gap-y-1">
+              {b.legs.map((leg) => (
+                <RollLegCells key={leg.marketId} leg={leg} coin={coin} />
+              ))}
+            </span>
+          </span>
+        ),
+        sub: null,
+        right: usdOrDash(batchCost(b.sim, b.slip.apr).totalUsd),
+        state: busy ? 'running' : 'pending',
+        progress: null,
+      }))}
+    />
+  );
+}
+
+function RollCostCard({ batches, age }: { batches: RollBatch[]; age: ReactNode }) {
+  const costs = batches.map((b) => batchCost(b.sim, b.slip.apr));
+  return (
+    <SummaryCard title={t('accounts.moveCash.cost')} aside={age}>
+      {batches.map((b, i) => {
+        const cost = costs[i];
+        const overVenues = b.sim ? b.sim.legs.filter((l) => l.slippageExceeded).map((l) => prettyVenue(l.venue)) : [];
+        return (
+          <div key={b.key} className="flex flex-col gap-1.5">
+            <SlippageLine
+              label={b.slipLabel}
+              est={b.sim?.slippageApr != null ? `${fmtPct(b.sim.slippageApr)} APR${cost.estSlipUsd !== null ? ` (${fmtUsd(cost.estSlipUsd)})` : ''}` : null}
+              cost={cost.estSlipUsd === null ? null : fmtUsd(cost.estSlipUsd, Math.abs(cost.estSlipUsd) < 100 ? 2 : 0)}
+              max={fmtPct(b.slip.apr * Math.max(1, b.legs.length))}
+              unit={`APR${cost.maxSlipUsd !== null ? ` (${fmtUsd(cost.maxSlipUsd)})` : ''}`}
+              open={b.slip.open}
+              onToggle={b.slip.onToggle}
+              value={b.slip.str}
+              onChange={b.slip.onChange}
+              invalid={b.slip.invalid}
+              invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
+              inputAriaLabel={b.slipAria}
+              hint={b.slipHint}
+            />
+            {overVenues.length > 0 && (
+              <p className="alert-amber text-[11px] leading-relaxed text-amber-100" role="alert">
+                {t('assetCard.batch.slipTooHigh', { venues: overVenues.join(t('assetCard.andSep')) })}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value={usdOrDash(sumUsd(costs.map((c) => c.feeUsd)))} />
+      <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+        <EstimateRow label={t('pairTicket.borosBits.totalCost')} value={usdOrDash(sumUsd(costs.map((c) => c.totalUsd)))} strong />
+      </div>
+    </SummaryCard>
   );
 }
 
@@ -1627,204 +1751,47 @@ function useAcknowledgement(legs: BorosPairLegBody[]): { checked: boolean; set: 
 /** The probe's poll: a signal for a banner, not a quote for an order. */
 const ROLL_PROBE_POLL_MS = 60_000;
 
-/** Everything one roll option states, from its two quotes. */
-interface RollFigures {
-  /** The APR the roll would earn on the capital it ties up, NET of the
-   * round trip (both batches' fees and the PnL of closing the old legs). */
-  netRate: number | null;
-  spreadApr: number | null;
-  netByMaturityUsd: number | null;
-  grossByMaturityUsd: number | null;
-  totalCostUsd: number | null;
-  exitCostUsd: number | null;
-  entryCostUsd: number | null;
-  exitPnlUsd: number | null;
-  capitalUsd: number | null;
-  newBorosImUsd: number | null;
-}
-
-/**
- * The roll's arithmetic, in ONE place: the option card and the banner's
- * probe both read it, so the rate the banner promises is the rate the
- * modal opens on (his catch 2026-09-20: the banner said 29% gross at a
- * fifth, the modal 20% net at the whole — two figures for one roll).
- */
-function rollFigures({
-  entrySim,
-  exitSim,
-  size,
-  perpImUsd,
-  maturity,
-  heldLegs,
-  nowSec,
-  keepOld = false,
-}: {
-  entrySim: BorosPairSimulation | undefined;
-  exitSim: BorosPairSimulation | undefined;
-  /** The size being rolled, in the collateral token. */
-  size: number;
-  /** The perp margin behind THIS size (the pair's, scaled by the share rolled). */
-  perpImUsd: number;
-  maturity: number;
-  heldLegs: ReadonlyArray<PairLegDetail>;
-  nowSec: number;
-  /** An open-only roll: the old legs stay open, so nothing is paid or
-   * realised closing them — only the new legs' opening fee counts. */
-  keepOld?: boolean;
-}): RollFigures {
-  const termYears = Math.max(0, maturity - nowSec) / SECONDS_IN_YEAR;
-
-  /**
-   * ⚠ Everything the simulation sizes is in COLLATERAL TOKENS, not dollars.
-   * `borosInitialMarginUsd` returns `N × rate × days/365 × kIM` in the units of
-   * N, and `simulateLeg` hands it `sizing.resultingSize` -- "collateral units
-   * in, collateral units out". So `marginRequiredTotal` is a TOKEN quantity
-   * despite the name, exactly as `costToCrossSize` is. Both are converted here
-   * through the simulation's own collateral price; when that price is unknown
-   * nothing is quoted, rather than publishing a figure in the wrong unit.
-   */
-  const px = entrySim?.collateralPriceUsd ?? exitSim?.collateralPriceUsd ?? null;
-  const usdOf = (tokens: number | null | undefined): number | null =>
-    tokens === null || tokens === undefined || px === null || !(px > 0) ? null : tokens * px;
-
-  // The margin this roll ADDS on the new markets, never the whole netted
-  // position's — see addedMarginOf.
-  const newBorosImUsd = usdOf(addedMarginOf(entrySim));
-  const capitalUsd = newBorosImUsd !== null ? perpImUsd + newBorosImUsd : null;
-
-  const exitCostUsd = keepOld ? 0 : usdOf(exitSim?.costToCrossSize);
-  const entryCostUsd = usdOf(entrySim?.costToCrossSize);
-  // Closing the old legs realises their remaining locked spread against
-  // today's book — money the roll makes or costs on day one, counted in
-  // the earnings and the rate alongside the fees (his call 2026-09-17).
-  const exitPnlUsd = keepOld ? 0 : usdOf(exitPnlOf(exitSim, heldLegs, nowSec).total);
-  const totalCostUsd =
-    exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
-  const dragApr =
-    totalCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
-      ? totalCostUsd / capitalUsd / termYears
+function useRollRateInputs(
+  pair: PairEstimate,
+  markets: ReadonlyArray<BorosPairMarketRow> | undefined,
+  heldSize: number,
+  pollMs: number,
+  enabled: boolean,
+  basis: 'hold' | 'settings',
+): RollRateInputs {
+  const settings = loadControls();
+  const holdBasis = basis === 'hold';
+  const viewOnly = useActiveWallet().viewOnly;
+  const ownRebate = useRebate().data ?? null;
+  const rebate = viewOnly ? null : ownRebate;
+  const closing = enabled && !holdBasis && settings.exitMode === 'close';
+  const legs = closing ? pairPerpCloseLegs(pair) : [];
+  const actions: ActionInput[] | null =
+    legs.length === 2
+      ? legs.map((l) => ({ kind: 'close-position' as const, symbol: l.symbol, ...(l.partial ? { qty: fieldValue(l.qty) } : {}) }))
       : null;
-
-  /**
-   * The APR this roll would EARN, on the capital it ties up.
-   *
-   * `estSpreadApr` is a rate on NOTIONAL, and the notional being rolled is the
-   * BOROS leg's -- not `pair.notionalUsd`, which is the two PERP legs and runs
-   * several times larger. Scaling by the perp notional inflated the carry by
-   * that ratio before dividing by capital, which is how this read 20.49% while
-   * the card's own 30 Oct pair read 29.77% for the same maturity.
-   *
-   * Carry per year = spread x rolled notional; APR on capital = that / capital,
-   * then less the round-trip drag so the headline is a figure actually earned.
-   */
-  const rolledNotionalUsd = usdOf(size) ?? 0;
-  const spreadApr = entrySim?.estSpreadApr ?? null;
-  const carryPerYearUsd =
-    spreadApr !== null && rolledNotionalUsd > 0 ? spreadApr * rolledNotionalUsd : null;
-  const rateOnCapital =
-    carryPerYearUsd !== null && capitalUsd !== null && capitalUsd > 0
-      ? carryPerYearUsd / capitalUsd
+  const preview = usePreviewDebounced(`roll-exit-${legs.map((l) => l.symbol).join('-')}`, actions, { refetchInterval: pollMs });
+  const previews = preview.previews;
+  const maker = settings.entryMode === 'maker-hedge';
+  const auto = preview.data?.makerLeg?.auto;
+  const makerIdx = maker && auto ? (auto === 'a' ? 0 : 1) : null;
+  const fees = closeCosts(previews, maker, makerIdx, false).tradeCost;
+  const slippage =
+    previews?.length === 2
+      ? previews.reduce<number | null>((sum, p, i) => {
+          if (sum === null || i === makerIdx) return sum;
+          const notional = legNotional(p);
+          const pct = p.fillEstimate?.slippagePct;
+          return notional === null || pct === undefined ? null : sum + (Math.max(0, pct) / 100) * notional;
+        }, 0)
       : null;
-  const exitPnlApr =
-    exitPnlUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0 ? exitPnlUsd / capitalUsd / termYears : null;
-  const netRate =
-    rateOnCapital !== null && dragApr !== null && exitPnlApr !== null ? rateOnCapital - dragApr + exitPnlApr : rateOnCapital;
-  /**
-   * What the roll is worth in dollars by the new maturity: the carry it earns
-   * over the term, less the fees paid to get into it. The percentage is the
-   * comparable figure; this is the one that reads as money.
-   */
-  const grossByMaturityUsd = carryPerYearUsd !== null ? carryPerYearUsd * termYears : null;
-  const netByMaturityUsd =
-    grossByMaturityUsd !== null && totalCostUsd !== null && exitPnlUsd !== null
-      ? grossByMaturityUsd - totalCostUsd + exitPnlUsd
-      : null;
-
+  const perpExitUsd = !closing || legs.length === 0 ? 0 : fees !== null && slippage !== null ? fees + slippage : null;
+  const settleOf = (id: number) => markets?.find((m) => m.marketId === id)?.settleFeeApr ?? 0;
   return {
-    netRate,
-    spreadApr,
-    netByMaturityUsd,
-    grossByMaturityUsd,
-    totalCostUsd,
-    exitCostUsd,
-    entryCostUsd,
-    exitPnlUsd,
-    capitalUsd,
-    newBorosImUsd,
+    perpExitUsd,
+    shareOf: (size) => (heldSize > 0 ? size / heldSize : 0),
+    rebateApr: (ids) => rollRebateApr(settleOf, holdBasis || settings.includeRebate ? rebate : null, ids),
   };
-}
-
-
-/**
- * The margin a trade ADDS, in collateral tokens — not what the resulting
- * position needs in total.
- *
- * ⚠ Boros nets to ONE position per (account, market), so `marginRequired` is
- * quoted on `sizing.resultingSize`: open 0.4 ETH on a market already holding
- * 42 and it answers for 42.4. Charging that whole figure as the trade's
- * capital made a 13% roll read almost the same capital as a 100% one — the
- * carry scaled with the size, the denominator did not, so the rate collapsed
- * (his catch 2026-09-18, the same class as the perp-margin bug on 09-17).
- *
- * IM is linear in notional at a fixed rate, so the increment is the resulting
- * margin scaled by the share of the position this trade opens. A leg that
- * opens nothing adds nothing; a leg opening its whole position adds all of it.
- */
-function addedMarginOf(sim: BorosPairSimulation | null | undefined): number | null {
-  if (!sim) return null;
-  let total = 0;
-  for (const leg of sim.legs) {
-    if (leg.marginRequired === null) return null;
-    const result = Math.abs(leg.sizing.resultingSize);
-    const delta = Math.abs(leg.sizing.deltaSize);
-    if (!(delta > 0)) continue;
-    total += result > 0 ? leg.marginRequired * Math.min(1, delta / result) : leg.marginRequired;
-  }
-  return total;
-}
-
-/** One leg of the exit as PnL: the rate the position locked against the
- * rate the book would close it at, over what is left of its life. */
-interface ExitPnlLeg {
-  venue: string;
-  side: 'LONG' | 'SHORT';
-  /** The rate the leg was entered at, sign included. */
-  lockedApr: number;
-  execApr: number | null;
-  /** Collateral units, before fees — null without an execution rate. */
-  pnl: number | null;
-}
-
-/**
- * The PnL of closing the pair's rate legs at the simulated rates, the way
- * CloseBorosForm quotes a close: (locked − exec) × size × years to
- * maturity, signed by the side held (a LONG gains when rates rose, a SHORT
- * when they fell), in COLLATERAL units and BEFORE fees — the fee is in
- * costToCrossSize, charged once. `PairLegDetail.lockedApr` is signed by
- * side (SHORT +, LONG −); `entryAprOf` recovers the rate the leg was entered
- * at, sign included — never its magnitude, or a leg entered at a negative
- * rate would be priced against the wrong number.
- */
-function exitPnlOf(
-  sim: BorosPairSimulation | null | undefined,
-  heldLegs: ReadonlyArray<PairLegDetail>,
-  nowSec: number,
-  /** `worst` prices each leg at the bound its order carries (mid ± the
-   * tolerance) instead of the book's estimate — the floor of what the exit
-   * can realise if every leg fills at its limit. */
-  at: 'exec' | 'worst' = 'exec',
-): { legs: ExitPnlLeg[]; total: number | null } {
-  const one = (s: BorosSimulatedLeg | undefined, l: PairLegDetail | undefined): ExitPnlLeg | null => {
-    if (!s || !l || l.lockedApr === null) return null;
-    const locked = entryAprOf(l.side, l.lockedApr);
-    const years = Math.max(0, l.maturity - nowSec) / SECONDS_IN_YEAR;
-    const rate = at === 'worst' ? s.worstApr : s.execApr;
-    const pnl = rate !== null ? (l.side === 'LONG' ? rate - locked : locked - rate) * s.estFillSize * years : null;
-    return { venue: l.venue, side: l.side, lockedApr: locked, execApr: rate, pnl };
-  };
-  const legs = (sim?.legs ?? []).map((s, i) => one(s, heldLegs[i])).filter((x): x is ExitPnlLeg => x !== null);
-  const total = legs.length > 0 && legs.every((x) => x.pnl !== null) ? legs.reduce((a, x) => a + (x.pnl ?? 0), 0) : null;
-  return { legs, total };
 }
 
 /** One roll option's four legs as last quoted; `key` changes only when their
@@ -1841,33 +1808,6 @@ type RollTarget =
 
 const targetMarketIds = (t: RollTarget): number[] =>
   'spreadMarketId' in t ? [t.spreadMarketId] : [t.longMarketId, t.shortMarketId];
-
-const rollPart = (own: number, size: number, heldSize: number): number =>
-  size >= heldSize ? own : size * (own / heldSize);
-
-function exitLegBodies({
-  pair,
-  slippageApr,
-  size,
-}: {
-  pair: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'legs'>;
-  slippageApr: number;
-  size: number;
-}): BorosPairLegBody[] | null {
-  const { yuLegs, heldSize } = pairRollGeometry(pair);
-  if (!(size > 0) || yuLegs.length === 0) return null;
-  const legs: BorosPairLegBody[] = [];
-  for (const l of yuLegs) {
-    if (l.marketId === undefined) return null;
-    legs.push({
-      marketId: l.marketId,
-      direction: l.side === 'LONG' ? 'short' : 'long',
-      slippageApr,
-      size: rollPart(l.sizeToken, size, heldSize),
-    });
-  }
-  return legs;
-}
 
 function entryLegBodies({
   target,
@@ -1889,14 +1829,6 @@ function entryLegBodies({
     { marketId: target.longMarketId, direction: 'long', slippageApr, size: rollPart(exposure.long, size, heldSize) },
     { marketId: target.shortMarketId, direction: 'short', slippageApr, size: rollPart(exposure.short, size, heldSize) },
   ];
-}
-
-function inRollUnits<L extends BorosSimulatedLeg>(legs: L[], bodies: BorosPairLegBody[] | null, heldSize: number): L[] {
-  return legs.map((l, i) => {
-    const ratio = bodies?.[i] && heldSize > 0 ? bodies[i].size / heldSize : 1;
-    if (!(ratio > 0) || ratio === 1 || !Array.isArray(l.depth)) return l;
-    return { ...l, depth: l.depth.map(([adverse, cum]): [number, number] => [adverse, cum / ratio]) };
-  });
 }
 
 function rollQuoteInUnits(pair: PairEstimate, target: RollTarget, quote: { exit: BorosSimulatedLeg[]; entry: BorosSimulatedLeg[] }) {
@@ -1921,11 +1853,15 @@ export function RollOverModal({
   pair,
   base,
   nowSec,
+  picker = null,
+  onSending,
   onClose,
 }: {
   pair: PairEstimate;
   base: string;
   nowSec: number;
+  picker?: ReactNode;
+  onSending?: () => void;
   onClose: () => void;
 }) {
   useTranslation();
@@ -1938,6 +1874,7 @@ export function RollOverModal({
   const { yuLegs, heldSize, pairPerpImUsd } = pairRollGeometry(pair);
 
   const targets = useMemo(() => rollTargetsFor(markets ?? [], pair, base, soonest), [markets, soonest, base, pair]);
+  const rollRates = useRollRateInputs(pair, markets, heldSize, ROLL_POLL_MS, true, 'settings');
 
   const [picked, setPicked] = useState<number | null>(null);
   const selected = picked ?? targets[0]?.maturity ?? null;
@@ -2025,6 +1962,9 @@ export function RollOverModal({
    */
   const perpImUsd = heldSize > 0 ? pairPerpImUsd * (simSize / heldSize) : 0;
   const pct = heldSize > 0 ? Math.round((size / heldSize) * 100) : 0;
+  const sizeLabel = openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll');
+  const litShare: RollShare | null =
+    sizeOk && sizeStr.trim() !== '' ? (ROLL_SHARES.find((share) => Number(fmtSize(heldSize * (Number(share) / 100))) === parsedSize) ?? null) : null;
 
   /**
    * Each batch's tolerance FOLLOWS THE SIZE: the seed while the size fills
@@ -2051,191 +1991,207 @@ export function RollOverModal({
     sizeLimits.filter((l): l is BatchLimit => l !== null).sort((a, b) => a.maxSize - b.maxSize)[0] ?? null;
   const maxRoll = maxRollSize(sizeLimits);
 
-  const [step, setStep] = useState<'pick' | 'review'>('pick');
-  // The review page locks the modal while a batch is in flight.
-  const [busy, setBusy] = useState(false);
+  const seedKey = `${mode}:${selected}:${simSize}`;
+  const seedPlans = target !== null ? plansFor(target, simSize) : null;
+  const pctOf = (apr: number | undefined) => (apr === undefined ? undefined : +(apr * 100).toFixed(2));
+  const liveExitSeed = pctOf(seedPlans?.exit?.toleranceApr);
+  const liveEntrySeed = pctOf(seedPlans?.entry?.toleranceApr);
+  const [frozenSeeds, setFrozenSeeds] = useState<{ key: string; exit?: number; entry?: number } | null>(null);
+  useEffect(() => {
+    setFrozenSeeds((prev) => {
+      if (prev?.key !== seedKey) return { key: seedKey, exit: liveExitSeed, entry: liveEntrySeed };
+      const exit = prev.exit ?? liveExitSeed;
+      const entry = prev.entry ?? liveEntrySeed;
+      return exit === prev.exit && entry === prev.entry ? prev : { key: seedKey, exit, entry };
+    });
+  }, [seedKey, liveExitSeed, liveEntrySeed]);
+  const seeds = frozenSeeds?.key === seedKey ? frozenSeeds : null;
+
+  const [busy, setBusyState] = useState(false);
+  const setBusy = (b: boolean) => {
+    if (b) onSending?.();
+    setBusyState(b);
+  };
+  const [sent, setSent] = useState(false);
+  const [stepsSlot, setStepsSlot] = useState<HTMLDivElement | null>(null);
 
   return (
     <Modal
-      // Venues only: the maturity being left heads the Exit card, and the
-      // pick page states the days remaining on each option (his call
-      // 2026-09-18).
-      title={t('assetCard.roll.modalTitle', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}
+      title={t('assetCard.roll.title')}
       onClose={onClose}
       locked={busy}
-      // Wide enough for the review's two batches side by side.
-      widthClass="w-[780px] max-w-[calc(100vw-32px)]"
+      widthClass="w-[640px] max-w-[calc(100vw-32px)]"
     >
-      {step === 'review' && target !== null && address !== null && ctx.data ? (
-        openOnly ? (
-          <OpenOnlyReview
-            pair={pair}
-            base={base}
-            yuLegs={yuLegs}
-            target={target}
-            size={size}
-            collateral={collateral}
-            address={address}
-            nowSec={nowSec}
-            entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
-            onBack={() => setStep('pick')}
-            onBusy={setBusy}
-            onClose={onClose}
-          />
-        ) : (
-          <RollReview
-            pair={pair}
-            yuLegs={yuLegs}
-            target={target}
-            size={size}
-            collateral={collateral}
-            address={address}
-            ctx={ctx.data}
-            oldMaturity={soonest}
-            nowSec={nowSec}
-            perpImUsd={heldSize > 0 ? pairPerpImUsd * (size / heldSize) : 0}
-            exitSeedPct={plans?.exit ? +(plans.exit.toleranceApr * 100).toFixed(2) : undefined}
-            entrySeedPct={plans?.entry ? +(plans.entry.toleranceApr * 100).toFixed(2) : undefined}
-            onBack={() => setStep('pick')}
-            onBusy={setBusy}
-            onClose={onClose}
-          />
-        )
-      ) : (
-        <>
-          {/* Close the old legs and re-open, or open the new maturity and let
-              the old legs run to maturity (a double hedge). */}
-          <div className="mb-3">
-            <div className="inline-flex rounded-md border border-ink-700 p-0.5 text-[12px]" role="group" aria-label={t('assetCard.roll.modeAria')}>
-              {(
-                [
-                  ['reopen', t('assetCard.roll.modeReopen')],
-                  ['openOnly', t('assetCard.roll.modeOpenOnly')],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={mode === value}
-                  className={`rounded px-3 py-1 transition-colors ${mode === value ? 'bg-info/20 font-medium text-ink-50' : 'text-ink-400 hover:text-ink-200'}`}
-                  onClick={() => setMode(value)}
-                >
-                  {label}
-                </button>
-              ))}
+      <div className="flex flex-col gap-4">
+        {!sent && (
+          <fieldset disabled={busy} className="flex min-w-0 flex-col gap-4">
+            {picker}
+            <div className="order-stack">
+              <SegmentedToggle<'reopen' | 'openOnly'>
+                className="seg-info"
+                fill
+                ariaLabel={t('assetCard.roll.modeAria')}
+                value={mode}
+                onChange={setMode}
+                options={[
+                  { value: 'reopen', label: t('assetCard.roll.modeReopen') },
+                  {
+                    value: 'openOnly',
+                    label: (
+                      <HoverCard
+                        wrapsControl
+                        widthPx={320}
+                        label={<span className="underline decoration-dotted underline-offset-4">{t('assetCard.roll.modeOpenOnly')}</span>}
+                      >
+                        <span className="flex flex-col gap-1 text-xs leading-snug">
+                          <span>{t('assetCard.roll.modeOpenOnlyHedge')}</span>
+                          <span>{t('assetCard.roll.modeOpenOnlyOld', { date: fmtDateLocal(soonest) })}</span>
+                        </span>
+                      </HoverCard>
+                    ),
+                  },
+                ]}
+              />
+              <div
+                ref={setStepsSlot}
+                className="overflow-hidden border border-ink-700 empty:hidden [&_li]:rounded-none [&_li]:border-x-0 [&_li]:border-b-0 [&_ol]:gap-0"
+              />
             </div>
-            {openOnly && <OpenOnlyNote oldMaturity={soonest} className="mt-2 text-ink-400" />}
-          </div>
 
-          {/* A slider for the share of the position, a box for the exact
-              figure — the same value, two grips. */}
-          <div className="mb-3 flex flex-wrap items-center gap-3 text-xs">
-            <span className={microLabelClass}>{openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll')}</span>
-            <input
-              type="range"
-              className="min-w-[160px] flex-1 accent-info"
-              min={0}
-              max={heldSize}
-              step={heldSize > 0 ? heldSize / 200 : 1}
-              value={size}
-              onChange={(e) => setSize(fmtSize(Number(e.target.value)))}
-              aria-label={t('assetCard.roll.shareAria')}
-            />
-            <span className="num w-10 text-right text-ink-400">{pct}%</span>
-            <input
-              className={`input num w-32 !py-1.5 text-xs ${sizeStr !== '' && !sizeOk ? 'border-guava/60' : ''}`}
-              inputMode="decimal"
-              value={sizeStr}
-              onChange={(e) => setSize(e.target.value)}
-              aria-label={`${openOnly ? t('assetCard.roll.sizeToOpen') : t('assetCard.roll.sizeToRoll')} (${collateral})`}
-            />
-            <span className="text-ink-400">{collateral}</span>
-            {/* Four grips on the same value: a quarter, half, three
-                quarters, all. Each is a choice, so it counts as touching. */}
-            <span className="inline-flex gap-1" role="group" aria-label={t('assetCard.roll.shareShortcuts')}>
-              {ROLL_SHARE_STEPS.map((share) => (
-                <button
-                  key={share}
-                  type="button"
-                  className={`btn-ghost-xs num ${pct === Math.round(share * 100) && sizeOk ? '!text-ink-50' : ''}`}
-                  onClick={() => setSize(fmtSize(heldSize * share))}
-                  title={share === 1 ? t('assetCard.roll.wholePosition') : t('assetCard.roll.pctOfPosition', { pct: Math.round(share * 100) })}
-                >
-                  {Math.round(share * 100)}%
-                </button>
-              ))}
-            </span>
-          </div>
-
-          {/* Only what a tolerance cannot fix. A size that merely needs a
-              wider tolerance has been given one, silently. */}
-          {sizeLimit !== null && maxRoll !== null && (
-            <p role="alert" className="mb-3 rounded border border-amber-500/40 bg-amber-500/[0.05] px-3 py-2 text-[11.5px] leading-relaxed text-amber-100">
-              {sizeLimit.kind === 'liquidity'
-                ? t('assetCard.roll.tooBigLiquidity', { market: sizeLimit.marketName })
-                : t('assetCard.roll.tooBigRate', { market: sizeLimit.marketName })}{' '}
-              {t(openOnly ? 'assetCard.roll.mostOpens' : 'assetCard.roll.mostRolls', { qty: fmtTokenQty(maxRoll, collateral) })}{' '}
-              <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
-                {t(openOnly ? 'assetCard.roll.openInstead' : 'assetCard.roll.rollInstead', { qty: exactQty(suggestedRollSize(maxRoll, heldSize), collateral) })}
-              </button>
-            </p>
-          )}
-
-          {targets.length === 0 ? (
-            <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
-              {ctx.isLoading
-                ? t('assetCard.roll.loadingMaturities')
-                : t('assetCard.roll.noTarget')}
+            <div className="flex flex-col gap-1.5">
+              <span className={microLabelClass}>{sizeLabel}</span>
+              <AmountPresets<RollShare>
+                value={sizeStr}
+                onChange={setSize}
+                inputLabel={`${sizeLabel} (${collateral})`}
+                suffix={t('assetCard.roll.sizeSuffix', { coin: collateral, pct })}
+                bad={sizeStr !== '' && !sizeOk}
+                boxClassName="w-48"
+                presetsLabel={t('assetCard.roll.shareShortcuts')}
+                preset={litShare}
+                onPreset={(share) => setSize(fmtSize(heldSize * (Number(share) / 100)))}
+                presets={ROLL_SHARES.map((share) => ({ value: share, label: `${share}%` }))}
+                custom={{
+                  label: t('accounts.deleverTab.custom'),
+                  unit: '%',
+                  inputLabel: t('accounts.deleverTab.customPctAria'),
+                  max: 100,
+                  onApply: (share) => setSize(fmtSize(heldSize * (share / 100))),
+                }}
+              />
             </div>
+
+            {targets.length === 0 ? (
+              <div className="rounded border border-dashed border-ink-700 px-3 py-4 text-center text-xs text-ink-500">
+                {ctx.isLoading ? t('assetCard.roll.loadingMaturities') : t('assetCard.roll.noTarget')}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <div className={`${ROLL_OPTION_GRID} pr-3 ${microLabelClass}`}>
+                  <span>{t('assetCard.roll.rollInto')}</span>
+                  <span className="text-right">
+                    <HoverCard label={t('assetCard.roll.fixedApr')} widthPx={260}>
+                      {t('assetCard.roll.fixedAprHint')}
+                    </HoverCard>
+                  </span>
+                  <span className="text-right">
+                    <HoverCard label={t('assetCard.roll.estProfit')} widthPx={260}>
+                      {openOnly ? t('assetCard.option.earnOpenTitle') : t('assetCard.option.earnRollTitle')}
+                    </HoverCard>
+                  </span>
+                  <span className="text-right">{t('pairTicket.borosBits.totalCost')}</span>
+                </div>
+                <div className="flex flex-col gap-1.5" role="radiogroup" aria-label={t('assetCard.roll.rollInto')}>
+                  {targets.map((tg) => (
+                    <RollOption
+                      key={tg.maturity}
+                      target={tg}
+                      base={base}
+                      pair={pair}
+                      yuLegs={yuLegs}
+                      size={simSize}
+                      perpImUsd={perpImUsd}
+                      address={address}
+                      exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
+                      entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
+                      nowSec={nowSec}
+                      rates={rollRates}
+                      openOnly={openOnly}
+                      selected={selected === tg.maturity}
+                      onSelect={() => setPicked(tg.maturity)}
+                      onLegs={(q) => setLegsBy((prev) => (prev[tg.maturity]?.key === q.key ? prev : { ...prev, [tg.maturity]: q }))}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {sizeLimit !== null && maxRoll !== null && (
+              <p role="alert" className="alert-amber text-[11.5px] leading-relaxed text-amber-100">
+                {sizeLimit.kind === 'liquidity'
+                  ? t('assetCard.roll.tooBigLiquidity', { market: sizeLimit.marketName })
+                  : t('assetCard.roll.tooBigRate', { market: sizeLimit.marketName })}{' '}
+                {t(openOnly ? 'assetCard.roll.mostOpens' : 'assetCard.roll.mostRolls', { qty: fmtTokenQty(maxRoll, collateral) })}{' '}
+                <button type="button" className="btn-link" onClick={() => setSize(fmtSize(suggestedRollSize(maxRoll, heldSize)))}>
+                  {t(openOnly ? 'assetCard.roll.openInstead' : 'assetCard.roll.rollInstead', { qty: exactQty(suggestedRollSize(maxRoll, heldSize), collateral) })}
+                </button>
+              </p>
+            )}
+
+          </fieldset>
+        )}
+        {target !== null && address !== null && ctx.data && simSize > 0 ? (
+          openOnly ? (
+            <OpenOnlyReview
+              pair={pair}
+              base={base}
+              yuLegs={yuLegs}
+              target={target}
+              size={simSize}
+              collateral={collateral}
+              address={address}
+              nowSec={nowSec}
+              perpImUsd={perpImUsd}
+              rates={rollRates}
+              markets={markets ?? []}
+              entrySeedPct={seeds?.entry}
+              settling={size !== simSize || seeds === null}
+              stepsSlot={stepsSlot}
+              onBusy={setBusy}
+              onResult={setSent}
+              onClose={onClose}
+            />
           ) : (
-            <div className="flex flex-col gap-2">
-              {targets.map((tg) => (
-                <RollOption
-                  key={tg.maturity}
-                  target={tg}
-                  base={base}
-                  pair={pair}
-                  yuLegs={yuLegs}
-                  size={simSize}
-                  perpImUsd={perpImUsd}
-                  address={address}
-                  exitSlippageApr={plansFor(tg, simSize).exit?.toleranceApr ?? exitSlippageApr}
-                  entrySlippageApr={plansFor(tg, simSize).entry?.toleranceApr ?? entrySeedFor(tg)}
-                  nowSec={nowSec}
-                  openOnly={openOnly}
-                  selected={selected === tg.maturity}
-                  onSelect={() => setPicked(tg.maturity)}
-                  onLegs={(q) => setLegsBy((prev) => (prev[tg.maturity]?.key === q.key ? prev : { ...prev, [tg.maturity]: q }))}
-                />
-              ))}
-            </div>
-          )}
-
-          <div className="mt-4 flex items-center justify-end gap-2">
-            <button type="button" className="btn" onClick={onClose}>
-              {t('common.cancel')}
-            </button>
-            {/* Not the confirm: this opens the review, where the order is
-                checked and held. */}
-            <button
-              type="button"
-              className="btn-primary"
-              disabled={target === null || !(size > 0) || address === null || !ctx.data}
-              title={
-                target === null
-                  ? t('assetCard.roll.pickMaturity')
-                  : openOnly
-                    ? t('assetCard.roll.reviewOpenTitle')
-                    : t('assetCard.roll.reviewRollTitle')
-              }
-              onClick={() => setStep('review')}
-            >
+            <RollReview
+              pair={pair}
+              yuLegs={yuLegs}
+              target={target}
+              size={simSize}
+              collateral={collateral}
+              address={address}
+              ctx={ctx.data}
+              oldMaturity={soonest}
+              nowSec={nowSec}
+              perpImUsd={perpImUsd}
+              rates={rollRates}
+              exitSeedPct={seeds?.exit}
+              entrySeedPct={seeds?.entry}
+              settling={size !== simSize || seeds === null}
+              stepsSlot={stepsSlot}
+              onBusy={setBusy}
+              onResult={setSent}
+              onClose={onClose}
+            />
+          )
+        ) : (
+          !sent &&
+          !(simSize > 0) && (
+            <HoldToConfirmButton tone="cyan" className="w-full" disabled onConfirm={() => {}}>
               {openOnly ? t('assetCard.roll.openNewMaturity') : t('assetCard.actions.rollOver')}
-              <ArrowRight size={14} aria-hidden />
-            </button>
-          </div>
-        </>
-      )}
+            </HoldToConfirmButton>
+          )
+        )}
+      </div>
     </Modal>
   );
 }
@@ -2243,42 +2199,44 @@ export function RollOverModal({
 /** One side of a roll (its two legs) as the venue reported them, coloured by
  * the roll's single all-or-nothing verdict — a roll fills whole or not at all,
  * so both sides share one status rather than each carrying its own. */
-function RollLegReport({
-  label,
-  legs,
-  collateral,
-  tone,
-  nameOf,
-}: {
+function withoutRollStep(message: string): string {
+  for (const word of ['exit', 'reEntry'] as const) {
+    const prefix = t('errors.rollStep', { stepWord: t(`errors.word.${word}`), inner: '' });
+    if (message.startsWith(prefix)) return message.slice(prefix.length);
+  }
+  return message;
+}
+
+interface RollLegSection {
   label: string;
   legs: BorosLegFill[];
-  collateral: string;
-  tone: 'green' | 'amber' | 'rose';
   /** The market each fill traded. A spread is one position, so "Leg A" would
    * name a second leg that does not exist. */
   nameOf?: (marketId: number) => string | null;
-}) {
-  const box =
-    tone === 'green'
-      ? 'border-emerald-500/25 bg-emerald-500/5'
-      : tone === 'amber'
-        ? 'border-amber-500/30 bg-amber-500/[0.04]'
-        : 'border-rose-500/30 bg-rose-500/[0.04]';
+}
+
+const legFilled = (fill: BorosLegFill): boolean => fill.failure === null && fill.filledSize > 0;
+
+const legsCount = (legs: BorosLegFill[]): string => t('assetCard.review.legsCount', { ok: legs.filter(legFilled).length, total: legs.length });
+
+function RollLegReport({ sections, collateral }: { sections: RollLegSection[]; collateral: string }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div className={`rounded-lg border px-3 py-2.5 ${box}`} role="status">
-      <span className="text-[12px] font-semibold text-ink-100">{label}</span>
-      <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
-        {legs.map((fill, i) => (
-          <LegFillLine key={fill.marketId} label={nameOf?.(fill.marketId) ?? t('assetCard.legLetterLabel', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
-        ))}
-      </div>
-    </div>
+    <FoldRow label={t('assetCard.review.legs')} summary={null} open={open} onToggle={() => setOpen((v) => !v)}>
+      {sections.map(({ label, legs, nameOf }) => (
+        <div key={label}>
+          <span className="text-[12px] font-semibold text-ink-100">{label}</span>
+          <div className="mt-1.5 flex flex-col gap-0.5 text-[11px] text-ink-300">
+            {legs.map((fill, i) => (
+              <LegFillLine key={fill.marketId} label={nameOf?.(fill.marketId) ?? t('assetCard.legLetterLabel', { letter: legLetter(i) })} fill={fill} collateral={collateral} />
+            ))}
+          </div>
+        </div>
+      ))}
+    </FoldRow>
   );
 }
 
-/** One batch of the roll, read exactly as the ticket reads a pair: the
- * spread readout, the costs, the position arithmetic, the simulator's own
- * notes — so a roll is two of the same thing the trader already knows. */
 /** One batch's tolerance, as the review page holds it: the typed percent,
  * whether it is usable, and whether its editor is open. */
 interface BatchSlip {
@@ -2289,196 +2247,6 @@ interface BatchSlip {
   onToggle: () => void;
   /** The batch's per-leg tolerance as an APR fraction. */
   apr: number;
-}
-
-function BatchSection({
-  label,
-  sub,
-  sim,
-  dataUpdatedAt,
-  estimating,
-  pending,
-  error,
-  onRetry,
-  exitPnl,
-  slip,
-  step,
-  heading,
-  liqWarn = true,
-}: {
-  label: string;
-  /** False when the margin left free after the batch already carries the
-   * new legs to the suggested liquidation rate. */
-  liqWarn?: boolean;
-  /** What the card's header SAYS, when that differs from the batch's name
-   * (`label` still names it in the tolerance box and the blockers). */
-  heading?: string;
-  sub: string;
-  step?: number;
-  sim: BorosPairSimulation | null;
-  dataUpdatedAt: number;
-  estimating: boolean;
-  pending: boolean;
-  error: unknown;
-  onRetry: () => void;
-  /** For the EXIT: the PnL of closing, shown in place of a spread —
-   * a close locks nothing, it realises what was locked. */
-  exitPnl?: { legs: ExitPnlLeg[]; total: number | null };
-  slip: BatchSlip;
-}) {
-  // The server's own per-leg verdict: the fill sits past the bound, so that
-  // leg would be refused before the wire. Said here, on the batch it is
-  // about, rather than as one line about "the roll".
-  const exceeded = sim ? sim.legs.filter((l) => l.slippageExceeded) : [];
-  const [more, setMore] = useState(false);
-  /** A quiet label/value line for the folded detail. */
-  const Row = ({ label, value, title }: { label: string; value: string; title?: string }) => (
-    <div className="flex items-baseline justify-between gap-3" title={title}>
-      <span className="pl-3 text-[11.5px] text-ink-400">{t('assetCard.batch.labelMargin', { label })}</span>
-      <span className="num text-[12px] text-ink-300">{value}</span>
-    </div>
-  );
-  const slipLine = (
-    <SlippageLine
-      est={sim?.slippageApr !== null && sim?.slippageApr !== undefined ? fmtPct(sim.slippageApr) : null}
-      max={fmtPct(slip.apr * 2)}
-      unit="APR"
-      open={slip.open}
-      onToggle={slip.onToggle}
-      value={slip.str}
-      onChange={slip.onChange}
-      invalid={slip.invalid}
-      invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-      inputAriaLabel={t('assetCard.batch.slipAria', { label })}
-      title={t('assetCard.batch.slipTitle', { max: slip.str })}
-      hint={t('assetCard.batch.slipHint')}
-    />
-  );
-  return (
-    <EstimateCard label={heading ?? label} sub={sub} step={step} dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={Boolean(error)}>
-      {error ? (
-        <QueryError title={t('assetCard.batch.cantPrice', { label: label.toLowerCase() })} error={error} onRetry={onRetry} />
-      ) : sim ? (
-        <>
-          {exitPnl ? (
-            <ExitPnlReadout sim={sim} exitPnl={exitPnl} between={slipLine} />
-          ) : (
-            <SpreadReadout sim={sim} />
-          )}
-          {exceeded.length > 0 && (
-            <p
-              className="alert-amber text-[11px] leading-relaxed text-amber-100"
-              role="alert"
-              title={t('assetCard.batch.exceededTitle')}
-            >
-              {t('assetCard.batch.slipTooHigh', { venues: exceeded.map((l) => prettyVenue(l.venue)).join(t('assetCard.andSep')) })}
-            </p>
-          )}
-          {/* The batch's headline, where the new legs liquidate, the margin
-              it moves and its fee, then its tolerance, are the decision;
-              where each position ends up and which bucket carries what are
-              the detail, folded until asked for — the two cards were a wall
-              of figures. */}
-          {!exitPnl && (
-            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-              <LiquidationLines sim={sim} warn={() => liqWarn} />
-            </div>
-          )}
-          <div className="border-t border-ink-800/80 pt-2">
-            <PairCosts sim={sim} freeing={Boolean(exitPnl)} />
-          </div>
-          {!exitPnl && <div className="border-t border-ink-800/80 pt-2">{slipLine}</div>}
-          <button
-            type="button"
-            className="self-start text-[11px] text-ink-400 underline decoration-dotted underline-offset-2 hover:text-ink-200"
-            aria-expanded={more}
-            onClick={() => setMore((v) => !v)}
-          >
-            {more ? t('assetCard.batch.less') : t('assetCard.batch.details')} {more ? '‹' : '›'}
-          </button>
-          {more && (
-            <>
-              {!exitPnl && (
-                <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-                  {sim.legs.map((l) => (
-                    <Row
-                      key={l.marketId}
-                      label={l.venue}
-                      title={t('assetCard.batch.legImTitle')}
-                      value={l.marginRequired !== null ? fmtTokenQty(l.marginRequired, sim.collateral) : '—'}
-                    />
-                  ))}
-                </div>
-              )}
-              <PositionArithmetic sim={sim} />
-              {sim.reasons.length > 0 && (
-                <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
-                  {sim.reasons.map((r) => (
-                    <li key={r}>· {localizeServerText(r)}</li>
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
-        </>
-      ) : (
-        <>
-          <span className="text-[11.5px] text-ink-500">{pending ? t('assetCard.batch.pricing') : t('assetCard.batch.noQuote')}</span>
-          {slipLine}
-        </>
-      )}
-    </EstimateCard>
-  );
-}
-
-/** The exit's headline: what closing realises, per leg and in total —
- * locked rate → execution rate, priced in dollars where the collateral
- * has a price, else in the token. Before fees; PairCosts has those. */
-function ExitPnlReadout({
-  sim,
-  exitPnl,
-  between,
-}: {
-  sim: BorosPairSimulation;
-  exitPnl: { legs: ExitPnlLeg[]; total: number | null };
-  /** Rendered under the headline, before the per-leg lines (the slippage line). */
-  between?: React.ReactNode;
-}) {
-  const px = sim.collateralPriceUsd;
-  const money = (n: number) =>
-    px !== null && px > 0 ? <SignedNumber value={n * px} format={fmtUsd} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, sim.collateral)} />;
-  const plain = (n: number) =>
-    px !== null && px > 0 ? fmtUsd(n * px) : fmtTokenQty(n, sim.collateral);
-  /**
-   * The per-leg split, as hover text. The total is the figure a roll is
-   * judged on; which venue contributed what — and the rate move behind it —
-   * is detail, so it rides on the label rather than taking two rows (his
-   * call 2026-09-18).
-   */
-  const breakdown = exitPnl.legs
-    .map(
-      (l) =>
-        `${prettyVenue(l.venue)} · ${fmtPct(l.lockedApr)} → ${l.execApr !== null ? fmtPct(l.execApr) : '—'}\t${
-          l.pnl !== null ? plain(l.pnl) : '—'
-        }`,
-    )
-    .join('\n');
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-3">
-        <span
-          className="cursor-help text-[12.5px] text-ink-50"
-          title={`${t('assetCard.exitPnl.title')}${
-            breakdown ? `\n${breakdown}` : ''
-          }`}
-        >
-          {t('assetCard.exitPnl.label')} <span className="text-ink-400">ⓘ</span>
-        </span>
-        <span className="num text-lg font-semibold">{exitPnl.total !== null ? money(exitPnl.total) : <span className="text-ink-500">—</span>}</span>
-      </div>
-      {between}
-    </div>
-  );
 }
 
 /**
@@ -2506,11 +2274,13 @@ function RollReview({
   oldMaturity,
   nowSec,
   perpImUsd,
+  rates,
   exitSeedPct,
   entrySeedPct,
-  onBack,
+  settling,
+  stepsSlot,
   onBusy,
-  onClose,
+  onResult,
 }: {
   pair: PairEstimate;
   yuLegs: PairLegDetail[];
@@ -2521,15 +2291,17 @@ function RollReview({
   ctx: BorosPairContext;
   oldMaturity: number;
   nowSec: number;
-  /** The perp margin behind THIS size — the capital base of the headline. */
   perpImUsd: number;
+  rates: RollRateInputs;
   /** The tolerance the pick page settled on for each batch at this size, in
    * % APR — wider than the per-market seed when the size needed it. Absent
    * (no ladder quoted yet) falls back to the seed. */
   exitSeedPct?: number;
   entrySeedPct?: number;
-  onBack: () => void;
+  settling: boolean;
+  stepsSlot: HTMLElement | null;
   onBusy: (busy: boolean) => void;
+  onResult: (shown: boolean) => void;
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
@@ -2589,10 +2361,21 @@ function RollReview({
   };
   // The report page reads the execute response, not the quote — so once the
   // roll has been sent the poll stops rather than re-pricing a closed pair.
-  const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string } | null>(null);
+  const [out, setOut] = useState<{ payload: BorosRollExecuteResponse } | { error: string; refused: boolean } | null>(null);
+  useEffect(() => onResult(out !== null), [out, onResult]);
   const roll = useBorosRollSimulation(rollReq, rollReq !== null && out === null, ROLL_POLL_MS);
   const exitSim = roll.data?.exit.simulation ?? null;
   const entrySim = roll.data?.entry.simulation ?? null;
+  const fixedApr = rollFigures({
+    entrySim: entrySim ?? undefined,
+    exitSim: exitSim ?? undefined,
+    size,
+    perpImUsd,
+    maturity: target.maturity,
+    heldLegs: yuLegs,
+    nowSec,
+    rates,
+  }).netRate;
   const ackShown = roll.data?.entry.gate.requiresAcknowledgement === true;
   const pending = roll.isPending;
 
@@ -2611,6 +2394,10 @@ function RollReview({
   // between the closes and the opens, which is what the opens were judged on.
   const availableAfterExit = margin?.availableAfterExit ?? null;
   const marginShort = margin?.shortfall ?? 0;
+  const openFees =
+    availableAfter === null && marginShort > 0 && entrySim
+      ? entrySim.legs.reduce((sum, l) => sum + (l.takerFeeCost ?? 0) + (l.fillVsMarkCost ?? 0), 0)
+      : null;
   /** Deposit the new legs still need for the suggested liquidation rate,
    * after the margin the roll leaves free; null on an older server. */
   const suggestedTopUp = margin?.suggestedTopUp ?? null;
@@ -2668,7 +2455,7 @@ function RollReview({
     Object.fromEntries(
       [...req.exit.legs.map((l) => `exit:${l.marketId}`), ...req.entry.legs.map((l) => `entry:${l.marketId}`)].map((k) => [k, ids.current[k]]),
     );
-  const canConfirm = rollReq !== null && blockers.length === 0 && !busy && out === null && canTrade;
+  const canConfirm = rollReq !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
   const run = async () => {
     if (!rollReq) return;
@@ -2678,7 +2465,7 @@ function RollReview({
       const payload = await executeRoll.mutateAsync({ ...rollReq, clientOrderIds: rollIds(rollReq) });
       setOut({ payload });
     } catch (e) {
-      setOut({ error: e instanceof Error ? e.message : String(e) });
+      setOut({ error: e instanceof Error ? e.message : String(e), refused: e instanceof ApiError && e.httpStatus === 409 });
     } finally {
       setBusy(false);
     }
@@ -2690,7 +2477,6 @@ function RollReview({
     const payload = 'payload' in out ? out.payload : null;
     const result = payload?.result ?? null;
     const status = result?.status ?? null;
-    const tone = status === 'rolled' ? 'green' : status === 'unknown' ? 'amber' : 'rose';
     /** The market a named leg trades, from the priced legs by key. */
     const legMarketName = (key: BorosRollLegKey): string | null => {
       if (!payload) return null;
@@ -2702,234 +2488,207 @@ function RollReview({
     const namedMarket = reason?.leg != null ? legMarketName(reason.leg) : null;
     const refusedText = reason ? (namedMarket ? `${namedMarket}: ${localizeServerText(reason.message)}` : localizeServerText(reason.message)) : '';
     const canRetry = 'error' in out || status === 'refused';
+    const canEdit = status === 'refused' || ('error' in out && out.refused);
+    const fillsOf = (prefix: string): BorosLegFill[] => (result ? Object.entries(result.legs).filter(([k]) => k.startsWith(prefix)).map(([, l]) => l) : []);
+    const exitFills = fillsOf('exit:');
+    const entryFills = fillsOf('entry:');
     return (
       <div className="flex flex-col gap-2">
+        {status === 'rolled' && result && (
+          <ResultBox
+            tone="done"
+            title={t('assetCard.review.rolled', { qty: exactQty(result.rolledSize, collateral), date: fmtDateLocal(target.maturity) })}
+            rows={[
+              { label: t('assetCard.review.stepOn', { step: t('assetCard.roll.exit'), date: fmtDateLocal(oldMaturity) }), value: legsCount(exitFills) },
+              { label: t('assetCard.review.stepOn', { step: t('assetCard.roll.reentry'), date: fmtDateLocal(target.maturity) }), value: legsCount(entryFills) },
+            ]}
+          />
+        )}
+        {status === 'refused' && <ResultBox tone="part" title={t('assetCard.review.nothingTraded', { reason: refusedText })} />}
+        {status === 'unknown' && <ResultBox tone="stop" title={t('assetCard.review.unknown')} />}
+        {'error' in out && <StopBox title={t('assetCard.review.notSent')} lines={[withoutRollStep(out.error)]} />}
         {result && (
-          <>
-            <RollLegReport label={t('assetCard.roll.exit')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('exit:')).map(([, l]) => l)} collateral={collateral} tone={tone} nameOf={(id) => legMarketName(`exit:${id}`)} />
-            <RollLegReport label={t('assetCard.roll.reentry')} legs={Object.entries(result.legs).filter(([k]) => k.startsWith('entry:')).map(([, l]) => l)} collateral={collateral} tone={tone} nameOf={(id) => legMarketName(`entry:${id}`)} />
-          </>
-        )}
-        {status === 'rolled' && (
-          <p className="text-[11.5px] text-ink-300" role="status">
-            {t('assetCard.review.rolled', { qty: exactQty(result!.rolledSize, collateral), date: fmtDateLocal(target.maturity) })}
-          </p>
-        )}
-        {status === 'refused' && (
-          <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            {t('assetCard.review.nothingTraded', { reason: refusedText })}
-          </p>
-        )}
-        {status === 'unknown' && (
-          <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
-            {t('assetCard.review.unknown')}
-          </p>
-        )}
-        {'error' in out && (
-          <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
-            <span className="font-semibold text-rose-200">{t('assetCard.review.notSent')}</span>{' '}
-            <span className="text-rose-200/80">{out.error}</span>
-          </p>
+          <RollLegReport
+            sections={[
+              { label: t('assetCard.roll.exit'), legs: exitFills, nameOf: (id) => legMarketName(`exit:${id}`) },
+              { label: t('assetCard.roll.reentry'), legs: entryFills, nameOf: (id) => legMarketName(`entry:${id}`) },
+            ]}
+            collateral={collateral}
+          />
         )}
         {payload?.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
             {t('assetCard.replayed')}
           </p>
         )}
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
-            {t('common.close')}
-          </button>
-          {canRetry && (
-            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
-              {t('common.retry')}
-            </HoldToConfirmButton>
-          )}
-        </div>
+        {(canEdit || canRetry) && (
+          <div className="mt-2 flex items-center gap-2">
+            {canEdit && (
+              <button type="button" className="btn flex-1" onClick={() => setOut(null)} disabled={busy}>
+                {t('common.back')}
+              </button>
+            )}
+            {canRetry && (
+              <HoldToConfirmButton tone="cyan" compact className="flex-1" disabled={busy} onConfirm={run} title={t('assetCard.review.retryTitle')}>
+                {t('common.retry')}
+              </HoldToConfirmButton>
+            )}
+          </div>
+        )}
       </div>
     );
   }
 
-  /**
-   * The strip at the top answers the only question first: what does this
-   * roll lock, for how long, and what does it cost today — the SAME figures
-   * the option card showed, re-priced at these tolerances. The two batches
-   * under it are how it executes; the margin line is whether it can. Three
-   * ranks, so the page reads top-down instead of as one wall of
-   * simulation output (his call 2026-09-20).
-   */
-  const fig = rollFigures({ entrySim: entrySim ?? undefined, exitSim: exitSim ?? undefined, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec });
-  const termDays = daysToMaturity(target.maturity, nowSec);
-  const dayOneUsd = fig.totalCostUsd !== null && fig.exitPnlUsd !== null ? fig.exitPnlUsd - fig.totalCostUsd : null;
-  const marginOk = marginNeed !== null && availableAfter !== null && marginShort === 0;
+  const allMarkets = [...ctx.markets, ...(ctx.spreadMarkets ?? [])];
+  const exitRows = rollLegsOf(rollExitLegs, allMarkets, heldSide, (i) => yuLegs[i]?.venue ?? '');
+  const entryRows = rollLegsOf(rollEntryLegs, allMarkets, openSide, () => '');
+  const exitPnl = exitPnlOf(exitSim, yuLegs, nowSec);
+  const money = (n: number) =>
+    px !== null && px > 0 ? <SignedNumber value={n * px} format={fmtUsd} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, collateral)} />;
+  const afterAvail = availableAfter ?? availableAfterExit;
+  const blank = <span className="text-ink-500">{pending ? '…' : '—'}</span>;
+  const reasons = [...new Set([...(exitSim?.reasons ?? []), ...(entrySim?.reasons ?? [])])];
+  const batches: RollBatch[] = [
+    {
+      key: 'exit',
+      title: t('assetCard.roll.stepClose', { date: fmtDateLocal(oldMaturity) }),
+      legs: exitRows,
+      sim: exitSim,
+      slip: exitSlip,
+      slipLabel: t('assetCard.roll.slipClose'),
+      slipAria: t('assetCard.batch.slipAria', { label: t('assetCard.roll.exit') }),
+      slipHint: t('assetCard.batch.slipHint'),
+    },
+    {
+      key: 'entry',
+      title: t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) }),
+      legs: entryRows,
+      sim: entrySim,
+      slip: entrySlip,
+      slipLabel: t('assetCard.roll.slipOpen'),
+      slipAria: t('assetCard.batch.slipAria', { label: t('assetCard.roll.reentry') }),
+      slipHint: t('assetCard.batch.slipHint'),
+    },
+  ];
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
-        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-          <div className="min-w-0">
-            <div className={microLabelClass}>{t('assetCard.review.youLock')}</div>
-            <div className="num mt-1 text-[26px] font-semibold leading-none tracking-[-0.02em]">
-              {fig.netRate !== null ? <SignedNumber value={fig.netRate} format={fmtPct} /> : <span className="text-ink-600">{pending ? '…' : '—'}</span>}
-              <span className="ml-2 text-[13px] font-normal text-ink-300">{t('assetCard.review.days', { days: termDays })}</span>
-            </div>
-            <div className="mt-1.5 text-[11.5px] text-ink-400">{t('assetCard.review.netOfFees')}</div>
-          </div>
-          <div className="grid grid-cols-3 gap-x-5">
-            <div title={t('assetCard.review.sizeTitle')}>
-              <div className={statLabel}>{t('common.size')}</div>
-              <div className={`${statValue} font-semibold text-ink-50`}>{exactQty(size, collateral)}</div>
-            </div>
-            <div title={t('assetCard.review.earnTitle')}>
-              <div className={statLabel}>{t('assetCard.estEarnings')}</div>
-              <div className={`${statValue} font-semibold`}>
-                {fig.netByMaturityUsd !== null ? <SignedNumber value={fig.netByMaturityUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
-              </div>
-            </div>
-            <div
-              title={`${t('assetCard.review.exitFee')}\t${fig.exitCostUsd !== null ? `−${fmtUsd(fig.exitCostUsd)}` : '—'}\n${t('assetCard.review.entryFee')}\t${fig.entryCostUsd !== null ? `−${fmtUsd(fig.entryCostUsd)}` : '—'}\n${t('assetCard.review.exitPnl')}\t${fig.exitPnlUsd !== null ? `${fig.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(fig.exitPnlUsd))}` : '—'}`}
-            >
-              <div className={statLabel}>{t('assetCard.review.costToday')}</div>
-              <div className={statValue}>
-                {dayOneUsd !== null ? <SignedNumber value={dayOneUsd} format={fmtUsd} /> : <span className="text-ink-600">—</span>}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
+      {roll.isError && <QueryError title={t('assetCard.review.quoteFailed')} error={roll.error} onRetry={() => roll.refetch()} />}
+      {stepsSlot && createPortal(<RollSteps batches={batches} coin={collateral} busy={busy} />, stepsSlot)}
+      <RollCostCard batches={batches} age={<EstimateAge dataUpdatedAt={roll.dataUpdatedAt} estimating={roll.isPlaceholderData} isError={roll.isError} />} />
 
-      {/* The two batches side by side: how the roll executes — what closing
-          realises against what re-opening locks, each with its own
-          tolerance and the margin it moves. */}
-      <div className={microLabelClass}>{t('assetCard.review.howExecutes')}</div>
-      {/* Cancels are per market: a part roll also drops the kept part's orders. */}
-      {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
-        <p className="text-[11px] text-ink-400">
-          {size < pairRollGeometry(pair).heldSize
-            ? t('assetCard.review.cancelPart', { date: fmtDateLocal(oldMaturity) })
-            : t('assetCard.review.cancelAll', { date: fmtDateLocal(oldMaturity) })}
-        </p>
-      )}
-      {/* 1 then 2: the order the two batches are sent in, a numbered disc
-          on each card. */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 [&>*]:min-w-0">
-        <BatchSection
-          label={t('assetCard.roll.exit')}
-          step={1}
-          sub={fmtDateLocal(oldMaturity)}
-          sim={exitSim}
-          dataUpdatedAt={roll.dataUpdatedAt}
-          estimating={roll.isPlaceholderData}
-          pending={pending}
-          error={roll.isError ? roll.error : null}
-          onRetry={() => roll.refetch()}
-          exitPnl={exitPnlOf(exitSim, yuLegs, nowSec)}
-          slip={exitSlip}
-        />
-        <BatchSection
-          label={t('assetCard.roll.reentry')}
-          // Reads as one phrase with the maturity beside it: "Roll into 2026-10-30".
-          heading={t('assetCard.roll.renewTo')}
-          step={2}
-          sub={fmtDateLocal(target.maturity)}
-          sim={entrySim}
-          dataUpdatedAt={roll.dataUpdatedAt}
-          estimating={roll.isPlaceholderData}
-          pending={pending}
-          error={roll.isError ? roll.error : null}
-          onRetry={() => roll.refetch()}
-          slip={entrySlip}
-          liqWarn={suggestedTopUp === null || suggestedTopUp > 0}
-        />
-      </div>
-
-      {/* Margin: two numbers — what the new legs need, and what will be
-          there to pay for it once the exit has run. Green when it clears. */}
-      <div
-        className={`flex flex-col gap-1.5 rounded-lg border px-3.5 py-3 ${
-          marginShort > 0 ? 'border-amber-500/40 bg-amber-500/[0.05]' : marginOk ? 'border-emerald-500/25 bg-emerald-500/[0.03]' : 'border-ink-700 bg-ink-850/40'
-        }`}
-        role={marginShort > 0 ? 'alert' : undefined}
-      >
-        <span className="flex items-center gap-2 text-[12px] font-normal leading-[14.52px] text-ink-300">
-          <StepBadge n={3} />
-          {t('assetCard.review.canFund')}
-          {marginOk && <Check size={12} aria-hidden className="text-emerald-300" />}
-        </span>
-        <EstimateRow
-          label={t('assetCard.review.requiredMargin')}
-          sub={t('assetCard.review.forNewLegs')}
-          title={t('assetCard.review.requiredTitle')}
-          value={
-            marginNeed !== null ? (
-              <>
-                {fmtTokenQty(marginNeed, collateral)}
-                {usdNote(marginNeed)}
-              </>
-            ) : (
-              '—'
-            )
-          }
-          strong
-        />
-        <EstimateRow
-          label={t('assetCard.review.availableMargin')}
-          sub={
-            availableAfter !== null
-              ? t('assetCard.review.availSubAfter')
-              : availableAfterExit !== null
-                ? t('assetCard.review.availSubExit')
-                : undefined
-          }
-          title={
-            availableAfter !== null
-              ? t('assetCard.review.availTitleAfter')
-              : availableAfterExit !== null
-                ? t('assetCard.review.availTitleExit')
-                : undefined
-          }
-          value={
-            availableBefore !== null && availableAfter !== null ? (
-              <>
-                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(availableAfter, collateral)}
-                {usdNote(availableAfter)}
-              </>
-            ) : availableBefore !== null && availableAfterExit !== null ? (
-              <>
-                {fmtTokenQty(availableBefore, collateral)} → {fmtTokenQty(availableAfterExit, collateral)}
-                {usdNote(availableAfterExit)}
-              </>
-            ) : (
-              // No preview yet, a lost one (429), or a refusal with no state:
-              // the reason is in the box below. "Simulation failed" here read
-              // as mozzarella's 1.7.5 bug on every first open.
-              <span className="text-ink-400">{pending ? '…' : '—'}</span>
-            )
-          }
-          strong
-        />
-        {suggestedTopUp !== null && suggestedTopUp > 0 && (
+      <SummaryCard title={t('accounts.moveCash.after')}>
+        <div className="flex flex-col gap-1.5">
+          <RollFixedAprRow rate={fixedApr} />
           <EstimateRow
-            label={<span className="text-amber-300">{t('pairTicket.borosBits.suggestedTopUp')}</span>}
-            title={t('pairTicket.borosBits.suggestedTopUpHint')}
-            value={
-              <span className="text-amber-300">
-                +{depositQty(suggestedTopUp, collateral)}
-                {usdNote(suggestedTopUp)}
-              </span>
+            label={
+              <HoverCard label={t('assetCard.review.exitPnl')} widthPx={300}>
+                <HoverRows
+                  lead={t('assetCard.exitPnl.title')}
+                  rows={exitPnl.legs.map((l) => [
+                    `${prettyVenue(l.venue)} · ${fmtPct(l.lockedApr)} → ${l.execApr !== null ? fmtPct(l.execApr) : '—'}`,
+                    l.pnl !== null ? (px !== null && px > 0 ? fmtUsd(l.pnl * px) : fmtTokenQty(l.pnl, collateral)) : '—',
+                  ])}
+                />
+              </HoverCard>
             }
+            value={exitPnl.total !== null ? money(exitPnl.total) : blank}
             strong
           />
+          <AfterRates sim={entrySim} legs={entryRows} liqWarn={() => suggestedTopUp === null || suggestedTopUp > 0} />
+        </div>
+        <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+          <EstimateRow
+            label={t('assetCard.review.requiredMargin')}
+            value={
+              marginNeed !== null ? (
+                <>
+                  {fmtTokenQty(marginNeed, collateral)}
+                  {usdNote(marginNeed)}
+                </>
+              ) : (
+                blank
+              )
+            }
+          />
+          {openFees !== null && openFees > 0 && (
+            <EstimateRow
+              label={t('assetCard.review.openFees')}
+              value={
+                <>
+                  {fmtTokenQty(openFees, collateral)}
+                  {usdNote(openFees)}
+                </>
+              }
+            />
+          )}
+          {availableAfter === null && availableAfterExit !== null && availableBefore !== null && (
+            <EstimateRow
+              label={t('assetCard.review.availNow')}
+              value={
+                <>
+                  {fmtTokenQty(availableBefore, collateral)}
+                  {usdNote(availableBefore)}
+                </>
+              }
+            />
+          )}
+          <EstimateRow
+            label={
+              availableAfter === null && availableAfterExit !== null ? (
+                <HoverCard label={t('assetCard.review.availAfterClose')} widthPx={260}>
+                  {t('assetCard.review.availTitleExit')}
+                </HoverCard>
+              ) : (
+                <HoverCard label={t('assetCard.review.availableMargin')} widthPx={260}>
+                  {t('assetCard.review.availTitleAfter')}
+                </HoverCard>
+              )
+            }
+            value={
+              availableBefore !== null && afterAvail !== null ? (
+                <span className={afterAvail < 0 || marginShort > 0 ? 'text-rose-300' : ''}>
+                  {availableAfter === null ? fmtTokenQty(afterAvail, collateral) : `${fmtTokenQty(availableBefore, collateral)} → ${fmtTokenQty(afterAvail, collateral)}`}
+                  {usdNote(afterAvail)}
+                </span>
+              ) : (
+                blank
+              )
+            }
+          />
+          {suggestedTopUp !== null && suggestedTopUp > 0 && (
+            <EstimateRow
+              label={
+                <span className="text-amber-300">
+                  <HoverCard label={t('pairTicket.borosBits.suggestedTopUp')} widthPx={260}>
+                    {t('pairTicket.borosBits.suggestedTopUpHint')}
+                  </HoverCard>
+                </span>
+              }
+              value={
+                <span className="text-amber-300">
+                  +{depositQty(suggestedTopUp, collateral)}
+                  {usdNote(suggestedTopUp)}
+                </span>
+              }
+            />
+          )}
+          {(roll.data?.cancelOrdersOn.length ?? 0) > 0 && (
+            <EstimateRow
+              label={t('assetCard.roll.openOrders', { date: fmtDateLocal(oldMaturity) })}
+              value={size < pairRollGeometry(pair).heldSize ? t('assetCard.roll.cancelledPart') : t('assetCard.roll.cancelled')}
+            />
+          )}
+        </div>
+        {reasons.length > 0 && (
+          <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
+            {reasons.map((r) => (
+              <li key={r}>· {localizeServerText(r)}</li>
+            ))}
+          </ul>
         )}
-        {marginShort > 0 && (
-          <p className="text-[11.5px] leading-relaxed text-amber-100">
-            {t('assetCard.review.short', { qty: fmtTokenQty(marginShort, collateral) })}
-          </p>
-        )}
-      </div>
-      {/* The roll gate's warnings — the auto-top-up cost notice among them,
-          which the two-batch flow dropped. Rendered exactly as the ticket
-          renders gate warnings (BorosPairTicket). */}
+      </SummaryCard>
+
       {(roll.data?.gate.warnings ?? []).map((w) => (
         <p
           key={w}
@@ -2942,29 +2701,26 @@ function RollReview({
         <OpposingAcknowledgement sim={entrySim} checked={acked.checked} onChange={acked.set} nameOf={nameOf} />
       )}
       <BlockerList
-        // A fill past the tolerance still blocks (it is in `blockers`), but
-        // its batch already says so, in amber, next to the Max that fixes
-        // it — a second, red copy here explained nothing new. The same for
-        // the tick: the box above is the ask.
-        blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))}
+        blockers={blockers.filter(
+          (b) =>
+            b.code !== 'slippage-exceeds-max' &&
+            !(roll.isFetching && QUOTE_WAIT_CODES.has(b.code)) &&
+            !(ackShown && b.code === 'flip-unacknowledged') &&
+            !(roll.isError && b.code === 'quote-failed'),
+        )}
       />
 
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <button type="button" className="btn" onClick={onBack} disabled={busy}>
-          <ArrowLeft size={14} aria-hidden />
-          {t('common.back')}
-        </button>
+      <div className="mt-1 flex flex-col">
         {loginLabel ? (
           <BorosLogInButton />
         ) : (
-        <HoldToConfirmButton
-          tone="cyan"
-          disabled={!canConfirm}
-          onConfirm={run}
-          title={t('assetCard.review.holdTitle')}
-        >
-          {busy ? t('assetCard.review.rolling') : t('assetCard.actions.rollOver')}
-        </HoldToConfirmButton>
+          <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.review.holdTitle')}>
+            {busy
+              ? t('assetCard.review.rolling')
+              : roll.isFetching && blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+                ? t('common.refreshing')
+                : t('assetCard.actions.rollOver')}
+          </HoldToConfirmButton>
         )}
       </div>
     </div>
@@ -2990,9 +2746,14 @@ function OpenOnlyReview({
   collateral,
   address,
   nowSec,
+  perpImUsd,
+  rates,
+  markets,
   entrySeedPct,
-  onBack,
+  settling,
+  stepsSlot,
   onBusy,
+  onResult,
   onClose,
 }: {
   pair: PairEstimate;
@@ -3003,19 +2764,25 @@ function OpenOnlyReview({
   collateral: string;
   address: string;
   nowSec: number;
+  perpImUsd: number;
+  rates: RollRateInputs;
+  markets: ReadonlyArray<BorosPairMarketRow>;
   /** The tolerance the pick page settled on for the entry at this size, in %
    * APR — wider than the per-market seed when the size needed it. */
   entrySeedPct?: number;
-  onBack: () => void;
+  settling: boolean;
+  stepsSlot: HTMLElement | null;
   onBusy: (busy: boolean) => void;
+  onResult: (shown: boolean) => void;
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
+  const flow = useTradeFlowOptional();
   const { canTrade, loginLabel } = useActiveWallet();
   const execute = useExecuteBorosPair();
   // One tolerance for the two entry legs — seeded as the pick page settled it,
   // editable here. Invalid (empty, zero, over the cap) blocks the confirm.
-  const seedPct = entrySeedPct ?? ROLL_MAX_SLIP_PCT / 10;
+  const seedPct = entrySeedPct ?? seedSlipPctFor(markets, targetMarketIds(target));
   const [slipEdited, setSlipEdited] = useState<string | null>(null);
   const [slipOpen, setSlipOpen] = useState(false);
   const slipStr = slipEdited ?? String(seedPct);
@@ -3033,8 +2800,20 @@ function OpenOnlyReview({
   // The report reads the execute response, not the quote — so once sent the
   // poll stops rather than re-pricing a position that is already open.
   const [out, setOut] = useState<{ payload: BorosPairExecuteResponse } | { error: string } | null>(null);
+  useEffect(() => onResult(out !== null), [out, onResult]);
   const sim = useBorosPairSimulation(req, req !== null && out === null, { refetchInterval: ROLL_POLL_MS });
   const simulation = sim.data?.simulation ?? null;
+  const fixedApr = rollFigures({
+    entrySim: simulation ?? undefined,
+    exitSim: undefined,
+    size,
+    perpImUsd,
+    maturity: target.maturity,
+    heldLegs: yuLegs,
+    nowSec,
+    rates,
+    keepOld: true,
+  }).netRate;
   const ackShown = sim.data?.gate.requiresAcknowledgement === true;
   /** Names a margin account when the new legs draw on more than one. */
   const nameOfAccount = (id: number | null): string =>
@@ -3066,7 +2845,7 @@ function OpenOnlyReview({
   // Two ids minted once and reused for every retry — a lost response replays
   // from the server's memo, a refusal executes again (as the pair ticket does).
   const ids = useRef<string[]>([]);
-  const canConfirm = req !== null && blockers.length === 0 && !busy && out === null && canTrade;
+  const canConfirm = req !== null && blockers.length === 0 && !busy && !settling && out === null && canTrade;
 
   const run = async () => {
     if (!req) return;
@@ -3084,149 +2863,148 @@ function OpenOnlyReview({
 
   if (out !== null) {
     const result = 'payload' in out ? out.payload.result : null;
-    const tone = result === null || result.filledNothing ? 'rose' : result.partial ? 'amber' : 'green';
     // Not after a partial fill: the server keeps that answer for these ids, so a
     // retry would replay it, and fresh ids would resend the full size.
     const retryable = 'error' in out || (result?.filledNothing ?? false);
+    const rest = result?.partial && !result.filledNothing ? Math.max(0, size - result.hedgedSize) : 0;
+    const restPx = simulation?.collateralPriceUsd ?? null;
+    const openRest =
+      flow && rest > 0 && (pair.unit === 'base' || restPx !== null)
+        ? () => {
+            flow.prefillBorosOpen({
+              base,
+              longVenue: pair.longVenue,
+              shortVenue: pair.shortVenue,
+              maturity: target.maturity,
+              size: pair.unit === 'usd' ? rest : rest * (restPx ?? 0),
+              sizeBase: pair.unit === 'base' ? rest : undefined,
+            });
+            flow.openRail();
+            onClose();
+          }
+        : null;
     return (
       <div className="flex flex-col gap-2">
-        {result && <RollLegReport label={t('assetCard.openOnly.newLegs')} legs={result.legs} collateral={collateral} tone={tone} nameOf={(id) => simulation?.legs.find((l) => l.marketId === id)?.marketName ?? ('spreadVenues' in target ? spreadName(base, target.spreadVenues) : null)} />}
         {result && !result.filledNothing && !result.partial && (
-          <p className="text-[11.5px] text-ink-300" role="status">
-            {t('assetCard.openOnly.opened', { qty: exactQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity), old: fmtDateLocal(pair.soonestMaturitySec) })}
-          </p>
+          <ResultBox
+            tone="done"
+            title={t('assetCard.openOnly.opened', { qty: exactQty(result.hedgedSize, collateral), date: fmtDateLocal(target.maturity) })}
+            lines={[t('assetCard.openOnly.openedNote', { old: fmtDateLocal(pair.soonestMaturitySec) })]}
+            rows={[{ label: t('assetCard.openOnly.newLegs'), value: legsCount(result.legs) }]}
+          />
         )}
         {result?.partial && !result.filledNothing && (
-          <p className="rounded border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-2 text-[11.5px] leading-relaxed text-amber-200" role="alert">
-            {t('assetCard.openOnly.partial', { qty: exactQty(result.hedgedSize, collateral) })}
-          </p>
+          <ResultBox
+            tone="part"
+            title={t('assetCard.openOnly.partial', { qty: exactQty(result.hedgedSize, collateral) })}
+            rows={[{ label: t('assetCard.openOnly.newLegs'), value: legsCount(result.legs) }]}
+          />
         )}
-        {result?.filledNothing && (
-          <p className="rounded border border-rose-500/30 bg-rose-500/[0.04] px-2.5 py-2 text-[11.5px] leading-relaxed text-rose-200" role="alert">
-            {t('assetCard.openOnly.nothing')}
-          </p>
+        {openRest && (
+          <button type="button" className="btn-link self-start text-[12px]" onClick={openRest}>
+            {t('assetCard.openOnly.openRest')}
+          </button>
         )}
-        {'error' in out && (
-          <p className="rounded-lg border border-rose-500/30 bg-rose-500/[0.04] px-3 py-2.5 text-[11.5px]" role="alert">
-            <span className="font-semibold text-rose-200">{t('assetCard.openOnly.notSent')}</span> <span className="text-rose-200/80">{out.error}</span>
-          </p>
+        {result?.filledNothing && <ResultBox tone="stop" title={t('assetCard.openOnly.nothing')} />}
+        {'error' in out && <StopBox title={t('assetCard.openOnly.notSent')} lines={[out.error]} />}
+        {result && (
+          <RollLegReport
+            sections={[{ label: t('assetCard.openOnly.newLegs'), legs: result.legs, nameOf: (id) => simulation?.legs.find((l) => l.marketId === id)?.marketName ?? ('spreadVenues' in target ? spreadName(base, target.spreadVenues) : null) }]}
+            collateral={collateral}
+          />
         )}
         {'payload' in out && out.payload.replayed && (
           <p className="text-[11px] text-ink-400" role="status">
             {t('assetCard.replayed')}
           </p>
         )}
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
-            {t('common.close')}
-          </button>
-          {retryable && (
-            <HoldToConfirmButton tone="cyan" disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
-              {t('common.retry')}
-            </HoldToConfirmButton>
-          )}
-        </div>
+        {(result?.filledNothing || retryable) && (
+          <div className="mt-2 flex items-center gap-2">
+            {result?.filledNothing && (
+              <button type="button" className="btn flex-1" onClick={() => setOut(null)} disabled={busy}>
+                {t('common.back')}
+              </button>
+            )}
+            {retryable && (
+              <HoldToConfirmButton tone="cyan" compact className="flex-1" disabled={busy} onConfirm={run} title={t('assetCard.openOnly.retryTitle')}>
+                {t('common.retry')}
+              </HoldToConfirmButton>
+            )}
+          </div>
+        )}
       </div>
     );
   }
 
-  const termDays = daysToMaturity(target.maturity, nowSec);
-  const slipLine = (
-    <SlippageLine
-      est={simulation?.slippageApr !== null && simulation?.slippageApr !== undefined ? fmtPct(simulation.slippageApr) : null}
-      max={fmtPct(slipApr * 2)}
-      unit="APR"
-      open={slipOpen}
-      onToggle={() => setSlipOpen((v) => !v)}
-      value={slipStr}
-      onChange={setSlipEdited}
-      invalid={slipInvalid}
-      invalidText={t('assetCard.batch.slipInvalid', { max: ROLL_MAX_SLIP_PCT })}
-      inputAriaLabel={t('assetCard.openOnly.slipAria')}
-      title={t('assetCard.batch.slipTitle', { max: slipStr })}
-      hint={t('assetCard.openOnly.slipHint')}
-    />
-  );
-
+  const slip: BatchSlip = {
+    str: slipStr,
+    onChange: setSlipEdited,
+    invalid: slipInvalid,
+    open: slipOpen,
+    onToggle: () => setSlipOpen((v) => !v),
+    apr: slipApr,
+  };
+  const openRows = rollLegsOf(openLegs, markets, openSide, () => '');
+  const batch: RollBatch = {
+    key: 'entry',
+    title: t('assetCard.roll.stepOpen', { date: fmtDateLocal(target.maturity) }),
+    legs: openRows,
+    sim: simulation,
+    slip,
+    slipAria: t('assetCard.openOnly.slipAria'),
+    slipHint: t('assetCard.openOnly.slipHint'),
+  };
+  const blank = <span className="text-ink-500">{sim.isPending ? '…' : '—'}</span>;
   return (
     <div className="flex flex-col gap-3">
-      <div className="rounded-lg border border-ink-700 bg-ink-850/40 px-4 py-3">
-        <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
-          <div className="min-w-0">
-            <div className={microLabelClass}>{t('assetCard.openOnly.openAt', { date: fmtDateLocal(target.maturity) })}</div>
-            <div className="num mt-1 text-[22px] font-semibold leading-none tracking-[-0.02em]">
-              {exactQty(size, collateral)}
-              <span className="ml-2 text-[13px] font-normal text-ink-300">{t('assetCard.review.days', { days: termDays })}</span>
-            </div>
-            <div className="mt-1.5 text-[11.5px] text-ink-400">{t('assetCard.openOnly.oldKeep')}</div>
-          </div>
+      {sim.isError && <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />}
+      {stepsSlot && createPortal(<RollSteps batches={[batch]} coin={collateral} busy={busy} />, stepsSlot)}
+      <RollCostCard batches={[batch]} age={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />} />
+
+      <SummaryCard title={t('accounts.moveCash.after')}>
+        <div className="flex flex-col gap-1.5">
+          <RollFixedAprRow rate={fixedApr} />
+          <AfterRates sim={simulation} legs={openRows} liqWarn={liqWarnOf(sim.data?.gate.funding)} />
         </div>
-      </div>
-
-      <OpenOnlyNote oldMaturity={pair.soonestMaturitySec} className="rounded-lg border border-amber-500/25 bg-amber-500/[0.04] px-3 py-2 text-amber-200" />
-
-      <EstimateCard
-        label={t('assetCard.openOnly.newLegs')}
-        sub={`${'spreadVenues' in target ? spreadName(base, target.spreadVenues) : `${prettyVenue(pair.longVenue)} / ${prettyVenue(pair.shortVenue)}`} · ${fmtDateLocal(target.maturity)}`}
-        dataUpdatedAt={sim.dataUpdatedAt}
-        estimating={sim.isPlaceholderData}
-        isError={sim.isError}
-      >
-        {sim.isError ? (
-          <QueryError title={t('assetCard.openOnly.cantPrice')} error={sim.error} onRetry={() => sim.refetch()} />
-        ) : simulation ? (
-          <>
-            <SpreadReadout sim={simulation} boxed />
-            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-              <LiquidationLines sim={simulation} warn={liqWarnOf(sim.data?.gate.funding)} />
-            </div>
-            <div className="flex flex-col gap-1 border-t border-ink-800/80 pt-2">
-              <PairCosts
-                sim={simulation}
-                afterMargin={
-                  sim.data?.gate.funding && (
-                    <SuggestedTopUpLines sim={simulation} funding={sim.data.gate.funding} nameOf={nameOfAccount} />
-                  )
-                }
-              />
-              {sim.data?.gate.funding && (
-                <AvailableMarginLines
-                  sim={simulation}
-                  funding={sim.data.gate.funding}
-                  nameOf={nameOfAccount}
-                  fallback={null}
-                  unit={simulation.collateral}
-                />
-              )}
-            </div>
-            <div className="border-t border-ink-800/80 pt-2">{slipLine}</div>
-          </>
-        ) : (
-          <>
-            <span className="text-[11.5px] text-ink-500">{sim.isPending ? t('assetCard.batch.pricing') : t('assetCard.batch.noQuote')}</span>
-            {slipLine}
-          </>
+        <div className="flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+          {simulation ? <MarginUsageRow sim={simulation} /> : <EstimateRow label={t('pairTicket.borosBits.marginUsage')} value={blank} strong />}
+          {simulation && sim.data?.gate.funding && (
+            <>
+              <SuggestedTopUpLines sim={simulation} funding={sim.data.gate.funding} nameOf={nameOfAccount} />
+              <AvailableMarginLines sim={simulation} funding={sim.data.gate.funding} nameOf={nameOfAccount} fallback={null} unit={simulation.collateral} />
+            </>
+          )}
+        </div>
+        {simulation && simulation.reasons.length > 0 && (
+          <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
+            {simulation.reasons.map((r) => (
+              <li key={r}>· {localizeServerText(r)}</li>
+            ))}
+          </ul>
         )}
-      </EstimateCard>
+      </SummaryCard>
 
       {ackShown && simulation && <OpposingAcknowledgement sim={simulation} checked={acked.checked} onChange={acked.set} />}
-      <BlockerList blockers={blockers.filter((b) => b.code !== 'slippage-exceeds-max' && !(ackShown && b.code === 'flip-unacknowledged'))} />
+      <BlockerList
+        blockers={blockers.filter(
+          (b) =>
+            b.code !== 'slippage-exceeds-max' &&
+            !(sim.isFetching && QUOTE_WAIT_CODES.has(b.code)) &&
+            !(ackShown && b.code === 'flip-unacknowledged') &&
+            !(sim.isError && b.code === 'quote-failed'),
+        )}
+      />
 
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <button type="button" className="btn" onClick={onBack} disabled={busy}>
-          <ArrowLeft size={14} aria-hidden />
-          {t('common.back')}
-        </button>
+      <div className="mt-1 flex flex-col">
         {loginLabel ? (
           <BorosLogInButton />
         ) : (
-          <HoldToConfirmButton
-            tone="cyan"
-            disabled={!canConfirm}
-            onConfirm={run}
-            title={t('assetCard.openOnly.holdTitle')}
-          >
-            {busy ? t('assetCard.openOnly.opening') : t('assetCard.roll.openNewMaturity')}
+          <HoldToConfirmButton tone="cyan" className="w-full" disabled={!canConfirm} onConfirm={run} title={t('assetCard.openOnly.holdTitle')}>
+            {busy
+              ? t('assetCard.openOnly.opening')
+              : sim.isFetching && blockers.some((b) => QUOTE_WAIT_CODES.has(b.code))
+                ? t('common.refreshing')
+                : t('assetCard.roll.openNewMaturity')}
           </HoldToConfirmButton>
         )}
       </div>
@@ -3240,8 +3018,6 @@ function OpenOnlyReview({
  * TWO simulations, because a roll at market is two market orders: `close` on
  * the legs held now and `open` on the new ones. Both cross a book, so both pay
  * taker fees and slippage -- quoting only the entry would understate the roll.
- * The headline is net of BOTH, so "continue earning 18.95%" is a rate actually
- * received; the breakdown behind it opens only on the selected option.
  */
 function RollOption({
   target,
@@ -3254,6 +3030,7 @@ function RollOption({
   exitSlippageApr,
   entrySlippageApr,
   nowSec,
+  rates,
   openOnly = false,
   selected,
   onSelect,
@@ -3267,6 +3044,7 @@ function RollOption({
   /** The size being rolled, in the collateral token — the modal's input. */
   size: number;
   perpImUsd: number;
+  rates: RollRateInputs;
   address: string | null;
   /** Per-leg tolerance of each batch, as an APR fraction. */
   exitSlippageApr: number;
@@ -3313,18 +3091,10 @@ function RollOption({
 
   const entrySim = entry.data?.simulation;
   const exitSim = exit.data?.simulation;
-  const {
-    netRate,
-    spreadApr,
-    netByMaturityUsd,
-    grossByMaturityUsd,
-    totalCostUsd,
-    exitCostUsd,
-    entryCostUsd,
-    exitPnlUsd,
-    capitalUsd,
-    newBorosImUsd,
-  } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec, keepOld: openOnly });
+  const { netRate, netByMaturityUsd } = rollFigures({ entrySim, exitSim, size, perpImUsd, maturity: target.maturity, heldLegs: yuLegs, nowSec, keepOld: openOnly, rates });
+  const costUsd = openOnly
+    ? batchCost(entrySim, entrySlippageApr).totalUsd
+    : sumUsd([batchCost(exitSim, exitSlippageApr).totalUsd, batchCost(entrySim, entrySlippageApr).totalUsd]);
 
   const pending = exit.isPending || entry.isPending;
   /**
@@ -3338,134 +3108,57 @@ function RollOption({
    * until the next.
    */
   const fresh = !entry.isPlaceholderData && !exit.isPlaceholderData;
-  const live = {
-    netRate,
-    spreadApr,
-    netByMaturityUsd,
-    grossByMaturityUsd,
-    totalCostUsd,
-    exitCostUsd,
-    entryCostUsd,
-    exitPnlUsd,
-    capitalUsd,
-    newBorosImUsd,
-    perpImUsd,
-  };
+  const live = { netRate, netByMaturityUsd, costUsd };
   const held = useRef(live);
   if (fresh) held.current = live;
   const v = fresh ? live : held.current;
   const settling = fresh ? '' : 'opacity-60 transition-opacity';
-
+  const blank = <span className="text-ink-600">{pending ? '…' : '—'}</span>;
 
   return (
-    <div
-      className={`rounded border transition-colors ${
-        selected ? 'border-sky-500/50 bg-sky-500/[0.06]' : 'border-ink-700 bg-ink-950/40 hover:border-ink-600'
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      className={`${ROLL_OPTION_GRID} w-full rounded border px-3 py-2.5 text-left transition-colors ${
+        selected ? 'border-info/60 bg-info/[0.08]' : 'border-ink-700 bg-ink-950/40 hover:border-ink-600'
       }`}
+      onClick={onSelect}
     >
-      <button type="button" className="flex w-full items-center gap-3 p-3 text-left" onClick={onSelect}>
+      <span className="flex min-w-0 items-center gap-3">
         <span
           aria-hidden
-          className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border ${
-            selected ? 'border-sky-400 bg-sky-400/30' : 'border-ink-600'
-          }`}
+          className={`h-3.5 w-3.5 shrink-0 rounded-full border ${selected ? 'border-info bg-info ring-2 ring-inset ring-ink-900' : 'border-ink-500'}`}
         />
-        <span className="flex min-w-0 flex-1 flex-col gap-1">
-          <span className={`num text-[20px] font-semibold leading-none tracking-[-0.02em] ${settling}`}>
-            {v.netRate !== null ? (
-              <SignedNumber value={v.netRate} format={fmtPct} />
+        <span className="flex min-w-0 flex-col gap-1">
+          <span className="num text-[13px] font-semibold text-ink-50">
+            {fmtDateLocal(target.maturity)}
+            <span className="ml-1.5 text-[11.5px] font-normal text-ink-400">{daysLeftText(target.maturity, nowSec)}</span>
+          </span>
+          <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-ink-300">
+            {'spreadMarketId' in target ? (
+              <>
+                <SpreadIcon venues={target.spreadVenues} size={14} />
+                <SpreadName base={base} venues={target.spreadVenues} />
+              </>
             ) : (
-              <span className="text-ink-600">{pending ? '…' : '—'}</span>
+              <>
+                <VenueIcon venue={pair.longVenue} size={14} />
+                <VenueIcon venue={pair.shortVenue} size={14} />
+                <span className="truncate">{t('assetCard.roll.twoMarkets', { long: prettyVenue(pair.longVenue), short: prettyVenue(pair.shortVenue) })}</span>
+              </>
             )}
-            <span className="ml-1.5 text-[12px] font-normal text-ink-300">{t('assetCard.option.fixed')}</span>
-          </span>
-          <span className="num text-[11.5px] text-ink-400" title={t('assetCard.option.dayTitle')}>
-            {t('assetCard.option.daysDate', { days: daysToMaturity(target.maturity, nowSec), date: fmtDateLocal(target.maturity) })}
-          </span>
-          {/* Spread and singles are separate cards (mozzarella 2026-10-14): say
-              which one the roll lands in. */}
-          <span className="text-[11px] text-ink-500">
-            → {'spreadMarketId' in target ? <SpreadName base={base} venues={target.spreadVenues} /> : t('assetCard.option.singles')}
           </span>
         </span>
-      </button>
-
-      {/* Under the rate: what it locks, what that is worth, what it ties up
-          — three figures of one rank. The fees that were netted out of the
-          headline come last and small: they explain the number, they are
-          not the number (his call 2026-09-17). */}
-      {selected && (
-        <div className={`border-t border-ink-800 px-3 pb-3 pt-2.5 ${settling}`}>
-          <div className="grid grid-cols-3 gap-x-4">
-            <div title={t('assetCard.option.spreadTitle')}>
-              <div className={statLabel}>{t('assetCard.option.lockedSpread')}</div>
-              <div className={statValue}>
-                {v.spreadApr !== null ? (
-                  <SignedNumber value={v.spreadApr} format={fmtPct} />
-                ) : (
-                  <span className="text-ink-600">{pending ? '…' : '—'}</span>
-                )}
-              </div>
-            </div>
-            <div
-              title={
-                v.grossByMaturityUsd !== null
-                  ? `${t('assetCard.option.carryTo', { date: fmtDateLocal(target.maturity) })}\t${fmtUsd(v.grossByMaturityUsd)}\n${t('common.fees')}\t${v.totalCostUsd !== null ? `−${fmtUsd(v.totalCostUsd)}` : '—'}${openOnly ? '' : `\n${t('assetCard.review.exitPnl')}\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}`}`
-                  : openOnly
-                    ? t('assetCard.option.earnOpenTitle')
-                    : t('assetCard.option.earnRollTitle')
-              }
-            >
-              <div className={statLabel}>{t('assetCard.estEarnings')}</div>
-              <div className={`${statValue} font-semibold`}>
-                {v.netByMaturityUsd !== null ? (
-                  <SignedNumber value={v.netByMaturityUsd} format={fmtUsd} />
-                ) : (
-                  <span className="text-ink-600">{pending ? '…' : '—'}</span>
-                )}
-              </div>
-            </div>
-            <div
-              title={
-                v.newBorosImUsd !== null
-                  ? `${t('assetCard.option.perpMargin')}\t${fmtUsd(v.perpImUsd)}\n${t('assetCard.option.newBorosMargin')}\t${fmtUsd(v.newBorosImUsd)}`
-                  : t('assetCard.option.capitalTitle')
-              }
-            >
-              <div className={statLabel}>{t('common.capital')}</div>
-              <div className={`${statValue} text-ink-100`}>{v.capitalUsd !== null ? fmtUsdCompact(v.capitalUsd) : '—'}</div>
-            </div>
-          </div>
-          {/* The split sits behind an ⓘ after the number, the house pattern
-              (reduce-only ⓘ, dust assets ⓘ): the number is what the option
-              states, the split is what explains it. */}
-          {/* ONE figure for what the roll costs on day one: the two batches'
-              fees, and what closing the old legs realises of their remaining
-              locked spread (which can pay for the fees, or add to them). The
-              split is behind the ⓘ. */}
-          <div className="num mt-2.5 flex items-baseline justify-between gap-3 border-t border-ink-800 pt-2 text-[11px] text-ink-500">
-            <span>{openOnly ? t('assetCard.option.openingCost') : t('assetCard.option.rolloverCost')}</span>
-            <span>
-              {v.totalCostUsd !== null && v.exitPnlUsd !== null ? (
-                <SignedNumber value={v.exitPnlUsd - v.totalCostUsd} format={fmtUsd} />
-              ) : (
-                <span className="text-ink-600">—</span>
-              )}
-              <span
-                className="ml-1 cursor-help text-ink-500"
-                title={
-                  openOnly
-                    ? `${t('assetCard.option.openingFee')}\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n${t('assetCard.option.openNotes')}`
-                    : `${t('assetCard.review.exitFee')}\t${v.exitCostUsd !== null ? `−${fmtUsd(v.exitCostUsd)}` : '—'}\n${t('assetCard.review.entryFee')}\t${v.entryCostUsd !== null ? `−${fmtUsd(v.entryCostUsd)}` : '—'}\n${t('assetCard.review.exitPnl')}\t${v.exitPnlUsd !== null ? `${v.exitPnlUsd >= 0 ? '+' : '−'}${fmtUsd(Math.abs(v.exitPnlUsd))}` : '—'}\n${t('assetCard.option.rollNotes')}`
-                }
-              >
-                ⓘ
-              </span>
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
+      </span>
+      <span className={`num text-right text-[12.5px] ${settling}`}>
+        {v.netRate !== null ? <SignedNumber value={v.netRate} format={fmtPct} /> : blank}
+      </span>
+      <span className={`num text-right text-[12.5px] ${settling}`}>
+        {v.netByMaturityUsd !== null ? <SignedNumber value={v.netByMaturityUsd} format={fmtUsd} /> : blank}
+      </span>
+      <span className={`num text-right text-[12.5px] text-ink-50 ${settling}`}>{v.costUsd !== null ? fmtUsd(v.costUsd) : blank}</span>
+    </button>
   );
 }
 
@@ -3621,18 +3314,7 @@ function PerpOnlyPairCard({
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.longVenue} size={18} />
-                  {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
-                </span>
-                <span className="text-ink-600">/</span>
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.shortVenue} size={18} />
-                  {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
-                </span>
+                <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue}>
                 <Chip
                   sm
                   tone="amber"
@@ -3641,7 +3323,7 @@ function PerpOnlyPairCard({
                 >
                   {!spread && rowMissing(pair.longYu, pair.missingLong) && rowMissing(pair.shortYu, pair.missingShort) ? t('assetCard.perpOnly.legsMissing') : t('assetCard.perpOnly.legMissing')}
                 </Chip>
-                </span>
+                </PairTitle>
                 {/* The maturity rides under the venues, as on a full pair. */}
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
                   {held ? (
@@ -3898,18 +3580,7 @@ function BorosOnlyPairCard({
                   setOpen((v) => !v);
                 }}
               >
-                <span className="inline-flex min-w-0 flex-wrap items-center gap-[7px]">
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.longVenue} size={18} />
-                  {prettyVenue(pair.longVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-grass">{t('common.longUpper')}</span>
-                </span>
-                <span className="text-ink-600">/</span>
-                <span className="inline-flex items-center gap-[6px]">
-                  <VenueIcon venue={pair.shortVenue} size={18} />
-                  {prettyVenue(pair.shortVenue)}
-                  <span className="text-[9.5px] font-semibold tracking-[0.1em] text-guava">{t('common.shortUpper')}</span>
-                </span>
+                <PairTitle longVenue={pair.longVenue} shortVenue={pair.shortVenue}>
                 <Chip
                   sm
                   tone="amber"
@@ -3919,7 +3590,7 @@ function BorosOnlyPairCard({
                   {both ? t('assetCard.borosOnly.perpsMissing') : t('assetCard.borosOnly.perpMissing')}
                 </Chip>
                 <AddMarginChip sm legs={borosOpen.filter((b) => pair.borosLegs.some((y) => y.marketId === b.marketId))} />
-                </span>
+                </PairTitle>
                 <span className="num text-[11.5px] font-normal leading-none text-ink-400">
                   <span title={t('assetCard.borosOnly.maturityTitle')}>
                     {t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturity), left: daysLeftText(pair.maturity, nowSec) })}
@@ -5610,6 +5281,8 @@ export function AssetCard({
   }, [appShowNonce]);
   const [closedOpen, setClosedOpen] = useState(false);
   const [closePerps, setClosePerps] = useState<PairEstimate | null>(null);
+  const openRebalance = useRebalanceOpener();
+  const rebalanceJob = useRebalance().data?.job ?? null;
   const [closePerpOnly, setClosePerpOnly] = useState<PerpOnlyPair | null>(null);
   const [closeBoros, setCloseBoros] = useState<PairEstimate | null>(null);
   const [closeBorosOnly, setCloseBorosOnly] = useState<BorosOnlyPair | null>(null);
@@ -5709,12 +5382,12 @@ export function AssetCard({
    * asset + pair so two assets never collide, and cleared on unmount — a
    * card that stops rendering must not leave a stale line in the banner.
    */
-  const rollKeys = rollable.map((p) => `${group.base}:${pairKey(p)}`).join('|');
+  const rollKeys = rollable.map((p) => openPairKey(group.base, p)).join('|');
   const rollJson = JSON.stringify(rollable.map((p) => rollSignals[pairKey(p)] ?? []));
   useEffect(() => {
     const live = new Set<string>();
     for (const p of rollable) {
-      const key = `${group.base}:${pairKey(p)}`;
+      const key = openPairKey(group.base, p);
       live.add(key);
       publishRoll(key, {
         key,
@@ -6447,6 +6120,8 @@ export function AssetCard({
                 defaultOpen={pairRollDue(p, nowSec)}
                 showRollNonce={showRollNonce}
                 focusOnShow={p === showTarget}
+                onDelever={() => openRebalance({ tab: 'delever', pairKey: openPairKey(group.base, p) })}
+                deleverJob={deleverJobOf(rebalanceJob, p)}
                 onClosePerps={() => setClosePerps(p)}
                 onCloseBoros={() => setCloseBoros(p)}
                 onRollOver={() => setRollOver(p)}
@@ -6586,30 +6261,7 @@ export function AssetCard({
         )}
 
       {closePerps !== null && (
-        <Modal
-          title={
-            <>
-              {t('assetCard.actions.closePerps')}
-              <span className="ml-2 text-[12px] font-normal text-ink-400">
-                {group.base} · {prettyVenue(closePerps.longVenue)} ⇄ {prettyVenue(closePerps.shortVenue)}
-                {closePerps.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closePerps.soonestMaturitySec)}` : ''}
-              </span>
-            </>
-          }
-          onClose={() => setClosePerps(null)}
-          widthClass="w-[620px]"
-        >
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] leading-relaxed text-amber-200">{t('assetCard.closeModal.borosStaysOpen')}</p>
-            {/* The form's own leg rows say which leg is a pair slice of a
-                larger venue position and how much of it. */}
-            <ClosePairForm
-              base={group.base}
-              legs={pairPerpCloseLegs(closePerps)}
-              livePositions={livePositions}
-            />
-          </div>
-        </Modal>
+        <ClosePairModal kind="perps" pair={closePerps} group={group} livePositions={livePositions} onClose={() => setClosePerps(null)} />
       )}
       {closePerpOnly !== null && (
         <Modal
@@ -6625,7 +6277,7 @@ export function AssetCard({
           widthClass="w-[620px]"
         >
           <div className="flex flex-col gap-3">
-            <ClosePairForm base={group.base} legs={perpOnlyCloseLegs(closePerpOnly)} livePositions={livePositions} />
+            <ClosePairForm base={group.base} legs={perpOnlyCloseLegs(closePerpOnly)} livePositions={livePositions} allowTwap />
           </div>
         </Modal>
       )}
@@ -6690,31 +6342,7 @@ export function AssetCard({
         </Modal>
       )}
       {closeBoros !== null && (
-        <Modal
-          title={
-            <>
-              {/* Named for what it closes: the perps stay open. */}
-              {pairBorosCloseLegs(closeBoros, group).length === 1 ? t('assetCard.borosOnly.closeLeg') : t('assetCard.borosOnly.closeLegs')}
-              <span className="ml-2 text-[12px] font-normal text-ink-400">
-                {group.base} · {prettyVenue(closeBoros.longVenue)} ⇄ {prettyVenue(closeBoros.shortVenue)}
-                {closeBoros.soonestMaturitySec > 0 ? ` · ${fmtDateLocal(closeBoros.soonestMaturitySec)}` : ''}
-              </span>
-            </>
-          }
-          onClose={() => setCloseBoros(null)}
-          widthClass="w-[620px]"
-        >
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] leading-relaxed text-amber-200">{t('assetCard.closeModal.perpsStayOpen')}</p>
-            <CloseBorosForm
-              legs={pairBorosCloseLegs(closeBoros, group).map((l) => ({
-                ...l,
-                spreadVenues: group.borosOpen.find((b) => b.marketId === l.marketId)?.spreadVenues ?? null,
-              }))}
-              onDone={() => setCloseBoros(null)}
-            />
-          </div>
-        </Modal>
+        <ClosePairModal kind="boros" pair={closeBoros} group={group} livePositions={livePositions} onClose={() => setCloseBoros(null)} />
       )}
       {closeBorosOnly !== null && (
         <Modal
@@ -6767,7 +6395,7 @@ export function AssetCard({
         </Modal>
       )}
       {rollOver !== null && (
-        <RollOverModal pair={rollOver} base={group.base} nowSec={nowSec} onClose={() => setRollOver(null)} />
+        <RollPairModal pair={rollOver} group={group} nowSec={nowSec} onClose={() => setRollOver(null)} />
       )}
 
       {feesOpen && (

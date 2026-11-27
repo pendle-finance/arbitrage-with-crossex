@@ -1,9 +1,12 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { RebalanceBucket } from '../api/types';
+import type { EvenPlan, GoalKind, RebalanceBucket, RebalanceView } from '../api/types';
 import { rebalanceViews, rebased } from '../test/fixtures';
-import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, pickedRoute, roundOf, shownKeys, stopsPerDayOf, targetsOf, worthLine } from './RebalanceHovers';
+import { borrowFacts, defaultGoal, Facts, isNotWorthIt, isWorthIt, paybackDays, pickedRoute, realizeFeeUsd, realizeImpactUsd } from './RebalanceHovers';
+import { fmtUsd } from '../lib/fmt';
+import { costPartsUsd } from './RebalanceHovers';
+import { RebalanceInfo, roundOf, RouteRow, stopsPerDayOf, totalCostUsd, worthChip, worthLine } from './RebalanceHovers';
 
 function show(buckets: RebalanceBucket[]) {
   return render(<Facts items={borrowFacts(buckets)} />);
@@ -74,9 +77,9 @@ describe('borrow facts', () => {
     const borrowingValues = [...((await hoverRows('Borrowing')).grid?.querySelectorAll('span:nth-child(2n)') ?? [])];
     const interestValues = [...((await hoverRows('Interest now')).grid?.querySelectorAll('span:nth-child(2n)') ?? [])];
     expect(borrowingValues).toHaveLength(2);
-    expect(interestValues).toHaveLength(2);
+    expect(interestValues).toHaveLength(3);
     for (const span of borrowingValues) expect(span.className).toContain('text-right');
-    for (const span of interestValues) expect(span.className).toContain('text-right');
+    for (const span of interestValues) expect(span.className).not.toContain('text-right');
   });
 
   it('a figure with a hover keeps its colour: amber for a borrow and its interest, white for interest paid', () => {
@@ -94,6 +97,7 @@ describe('borrow facts', () => {
     expect(lines('Interest now')).toEqual(['$0.0017 an hour']);
     expect(await rows('Interest now')).toEqual([
       { name: 'Lighter', value: '$0.0017 an hour' },
+      { name: '', value: '$0.04 a day' },
       { name: 'Hyperliquid', value: '$0.00 an hour' },
     ]);
   });
@@ -136,7 +140,10 @@ describe('borrow facts', () => {
   it('lighter charges from the first dollar', async () => {
     show(rebalanceViews.oneBorrow.buckets);
 
-    expect(await rows('Interest now')).toEqual([{ name: 'Lighter', value: '$0.0017 an hour' }]);
+    expect(await rows('Interest now')).toEqual([
+      { name: 'Lighter', value: '$0.0017 an hour' },
+      { name: '', value: '$0.04 a day' },
+    ]);
   });
 
   it('borrow comes from liability', async () => {
@@ -171,7 +178,10 @@ describe('borrow facts', () => {
 
     expect(lines('Borrowing')[0]).toBe('12,000.00 USDC');
     expect(lines('Interest now')[0]).toBe('$0.0113 an hour');
-    expect(await rows('Interest now')).toEqual([{ name: 'Hyperliquid', value: '$0.0113 an hour' }]);
+    expect(await rows('Interest now')).toEqual([
+      { name: 'Hyperliquid', value: '$0.0113 an hour' },
+      { name: '', value: '$0.27 a day' },
+    ]);
   });
 
   it('a 2,000 USDT borrow shows $0.0129 an hour', async () => {
@@ -179,7 +189,10 @@ describe('borrow facts', () => {
 
     expect(lines('Borrowing')[0]).toBe('2,000.00 USDT');
     expect(lines('Interest now')[0]).toBe('$0.0129 an hour');
-    expect(await rows('Interest now')).toEqual([{ name: 'CrossEx', value: '$0.0129 an hour' }]);
+    expect(await rows('Interest now')).toEqual([
+      { name: 'CrossEx', value: '$0.0129 an hour' },
+      { name: '', value: '$0.31 a day' },
+    ]);
   });
 
   it('interest an hour of $1 or more shows 2 decimals', () => {
@@ -213,35 +226,12 @@ describe('the current round', () => {
   });
 });
 
-describe('balanced targets', () => {
-  it('targets hold still during a run', () => {
-    const before = rebalanceViews.twoBorrows;
-    const running = rebalanceViews.accountARunning.job!;
-    const during = {
-      ...before,
-      job: { ...running, status: 'running' as const, inTransit: { coin: 'USDC' as const, qty: 300, at: 'MOVING' as const } },
-      buckets: rebased(before.buckets, { 'USDT/CROSSEX': { cash: 1087.45, equity: 1191.92 } }),
-    };
-    const cents = (targets: Map<string, number>) => [...targets].map(([key, value]) => [key, Math.round(value * 100)]);
-
-    expect(cents(targetsOf(during))).toEqual(cents(targetsOf(before)));
-    expect(cents(targetsOf({ ...during, job: { ...during.job, status: 'abandoned' } }))).not.toEqual(cents(targetsOf(before)));
-  });
-});
-
 describe('route and wallet rules the card and the modal share', () => {
   it('picks the first open route, starting from the pick', () => {
     const plan = rebalanceViews.twoBorrows.plans.even;
     expect(pickedRoute(plan, null).name).toBe('mix');
     expect(pickedRoute(plan, 'convert').route).toBe(plan.routes.convert);
     expect(pickedRoute(rebalanceViews.hiddenRoute.plans.even, 'loop').name).not.toBe('loop');
-  });
-
-  it('shows the Gate wallet only while it holds a dollar of cash', () => {
-    const view = rebalanceViews.accountA;
-    expect(shownKeys(view, [])).toContain('USDC/GATE');
-    const dust = { ...view, buckets: rebased(view.buckets, { 'USDC/GATE': { cash: 0.99, equity: 0.99 } }) };
-    expect(shownKeys(dust, [])).not.toContain('USDC/GATE');
   });
 });
 
@@ -251,14 +241,20 @@ describe('the 30-day rule the card and the modal share', () => {
   // The route repays the whole Lighter borrow, so it stops all of its interest.
   const lighterAt = (interestPerDayUsd: number) => rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { interestPerDayUsd } });
   const at = (costUsd: number, savesPerDayUsd = route.savesPerDayUsd) => ({ ...route, costUsd, savesPerDayUsd });
+  const plan = oneBorrow.plans.even;
+  const planAs = (kind: GoalKind, noLegs = false): EvenPlan => ({
+    ...plan,
+    goal: kind === 'custom' ? { kind, from: 'HYPERLIQUID', to: 'LIGHTER', amount: 132 } : { kind },
+    noLegs,
+  });
 
   it('a fee up to 30 whole days of the interest it stops is worth it, and a cent more is not', () => {
-    expect(isWorthIt(at(3), lighterAt(0.1))).toBe(true);
-    expect(isWorthIt(at(3.01), lighterAt(0.1))).toBe(false);
-    expect(isWorthIt(at(20), lighterAt(0.1))).toBe(false);
-    expect(isWorthIt(at(12_000), lighterAt(400))).toBe(true);
-    expect(isWorthIt(at(12_000.01), lighterAt(400))).toBe(false);
-    expect(worthLine(at(3), lighterAt(0.1))).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
+    expect(isWorthIt(plan, at(3), lighterAt(0.1))).toBe(true);
+    expect(isWorthIt(plan, at(3.01), lighterAt(0.1))).toBe(false);
+    expect(isWorthIt(plan, at(20), lighterAt(0.1))).toBe(false);
+    expect(isWorthIt(plan, at(12_000), lighterAt(400))).toBe(true);
+    expect(isWorthIt(plan, at(12_000.01), lighterAt(400))).toBe(false);
+    expect(worthLine(plan, at(3), lighterAt(0.1))).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
   });
 
   it('weighs the interest each wallet stops, not the daily saving the server rounds to cents', () => {
@@ -266,10 +262,10 @@ describe('the 30-day rule the card and the modal share', () => {
     const small = rebased(oneBorrow.buckets, {
       'USDC/LIGHTER': { cash: -114.7, equity: -114.7, borrow: 114.7, interestPerDayUsd: (114.7 * 0.1095) / 365 },
     });
-    expect(worthLine(at(1, 0.03), small)).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
+    expect(worthLine(plan, at(1, 0.03), small)).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 30 days of the interest it saves.' });
     // 16 USDC costs 0.0048 a day. The server sends 0.00.
     const tiny = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { cash: -16, equity: -16, borrow: 16, interestPerDayUsd: 0.0048 } });
-    expect(worthLine(at(0.03, 0), tiny)).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 7 days of the interest it saves.' });
+    expect(worthLine(plan, at(0.03, 0), tiny)).toEqual({ text: 'Rebalance recommended.', tone: 'act', sub: 'The fee equals 7 days of the interest it saves.' });
   });
 
   it('a wallet in profit owes its cash, not minus its equity: the route stops only the part it repays', () => {
@@ -282,8 +278,8 @@ describe('the 30-day rule the card and the modal share', () => {
       after: route.after.map((w) => (w.venue === 'LIGHTER' ? { ...w, cash: -200, equity: 0 } : w)),
     });
     expect(stopsPerDayOf(sends300(3.5), inProfit)).toBeCloseTo(0.09, 10);
-    expect(worthLine(sends300(3.5), inProfit)?.tone).toBe('warn');
-    expect(worthLine(sends300(2.7), inProfit)).toEqual({
+    expect(worthLine(plan, sends300(3.5), inProfit)?.tone).toBe('warn');
+    expect(worthLine(plan, sends300(2.7), inProfit)).toEqual({
       text: 'Rebalance recommended.',
       tone: 'act',
       sub: 'The fee equals 30 days of the interest it saves.',
@@ -292,9 +288,9 @@ describe('the 30-day rule the card and the modal share', () => {
 
   it('the line and the rule never disagree at the edge: a fee just past 30 days reads not worth it', () => {
     // 1.20 against 0.03999 a day is 30.008 days, so the line would say 31 days.
-    expect(isWorthIt(at(1.2), lighterAt(0.03999))).toBe(false);
-    expect(worthLine(at(1.2), lighterAt(0.03999))?.tone).toBe('warn');
-    expect(worthLine(at(1.19), lighterAt(0.03999))).toEqual({
+    expect(isWorthIt(plan, at(1.2), lighterAt(0.03999))).toBe(false);
+    expect(worthLine(plan, at(1.2), lighterAt(0.03999))?.tone).toBe('warn');
+    expect(worthLine(plan, at(1.19), lighterAt(0.03999))).toEqual({
       text: 'Rebalance recommended.',
       tone: 'act',
       sub: 'The fee equals 30 days of the interest it saves.',
@@ -304,15 +300,15 @@ describe('the 30-day rule the card and the modal share', () => {
   it('a route that stops no interest is not worth any fee, and a free route gives no line', () => {
     const free = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { cash: -16, equity: -16, borrow: 16, interestPerDayUsd: 0.0048 } });
     const keepsBorrow = { ...at(0.46), after: route.after.map((w) => (w.venue === 'LIGHTER' ? { ...w, cash: -16, equity: -16 } : w)) };
-    expect(isNotWorthIt(keepsBorrow, free)).toBe(true);
-    expect(isWorthIt(at(0), lighterAt(0.1))).toBe(true);
-    expect(worthLine(at(0), lighterAt(0.1))).toBeNull();
+    expect(isNotWorthIt(plan, keepsBorrow, free)).toBe(true);
+    expect(isWorthIt(plan, at(0), lighterAt(0.1))).toBe(true);
+    expect(worthLine(plan, at(0), lighterAt(0.1))).toBeNull();
   });
 
   it('says less than a day and 1 day', () => {
-    expect(worthLine(at(0.03), lighterAt(0.04))?.sub).toBe('The fee equals less than a day of the interest it saves.');
-    expect(worthLine(at(0.04), lighterAt(0.04))?.sub).toBe('The fee equals 1 day of the interest it saves.');
-    expect(worthLine(at(0.05), lighterAt(0.04))?.sub).toBe('The fee equals 2 days of the interest it saves.');
+    expect(worthLine(plan, at(0.03), lighterAt(0.04))?.sub).toBe('The fee equals less than a day of the interest it saves.');
+    expect(worthLine(plan, at(0.04), lighterAt(0.04))?.sub).toBe('The fee equals 1 day of the interest it saves.');
+    expect(worthLine(plan, at(0.05), lighterAt(0.04))?.sub).toBe('The fee equals 2 days of the interest it saves.');
   });
 
   it('a borrow inside its free allowance keeps the blue no-interest line, whatever the goal', () => {
@@ -321,31 +317,118 @@ describe('the 30-day rule the card and the modal share', () => {
       'USDC/LIGHTER': { borrow: 0, equity: 100, cash: 100, interestPerDayUsd: 0, imHeldUsd: 0, mmHeldUsd: 0 },
     });
     for (const goal of ['even', 'repay'] as const) {
-      expect(worthLine(at(20), free, goal)).toEqual({ text: 'No interest yet. Nothing to move.', tone: 'info' });
+      expect(worthLine(planAs(goal), at(20), free)).toEqual({ text: 'No interest yet. Nothing to move.', tone: 'info' });
     }
   });
 
   it('says no borrow with no borrow, and names the failure when a borrow rate cannot be read', () => {
-    expect(isNotWorthIt(at(20), rebalanceViews.accountB.buckets)).toBe(false);
-    expect(worthLine(at(20), rebalanceViews.accountB.buckets)).toEqual({ text: 'No borrow. Nothing to move.', tone: 'info' });
+    expect(isNotWorthIt(plan, at(20), rebalanceViews.accountB.buckets)).toBe(false);
+    expect(worthLine(plan, at(20), rebalanceViews.accountB.buckets)).toEqual({ text: 'No borrow. Nothing to move.', tone: 'info' });
     const unknown = rebased(oneBorrow.buckets, { 'USDC/LIGHTER': { ratePerYear: null, interestPerDayUsd: 0 } });
-    expect(isNotWorthIt(at(20), unknown)).toBe(false);
+    expect(isNotWorthIt(plan, at(20), unknown)).toBe(false);
     // An unreadable rate is an error, not silence: the dialog still prices a fee.
-    expect(worthLine(at(20), unknown)).toEqual({ text: 'Could not read the borrow interest rate. Check the fee before you move anything.', tone: 'warn' });
+    expect(worthLine(plan, at(20), unknown)).toEqual({ text: 'Could not read the borrow interest rate. Check the fee before you move anything.', tone: 'warn' });
   });
 
   it('with no legs the borrow blocks a withdrawal, so no fee is weighed — whatever goal asks', () => {
     const withdrawBlocked = { text: 'Clear debt recommended.', tone: 'act', sub: 'You cannot withdraw cash while a wallet borrows.' };
     for (const goal of ['repay', 'custom', 'even'] as const) {
-      expect(worthLine(at(3), lighterAt(0.1), goal, true)).toEqual(withdrawBlocked);
+      expect(worthLine(planAs(goal, true), at(3), lighterAt(0.1))).toEqual(withdrawBlocked);
     }
     // A fee that dwarfs the interest still says repay: the cash is stuck either way.
-    expect(worthLine(at(500), lighterAt(0.1), 'repay', true)).toEqual(withdrawBlocked);
+    expect(worthLine(planAs('repay', true), at(500), lighterAt(0.1))).toEqual(withdrawBlocked);
   });
 
   it('with legs the fee-versus-interest weighing applies to a custom move as well', () => {
-    expect(worthLine(at(3), lighterAt(0.1), 'custom', false)?.sub).toBe('The fee equals 30 days of the interest it saves.');
-    expect(worthLine(at(500), lighterAt(0.1), 'custom', false)?.tone).toBe('warn');
+    expect(worthLine(planAs('custom'), at(3), lighterAt(0.1))?.sub).toBe('The fee equals 30 days of the interest it saves.');
+    expect(worthLine(planAs('custom'), at(500), lighterAt(0.1))?.tone).toBe('warn');
+  });
+});
+
+describe('total cost counts the profit step', () => {
+  const pickedOf = (view: RebalanceView, goal: 'even' | 'repay' = 'even') => {
+    const plan = view.plans[goal];
+    return { plan, route: pickedRoute(plan, null).route, buckets: view.buckets };
+  };
+  const wholeDays = (view: RebalanceView, goal: 'even' | 'repay' = 'even') => {
+    const { plan, route, buckets } = pickedOf(view, goal);
+    return Math.ceil(paybackDays(plan, route, buckets) ?? Number.NaN);
+  };
+
+  it('total cost is step 1 fees plus its price impact plus the route cost', () => {
+    const { plan, route } = pickedOf(rebalanceViews.ownerBook);
+    expect(realizeFeeUsd(plan)).toBeCloseTo(102.39, 2);
+    expect(realizeImpactUsd(plan)).toBeCloseTo(18.88, 2);
+    expect(Math.abs(totalCostUsd(plan, route) - (102.39 + 18.88 + route.costUsd))).toBeLessThan(0.01);
+  });
+
+  it('total cost at $6M of book counts both Converts and both legs', () => {
+    const { plan, route } = pickedOf(rebalanceViews.ownerConvertSplit, 'repay');
+    expect(realizeFeeUsd(plan)).toBeCloseTo(1591.91 * 2 + 1911, 2);
+    expect(realizeImpactUsd(plan)).toBeCloseTo(557.87 + 557.86, 2);
+    expect(Math.abs(totalCostUsd(plan, route) - (5094.82 + 1115.73 + route.costUsd))).toBeLessThan(0.01);
+    expect(wholeDays(rebalanceViews.ownerConvertSplit, 'repay')).toBe(25);
+  });
+
+  it('a plan with no profit step costs the route alone', () => {
+    const { plan, route } = pickedOf(rebalanceViews.oneBorrow);
+    expect(realizeFeeUsd(plan)).toBe(0);
+    expect(realizeImpactUsd(plan)).toBe(0);
+    expect(totalCostUsd(plan, route)).toBe(route.costUsd);
+  });
+
+  it('payback days count step 1: 26 on the owner book, 57 with ETH up, 45 not worth it', () => {
+    expect(wholeDays(rebalanceViews.ownerBook)).toBe(26);
+    expect(wholeDays(rebalanceViews.ethUp)).toBe(57);
+    expect(wholeDays(rebalanceViews.notWorthIt, 'repay')).toBe(45);
+  });
+
+  it('the card verdict gives the same days as the modal', () => {
+    const { plan, route, buckets } = pickedOf(rebalanceViews.ethUp);
+    expect(worthLine(plan, route, buckets)).toEqual({
+      text: 'Not worth it yet.',
+      tone: 'warn',
+    });
+    const owner = pickedOf(rebalanceViews.ownerBook);
+    expect(worthLine(owner.plan, owner.route, owner.buckets)?.sub).toBe('The fee equals 26 days of the interest it saves.');
+  });
+
+  it('worth it at 30 days or less, not worth it yet above', () => {
+    const chip = (view: RebalanceView, goal: 'even' | 'repay' = 'even') => {
+      const { plan, route, buckets } = pickedOf(view, goal);
+      return worthChip(plan, route, buckets);
+    };
+    expect(chip(rebalanceViews.ownerBook)).toBe('worth');
+    expect(chip(rebalanceViews.ethUp)).toBe('notYet');
+    expect(chip(rebalanceViews.notWorthIt, 'repay')).toBe('notYet');
+    expect(chip(rebalanceViews.accountB)).toBeNull();
+  });
+
+  it('a route with no steps after step 1 still gets a verdict from step 1 alone', () => {
+    const { plan, route, buckets } = pickedOf(rebalanceViews.ownerBook);
+    const empty = { ...route, costUsd: 0, priceImpactUsd: 0, steps: [] };
+    expect(totalCostUsd(plan, empty)).toBeCloseTo(121.27, 2);
+    expect(Math.ceil(paybackDays(plan, empty, buckets) ?? Number.NaN)).toBe(25);
+    expect(worthChip(plan, empty, buckets)).toBe('worth');
+  });
+});
+
+describe('the fee cell', () => {
+  const rowText = (view: RebalanceView, route: 'loop' | 'convert') =>
+    render(<RouteRow route={route} plan={view.plans.even} checked={false} onPick={() => {}} />).container.textContent;
+
+  it('route rows show the total cost, then the fee and price impact under it', () => {
+    const plan = rebalanceViews.ownerBook.plans.even;
+    for (const route of ['loop', 'convert'] as const) {
+      const { feeUsd, impactUsd, totalUsd } = costPartsUsd(plan, plan.routes[route]!);
+      const row = rowText(rebalanceViews.ownerBook, route);
+      expect(feeUsd + impactUsd).toBeCloseTo(totalUsd, 6);
+      expect(row).toContain(fmtUsd(totalUsd));
+      expect(row).toContain(`Fee ${fmtUsd(feeUsd)} · Price impact ${fmtUsd(impactUsd)}`);
+    }
+    const flat = rebalanceViews.accountA.plans.even;
+    render(<RouteRow route="convert" plan={flat} checked={false} onPick={() => {}} />);
+    expect(screen.getByText(/Price impact \$0\.00/)).toBeInTheDocument();
   });
 });
 
@@ -381,5 +464,21 @@ describe('defaultGoal — the card leads with whatever is worth doing', () => {
     expect(defaultGoal({ ...view, plans: { ...view.plans, even: busy, repay: idle } })).toBe('even');
     // Nothing to do anywhere keeps the feature's own name.
     expect(defaultGoal({ ...view, plans: { ...view.plans, even: idle, repay: idle } })).toBe('even');
+  });
+});
+
+describe('Borrow info hover', () => {
+  it('shows the three canvas lines in order, and no wallet or route table', async () => {
+    const user = userEvent.setup();
+    render(<RebalanceInfo />);
+    const trigger = screen.getByRole('button', { name: 'Borrow' });
+    await user.hover(trigger);
+    const card = await screen.findByRole('tooltip');
+    expect([...card.querySelectorAll('p')].map((p) => p.textContent)).toEqual([
+      'A wallet below zero borrows from CrossEx and pays interest.',
+      'Reduce borrow opens Move cash. If cash is not enough, it opens Realize uPnL first.',
+      'Realize uPnL closes and reopens a leg in profit. Its uPnL becomes cash. Size and pair PnL unchanged, except fees.',
+    ]);
+    expect(card.querySelector('table')).toBeNull();
   });
 });

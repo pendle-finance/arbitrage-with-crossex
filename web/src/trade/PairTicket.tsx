@@ -1,40 +1,30 @@
-/**
- * Delta-neutral pair ticket: one coin, a LONG venue and a SHORT venue, one
- * notional-per-leg. Two execution modes:
- *  - "2 market orders": both legs MARKET opens (taker × 2), submitted concurrently.
- *  - "Limit + hedge": one leg rests post-only one bid–ask gap BEHIND the touch
- *    (maker fee) and the engine auto-fires market hedges on the other leg as it
- *    fills; the maker venue is auto-chosen to minimize total fees (no manual
- *    override).
- * Both legs run at their own venue's max leverage. Execute is inline hold-to-
- * confirm — no review modal — so the maker price stays live until t=submit.
- */
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAccount, usePositions, useSymbolDetail, useSymbolsByBase, useVenueBook } from '../api/queries';
-import type { ActionInput, PreviewResult, RestEstimate } from '../api/types';
+import type { ActionInput, DealRequest, PreviewResponse, RestEstimate } from '../api/types';
+import { MARKET_ORDER_SEC, OrdersGroup } from '../components/OrdersGroup';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { amountError } from '../lib/amount';
 import { sizeUnitForBase } from '../lib/boros';
-import { fieldValue, fmtUsd } from '../lib/fmt';
+import { formatRestPrice } from '../lib/ticks';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue } from '../lib/fmt';
+import { useDebounced } from '../lib/useDebounced';
 import { uuid } from '../lib/uuid';
+import type { DealOpts } from './deal';
 import { ExecuteControl } from './ExecuteControl';
-import { estimateMargin } from './previewBits';
-import {
-  AffixedInput,
-  MakerHedgeControls,
-  PairEstimate,
-  PairVenues,
-  type ExecMode,
-  storedExecMode,
-  type TimeoutChoice,
-} from './PairTicketBits';
-import { PairBookImpact } from './PriceImpactGraph';
+import { LimitPriceBox } from './LimitPriceBox';
+import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
+import { estimateMargin, pairModeFees } from './previewBits';
+import { AffixedInput, PairEstimate, PairVenues, type ExecMode, storedExecMode } from './PairTicketBits';
 import { CoinCombobox, FieldLabel } from './SymbolCombobox';
 import { useTradeFlowOptional } from './TradeFlow';
+import { TwapArea, twapControlOf, useTwapDefault, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
+import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 import { TRACKED_PRICE_TOLERANCE, withinTrackedDrift } from './trackedPriceDrift';
+
+type RepegBp = DealRequest['repegBehindBp'] & number;
 
 /** The default maker resting price: one bid–ask gap BEHIND the touch (BUY at
  * bid − gap, SELL at ask + gap). Both edges sit on the venue tick so the offset
@@ -51,7 +41,7 @@ function restOffsetPrice(rest: RestEstimate, isBuy: boolean): number {
 
 /** `onExecuted` fires once the pair is ACCEPTED (the 202 that opens the deal
  * view) — execution itself is asynchronous and tracked by the DealModal. */
-export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
+export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () => void; allowTwap?: boolean } = {}) {
   const { t } = useTranslation();
   const [base, setBase] = useState<string | null>(null);
   const [longSym, setLongSym] = useState<string | null>(null);
@@ -81,7 +71,10 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
   const [makerPriceStr, setMakerPriceStr] = useState('');
   /** True once the user typed a price — stop auto-tracking the touch. */
   const [pricePinned, setPricePinned] = useState(false);
-  const [timeoutSec, setTimeoutSec] = useState<TimeoutChoice>('300');
+  const [makerLeg, setMakerLeg] = useState<'auto' | 'a' | 'b'>('auto');
+  const taker = useTakerAfter();
+  const [repegBp, setRepegBp] = useState<RepegBp | null>(REPEG_DEFAULT_BP);
+  const twap = useTwapInput();
 
   /**
    * Follow the coin until the user says otherwise.
@@ -200,21 +193,12 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
   const levLong = longDetail.data?.leverageMax || undefined;
   const levShort = shortDetail.data?.leverageMax || undefined;
 
-  // Preview results are needed BELOW for the maker auto-choice; note the [long,
-  // short] positional order is preserved in BOTH modes so previews[0] is always
-  // the LONG leg. The chooser reads only per-venue fee RATES, which don't depend
-  // on the current mode/roles — so the choice can't oscillate with the preview.
-  const [previewLegs, setPreviewLegs] = useState<{ legLong?: PreviewResult; legShort?: PreviewResult }>({});
-
-  const makerLegPick = useMemo<'long' | 'short'>(() => {
-    const fl = previewLegs.legLong?.fees;
-    const fs = previewLegs.legShort?.fees;
-    if (!fl || !fs) return 'long';
-    // Total fee = maker on one venue + taker on the other; pick the cheaper combo.
-    const costMakerLong = fl.makerRate + fs.takerRate;
-    const costMakerShort = fs.makerRate + fl.takerRate;
-    return costMakerShort < costMakerLong - 1e-12 ? 'short' : 'long';
-  }, [previewLegs.legLong?.fees, previewLegs.legShort?.fees]);
+  const [autoPick, setAutoPick] = useState<PreviewResponse['makerLeg']>(null);
+  const pick: 'a' | 'b' = makerLeg !== 'auto' ? makerLeg : (autoPick?.auto ?? 'a');
+  const makerIsLong = pick === 'a';
+  const twapOn = allowTwap && mode === 'maker' && twap.on;
+  const pinned = pricePinned && !twapOn;
+  const takerSec = taker.sec;
 
   const actions = useMemo<ActionInput[] | null>(() => {
     if (!longSym || !shortSym || !notionalOk) return null;
@@ -230,8 +214,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
     // touch until pinned); the other leg is the engine-fired market hedge.
     // NOTE: pegToTouch is NOT set here (it would leak into the preview payload);
     // it is injected at CONFIRM in `decorate` below when the price is tracking.
-    const makerIsLong = makerLegPick === 'long';
-    const makerLeg: ActionInput = {
+    const makerAction: ActionInput = {
       kind: 'open-limit',
       symbol: makerIsLong ? longSym : shortSym,
       side: makerIsLong ? 'BUY' : 'SELL',
@@ -239,7 +222,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
       price: makerPriceStr,
       tif: 'POC',
       pairRole: 'maker',
-      makerTimeoutSec: Number(timeoutSec),
+      ...(takerSec !== null ? { makerTimeoutSec: takerSec } : {}),
       pairGroupId,
       ...(makerIsLong ? levL : levS),
     };
@@ -252,70 +235,79 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
       pairGroupId,
       ...(makerIsLong ? levS : levL),
     };
-    return makerIsLong ? [makerLeg, hedgeLeg] : [hedgeLeg, makerLeg];
+    return makerIsLong ? [makerAction, hedgeLeg] : [hedgeLeg, makerAction];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [longSym, shortSym, notionalOk, notionalStr, sizeUnit, levLong, levShort, pairGroupId, mode, makerLegPick, makerPriceStr, timeoutSec]);
+  }, [longSym, shortSym, notionalOk, notionalStr, sizeUnit, levLong, levShort, pairGroupId, mode, makerIsLong, makerPriceStr, takerSec]);
 
+  const twapJson = twapOn ? JSON.stringify(twap.input) : '';
+  const twapSettled = useDebounced(twapJson, 400) === twapJson;
   // The same tolerance ExecuteControl runs under, so the estimate card never
   // says "previewing…" beside an armed Execute while the maker price tracks.
   const preview = usePreviewDebounced('ticket-pair', actions, {
     debounceMs: 400,
     refetchInterval: 3_000,
     tolerate:
-      mode === 'maker' && !pricePinned
+      mode === 'maker' && !pinned
         ? (shown, current) => withinTrackedDrift(shown, current, TRACKED_PRICE_TOLERANCE)
         : undefined,
+    twap: twapOn ? twap.input : undefined,
   });
   const legLong = preview.previews?.[0];
   const legShort = preview.previews?.[1];
+  const previewData = preview.previews ? preview.data : undefined;
+  const twapWait = useTwapDefault(twap, notionalOk ? previewData && previewData.twapDefault : null, mode, allowTwap && mode === 'maker' && previewData !== undefined && !preview.isPlaceholderData);
+  const landedTwap = useRef<string | null>(null);
+  if (preview.data && !preview.isPlaceholderData && twapSettled) landedTwap.current = twapJson;
+  const twapFresh = twapOn && twapSettled && landedTwap.current === twapJson;
+  const twapPreview = twapOn ? (previewData?.twap ?? null) : null;
+  const twapPlan = twapFresh ? (twapPreview?.plan ?? null) : null;
+  const nextAutoPick = previewData?.makerLeg ?? null;
   useEffect(() => {
-    setPreviewLegs({ legLong, legShort });
-  }, [legLong, legShort]);
+    setAutoPick(nextAutoPick);
+  }, [nextAutoPick?.auto, nextAutoPick?.why]);
 
-  // Auto-track the maker price to ONE bid–ask gap BEHIND the venue's touch —
-  // a BUY rests at bid − (ask − bid), a SELL at ask + (ask − bid) — until the
-  // user pins a price (the engine's t=submit peg applies the same formula
-  // server-side). Fallback chain when the maker venue's book is unavailable:
-  // the maker leg's own mid (market-mode estimate) → the HEDGE leg's mid
-  // (cross-venue, within bps — a usable starting price beats an empty input
-  // that blocks the whole ticket).
-  const makerPreviewLeg = makerLegPick === 'long' ? legLong : legShort;
-  const hedgePreviewLeg = makerLegPick === 'long' ? legShort : legLong;
-  const makerSideIsBuy = makerLegPick === 'long';
-  const touchPx = makerPreviewLeg?.restEstimate
-    ? restOffsetPrice(makerPreviewLeg.restEstimate, makerSideIsBuy)
+  const takerBlocked = useTwapTakerAfter(taker, twapOn, twapPreview?.plan?.takerAfterSec ?? null);
+  const makerPreviewLeg = makerIsLong ? legLong : legShort;
+  const hedgePreviewLeg = makerIsLong ? legShort : legLong;
+  const rest = makerPreviewLeg?.restEstimate;
+  const touchPx = rest
+    ? repegBp !== null
+      ? makerIsLong
+        ? rest.bestBid
+        : rest.bestAsk
+      : restOffsetPrice(rest, makerIsLong)
     : (makerPreviewLeg?.fillEstimate?.midPrice ?? hedgePreviewLeg?.fillEstimate?.midPrice);
-  const touchIsFallback = Boolean(touchPx !== undefined && !makerPreviewLeg?.restEstimate);
+  const makerSym = makerIsLong ? longSym : shortSym;
+  const makerTick = (makerIsLong ? longDetail : shortDetail).data?.tickSize ?? makerPreviewLeg?.rule?.tickSize ?? null;
   useEffect(() => {
-    if (mode !== 'maker' || pricePinned) return;
-    if (Number.isFinite(touchPx) && (touchPx as number) > 0) setMakerPriceStr(String(touchPx));
-  }, [mode, pricePinned, touchPx]);
+    if (mode !== 'maker' || pinned) return;
+    if (!Number.isFinite(touchPx) || (touchPx as number) <= 0) return;
+    const px = touchPx as number;
+    setMakerPriceStr(makerSym && makerTick ? formatRestPrice(px, makerIsLong ? 'BUY' : 'SELL', makerSym, makerTick) : String(px));
+  }, [mode, pinned, touchPx, makerSym, makerTick, makerIsLong]);
 
   const estimating = preview.estimating;
 
-  // Maker-mode saving vs the all-taker open, from per-venue rates × notional.
-  const makerSaving = useMemo(() => {
+  const trackingMaker = mode === 'maker' && !pinned;
+  const dealOpts: DealOpts | undefined =
+    mode === 'maker' ? { makerLeg, repegBehindBp: repegBp, timeoutSec: takerSec } : undefined;
+  const twapControl = twapControlOf(twapOn, twapPlan, twapOn && twap.blockedBy(twapPreview));
+  const makerSaving = (() => {
     const fl = legLong?.fees;
     const fs = legShort?.fees;
-    if (!fl || !fs || !notionalOk) return null;
-    const allTaker = fl.takerRate + fs.takerRate;
-    const chosen = makerLegPick === 'long' ? fl.makerRate + fs.takerRate : fs.makerRate + fl.takerRate;
-    /**
-     * This is a DOLLAR saving, so it needs a dollar notional. When the box is
-     * in base units the preview's own resolved estNotional is the honest
-     * source — reusing the typed number would have reported "you save $0.4" on
-     * a 0.4 ETH order, wrong by the whole ETH price.
-     */
-    const usdNotional =
-      sizeUnit === 'usd' ? notionalNum : (legLong?.estNotional ?? legShort?.estNotional ?? null);
-    if (usdNotional === null || !Number.isFinite(usdNotional)) return null;
-    return (allTaker - chosen) * usdNotional;
-  }, [legLong?.fees, legShort?.fees, legLong?.estNotional, legShort?.estNotional, makerLegPick, notionalOk, notionalNum, sizeUnit]);
-
-  // Inject the engine-side peg ONLY at confirm and ONLY while auto-tracking: the
-  // maker rests at the fresh book-offset price computed at t=submit (same
-  // one-gap-behind-the-touch formula), not the client price.
-  const trackingMaker = mode === 'maker' && !pricePinned;
+    if (twapOn || mode !== 'maker' || !fl || !fs || !notionalOk) return null;
+    const chosen = makerIsLong ? fl.makerRate + fs.takerRate : fs.makerRate + fl.takerRate;
+    const usd = sizeUnit === 'usd' ? notionalNum : (legLong?.estNotional ?? legShort?.estNotional ?? null);
+    if (usd === null || !Number.isFinite(usd)) return null;
+    return (fl.takerRate + fs.takerRate - chosen) * usd;
+  })();
+  const legs =
+    longSym && shortSym
+      ? [
+          { name: prettyVenue(parseSymbol(longSym).exchange), side: 'LONG' as const },
+          { name: prettyVenue(parseSymbol(shortSym).exchange), side: 'SHORT' as const },
+        ]
+      : null;
   const decorate = (acts: ActionInput[]): ActionInput[] =>
     trackingMaker
       ? acts.map((a) => (a.kind === 'open-limit' && a.pairRole === 'maker' ? { ...a, pegToTouch: true } : a))
@@ -345,6 +337,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
     // The maker price belonged to the leg that just changed sides — resume
     // tracking the book, as a mode switch does.
     setPricePinned(false);
+    setMakerLeg('auto');
   };
 
   const leverageText =
@@ -366,6 +359,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
           ) : undefined
         }
         onSelect={(b) => {
+          if (b === base) return;
           setBase(b);
           setLongSym(null);
           setShortSym(null);
@@ -381,13 +375,8 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
           // coin; it does not survive the switch.
           setUnitPinned(false);
           setNotionalStr('');
-        }}
-        onClear={() => {
-          setBase(null);
-          setLongSym(null);
-          setShortSym(null);
-          setUnitPinned(false);
-          setNotionalStr('');
+          setPricePinned(false);
+          setMakerLeg('auto');
         }}
       />
 
@@ -458,40 +447,76 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         )}
       </div>
 
-      <div className="flex flex-col gap-1.5">
-        <FieldLabel>{t('pairTicket.pair.execution')}</FieldLabel>
-        <SegmentedToggle<ExecMode>
-          ariaLabel={t('pairTicket.pair.executionAria')}
-          fill
-          value={mode}
-          onChange={(m) => {
-            setMode(m);
-            setPricePinned(false);
-          }}
-          options={[
-            { value: 'market', label: t('pairTicket.pair.twoMarket') },
-            { value: 'maker', label: t('pairTicket.pair.limitHedge'), sub: t('pairTicket.pair.savesFees') },
-          ]}
-        />
-      </div>
+      <OrdersGroup
+        value={mode}
+        onChange={(m) => {
+          setMode(m);
+          setPricePinned(false);
+        }}
+        cost={pairModeFees([legLong, legShort], makerLeg !== 'auto' ? (makerLeg === 'a' ? 0 : 1) : autoPick ? (autoPick.auto === 'a' ? 0 : 1) : null, twapOn ? (previewData?.priceImpact?.slicedLegs ?? null) : null)}
+        seconds={{ maker: twapOn ? (twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : null) : takerSec, market: MARKET_ORDER_SEC }}
+        whole={{ maker: !twapOn, market: true }}
+      >
+        {mode === 'maker' && (
+          <MakerSettings
+            legs={legs}
+            symbols={longSym && shortSym ? [longSym, shortSym] : undefined}
+            makerLeg={makerLeg}
+            autoPick={autoPick ?? null}
+            saving={makerSaving}
+            onMakerLeg={setMakerLeg}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            takerCapSec={twapOn ? (twapPreview?.plan?.takerAfterSec ?? null) : null}
+            repegBehindBp={repegBp}
+            repegLocked={pinned}
+            onRepeg={(v) => setRepegBp(v === 2 || v === 5 || v === 10 ? v : null)}
+          />
+        )}
+        {mode === 'maker' && allowTwap && (
+          <TwapArea
+            on={twap.on}
+            onToggle={(on) => {
+              twap.setOn(on);
+              setPricePinned(false);
+            }}
+            input={twap.input}
+            onInput={twap.setInput}
+            preview={twapPreview}
+            impact={previewData?.priceImpact ?? null}
+            waiting={twapWait}
+            coin={base ?? ''}
+            lot={longDetail.data?.lotSize ?? shortDetail.data?.lotSize}
+          />
+        )}
+      </OrdersGroup>
 
       {mode === 'maker' && (
-        <MakerHedgeControls
-          makerLegPick={makerLegPick}
-          longSym={longSym}
-          shortSym={shortSym}
-          makerSaving={makerSaving}
-          priceStr={makerPriceStr}
-          pricePinned={pricePinned}
-          touchIsFallback={touchIsFallback}
-          onPriceInput={(v) => {
-            setMakerPriceStr(v);
-            setPricePinned(true);
-          }}
-          onTrackTouch={() => setPricePinned(false)}
-          timeoutSec={timeoutSec}
-          onTimeout={setTimeoutSec}
-        />
+        <>
+          {!twapOn && makerSym && (
+            <>
+            <LimitPriceBox
+              bookPrice={makerTick !== null && touchPx !== undefined ? String(touchPx) : null}
+              value={pinned ? makerPriceStr : null}
+              onChange={(price) => {
+                if (price === null) {
+                  setPricePinned(false);
+                  return;
+                }
+                setMakerPriceStr(price);
+                setPricePinned(true);
+              }}
+              tick={makerTick ?? ''}
+              unit={(makerSym && parseSymbol(makerSym).quote) || 'USDT'}
+            />
+            {!pinned && touchPx !== undefined && !rest && (
+              <span className="text-[11px] text-amber-400/90" title={t('pairTicket.bits.bookUnavailableHint')}>
+                {t('pairTicket.bits.bookUnavailable')}
+              </span>
+            )}
+            </>
+          )}
+        </>
       )}
 
       {actions && (
@@ -503,23 +528,10 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
           dataUpdatedAt={preview.dataUpdatedAt}
           legLong={legLong}
           legShort={legShort}
-          mode={mode}
           leverage={leverageText}
           marginRequired={marginRequired}
-          book={
-            <PairBookImpact
-              longSym={longSym}
-              shortSym={shortSym}
-              notional={notionalStr}
-              legLong={legLong}
-              legShort={legShort}
-              estimating={estimating}
-              mode={mode}
-              makerLegPick={makerLegPick}
-              makerPriceStr={makerPriceStr}
-              embedded
-            />
-          }
+          twapOn={twapOn}
+          typedQty={sizeUnit === 'base' ? notionalStr : null}
         />
       )}
 
@@ -533,7 +545,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
         tone="cyan"
         label={
             <>
-              {t('pairTicket.pair.execute')}
+              {twapOn ? t('trade.twap.area.start') : t('pairTicket.pair.execute')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -567,14 +579,23 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
           notionalStr,
           sizeUnit,
           mode,
-          makerLegPick,
-          timeoutSec,
-          pricePinned ? makerPriceStr : 'track',
+          makerLeg,
+          pick,
+          takerSec ?? 'never',
+          repegBp ?? 'off',
+          pinned ? makerPriceStr : 'track',
+          twapControl ? `${twapControl.plan.durationSec}/${twapControl.plan.slices}` : 'single',
         ].join('|')}
         // Block until BOTH venues' leverage caps are known (executing before they
         // load would open at the account's current leverage, not the venue max),
         // and, in maker mode, until the maker price has been tracked.
-        extraDisabled={(mode === 'maker' && !makerPriceStr) || levLong === undefined || levShort === undefined}
+        extraDisabled={
+          (mode === 'maker' && (!makerPriceStr || takerBlocked || twapWait)) ||
+                    levLong === undefined ||
+          levShort === undefined
+        }
+        dealOpts={dealOpts}
+        twap={twapControl}
         onExecuted={stageDone}
         detail={
           <div className="flex flex-col gap-0.5">
@@ -583,7 +604,7 @@ export function PairTicket({ onExecuted }: { onExecuted?: () => void } = {}) {
                 {t('pairTicket.pair.leverageDetail', { long: levLong, short: levShort })}
               </span>
             )}
-            {trackingMaker && <span>{t('pairTicket.pair.pegNote')}</span>}
+            {trackingMaker && repegBp !== null && <span>{t('pairTicket.pair.pegNote')}</span>}
           </div>
         }
       />

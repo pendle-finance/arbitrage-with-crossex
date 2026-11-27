@@ -2,18 +2,20 @@
  * controls, the estimate card (per-leg table, costs, leverage, margin) and
  * the shared row/affix primitives the single ticket reuses. Pure/prop-driven —
  * PairTicket owns all state and the preview query. */
-import { useMemo, useState, type ReactNode } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
-import type { PreviewResult, SymbolRule } from '../api/types';
+import { useMemo, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { BorosLegDirection, PreviewResult, SymbolRule } from '../api/types';
 import { Chip } from '../components/Chip';
+import { HoverCard } from '../components/HoverCard';
+import { ListPicker } from '../components/ListPicker';
+import { SwapButton } from '../components/SwapButton';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
-import { SegmentedToggle } from '../components/SegmentedToggle';
 import { OPPORTUNITIES_STORAGE_KEY, readJson } from '../lib/storage';
-import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, sig } from '../lib/fmt';
+import { bpsOf, fmtAge, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { estFeeOf, PreviewFallback, SlippageBadge, ViolationList } from './previewBits';
-import { FieldLabel } from './SymbolCombobox';
-import { BookOpen, ChevronDown, RotateCw } from 'lucide-react';
+import { fmtTradeCost } from './TicketEstimateBits';
+import { RotateCw } from 'lucide-react';
 
 export type ExecMode = 'market' | 'maker';
 
@@ -24,12 +26,6 @@ export function storedExecMode(): ExecMode {
     (p as { entryMode?: unknown } | null)?.entryMode === 'both-market' ? 'market' : 'maker',
   );
 }
-export const TIMEOUT_CHOICES = [
-  { value: '60', label: '1m' },
-  { value: '300', label: '5m' },
-  { value: '900', label: '15m' },
-] as const;
-export type TimeoutChoice = (typeof TIMEOUT_CHOICES)[number]['value'];
 
 function dedupeByMessage<T extends { message: string }>(list: T[]): T[] {
   return [...new Map(list.map((v) => [v.message, v])).values()];
@@ -89,6 +85,54 @@ export function StepBadge({ n }: { n: number }) {
   );
 }
 
+export function EstimateAge({
+  dataUpdatedAt,
+  estimating,
+  isError,
+}: {
+  dataUpdatedAt: number;
+  estimating: boolean;
+  isError: boolean;
+}) {
+  const { t } = useTranslation();
+  const now = useNow(1_000);
+  const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
+  return (
+    <span className="num text-[11px] text-ink-400">
+      {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('common.refreshing') : (
+        <>
+          <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
+        </>
+      )}
+    </span>
+  );
+}
+
+export function SummaryCard({
+  title,
+  sub,
+  aside,
+  children,
+}: {
+  title: string;
+  sub?: ReactNode;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-label={title} className="card flex flex-col gap-2 px-3.5 py-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-baseline gap-2">
+          <span className="text-[14px] font-semibold text-ink-50">{title}</span>
+          {sub && <span className="num text-[11px] text-ink-400">{sub}</span>}
+        </span>
+        {aside && <span className="flex items-center gap-2">{aside}</span>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 /** The estimate card's frame: an "ESTIMATE" caption, the preview's age, and
  * whatever the caller puts in the top-right (the pair's Book toggle). */
 export function EstimateCard({
@@ -116,8 +160,6 @@ export function EstimateCard({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const now = useNow(1_000);
-  const age = dataUpdatedAt > 0 ? fmtAge(now - dataUpdatedAt) : null;
   return (
     <div className="flex flex-col gap-2.5 card px-3.5 py-3">
       <div className="flex items-center justify-between gap-2">
@@ -138,13 +180,7 @@ export function EstimateCard({
           {sub && <span className="num text-[11px] text-ink-400">{sub}</span>}
         </span>
         <span className="flex items-center gap-2 text-[11px] text-ink-400">
-          <span className="num">
-            {isError ? t('pairTicket.bits.previewFailed') : estimating ? t('trade.execute.pricing') : (
-              <>
-                <RotateCw size={12} aria-hidden className="inline" /> {age !== null ? t('pairTicket.bits.ago', { age }) : '—'}
-              </>
-            )}
-          </span>
+          <EstimateAge dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={isError} />
           {aside}
         </span>
       </div>
@@ -204,6 +240,46 @@ export function LegCard({
  * button that reveals the tolerance editor (quick picks + a box). The same
  * shape on every close and ticket, whether the unit is % of price or APR.
  */
+export function SlippageCostHead({
+  name,
+  est,
+  max,
+  unit,
+  cost,
+  onToggle,
+  title,
+}: {
+  name: string;
+  est: string | null;
+  max: string;
+  unit?: string;
+  cost: string | null;
+  onToggle: () => void;
+  title?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-[12px] text-ink-200">
+        <HoverCard label={name} widthPx={240}>
+          <span className="num flex flex-col gap-0.5">
+            <span>{t('pairTicket.bits.est')} {est ?? '—'}</span>
+            <span>{t('pairTicket.bits.max')} {max}{unit ? ` ${unit}` : ''}</span>
+          </span>
+        </HoverCard>
+      </span>
+      <button
+        type="button"
+        className="num text-[12px] text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+        title={title ?? t('pairTicket.bits.changeTolerance')}
+        onClick={onToggle}
+      >
+        {cost ?? '—'}
+      </button>
+    </div>
+  );
+}
+
 export function SlippageLine({
   est,
   max,
@@ -216,11 +292,14 @@ export function SlippageLine({
   invalidText,
   inputAriaLabel,
   title,
+  label,
   hint,
+  cost,
   quick = ['0.2', '0.4', '1', '2'],
 }: {
   /** The estimated give-up, already formatted; null while unknown. */
   est: string | null;
+  cost?: string | null;
   /** The bound, already formatted (what the button shows). */
   max: string;
   /** Trailing unit word after the bound, e.g. "APR"; omitted for % of price. */
@@ -234,34 +313,42 @@ export function SlippageLine({
   invalidText: string;
   inputAriaLabel: string;
   title?: string;
+  label?: string;
   /** The editor's explanatory line. */
   hint: string;
   quick?: string[];
 }) {
   const { t } = useTranslation();
+  const name = label ?? t('pairTicket.bits.slippage');
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[12px] text-ink-200" title={title}>
-          {t('pairTicket.bits.slippage')}
-        </span>
-        <span className="num text-[12px] text-ink-400">
-          {t('pairTicket.bits.est')} <span className="text-ink-50">{est ?? '—'}</span>
-          {' / '}{t('pairTicket.bits.max')}{' '}
-          <button
-            type="button"
-            className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
-            title={t('pairTicket.bits.changeTolerance')}
-            onClick={onToggle}
-          >
-            {max}
-          </button>
-          {unit ? ` ${unit}` : ''}
-        </span>
-      </div>
+      {cost !== undefined ? (
+        <SlippageCostHead name={name} est={est} max={max} unit={unit} cost={cost} onToggle={onToggle} />
+      ) : (
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-[12px] text-ink-200" title={title}>
+            {name}
+          </span>
+          <span className="num text-[12px] text-ink-400">
+            {t('pairTicket.bits.est')} <span className="text-ink-50">{est ?? '—'}</span>
+            {' / '}{t('pairTicket.bits.max')}{' '}
+            <button
+              type="button"
+              className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
+              title={t('pairTicket.bits.changeTolerance')}
+              onClick={onToggle}
+            >
+              {max}
+            </button>
+            {unit ? ` ${unit}` : ''}
+          </span>
+        </div>
+      )}
       {open && (
         <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
-          <span className="text-[10.5px] leading-relaxed text-ink-400">{hint}</span>
+          <span className="text-[10.5px] leading-relaxed text-ink-400">
+            <span className="text-ink-200">{t('pairTicket.bits.thisTradeOnly')}</span> {hint}
+          </span>
           <div className="flex items-center gap-1.5">
             {quick.map((q) => (
               <button
@@ -295,7 +382,7 @@ export function LeverageValue({ text }: { text: string | null }) {
   const { t } = useTranslation();
   return text ? (
     <>
-      {text} <span className="text-[11px] font-normal text-ink-400">{t('pairTicket.bits.venueMax')}</span>
+      {text} <span className="text-[11px] font-normal text-ink-400">· {t('pairTicket.bits.venueMax')}</span>
     </>
   ) : (
     '—'
@@ -307,15 +394,62 @@ export function LeverageValue({ text }: { text: string | null }) {
 // ---------------------------------------------------------------------------
 
 /** LONG or SHORT venue as a dropdown — the other leg's venue is disabled. */
-function VenueSelect({
+export function LegHeader({
+  dir,
+  caption,
+  onDir,
+  hints,
+}: {
+  dir: BorosLegDirection;
+  caption: string;
+  onDir?: (d: BorosLegDirection) => void;
+  hints?: Record<BorosLegDirection, string>;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span className="flex items-center gap-2">
+        <Chip sm tone={dir === 'long' ? 'green' : 'red'} className="font-semibold">
+          {t(dir === 'long' ? 'common.longUpper' : 'common.shortUpper')}
+        </Chip>
+        <span className="text-[12px] font-normal text-ink-300">{caption}</span>
+      </span>
+      {onDir && (
+        <div className="seg seg-xs inline-flex" role="radiogroup" aria-label={t('common.side')}>
+          {(['long', 'short'] as const).map((d) => {
+            const active = dir === d;
+            return (
+              <button
+                key={d}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-active={active}
+                className={`seg-btn text-center ${active ? (d === 'long' ? '!bg-emerald-500/15 !text-emerald-300' : '!bg-rose-500/15 !text-rose-300') : ''}`}
+                title={hints?.[d]}
+                onClick={() => onDir(d)}
+              >
+                {t(d === 'long' ? 'common.longAction' : 'common.shortAction')}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function VenueSelect({
   tone,
+  onTone,
   value,
   otherValue,
   onPick,
   venues,
   loading,
 }: {
-  tone: 'long' | 'short';
+  tone: BorosLegDirection;
+  onTone?: (tone: BorosLegDirection) => void;
   value: string | null;
   otherValue: string | null;
   onPick: (s: string) => void;
@@ -324,37 +458,29 @@ function VenueSelect({
 }) {
   const otherVenue = otherValue ? parseSymbol(otherValue).exchange : null;
   const long = tone === 'long';
+  const none = !loading && (venues ?? []).length === 0;
   const { t } = useTranslation();
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
-      <div className="flex items-center gap-2">
-        <Chip sm tone={long ? 'green' : 'red'} className="font-semibold">
-          {t(long ? 'common.longUpper' : 'common.shortUpper')}
-        </Chip>
-        <span className="text-[12px] font-normal text-ink-300">
-          {t(long ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
-        </span>
-      </div>
-      <div className="relative">
-        <select
-          aria-label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
-          className="select"
-          value={value ?? ''}
-          onChange={(e) => onPick(e.target.value)}
-        >
-          <option value="">{loading ? t('trade.symbol.loadingVenues') : t('pairTicket.bits.selectVenue')}</option>
-          {(venues ?? []).map((r) => (
-            <option key={r.symbol} value={r.symbol} disabled={r.exchange === otherVenue}>
-              {prettyVenue(r.exchange)}
-              {r.quote !== 'USDT' ? ` · ${r.quote}` : ''}
-              {r.exchange === otherVenue ? ` (${t(long ? 'pairTicket.bits.shortVenue' : 'pairTicket.bits.longVenue')})` : ''}
-            </option>
-          ))}
-        </select>
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
-          <ChevronDown size={14} aria-hidden />
-        </span>
-      </div>
+      <LegHeader
+        dir={tone}
+        caption={t(long ? 'pairTicket.bits.paysFunding' : 'pairTicket.bits.receivesFunding')}
+        onDir={onTone}
+      />
+      <ListPicker
+        label={t(long ? 'pairTicket.bits.longVenue' : 'pairTicket.bits.shortVenue')}
+        value={value ?? ''}
+        onChange={onPick}
+        disabled={none}
+        placeholder={loading ? t('trade.symbol.loadingVenues') : none ? t('trade.symbol.pickCoin') : t('pairTicket.bits.selectVenue')}
+        rows={(venues ?? []).map((r) => ({
+          key: r.symbol,
+          icon: <VenueIcon venue={r.exchange} size={16} />,
+          name: `${prettyVenue(r.exchange)}${r.quote !== 'USDT' ? ` · ${r.quote}` : ''}`,
+          value: r.exchange === otherVenue ? t(long ? 'pairTicket.bits.shortVenue' : 'pairTicket.bits.longVenue') : undefined,
+          disabled: r.exchange === otherVenue,
+        }))}
+      />
     </div>
   );
 }
@@ -381,166 +507,40 @@ export function PairVenues({
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-end gap-2">
       <VenueSelect tone="long" value={longSym} otherValue={shortSym} onPick={onLong} venues={venues} loading={loading} />
-      <button
-        type="button"
-        aria-label={t('pairTicket.bits.swapVenues')}
-        title={t('pairTicket.bits.swapVenuesHint')}
-        disabled={!longSym && !shortSym}
-        onClick={onSwap}
-        className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        ⇄
-      </button>
+      <SwapButton label={t('pairTicket.bits.swapVenues')} title={t('pairTicket.bits.swapVenuesHint')} disabled={!longSym && !shortSym} onClick={onSwap} />
       <VenueSelect tone="short" value={shortSym} otherValue={longSym} onPick={onShort} venues={venues} loading={loading} />
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Maker-hedge controls
-// ---------------------------------------------------------------------------
-
-/** Maker-hedge controls: the auto-chosen maker leg (fee-minimizing, no
- * manual override), the touch-tracking price input, and the convert-to-taker
- * timeout. Flat in the form — they are fields of the ticket, not an aside. */
-export function MakerHedgeControls({
-  makerLegPick,
-  longSym,
-  shortSym,
-  makerSaving,
-  priceStr,
-  pricePinned,
-  touchIsFallback,
-  onPriceInput,
-  onTrackTouch,
-  timeoutSec,
-  onTimeout,
-}: {
-  makerLegPick: 'long' | 'short';
-  longSym: string | null;
-  shortSym: string | null;
-  /** Open-fee saving vs both legs taker (null while fees are unknown). */
-  makerSaving: number | null;
-  priceStr: string;
-  pricePinned: boolean;
-  touchIsFallback: boolean;
-  /** User typed a price — pin it. */
-  onPriceInput: (v: string) => void;
-  /** Un-pin and resume tracking the book (one gap behind the touch). */
-  onTrackTouch: () => void;
-  timeoutSec: TimeoutChoice;
-  onTimeout: (v: TimeoutChoice) => void;
-}) {
-  const { t } = useTranslation();
-  const makerSym = makerLegPick === 'long' ? longSym : shortSym;
-  const makerVenue = makerSym ? parseSymbol(makerSym).exchange : t(makerLegPick === 'long' ? 'common.longUpper' : 'common.shortUpper');
-  const makerQuote = makerSym ? parseSymbol(makerSym).quote || 'USDT' : 'USDT';
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2" data-maker-panel>
-        <span className="flex items-center gap-2 text-[11.5px]">
-          <span className="text-ink-200">{t('pairTicket.bits.makerLeg')}</span>
-          <Chip sm tone="cyan">
-            {makerVenue}
-          </Chip>
-          <span className="text-ink-400" title={t('pairTicket.bits.autoHint')}>
-            {t('pairTicket.bits.auto')}
-          </span>
-        </span>
-        {makerSaving !== null && makerSaving > 0 && (
-          <span className="text-[11px] text-ink-400" title={t('pairTicket.bits.savingHint')}>
-            <Trans
-              i18nKey="pairTicket.bits.saving"
-              values={{ amount: sig(makerSaving) }}
-              components={{ g: <span className="num text-emerald-400" /> }}
-            />
-          </span>
-        )}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-2">
-          <FieldLabel htmlFor="pair-maker-price">{t('pairTicket.bits.makerPrice')}</FieldLabel>
-          <span
-            className="text-[11px] text-ink-400"
-            title={t('pairTicket.bits.makerPriceHint')}
-          >
-            {pricePinned ? (
-              <>
-                {t('pairTicket.bits.pinned')}{' '}
-                <button type="button" className="underline underline-offset-2 hover:text-ink-100" onClick={onTrackTouch}>
-                  {t('pairTicket.bits.trackBook')}
-                </button>
-              </>
-            ) : (
-              t('pairTicket.bits.tracking')
-            )}
-            {!pricePinned && touchIsFallback && (
-              <span
-                className="ml-1 text-amber-400/90"
-                title={t('pairTicket.bits.bookUnavailableHint')}
-              >
-                {t('pairTicket.bits.bookUnavailable')}
-              </span>
-            )}
-          </span>
-        </div>
-        <AffixedInput affix={<span>{makerQuote}</span>}>
-          <input
-            id="pair-maker-price"
-            className="input num pr-14"
-            inputMode="decimal"
-            placeholder={t('pairTicket.bits.fetchingTouch')}
-            value={priceStr}
-            onChange={(e) => onPriceInput(e.target.value)}
-          />
-        </AffixedInput>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <FieldLabel>
-          <span title={t('pairTicket.bits.convertHint')}>
-            {t('pairTicket.bits.convertAfter')}
-          </span>
-        </FieldLabel>
-        <SegmentedToggle
-          ariaLabel={t('pairTicket.bits.convertAfter')}
-          fill
-          value={timeoutSec}
-          onChange={onTimeout}
-          options={TIMEOUT_CHOICES.map((c) => ({ value: c.value, label: t('pairTicket.bits.minutes', { n: Number(c.value) / 60 }) }))}
-        />
-      </div>
-    </div>
-  );
+function isMakerLeg(p: PreviewResult): boolean {
+  return 'pairRole' in p.input && p.input.pairRole === 'maker';
 }
 
-// ---------------------------------------------------------------------------
-// Estimate card
-// ---------------------------------------------------------------------------
-
-/** One leg of the estimate table: venue chip (+ maker), est price, slippage, est fee. */
-function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: PreviewResult | undefined }) {
+function LegRow({ side, p, rests }: { side: 'LONG' | 'SHORT'; p: PreviewResult | undefined; rests?: boolean }) {
   const { t } = useTranslation();
   if (!p) return null;
-  const isMaker = 'pairRole' in p.input && p.input.pairRole === 'maker';
+  const isMaker = rests ?? isMakerLeg(p);
+  const venue = parseSymbol(p.symbol).exchange;
   return (
     <>
       <tr className="border-t border-ink-800/80">
         <td className="py-1.5">
-          <span className="inline-flex items-center gap-1.5">
-            <VenueIcon venue={parseSymbol(p.symbol).exchange} size={16} />
-            <Chip sm tone={tone} className="font-semibold">
-              {parseSymbol(p.symbol).exchange}
+          <span className="inline-flex items-center gap-1.5 text-[12.5px] text-ink-50">
+            <Chip sm tone={side === 'LONG' ? 'green' : 'red'} className="font-semibold">
+              {t(side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
             </Chip>
+            <VenueIcon venue={venue} size={16} />
+            {prettyVenue(venue)}
             {isMaker && (
               <Chip sm tone="cyan" title={t('pairTicket.bits.makerChipHint')}>
                 {t('pairTicket.bits.maker')}
               </Chip>
             )}
-            <span className="text-[11px] text-ink-400">{label}</span>
           </span>
         </td>
         <td className="num py-1.5 text-right text-[12.5px] text-ink-50">
-          {p.fillEstimate ? sig(p.fillEstimate.avgPrice) : isMaker && p.price ? sig(p.price) : '—'}
+          {p.fillEstimate ? sigGrouped(p.fillEstimate.avgPrice) : isMaker && p.price ? sigGrouped(p.price) : '—'}
         </td>
         <td className="num py-1.5 text-right text-[12px] text-ink-300">
           {p.fillEstimate ? <SlippageBadge est={p.fillEstimate} /> : isMaker ? t('pairTicket.bits.rests') : '—'}
@@ -548,7 +548,7 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
         <td className="num py-1.5 text-right text-[12px] text-ink-50">
           {p.fees ? (
             <>
-              {sig(estFeeOf(p))} <span className="text-[10.5px] text-ink-400">{p.fees.quote}</span>
+              {sigGrouped(estFeeOf(p))} <span className="text-[10.5px] text-ink-400">{p.fees.quote}</span>
             </>
           ) : (
             '—'
@@ -569,6 +569,27 @@ function LegRow({ label, tone, p }: { label: string; tone: 'green' | 'red'; p: P
   );
 }
 
+export function LegTable({ rows }: { rows: { side: 'LONG' | 'SHORT'; p: PreviewResult | undefined; rests?: boolean }[] }) {
+  const { t } = useTranslation();
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-[12px] font-normal text-ink-300">
+          <th className="pb-1 text-left font-normal">{t('pairTicket.bits.colLeg')}</th>
+          <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colPrice')}</th>
+          <th className="pb-1 text-right font-normal">{t('pairTicket.bits.colSlip')}</th>
+          <th className="pb-1 text-right font-normal">{t('pairTicket.preview.estFee')}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <LegRow key={row.side} side={row.side} p={row.p} rests={row.rests} />
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 /** The pair's estimate card: trade cost headline, the book graph (toggled),
  * the per-leg table, shared qty + lot binding, net entry spread, leverage,
  * margin, and violations/warnings. Derives its summary numbers from the two
@@ -581,10 +602,10 @@ export function PairEstimate({
   dataUpdatedAt,
   legLong,
   legShort,
-  mode,
   leverage,
   marginRequired,
-  book,
+  twapOn = false,
+  typedQty = null,
 }: {
   previews: PreviewResult[] | undefined;
   isError: boolean;
@@ -593,17 +614,17 @@ export function PairEstimate({
   dataUpdatedAt: number;
   legLong: PreviewResult | undefined;
   legShort: PreviewResult | undefined;
-  mode: ExecMode;
   /** "10x long / 50x short" once both caps are known; null while loading. */
   leverage: string | null;
   /** Total initial margin the two legs post, in USD; null while unknown. */
   marginRequired: number | null;
-  /** The book + market-impact graph (already sized to this ticket). */
-  book: ReactNode;
+  twapOn?: boolean;
+  typedQty?: string | null;
 }) {
   const { t } = useTranslation();
-  const [showBook, setShowBook] = useState(true);
   const sharedQty = legLong?.qty || legShort?.qty || '';
+  const rounded = typedQty !== null && Number(typedQty) !== Number(sharedQty);
+  const showQty = sharedQty !== '' && (typedQty === null || rounded);
   const base = legLong ? parseSymbol(legLong.symbol).base : legShort ? parseSymbol(legShort.symbol).base : '';
   const binding = useMemo(() => {
     if (!legLong?.rule || !legShort?.rule) return null;
@@ -623,76 +644,64 @@ export function PairEstimate({
       ? bpsOf((legLong.fillEstimate.avgPrice - legShort.fillEstimate.avgPrice) / refPx)
       : null;
 
+  const fold = previews ? null : (
+    <div className="text-[11px]">
+      <PreviewFallback isError={isError} error={error} />
+    </div>
+  );
+
   return (
-    <EstimateCard
-      dataUpdatedAt={dataUpdatedAt}
-      estimating={estimating}
-      isError={isError}
-      aside={
-        <button
-          type="button"
-          aria-pressed={showBook}
-          onClick={() => setShowBook((v) => !v)}
-          title={t('pairTicket.bits.bookHint')}
-          className={`btn-ghost-xs ${
-            showBook
-              ? '!border-info/50 bg-info/[0.14] !text-pastel-blue'
-              : ''
-          }`}
-        >
-          <BookOpen size={12} aria-hidden /> {t('pairTicket.bits.book')}
-        </button>
-      }
-    >
-      {previews ? (
-        <>
-          <div className="flex items-end justify-between gap-3">
-            <div className="flex flex-col">
-              <span className="text-[12.5px] text-ink-50">{t('pairTicket.bits.tradeCost')}</span>
-              <span className="text-[11px] text-ink-400">
-                {mode === 'maker' ? t('pairTicket.bits.openMakerTaker') : t('pairTicket.bits.openTakerTwice')}
-              </span>
-            </div>
-            <span className="num text-lg font-semibold text-ink-50">
-              {tradeCost !== null ? `≈ ${sig(tradeCost)} USDT` : '—'}
-            </span>
-          </div>
+    <>
+      <SummaryCard
+        title={t('accounts.moveCash.cost')}
+        sub={twapOn ? t('trade.twap.area.wholeRun') : undefined}
+        aside={<EstimateAge dataUpdatedAt={dataUpdatedAt} estimating={estimating} isError={isError} />}
+      >
+        {previews ? (
+          <>
+            <LegTable
+              rows={[
+                { side: 'LONG', p: legLong },
+                { side: 'SHORT', p: legShort },
+              ]}
+            />
 
-          {showBook && <div className="pt-1">{book}</div>}
-
-          <table className="w-full">
-            <thead>
-              <tr className="text-[12px] font-normal text-ink-300">
-                <th className="pb-1 text-left">{t('pairTicket.bits.colLeg')}</th>
-                <th className="pb-1 text-right">{t('pairTicket.bits.colPrice')}</th>
-                <th className="pb-1 text-right">{t('pairTicket.bits.colSlip')}</th>
-                <th className="pb-1 text-right">{t('pairTicket.preview.estFee')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <LegRow label={t('common.long')} tone="green" p={legLong} />
-              <LegRow label={t('common.short')} tone="red" p={legShort} />
-            </tbody>
-          </table>
-
-          <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
-            {sharedQty && (
-              <EstimateRow
-                label={t('pairTicket.bits.sharedQty')}
-                sub={binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
-                value={`${sig(sharedQty)}${base ? ` ${base}` : ''}`}
-              />
-            )}
             {spreadBps !== null && (
               <EstimateRow
-                label={t('pairTicket.bits.netSpread')}
-                sub={t('pairTicket.bits.netSpreadSub')}
+                label={
+                  <HoverCard label={t('pairTicket.bits.netSpread')} widthPx={240}>
+                    {t('pairTicket.bits.netSpreadSub')}
+                  </HoverCard>
+                }
                 value={
                   <span className={spreadBps <= 0 ? 'text-emerald-400' : 'text-rose-400'}>{spreadBps.toFixed(1)} bps</span>
                 }
               />
             )}
-            <EstimateRow label={t('pairTicket.bits.leverage')} value={<LeverageValue text={leverage} />} />
+            <div className="mt-0.5 border-t border-ink-800 pt-1.5">
+              <EstimateRow
+                label={t('pairTicket.bits.tradeCost')}
+                value={fmtTradeCost(tradeCost)}
+                strong
+              />
+            </div>
+          </>
+        ) : (
+          fold
+        )}
+      </SummaryCard>
+
+      {previews && (
+        <SummaryCard title={t('accounts.moveCash.after')}>
+          {showQty && (
+            <EstimateRow
+              label={t('pairTicket.bits.sharedQty')}
+              sub={rounded && binding ? t('pairTicket.bits.lotBound', { venue: binding.exchange, lot: binding.lot }) : undefined}
+              value={`${qtyGrouped(sharedQty)}${base ? ` ${base}` : ''}`}
+            />
+          )}
+          <EstimateRow label={t('pairTicket.bits.leverage')} value={<LeverageValue text={leverage} />} />
+          <div className="mt-0.5 border-t border-ink-800 pt-1.5">
             <EstimateRow
               label={t('pairTicket.bits.marginRequired')}
               title={t('pairTicket.bits.marginRequiredHint')}
@@ -700,17 +709,16 @@ export function PairEstimate({
               strong
             />
           </div>
-          <ViolationList
-            violations={dedupeByMessage([...(legLong?.violations ?? []), ...(legShort?.violations ?? [])])}
-            warnings={[...new Set([...(legLong?.warnings ?? []), ...(legShort?.warnings ?? [])])]}
-          />
-        </>
-      ) : (
-        <div className="text-[11px]">
-          <PreviewFallback isError={isError} error={error} />
-        </div>
+        </SummaryCard>
       )}
-    </EstimateCard>
+
+      {previews && (
+        <ViolationList
+          violations={dedupeByMessage([...(legLong?.violations ?? []), ...(legShort?.violations ?? [])])}
+          warnings={[...new Set([...(legLong?.warnings ?? []), ...(legShort?.warnings ?? [])])]}
+        />
+      )}
+    </>
   );
 }
 

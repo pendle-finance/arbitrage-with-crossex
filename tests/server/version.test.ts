@@ -92,8 +92,99 @@ describe('GET /api/version', () => {
       latestCommit: MAIN_SHA,
       updateAvailable: true,
       highlights: ['a', 'b'],
+      checkOn: true,
+      freshRead: null,
     });
     expect(calls).toEqual([VERSION_URL, COMMIT_URL]);
+  });
+
+  it('?fresh=1 skips the cached read, at most once in 5 minutes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const calls: string[] = [];
+      let remote = '1.0.0';
+      const fetchImpl: FetchLike = async (url) => stub({ version: remote, highlights: [] }, { calls })(url);
+      app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: fetchImpl });
+      const fresh = () => app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST });
+
+      expect((await get()).json().data.updateAvailable).toBe(false);
+      remote = '1.1.0';
+      // The plain read keeps the cached answer.
+      expect((await get()).json().data.updateAvailable).toBe(false);
+      expect(calls).toHaveLength(2);
+
+      const found = (await fresh()).json().data;
+      expect(found.updateAvailable).toBe(true);
+      expect(found.latest).toBe('1.1.0');
+      expect(found.freshRead).toBe('ok');
+      expect(calls).toHaveLength(4);
+
+      // A second press inside 5 minutes answers from the new cache.
+      vi.setSystemTime(Date.now() + 4 * 60_000);
+      expect((await fresh()).json().data.freshRead).toBe('skipped');
+      expect(calls).toHaveLength(4);
+      vi.setSystemTime(Date.now() + 61_000);
+      await fresh();
+      expect(calls).toHaveLength(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a failed ?fresh=1 read keeps the last good answer', async () => {
+    let down = false;
+    const fetchImpl: FetchLike = async (url) =>
+      stub({ version: '1.1.0', highlights: ['a'] }, { reject: down })(url);
+    app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: fetchImpl });
+
+    expect((await get()).json().data.updateAvailable).toBe(true);
+    down = true;
+    const failed = (await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data;
+    expect(failed.freshRead).toBe('failed');
+    expect(failed.updateAvailable).toBe(true);
+    expect(failed.latest).toBe('1.1.0');
+    // The next plain read still has it.
+    expect((await get()).json().data.updateAvailable).toBe(true);
+  });
+
+  it('a plain read beside a failing ?fresh=1 read still answers 200', async () => {
+    app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: stub(null, { reject: true }) });
+    const [forced, plain] = await Promise.all([
+      app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST }),
+      get(),
+    ]);
+    expect(forced.statusCode).toBe(200);
+    expect(forced.json().data.freshRead).toBe('failed');
+    expect(plain.statusCode).toBe(200);
+    // A failed press does not start the 5-minute wait.
+    expect((await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data.freshRead).toBe('failed');
+  });
+
+  it('a failed press reads GitHub once and leaves nothing cached', async () => {
+    const calls: string[] = [];
+    let down = true;
+    const fetchImpl: FetchLike = async (url) =>
+      stub({ version: '1.1.0', highlights: [] }, { calls, reject: down })(url);
+    app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: fetchImpl });
+    const failed = (await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data;
+    expect(failed.freshRead).toBe('failed');
+    expect(failed.latest).toBeNull();
+    expect(calls).toHaveLength(1);
+    // GitHub is back: the next plain read reads it rather than a cached null.
+    down = false;
+    expect((await get()).json().data.updateAvailable).toBe(true);
+  });
+
+  it('two presses at once read GitHub once', async () => {
+    const calls: string[] = [];
+    app = makeTestApp({
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { calls }),
+    });
+    const press = () => app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST });
+    const [a, b] = await Promise.all([press(), press()]);
+    expect([a.json().data.freshRead, b.json().data.freshRead]).toEqual(['ok', 'ok']);
+    expect(calls.filter((u) => u === COMMIT_URL)).toHaveLength(1);
   });
 
   it('equal versions: no update, no highlights', async () => {
@@ -128,6 +219,8 @@ describe('GET /api/version', () => {
       latestCommit: null,
       updateAvailable: false,
       highlights: [],
+      checkOn: true,
+      freshRead: null,
     });
   });
 
@@ -173,6 +266,7 @@ describe('GET /api/version', () => {
       versionFetch: stub({ version: '9.9.9', highlights: [] }, { calls }),
     });
     const { data } = (await get()).json();
+    const pressed = (await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data;
     expect(calls).toHaveLength(0);
     expect(data).toEqual({
       current: '1.0.0',
@@ -181,7 +275,10 @@ describe('GET /api/version', () => {
       latestCommit: null,
       updateAvailable: false,
       highlights: [],
+      checkOn: false,
+      freshRead: null,
     });
+    expect(pressed).toEqual(data);
   });
 
   it('an unknown local version (the makeTestApp default) is network-free too', async () => {
@@ -345,6 +442,10 @@ describe('POST /api/version/update', () => {
       hedgeRejectStreak: 0,
       maxClip: null,
       clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: null,
       haltReason: null,
       reportJson: null,
       createdAt: Date.now(),

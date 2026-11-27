@@ -1,6 +1,6 @@
 import { ChevronRight, Wallet } from 'lucide-react';
 import { AccountsOverview } from './accounts/AccountsUi';
-import { useRef, useState, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAccount, useTransfer } from '../api/queries';
 import type { CrossexAsset, GateAccount, SpotBalance, TransferCoin } from '../api/types';
@@ -19,6 +19,7 @@ import { RebalanceSection } from './RebalanceSection';
 import { NoSpotReadHow } from './TransferBits';
 import { TransferSection } from './TransferSection';
 import type { TransferPick } from './TransferModal';
+import { useTransferPickTarget } from './rebalanceOpener';
 
 type AssetRow =
   | { kind: 'crossex'; asset: CrossexAsset }
@@ -123,6 +124,11 @@ export function BalancesPanel() {
   const spot = useTransfer().data?.spot;
   const [pick, setPick] = useState<TransferPick | null>(null);
   const assetsSection = useRef<HTMLElement>(null);
+  const openTransfer = useCallback((coin: TransferCoin, wallet: GateAccount) => {
+    setPick((prev) => ({ coin, wallet, nonce: (prev?.nonce ?? 0) + 1 }));
+    assetsSection.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+  useTransferPickTarget(openTransfer);
 
   if (isPending) {
     return (
@@ -141,11 +147,6 @@ export function BalancesPanel() {
     .filter((a) => Number(a.equity) !== 0 || Number(a.balance) !== 0 || Number(a.upnl) !== 0)
     .map((asset): AssetRow => ({ kind: 'crossex', asset }));
   const rows = assets.length === 0 && spot === null ? [] : [...assets, ...spotRows(spot)];
-
-  const openTransfer = (coin: TransferCoin, wallet: GateAccount) => {
-    setPick((prev) => ({ coin, wallet, nonce: (prev?.nonce ?? 0) + 1 }));
-    assetsSection.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  };
 
   return (
     <div className="flex flex-col gap-6" data-testid="balances-tabpanel">
@@ -166,7 +167,7 @@ export function BalancesPanel() {
           />
           {assets.length === 0 && spot === null && <NoSpotReadRow />}
         </div>
-        <RebalanceSection onTransfer={openTransfer} actions={<TransferSection pick={pick} />} />
+        <RebalanceSection actions={<TransferSection pick={pick} />} />
       </section>
     </div>
   );

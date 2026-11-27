@@ -1,22 +1,19 @@
-import { Info, TriangleAlert } from 'lucide-react';
-import { useId, type ReactNode } from 'react';
-import type { PlannedStep, Pool, RebalanceJob, RebalanceStep, RouteName, RoutePlan } from '../api/types';
-import { ChartTooltip } from '../components/ChartTooltip';
-import { SignedNumber } from '../components/SignedNumber';
-import { microLabelClass } from '../components/Th';
-import { fmtAbout, fmtAge, num } from '../lib/fmt';
-import { t } from '../i18n';
-import { hoverCash, hoverTarget, hoverUpnl, LEG_TEXT, MOVE_TEXT } from './rebalanceCopy';
-
-const HOVER_WIDTH_PX = 268;
+import { ArrowRight, Check, Info, TriangleAlert } from 'lucide-react';
+import type { ReactNode } from 'react';
+import type { RouteName } from '../api/types';
+import { TokenIcon } from '../components/AssetIcon';
+import { Spinner } from '../components/Spinner';
+import { num, parseSymbol } from '../lib/fmt';
 
 /** Severity of a rebalance verdict — see `VerdictTone` in RebalanceHovers. */
 const VERDICT_STYLE = {
   info: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Info size={14} aria-hidden className="block" />, sr: null },
+  recommend: { box: 'alert-blue', text: 'text-pastel-blue', icon: <Check size={14} aria-hidden className="block" />, sr: null },
   // The glyph is decorative (aria-hidden), so the level reaches a screen
   // reader as a word instead. `info` needs none: a neutral note reads fine
   // without a prefix, and "Note:" on every quiet line is just noise.
   warn: { box: 'alert-amber', text: 'text-gold', icon: <TriangleAlert size={14} aria-hidden className="block" />, sr: 'Warning:' },
+  good: { box: 'flex rounded border border-grass/45 bg-grass/10 px-3 py-2.5', text: 'text-grass', icon: <Check size={14} aria-hidden className="block" />, sr: null },
   act: { box: 'alert-red', text: 'text-guava', icon: <TriangleAlert size={14} aria-hidden className="block" />, sr: 'Action needed:' },
 } as const;
 
@@ -31,10 +28,12 @@ export function VerdictAlert({
   tone,
   text,
   sub,
+  action,
 }: {
-  tone: 'info' | 'warn' | 'act';
+  tone: 'info' | 'warn' | 'act' | 'good' | 'recommend';
   text: ReactNode;
   sub?: string | null;
+  action?: { label: string; onClick: () => void };
 }) {
   const style = VERDICT_STYLE[tone];
   return (
@@ -58,30 +57,15 @@ export function VerdictAlert({
         </span>
         {sub && <span className="num text-[11px] leading-4 text-ink-400">{sub}</span>}
       </span>
+      {action && (
+        <button type="button" className="btn-link ml-auto inline-flex shrink-0 items-center gap-1 text-xs leading-5" onClick={action.onClick}>
+          {action.label}
+          <ArrowRight size={12} aria-hidden />
+        </button>
+      )}
     </div>
   );
 }
-
-type BarTone = 'usdt' | 'usdc' | 'lighter' | 'gate' | 'spot';
-
-export interface BarRow {
-  key: string;
-  label: ReactNode;
-  name?: string;
-  cash: number;
-  upnl: number;
-  target: number | null;
-  tone: BarTone;
-}
-
-export const WALLET_TONE: Record<string, BarTone> = {
-  'USDT/CROSSEX': 'usdt',
-  'USDC/HYPERLIQUID': 'usdc',
-  'USDC/LIGHTER': 'lighter',
-  'USDC/GATE': 'gate',
-};
-
-export const ALWAYS_SHOWN = ['USDT/CROSSEX', 'USDC/HYPERLIQUID'];
 
 export const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
 
@@ -90,143 +74,6 @@ export const ROUTE_ORDER: RouteName[] = ['mix', 'loop', 'convert'];
  * src/core/rebalance/plan.ts, so the rows below Recommended rank the same way. */
 export const routeScore = (route: { costUsd: number; seconds: number }): number =>
   route.costUsd + Math.expm1(Math.max(0, route.seconds) / 3600);
-
-const barEnds = (row: BarRow): number[] => [row.cash, row.cash + row.upnl, row.target ?? 0];
-
-const widestEnd = (rows: BarRow[]): number => Math.max(0, ...rows.flatMap(barEnds).map((end) => Math.abs(end)));
-
-export const scaleOf = (...sets: BarRow[][]) => widestEnd(sets.flat());
-
-const cashFill = (row: BarRow): string => {
-  if (row.tone === 'spot') return 'bg-gold';
-  return row.cash >= 0 ? 'bg-grass' : 'bg-guava';
-};
-
-const pnlFill = (upnl: number): string => (upnl >= 0 ? 'bar-pnl-gain' : 'bar-pnl-loss');
-
-interface BarParts {
-  equity: number;
-  zero: number;
-  cashLeft: number;
-  cashWidth: number;
-  pnlLeft: number;
-  pnlWidth: number;
-  target: number | null;
-}
-
-function scalePoint(rows: BarRow[], scale: number): (value: number) => number {
-  const half = Math.max(scale, widestEnd(rows));
-  if (half <= 0) return () => 50;
-  return (value) => Math.min(100, Math.max(0, 50 + (value * 50) / half));
-}
-
-function barParts(row: BarRow, at: (value: number) => number): BarParts {
-  const equity = row.cash + row.upnl;
-  const cashLeft = at(Math.min(0, row.cash));
-  const pnlLeft = at(Math.min(row.cash, equity));
-  return {
-    equity,
-    zero: at(0),
-    cashLeft,
-    cashWidth: at(Math.max(0, row.cash)) - cashLeft,
-    pnlLeft,
-    pnlWidth: at(Math.max(row.cash, equity)) - pnlLeft,
-    target: row.target === null ? null : at(row.target),
-  };
-}
-
-const cssPct = (value: number): string => `${value}%`;
-
-function WalletHover({ row }: { row: BarRow }) {
-  return (
-    <div className="flex flex-col gap-2 text-xs" style={{ width: HOVER_WIDTH_PX }}>
-      <span className="font-semibold text-ink-50">{row.name ?? row.label}</span>
-      <div aria-hidden className="h-px bg-ink-700" />
-      <div className="flex items-center gap-2.5">
-        <span aria-hidden data-swatch="cash" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${cashFill(row)}`} />
-        <span className="text-ink-400">{hoverCash()}</span>
-        <span className={`num ml-auto ${row.cash < 0 ? 'text-guava' : 'text-ink-100'}`}>{num(row.cash)}</span>
-      </div>
-      <div className="flex items-center gap-2.5">
-        <span aria-hidden data-swatch="pnl" className={`h-2.5 w-2.5 shrink-0 rounded-sm ${pnlFill(row.upnl)}`} />
-        <span className="text-ink-400">{hoverUpnl()}</span>
-        <SignedNumber value={row.upnl} className="ml-auto" />
-      </div>
-      {row.target !== null && (
-        <div className="flex items-center gap-2.5">
-          <span aria-hidden data-swatch="target" className="mx-1 h-2.5 w-0.5 shrink-0 bg-gold" />
-          <span className="text-ink-400">{hoverTarget()}</span>
-          <span className="num ml-auto text-gold">{num(row.target)}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function WalletBar({ row, parts }: { row: BarRow; parts: BarParts }) {
-  return (
-    <div className="grid min-w-0 flex-1">
-      <ChartTooltip content={<WalletHover row={row} />}>
-        <div className="relative h-3 w-full">
-          <div className="absolute inset-0 overflow-hidden rounded-sm bg-ink-950">
-            <div
-              aria-hidden
-              data-bar-cash=""
-              className={`absolute inset-y-0 ${cashFill(row)}`}
-              style={{ left: cssPct(parts.cashLeft), width: cssPct(parts.cashWidth) }}
-            />
-            <div
-              aria-hidden
-              data-bar-pnl=""
-              className={`absolute inset-y-0 z-0 ${pnlFill(row.upnl)}`}
-              style={{ left: cssPct(parts.pnlLeft), width: cssPct(parts.pnlWidth) }}
-            />
-          </div>
-          <div
-            aria-hidden
-            data-zero-line=""
-            className="pointer-events-none absolute -inset-y-[5px] z-10 w-px -translate-x-1/2 bg-ink-200"
-            style={{ left: cssPct(parts.zero) }}
-          />
-          {parts.target !== null && (
-            <div
-              aria-hidden
-              data-bar-target=""
-              className="pointer-events-none absolute inset-y-0 z-20 w-0.5 -translate-x-px bg-gold"
-              style={{ left: cssPct(parts.target) }}
-            />
-          )}
-        </div>
-      </ChartTooltip>
-    </div>
-  );
-}
-
-export function BalanceBars({ caption, rows, scale }: { caption: ReactNode; rows: BarRow[]; scale: number }) {
-  const captionId = useId();
-  const at = scalePoint(rows, scale);
-  return (
-    <div role="group" aria-labelledby={captionId} className="flex flex-col gap-2">
-      <div id={captionId} className={`h-4 ${microLabelClass}`}>
-        {caption}
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {rows.map((row) => {
-          const parts = barParts(row, at);
-          return (
-            <div key={row.key} data-bar-row={row.key} className="flex h-4 items-center gap-3 text-xs">
-              <div className="w-40 shrink-0 whitespace-nowrap text-ink-100">{row.label}</div>
-              <WalletBar row={row} parts={parts} />
-              <span className={`num w-20 shrink-0 text-right ${parts.equity < 0 ? 'text-guava' : 'text-ink-100'}`}>
-                {num(parts.equity)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 type ProgressTone = 'running' | 'done' | 'stopped';
 
@@ -251,163 +98,93 @@ export function ProgressBar({ ratio, tone }: { ratio: number; tone: ProgressTone
   );
 }
 
+export type StepState = 'pending' | 'running' | 'done' | 'stopped';
+
 export interface StepRow {
   key: string;
-  label: string;
-  text: string;
-  sub: string;
+  coin: string;
+  text: ReactNode;
+  sub: ReactNode;
   right: string;
-  state: 'pending' | 'running' | 'done' | 'stopped';
-  progress: number;
+  state: StepState;
+  progress: number | null;
 }
 
-const STEP_TEXT: Record<StepRow['state'], string> = {
-  pending: 'text-ink-200',
-  running: 'text-ink-100',
-  done: 'text-ink-100',
-  stopped: 'text-ink-100',
+const STEP_MARK: Record<StepState, string> = {
+  pending: 'text-ink-400',
+  running: 'text-info',
+  done: 'text-grass',
+  stopped: 'text-guava',
 };
 
-const STEP_RIGHT: Record<StepRow['state'], string> = {
+export function StepDot({ n, state }: { n: number; state: StepState }) {
+  return (
+    <span aria-hidden data-step-dot={state} className={`num flex w-2 shrink-0 items-center justify-center ${STEP_MARK[state]}`}>
+      {state === 'running' ? <Spinner className="h-3 w-3" /> : state === 'done' ? <Check size={12} strokeWidth={2.5} /> : num(n, 0)}
+    </span>
+  );
+}
+
+const STEP_EDGE: Record<StepState, string> = {
+  pending: 'border-ink-800',
+  running: 'border-info/45',
+  done: 'border-ink-800',
+  stopped: 'border-guava/45',
+};
+
+const STEP_RIGHT: Record<StepState, string> = {
   pending: 'text-ink-400',
   running: 'text-pastel-blue',
   done: 'text-grass',
   stopped: 'text-guava',
 };
 
-const STEP_BAR: Record<StepRow['state'], ProgressTone> = {
-  pending: 'running',
-  running: 'running',
-  done: 'done',
-  stopped: 'stopped',
+const STEP_BAR: Record<StepState, string> = {
+  pending: PROGRESS_FILL.running,
+  running: PROGRESS_FILL.running,
+  done: PROGRESS_FILL.done,
+  stopped: PROGRESS_FILL.stopped,
 };
 
-export function StepList({ rows }: { rows: StepRow[] }) {
+const live = (row: StepRow): boolean => row.state === 'running' || row.state === 'stopped';
+
+export function shownSteps(rows: StepRow[], limit: number | null): { row: StepRow; n: number }[] {
+  return rows.map((row, index) => ({ row, n: index + 1 })).filter(({ row, n }) => limit === null || n <= limit || live(row));
+}
+
+export function StepList({ rows, limit = null }: { rows: StepRow[]; limit?: number | null }) {
   return (
-    <ol className="flex flex-col gap-5">
-      {rows.map((row) => (
-        <li key={row.key} aria-current={row.state === 'running' ? 'step' : undefined} className="flex gap-3">
-          <span className={`w-20 shrink-0 pt-0.5 ${microLabelClass}`}>{row.label}</span>
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
-            <div className="flex items-end justify-between gap-4 text-xs">
-              <div className="flex min-w-0 flex-col">
-                <span className={STEP_TEXT[row.state]}>{row.text}</span>
-                <span className="text-ink-400">{row.sub}</span>
-              </div>
-              <span className={`num shrink-0 ${STEP_RIGHT[row.state]}`}>{row.right}</span>
-            </div>
-            <ProgressBar ratio={row.progress} tone={STEP_BAR[row.state]} />
-          </div>
+    <ol className="flex flex-col gap-1">
+      {shownSteps(rows, limit).map(({ row, n }) => (
+        <li
+          key={row.key}
+          aria-current={row.state === 'running' ? 'step' : undefined}
+          className={`relative flex items-center gap-3 overflow-hidden rounded border px-3 py-1.5 text-xs text-ink-100 ${STEP_EDGE[row.state]}`}
+        >
+          <StepDot n={n} state={row.state} />
+          <TokenIcon symbol={row.coin} size={16} />
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="num">{row.text}</span>
+            {row.state === 'running' && row.sub && <span className="text-ink-400">{row.sub}</span>}
+          </span>
+          <span className={`num shrink-0 ${STEP_RIGHT[row.state]}`}>{row.right}</span>
+          {row.progress !== null && live(row) && (
+            <span
+              aria-hidden
+              data-step-bar=""
+              className={`absolute bottom-0 left-0 h-0.5 ${STEP_BAR[row.state]}`}
+              style={{ width: `${Number.isFinite(row.progress) ? Math.min(100, Math.max(0, row.progress * 100)) : 0}%` }}
+            />
+          )}
         </li>
       ))}
     </ol>
   );
 }
 
-type StepTextInput = Pick<PlannedStep, 'kind' | 'buy' | 'move' | 'arrives' | 'from' | 'to'> & { borrowLeft: number | null };
-
-function stepText(step: StepTextInput): { text: string; sub: string } {
-  const move = num(step.move);
-  const arrives = num(step.arrives);
-  const borrowLeft = step.borrowLeft === null ? null : num(step.borrowLeft);
-  const sub =
-    borrowLeft === null
-      ? t('accounts.rebalanceBits.arrives', { arrives })
-      : borrowLeft === num(0)
-        ? t('accounts.rebalanceBits.arrivesBorrowPaid', { arrives })
-        : t('accounts.rebalanceBits.arrivesBorrowLeft', { arrives, left: borrowLeft });
-  if (step.kind === 'convert') return { text: MOVE_TEXT.convert(step.from, step.to, move), sub };
-  if (step.from !== 'CROSSEX') return { text: MOVE_TEXT.step(step.from, step.to, move, arrives), sub };
-  const wallet = MOVE_TEXT.into(step.to);
-  const buy = num(step.buy);
-  if (buy === num(0)) return { text: t('accounts.rebalanceBits.moveTo', { move, wallet }), sub };
-  if (buy === move) return { text: t('accounts.rebalanceBits.buyMoveIt', { buy, wallet }), sub };
-  return { text: t('accounts.rebalanceBits.buyMove', { buy, move, wallet }), sub };
-}
-
-const HOP_SECONDS: Record<Pool, { in: number; out: number }> = {
-  CROSSEX: { in: 5, out: 5 },
-  HYPERLIQUID: { in: 125, out: 395 },
-  LIGHTER: { in: 230, out: 180 },
-};
-
-export const roundSeconds = (from: Pool, to: Pool): number => HOP_SECONDS[from].out + HOP_SECONDS[to].in;
-
-export function jobSeconds(job: RebalanceJob): number {
-  const rounds = new Map<number, number>();
-  for (const step of job.steps) {
-    if (step.round !== null && !rounds.has(step.round)) rounds.set(step.round, roundSeconds(step.from, step.to));
-  }
-  return [...rounds.values()].reduce((total, seconds) => total + seconds, 0);
-}
-
-function jobStepText(steps: RebalanceStep[], round: number | null) {
-  const named = (...names: string[]) => steps.find((step) => names.includes(step.name));
-  const { from, to } = steps[0];
-  const into = from === 'CROSSEX';
-  const out = to === 'CROSSEX';
-  const last = out ? named('Sell USDC') : named('To Hyperliquid', 'To Lighter');
-  const gives = steps.filter((step) => step.name === 'Convert' || step.name === 'Convert to USDT');
-  const lands = steps.filter((step) => step.name === 'Convert' || step.name === 'Convert to USDC');
-  const landed = lands.length > 0 && lands.every((step) => step.qty !== null);
-  const input =
-    round === null
-      ? {
-          kind: 'convert' as const,
-          buy: 0,
-          move: gives.reduce((total, step) => total + (step.planned ?? 0), 0),
-          arrives: landed ? lands.reduce((total, step) => total + (step.qty ?? 0), 0) : null,
-        }
-      : {
-          kind: 'round' as const,
-          buy: into ? (named('Buy USDC')?.qty ?? named('Buy USDC')?.planned ?? 0) : 0,
-          move: (into ? named('To spot') : named('From Hyperliquid', 'From Lighter'))?.planned ?? 0,
-          arrives: (out ? last?.planned : last?.arrives) ?? null,
-        };
-  const borrowLeft = round === null ? null : (last?.borrowLeft ?? null);
-  const { text, sub } = stepText({ ...input, from, to, arrives: input.arrives ?? 0, borrowLeft });
-  return { text, sub: input.arrives === null ? '' : sub };
-}
-
-export function jobRows(job: RebalanceJob, now: number, borrow: number | null): StepRow[] {
-  const hasBorrow = borrow !== null || job.steps.some((step) => (step.borrowLeft ?? 0) > 0);
-  const jobSteps = hasBorrow ? job.steps : job.steps.map((step) => ({ ...step, borrowLeft: null }));
-  const groups: { round: number | null; steps: RebalanceStep[] }[] = [];
-  for (const step of jobSteps) {
-    const last = groups.at(-1);
-    const head = last?.steps[0];
-    if (last && head && last.round === step.round && head.from === step.from && head.to === step.to) last.steps.push(step);
-    else groups.push({ round: step.round, steps: [step] });
-  }
-  const current = jobSteps[job.stepIndex];
-  return groups.map(({ round, steps }, index): StepRow => {
-    const { from, to } = steps[0];
-    const expected = round === null ? 0 : roundSeconds(from, to);
-    const started = steps.find((step) => step.startedAt !== null)?.startedAt ?? null;
-    const label = round === null ? t('accounts.rebalance.hover.title.convert') : t('accounts.rebalanceBits.round', { n: num(round, 0) });
-    const base = { key: `${round ?? 'convert'}:${index}`, label, ...jobStepText(steps, round) };
-    const doneAt = steps.at(-1)?.doneAt ?? null;
-    if (steps.every((step) => step.status === 'done')) {
-      const took = started === null || doneAt === null ? '' : fmtAge(doneAt - started);
-      return { ...base, state: 'done', progress: 1, right: took };
-    }
-    if (!current || !steps.includes(current)) {
-      return { ...base, state: 'pending', progress: 0, right: expected > 0 ? fmtAbout(expected) : t('accounts.rebalance.hover.title.time.instant') };
-    }
-    const elapsed = started === null ? 0 : Math.max(0, (job.status === 'running' ? now : job.updatedAt) - started);
-    const progress = expected > 0 ? elapsed / 1000 / expected : 0;
-    if (job.status !== 'running') return { ...base, state: 'stopped', progress, right: t('accounts.rebalanceBits.stopped') };
-    const right =
-      expected > 0 ? t('accounts.rebalanceBits.elapsedOf', { elapsed: fmtAge(elapsed), expected: fmtAbout(expected) }) : fmtAge(elapsed);
-    return { ...base, sub: LEG_TEXT[current.name] ?? base.sub, state: 'running', progress, right };
-  });
-}
-
-export function planRows(route: RoutePlan, borrow: number | null): StepRow[] {
-  return route.steps.map((step, index): StepRow => {
-    const label = step.kind === 'convert' ? t('accounts.rebalance.hover.title.convert') : t('accounts.rebalanceBits.round', { n: num(step.round ?? index + 1, 0) });
-    const right = step.kind === 'convert' ? t('accounts.rebalance.hover.title.time.instant') : fmtAbout(step.seconds);
-    const text = stepText({ ...step, borrowLeft: borrow === null ? null : step.borrowLeft });
-    return { key: String(index), label, ...text, right, state: 'pending', progress: 0 };
-  });
+export function markPriceOf(positions: readonly { symbol: string; markPrice?: string }[], symbol: string): number | null {
+  const base = parseSymbol(symbol).base;
+  const own = positions.find((p) => p.symbol === symbol) ?? positions.find((p) => parseSymbol(p.symbol).base === base);
+  const mark = Number(own?.markPrice);
+  return Number.isFinite(mark) && mark > 0 ? mark : null;
 }

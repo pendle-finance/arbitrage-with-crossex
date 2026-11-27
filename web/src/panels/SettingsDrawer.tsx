@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useVersion } from '../api/queries';
+import { useCheckForUpdate, useVersion } from '../api/queries';
 import { Drawer } from '../components/Drawer';
 import { GithubMark } from '../components/GithubMark';
 import { SegmentedToggle } from '../components/SegmentedToggle';
@@ -23,6 +24,13 @@ export function SettingsDrawer({
   const language: Language = isLanguage(i18n.language) ? i18n.language : LANGUAGES[0].code;
   const version = useVersion(); // same query key as the header pill — deduped
   const install = version.data?.install ?? null;
+  const check = useCheckForUpdate();
+  // The drawer stays mounted while closed, so an old result would greet the
+  // next open as if it were new.
+  const resetCheck = check.reset;
+  useEffect(() => {
+    if (!open) resetCheck();
+  }, [open, resetCheck]);
   const [openStep, setOpenStep] = useState<SetupStep | null>(open ? focusStep : null);
   const [committed, setCommitted] = useState({ open, focusStep });
   if (committed.open !== open || committed.focusStep !== focusStep) {
@@ -69,17 +77,43 @@ export function SettingsDrawer({
                     in here. Colouring it is what makes it noticed. */}
                 {version.data?.updateAvailable && version.data.latest ? (
                   <span className="text-gold">{t('app.settingsDrawer.available', { version: version.data.latest })}</span>
+                ) : check.isSuccess ? (
+                  <span className="text-ink-300">
+                    {t(
+                      check.data.freshRead === 'failed'
+                        ? 'app.settingsDrawer.checkFailed'
+                        : check.data.freshRead === 'skipped'
+                          ? 'app.settingsDrawer.checkedRecently'
+                          : 'app.settingsDrawer.upToDate',
+                    )}
+                  </span>
                 ) : null}
               </div>
-              <a
-                href={REPO_URL}
-                target="_blank"
-                rel="noreferrer"
-                className="inline-flex shrink-0 items-center gap-1.5 text-ink-300 hover:text-ink-100"
-              >
-                <GithubMark size={13} />
-                GitHub
-              </a>
+              <div className="flex shrink-0 items-center gap-3">
+                {/* The server re-reads GitHub at most once in 5 minutes; the
+                    header's update pill picks up what it finds. */}
+                {version.data?.checkOn ? (
+                  <button
+                    type="button"
+                    aria-label={t('app.settingsDrawer.checkUpdates')}
+                    title={t('app.settingsDrawer.checkUpdates')}
+                    disabled={check.isPending}
+                    onClick={() => check.mutate()}
+                    className="inline-flex items-center text-ink-300 hover:text-ink-100 disabled:cursor-wait"
+                  >
+                    <RefreshCw size={13} className={check.isPending ? 'animate-spin' : ''} />
+                  </button>
+                ) : null}
+                <a
+                  href={REPO_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 text-ink-300 hover:text-ink-100"
+                >
+                  <GithubMark size={13} />
+                  GitHub
+                </a>
+              </div>
             </div>
             {/* Which code is actually running: the installer records the exact
                 commit it laid down, so "did I install what I audited?" has an

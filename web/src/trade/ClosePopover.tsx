@@ -14,19 +14,25 @@
 import { ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import { useSymbolDetail } from '../api/queries';
 import type { ActionInput, CrossexPosition } from '../api/types';
-import { VenueIcon } from '../components/AssetIcon';
 import { Modal } from '../components/Modal';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SignedNumber } from '../components/SignedNumber';
 import { SideChip } from '../components/VenueChip';
-import { fieldValue, fmtUsd, fmtUsdCompact, parseSymbol, prettyVenue, sig, sigGrouped } from '../lib/fmt';
+import { fieldValue, fmtUsd, parseSymbol, prettyVenue, qtyGrouped, sig, sigGrouped } from '../lib/fmt';
 import { sizeUnitForBase } from '../lib/boros';
+import type { DealOpts } from './deal';
+import { EstimateHeadline } from './EstimateHeadline';
 import { ExecuteControl } from './ExecuteControl';
+import { MakerSettings, REPEG_DEFAULT_BP } from './MakerSettings';
 import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
 import { feeAmount, feeKind, PreviewFallback, ViolationList } from './previewBits';
+import { BookToggle, fmtTradeCost, OneLegBook, PlanLine } from './TicketEstimateBits';
 import { FieldLabel } from './SymbolCombobox';
+import { TwapArea, useTwapDefault, useTwapInput } from './TwapArea';
 import { usePreviewDebounced } from './usePreview';
+import { useTakerAfter, useTwapTakerAfter } from './useTwapTakerAfter';
 
 interface Props {
   position: CrossexPosition;
@@ -186,9 +192,9 @@ export function ClosePopover({
   // "151.202" typed against a 151.20195 position — the very figure the max
   // hint printed. Converted back to base units when the box is in USD.
   const displayRounding = (() => {
-    const shown = Number(sig(maxInUnit));
-    if (!Number.isFinite(shown)) return 0;
-    const slack = Math.abs(shown - maxInUnit);
+    const shown = [Number(sig(maxInUnit)), Number(qtyGrouped(maxInUnit).replace(/,/g, ''))].filter(Number.isFinite);
+    if (shown.length === 0) return 0;
+    const slack = Math.max(...shown.map((s) => Math.abs(s - maxInUnit)));
     return effUnit === 'usd' && mark > 0 ? slack / mark : slack;
   })();
   const qtyEps = Math.max(1e-9, maxQtyBase * 1e-7, displayRounding);
@@ -213,12 +219,37 @@ export function ClosePopover({
     };
   }, [slipInvalid, qtyInvalid, position.symbol, slip, closesEverything, qtyNum]);
 
+  const detail = useSymbolDetail(position.symbol);
+  const twapState = useTwapInput();
+  const twapOn = twapState.on;
+  const taker = useTakerAfter();
+  const [repegBehindBp, setRepegBehindBp] = useState<DealOpts['repegBehindBp']>(REPEG_DEFAULT_BP);
+
   const preview = usePreviewDebounced(`close-${position.symbol}`, action ? [action] : null, {
     debounceMs: 300,
     refetchInterval: 3_000,
+    twap: twapOn ? twapState.input : undefined,
   });
   const p = preview.previews?.[0];
   const estimating = preview.estimating;
+  const twapPreview = preview.data?.twap ?? null;
+  const twapWait = useTwapDefault(twapState, preview.data && preview.data.twapDefault, 'maker', preview.data !== undefined && !preview.isPlaceholderData);
+  const twapPlan = twapOn ? (twapPreview?.plan ?? null) : null;
+
+  const takerAfterBad = useTwapTakerAfter(taker, twapOn, twapPlan?.takerAfterSec ?? null);
+  const dealOpts = twapOn
+    ? { makerLeg: 'auto' as const, repegBehindBp, timeoutSec: taker.sec }
+    : undefined;
+  const twapStart =
+    twapOn && twapPlan
+      ? { plan: twapPlan, blocked: twapState.blockedBy(twapPreview) || takerAfterBad || estimating }
+      : null;
+  const restPrice = p?.fillEstimate?.midPrice ?? (p?.closing ? Number(p.closing.mark) : NaN);
+  const decorate = (acts: ActionInput[]): ActionInput[] =>
+    restPrice > 0
+      ? acts.map((a) => (a.kind === 'close-position' ? { ...a, makerPrice: String(restPrice) } : a))
+      : acts;
+  const makerFee = p?.fees && restPrice > 0 ? Number(p.qty) * restPrice * p.fees.makerRate : null;
 
   // Partial closes realize a proportional share of the position's uPnL.
   const upnlToRealize = p?.closing
@@ -230,7 +261,8 @@ export function ClosePopover({
 
   /** The tolerance editor — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
-  const { exchange, quote } = parseSymbol(position.symbol);
+  const [showBook, setShowBook] = useState(false);
+  const { exchange } = parseSymbol(position.symbol);
   const notionalUsd = markOk ? posQty * mark : null;
   const heldSide: 'LONG' | 'SHORT' = Number(position.positionQty) < 0 ? 'SHORT' : 'LONG';
   const leftAfter = Math.max(0, maxQtyBase - (Number.isFinite(qtyNum) ? qtyNum : 0));
@@ -241,15 +273,10 @@ export function ClosePopover({
   // row competes with the row it is about.
   return (
     <Modal
-      title={
-        <>
-          {t('trade.close.title')}
-          <span className="ml-2 inline-flex items-center gap-1.5 text-[12px] font-normal text-ink-300">
-            <VenueIcon venue={exchange} size={14} />
-            {t('trade.close.venueLine', { venue: prettyVenue(exchange), base, quote: quote || 'USDT' })}
-          </span>
-        </>
-      }
+      title={t('trade.close.titleLeg', {
+        venue: prettyVenue(exchange),
+        side: t(heldSide === 'LONG' ? 'common.long' : 'common.short'),
+      })}
       onClose={onDismiss}
       widthClass="w-[460px]"
     >
@@ -260,13 +287,13 @@ export function ClosePopover({
           venue={prettyVenue(exchange)}
           side={heldSide}
           sub={position.symbol}
-          value={`${sigGrouped(wholeQty)} ${base}`}
+          value={`${qtyGrouped(wholeQty)} ${base}`}
           valueSub={
             markOk ? (
               <>
                 {t('trade.close.notionalMark', {
-                  notional: notionalUsd !== null ? fmtUsdCompact(notionalUsd) : '—',
-                  mark: sig(mark),
+                  notional: notionalUsd !== null ? fmtUsd(notionalUsd) : '—',
+                  mark: sigGrouped(mark),
                 })}
               </>
             ) : undefined
@@ -277,7 +304,7 @@ export function ClosePopover({
             Say so where the size is chosen, not after the fact. */}
         {shared && (
           <p className="text-[11px] leading-relaxed text-amber-400/90">
-            {t('trade.close.sharedNote', { held: sigGrouped(attributedQty ?? 0), whole: sigGrouped(wholeQty) })}
+            {t('trade.close.sharedNote', { held: qtyGrouped(attributedQty ?? 0), whole: qtyGrouped(wholeQty) })}
           </p>
         )}
         {hedgedSibling && (
@@ -304,7 +331,7 @@ export function ClosePopover({
             >
               <Trans
                 i18nKey="trade.close.maxLink"
-                values={{ amount: sigGrouped(maxInUnit), unit: effUnit === 'usd' ? 'USDT' : base }}
+                values={{ amount: qtyGrouped(maxInUnit), unit: effUnit === 'usd' ? 'USDT' : base }}
                 components={{ u: <span className="text-link underline decoration-link/40 underline-offset-2" /> }}
               />
             </button>
@@ -354,7 +381,7 @@ export function ClosePopover({
           {qtyInvalid && qtyStr.trim() !== '' ? (
             <span className="text-[11px] text-rose-300">
               {(() => {
-                const max = effUnit === 'usd' ? `${sigGrouped(maxInUnit)} USDT` : `${sigGrouped(maxInUnit)} ${base}`;
+                const max = effUnit === 'usd' ? `${qtyGrouped(maxInUnit)} USDT` : `${qtyGrouped(maxInUnit)} ${base}`;
                 return shared ? t('trade.close.exceedsShare', { max }) : t('trade.close.exceedsPosition', { max });
               })()}
             </span>
@@ -368,7 +395,7 @@ export function ClosePopover({
                 <>
                   <Trans
                     i18nKey="trade.close.partialOpen"
-                    values={{ left: sigGrouped(leftAfter), base }}
+                    values={{ left: qtyGrouped(leftAfter), base }}
                     components={{ n: <span className="num text-ink-200" /> }}
                   />
                 </>
@@ -379,7 +406,7 @@ export function ClosePopover({
                 <>
                   <Trans
                     i18nKey="trade.close.atMark"
-                    values={{ qty: sigGrouped(qtyNum), base, mark: sig(mark) }}
+                    values={{ qty: qtyGrouped(qtyNum), base, mark: sigGrouped(mark) }}
                     components={{ n: <span className="num" /> }}
                   />
                 </>
@@ -388,19 +415,71 @@ export function ClosePopover({
           )}
         </div>
 
+        {twapOn && (
+          <MakerSettings
+            legs={null}
+            symbols={[position.symbol]}
+            makerLeg="auto"
+            autoPick={null}
+            onMakerLeg={() => {}}
+            takerAfter={taker.takerAfter}
+            onTakerAfter={taker.pick}
+            takerCapSec={twapPlan?.takerAfterSec ?? null}
+            repegBehindBp={repegBehindBp}
+            repegLocked={false}
+            onRepeg={(bp) => setRepegBehindBp(bp as DealOpts['repegBehindBp'])}
+            marketSlippage={{ value: slip, onChange: (v) => setSlipStr(String(v)) }}
+          />
+        )}
+        <TwapArea
+          on={twapOn}
+          onToggle={twapState.setOn}
+          input={twapState.input}
+          onInput={twapState.setInput}
+          preview={twapOn && action ? twapPreview : null}
+          impact={preview.data?.priceImpact ?? null}
+          waiting={twapWait}
+          coin={base}
+          lot={detail.data?.lotSize}
+        />
+
         {action && (
-          <EstimateCard dataUpdatedAt={preview.dataUpdatedAt} estimating={estimating} isError={preview.isError}>
+          <EstimateCard
+            dataUpdatedAt={preview.dataUpdatedAt}
+            estimating={estimating}
+            isError={preview.isError}
+            aside={twapOn ? <BookToggle on={showBook} onToggle={() => setShowBook((v) => !v)} /> : undefined}
+          >
             {p ? (
               <>
-                <div className="flex items-end justify-between gap-3">
-                  <div className="flex flex-col">
-                    <span className="text-[12.5px] text-ink-50">{t('trade.close.upnlToRealise')}</span>
-                    <span className="text-[11px] text-ink-400">{t('trade.close.becomesReal')}</span>
-                  </div>
-                  <span className="num text-lg font-semibold">
-                    {upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
-                  </span>
-                </div>
+                <EstimateHeadline
+                  label={t('trade.close.upnlToRealise')}
+                  sub={twapOn ? t('accounts.closePair.twap.headlineSub') : t('trade.close.becomesReal')}
+                  value={upnlToRealize !== null ? <SignedNumber value={upnlToRealize} format={(n) => fmtUsd(n)} /> : '—'}
+                />
+                {twapOn ? (
+                  <>
+                    <PlanLine side={heldSide} symbol={position.symbol} role="rests" qty={p.qty} />
+                    {showBook && (
+                      <div className="pt-1">
+                        <OneLegBook
+                          symbol={position.symbol}
+                          side={p.side}
+                          limitPx={restPrice > 0 ? restPrice : null}
+                          fill={undefined}
+                          estimating={estimating}
+                        />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
+                      <EstimateRow
+                        label={t('pairTicket.bits.tradeCost')}
+                        value={fmtTradeCost(makerFee, p.fees?.quote)}
+                      />
+                    </div>
+                  </>
+                ) : (
+                <>
                 <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
                   <EstimateRow
                     label={t('common.order')}
@@ -408,7 +487,7 @@ export function ClosePopover({
                     value={
                       <span className="inline-flex items-center gap-1.5">
                         <SideChip side={p.side} />
-                        {p.qty ? `${sigGrouped(p.qty)} ${base}` : '—'}
+                        {p.qty ? `${qtyGrouped(p.qty)} ${base}` : '—'}
                       </span>
                     }
                   />
@@ -416,7 +495,7 @@ export function ClosePopover({
                     label={t('trade.close.limitPx')}
                     sub={p.side === 'BUY' ? t('trade.close.markPlus', { pct: slipStr }) : t('trade.close.markMinus', { pct: slipStr })}
                     title={t('trade.close.limitPxTitle')}
-                    value={p.price ? sig(p.price) : '—'}
+                    value={p.price ? sigGrouped(p.price) : '—'}
                   />
                   <EstimateRow label={t('trade.single.estFee')} sub={feeKind(p.fees)} value={feeAmount(p.fees)} />
                 </div>
@@ -440,6 +519,8 @@ export function ClosePopover({
                     quick={['0.2', '0.5', '1', '2']}
                   />
                 </div>
+                </>
+                )}
                 <ViolationList violations={p.violations} warnings={p.warnings} />
               </>
             ) : (
@@ -468,14 +549,19 @@ export function ClosePopover({
           />
         )}
 
-        <div className="flex flex-col gap-1.5">
+        <div className="sticky bottom-0 z-10 flex flex-col gap-1.5 bg-ink-950 pb-1 pt-2">
           <ExecuteControl
             scope={`close-${position.symbol}`}
-            actions={action ? [action] : null}
+            actions={action && (!twapOn || twapPlan) ? [action] : null}
             tone="red"
+            decorate={twapOn ? decorate : undefined}
+            dealOpts={dealOpts}
+            twap={twapStart}
+            extraDisabled={twapWait}
+            intentKey={twapOn ? JSON.stringify([action, twapState.input, taker.takerAfter, repegBehindBp]) : undefined}
             label={
             <>
-              {t('trade.close.closeNow')}
+              {twapOn ? t('accounts.closePair.twap.start') : t('trade.close.closeNow')}
               <ChevronRight size={14} aria-hidden />
             </>
           }
@@ -492,7 +578,11 @@ export function ClosePopover({
             }}
           />
           <p className="text-[11px] leading-relaxed text-ink-400">
-            <Trans i18nKey="trade.close.reduceOnlyNote" components={{ b: <span className="font-medium text-ink-200" /> }} />
+            {twapOn ? (
+              <span className="font-medium text-ink-200">{t('accounts.closeLeg.twap.reduceOnly')}</span>
+            ) : (
+              <Trans i18nKey="trade.close.reduceOnlyNote" components={{ b: <span className="font-medium text-ink-200" /> }} />
+            )}
           </p>
         </div>
       </div>

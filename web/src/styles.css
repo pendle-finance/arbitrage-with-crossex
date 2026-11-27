@@ -75,6 +75,11 @@
     @apply px-1 py-[2.5px] text-[11px];
   }
 
+  .chip-tab {
+    @apply h-5 rounded-full px-2 py-0 font-medium;
+    font-size: inherit;
+  }
+
   /* PpSegmentedControlV2 — the mock's control is a row of BUTTED cells, each
      with its own hairline overlapping its neighbour by 1px, not a padded pill
      holding loose buttons. The wrapper therefore carries no border of its own. */
@@ -90,8 +95,13 @@
      grey fill read as disabled next to the info-tinted tabs and chips. */
   /* The mock's chosen cell: a neutral white fill and medium weight — the
      selection reads by weight + fill, so the blue stays reserved for actions. */
-  .seg-btn[data-active='true'] {
+  .seg-btn[data-active='true'],
+  .pick-chip[data-active='true'] {
     @apply relative z-[1] bg-wash/[0.15] font-medium text-ink-300;
+  }
+
+  .pick-chip {
+    @apply inline-flex items-center gap-1 rounded border border-ink-700 bg-transparent px-2.5 py-[3px] text-[11px] font-normal text-ink-500 transition-colors hover:bg-wash/[0.05] disabled:cursor-not-allowed disabled:opacity-35;
   }
 
   /* Full-row variant (SegmentedToggle `fill`): the mock's ticket switches are
@@ -102,6 +112,23 @@
 
   .seg-fill .seg-btn {
     @apply py-[7px] text-[12px];
+  }
+
+  .order-stack {
+    @apply flex flex-col;
+  }
+
+  .order-stack > :nth-child(n) {
+    @apply rounded;
+  }
+
+  .order-stack > :not(:first-child) {
+    @apply rounded-t-none border-t-0;
+  }
+
+  .order-stack > :not(:last-child),
+  .order-stack > .seg:not(:last-child) > .seg-btn {
+    @apply rounded-b-none;
   }
 
   /* The first styled checkbox in the app: native input, house colours. Native
@@ -148,6 +175,10 @@
      rides on colour alone. */
   .alert-red {
     @apply flex flex-col gap-1 rounded border border-guava/35 bg-guava/10 px-3 py-2.5;
+  }
+
+  .alert-green {
+    @apply flex flex-col gap-1 rounded border border-grass/45 bg-grass/10 px-3 py-2.5;
   }
 
   .alert-blue {
@@ -250,7 +281,7 @@
 
   /* ---- recipes the mock adds ------------------------------------------- */
 
-  /* UiTooltipContent — shared verbatim by HoverCard and ChartTooltip. */
+  /* UiTooltipContent — used by HoverCard. */
   .pp-tooltip {
     @apply rounded-md border border-ink-600 bg-[#1B202C] px-3 py-1.5 text-[12px] leading-[1.5] text-ink-50;
     box-shadow:
@@ -282,16 +313,6 @@
   /* The round chevron that opens a card (PpCard's disclosure). */
   .pp-chevron {
     @apply inline-flex shrink-0 items-center justify-center rounded-full bg-wash/[0.15] p-2 text-ink-50 transition-colors;
-  }
-
-  .bar-pnl-gain {
-    @apply bg-grass/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.grass') 0 2px, transparent 2px 6px);
-  }
-
-  .bar-pnl-loss {
-    @apply bg-guava/20;
-    background-image: repeating-linear-gradient(135deg, theme('colors.guava') 0 2px, transparent 2px 6px);
   }
 
   /* Ring that flashes around the credentials form when a card's Execute lands. */

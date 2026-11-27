@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import type { ApiMeta } from '../api/types';
+import type { ApiMeta, RebalanceView } from '../api/types';
 
 /** Shared msw server — tests add handlers per-case with server.use(...). */
 export const server = setupServer(
@@ -20,6 +20,10 @@ export const server = setupServer(
   // Default: no rebate. A rebated-account case overrides this with server.use.
   http.get('/api/boros/rebate', () => HttpResponse.json(env(null))),
   http.get('/api/asset-prefs/:book', () => HttpResponse.json(env({ sinceByAsset: {}, exclusions: {}, legSince: {} }))),
+  http.get('/api/rebalance', async () => {
+    const { makeRebalanceView } = await import('./fixtures');
+    return HttpResponse.json(env<RebalanceView>(makeRebalanceView()));
+  }),
   http.post('/api/asset-prefs/import', () => HttpResponse.json(env({}))),
 );
 

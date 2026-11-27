@@ -33,10 +33,10 @@ export interface DealRequest {
   /** Maker limit price (required for maker execution; tick-snapped here). */
   price?: string;
   pricePolicy?: 'fixed' | 'touch';
-  /** Maker PAIRS convert to taker after this many seconds (clamped [30, 3600],
-   * default 300). Single-leg maker deals rest with NO deadline (a plain resting
-   * post-only order — the user cancels or it fills). */
-  timeoutSec?: number;
+  timeoutSec?: number | null;
+  deadlineCapSec?: number;
+  repegBehindBp?: RepegBehindBp | null;
+  makerLeg?: 'a' | 'b';
   /** Max A-clip size during CONVERTING (bounds peak unhedged exposure). */
   maxClip?: string;
   /** A-clip marketable-limit protection band, percent (closes: slippagePct). */
@@ -47,8 +47,47 @@ export interface DealRequest {
 
 const ID_RE = /^[a-zA-Z0-9-]{6,40}$/;
 const TIMEOUT_DEFAULT_S = 300;
-const TIMEOUT_MIN_S = 30;
-const TIMEOUT_MAX_S = 3_600;
+export const TIMEOUT_MIN_S = 30;
+export const TIMEOUT_MAX_S = 86_400;
+export const TIMEOUT_RANGE_TEXT = 'Taker after must be 30s to 24h.';
+export const REPEG_CHOICES_BP = [2, 5, 10] as const;
+type RepegBehindBp = (typeof REPEG_CHOICES_BP)[number];
+export const REPEG_DEFAULT_BP: RepegBehindBp = 5;
+
+export const takerAfterCapText = (capSec: number): string => `Taker after must be 80% of the interval or less (${capSec}s).`;
+
+function withMakerLeg(req: DealRequest): DealRequest {
+  if (req.makerLeg === undefined || req.makerLeg === 'a') return req;
+  if (req.makerLeg !== 'b') throw new CoreError(`makerLeg must be 'a' or 'b'`);
+  if (!req.b) throw new CoreError('makerLeg b needs a second leg');
+  return {
+    ...req,
+    a: req.b,
+    b: req.a,
+    ...(req.leverage ? { leverage: { a: req.leverage.b, b: req.leverage.a } } : {}),
+  };
+}
+
+function timeoutOf(req: DealRequest): number | null {
+  if (req.timeoutSec === null) return null;
+  const sec = req.timeoutSec === undefined ? TIMEOUT_DEFAULT_S : Number(req.timeoutSec);
+  if (!Number.isFinite(sec) || sec < TIMEOUT_MIN_S || sec > TIMEOUT_MAX_S) {
+    throw new CoreError(TIMEOUT_RANGE_TEXT);
+  }
+  if (req.deadlineCapSec === undefined) return sec;
+  const cap = Number(req.deadlineCapSec);
+  if (!Number.isFinite(cap) || cap <= 0) throw new CoreError('deadlineCapSec must be a positive number of seconds');
+  if (sec > cap) throw new CoreError(takerAfterCapText(cap));
+  return sec;
+}
+
+function repegOf(req: DealRequest): RepegBehindBp | null {
+  if (req.repegBehindBp === undefined) return REPEG_DEFAULT_BP;
+  if (req.repegBehindBp === null) return null;
+  const bp = REPEG_CHOICES_BP.find((choice) => choice === req.repegBehindBp);
+  if (bp === undefined) throw new CoreError('Re-peg if behind must be 0.02%, 0.05%, 0.1% or Off.');
+  return bp;
+}
 
 /** Normalize a venue rule value to a plain decimal string the fx layer accepts
  * (rules can arrive as sci-notation like '1e-05', or null). Snapshotting a
@@ -76,14 +115,17 @@ function legSpecOf(rule: RuleSymbol, req: DealLegRequest): LegSpec {
 /** Validate + snapshot a deal. Throws CoreError on any violation; nothing sent. */
 export async function resolveDeal(
   clients: Clients,
-  req: DealRequest,
+  request: DealRequest,
   now: number,
   opts?: { preflight?: PreflightDeps; refPriceA?: string | null },
 ): Promise<PairRow> {
-  if (!ID_RE.test(req.id ?? '')) throw new CoreError('deal id must be 6-40 chars of [a-zA-Z0-9-]');
-  if (req.execution !== 'maker' && req.execution !== 'taker') {
+  if (!ID_RE.test(request.id ?? '')) throw new CoreError('deal id must be 6-40 chars of [a-zA-Z0-9-]');
+  if (request.execution !== 'maker' && request.execution !== 'taker') {
     throw new CoreError(`execution must be 'maker' or 'taker'`);
   }
+  const req = withMakerLeg(request);
+  const timeoutSec = req.execution === 'maker' ? timeoutOf(req) : null;
+  const repegBehindBp = repegOf(req);
 
   const symbols = [req.a.symbol.toUpperCase(), ...(req.b ? [req.b.symbol.toUpperCase()] : [])];
   const { body: ruleList } = await clients.crossEx.listCrossexRuleSymbols({ symbols: symbols.join(',') });
@@ -99,7 +141,8 @@ export async function resolveDeal(
   const bRule = req.b ? ruleFor(symbols[1]) : null;
 
   if (bRule) {
-    if (aRule.symbol === bRule.symbol) {
+    const isCloseAndReopen = req.a.reduceOnly === true && req.b!.reduceOnly !== true && req.a.side !== req.b!.side;
+    if (aRule.symbol === bRule.symbol && !isCloseAndReopen) {
       throw new CoreError('Deal legs must be different contracts (a same-contract pair would net to nothing but fees)');
     }
     if (parseSymbol(aRule.symbol).base !== parseSymbol(bRule.symbol).base) {
@@ -275,12 +318,7 @@ export async function resolveDeal(
   const a = legSpecOf(aRule, { ...req.a, symbol: aRule.symbol });
   const b = bRule && req.b ? legSpecOf(bRule, { ...req.b, symbol: bRule.symbol }) : null;
 
-  // Deadline: maker PAIRS must bound unhedged time; single maker deals rest.
-  let deadlineAt: number | null = null;
-  if (req.execution === 'maker' && b) {
-    const t = Number.isFinite(Number(req.timeoutSec)) && Number(req.timeoutSec) > 0 ? Number(req.timeoutSec) : TIMEOUT_DEFAULT_S;
-    deadlineAt = now + Math.min(TIMEOUT_MAX_S, Math.max(TIMEOUT_MIN_S, t)) * 1000;
-  }
+  const deadlineAt = timeoutSec === null || (!b && req.timeoutSec === undefined) ? null : now + timeoutSec * 1000;
 
   const row: PairRow = {
     id: req.id,
@@ -300,26 +338,29 @@ export async function resolveDeal(
     haltReason: null,
     reportJson: null,
     createdAt: now,
+    repegBehindBp,
+    repegAutoBp: repegBehindBp,
+    repegNotBefore: 0,
+    haltKind: null,
   };
 
-  // Margin preflight for exposure-OPENING deals (reduce-only legs are exempt
-  // inside preflightMargin — closes free margin). Fail-open on read errors;
-  // a confirmed shortfall blocks with nothing sent.
-  const openLegs = [
+  const legs = [
     { leg: a, lev: req.leverage?.a },
     ...(b ? [{ leg: b, lev: req.leverage?.b }] : []),
-  ].filter((x) => !x.leg.reduceOnly);
-  if (openLegs.length) {
+  ];
+  if (legs.some((x) => !x.leg.reduceOnly)) {
     await preflightMargin(
       clients,
-      openLegs.map(({ leg, lev }, i) => ({
+      legs.map(({ leg, lev }, i) => ({
         index: i,
-        input: { kind: 'open-market' as const, symbol: leg.contract, side: leg.side, qty: row.targetQty },
+        input: leg.reduceOnly
+          ? { kind: 'close-position' as const, symbol: leg.contract, qty: row.targetQty }
+          : { kind: 'open-market' as const, symbol: leg.contract, side: leg.side, qty: row.targetQty },
         symbol: leg.contract,
         side: leg.side,
         type: 'MARKET' as const,
         tif: 'IOC' as const,
-        reduceOnly: false,
+        reduceOnly: leg.reduceOnly === true,
         qty: row.targetQty,
         estNotional: 0,
         ...(lev ? { leverage: { requested: lev, max: lev } } : {}),

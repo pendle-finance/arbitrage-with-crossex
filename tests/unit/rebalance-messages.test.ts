@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { PlannedStep, WalletAfter } from '../../src/core/rebalance/plan';
+import { type RealizeLeg, realizeEstimateOf } from '../../src/core/rebalance/realize';
 import {
   bannerFor,
   haltReasonFor,
@@ -11,6 +12,7 @@ import {
   newJob,
   newTransferJob,
   pendingStep,
+  REOPEN_HALT,
   spotShortfallFailText,
   transferFailText,
   TransferFile,
@@ -195,9 +197,9 @@ describe('newJob', () => {
     expect(job.steps).toHaveLength(15);
     expect(job.steps.map((s) => s.round)).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5]);
     expect(job.steps.slice(9, 12)).toEqual([
-      { name: 'Buy USDC', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 23.77, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
-      { name: 'To spot', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
-      { name: 'To Hyperliquid', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: 44.66, borrowLeft: 11.53, from: 'CROSSEX', to: 'HYPERLIQUID' },
+      { name: 'Buy USDC', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 23.77, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
+      { name: 'To spot', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
+      { name: 'To Hyperliquid', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: 4, planned: 44.71, arrives: 44.66, borrowLeft: 11.53, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
     ]);
     expect(job.steps[0]).toMatchObject({ name: 'Buy USDC', planned: 0 });
   });
@@ -221,7 +223,7 @@ describe('newJob', () => {
     const job = newJob({ route: 'convert', steps: [convert], amount: 175.94, costUsd: 0.36, target: [], userId: null }, 7);
 
     expect(job.steps).toEqual([
-      { name: 'Convert', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: null, planned: 175.94, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID' },
+      { name: 'Convert', text: null, quoteId: null, venueId: null, qty: null, attempt: 0, status: 'pending', startedAt: null, doneAt: null, round: null, planned: 175.94, arrives: null, borrowLeft: null, from: 'CROSSEX', to: 'HYPERLIQUID', phase: 'route' },
     ]);
     expect(job.fundsAt).toBe('CROSSEX');
   });
@@ -259,6 +261,217 @@ describe('newJob', () => {
       { name: 'To Gate', round: 2, planned: 20, arrives: null, from: 'LIGHTER', to: 'CROSSEX' },
       { name: 'Sell USDC', round: 2, planned: 20, arrives: null, from: 'LIGHTER', to: 'CROSSEX' },
     ]);
+  });
+});
+
+const HL_ETH = 'HYPERLIQUID_FUTURE_ETH_USDC';
+const GATE_ETH = 'GATE_FUTURE_ETH_USDT';
+
+const realizeLeg = (over: Partial<RealizeLeg> = {}): RealizeLeg => ({
+  pool: 'HYPERLIQUID',
+  symbol: HL_ETH,
+  exchange: 'HYPERLIQUID',
+  base: 'ETH',
+  side: 'SHORT',
+  positionQty: 66,
+  qty: 53.8,
+  realizedUsd: 34386,
+  convert: { amount: 10298, count: 1, feeUsd: 20.6 },
+  closeFeeUsd: 51.2,
+  closeMakerFeeUsd: 21.94,
+  reopenFeeUsd: 51.19,
+  closeImpactUsd: 9.44,
+  reopenImpactUsd: 9.44,
+  impactBp: 1.9,
+  ...over,
+});
+
+const gateLong = (over: Partial<RealizeLeg> = {}): RealizeLeg =>
+  realizeLeg({ pool: 'CROSSEX', symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', qty: 47.1, convert: { amount: 8000, count: 1, feeUsd: 16 }, ...over });
+
+const ownerRoute: PlannedStep[] = [
+  { round: 1, kind: 'round', buy: 0, move: 27228, arrives: 27200, borrowLeft: 0, seconds: 900, ...FROM_HYPERLIQUID },
+];
+
+const realizeJob = (legs: RealizeLeg[], steps: PlannedStep[] = ownerRoute): Job =>
+  newJob(
+    {
+      route: 'loop',
+      steps,
+      amount: 37526,
+      costUsd: 127.27,
+      target: [],
+      userId: '1',
+      realize: {
+        legs,
+        refused: null,
+        estimates: { maker: realizeEstimateOf({ legs }, 'maker'), market: realizeEstimateOf({ legs }, 'market') },
+      },
+    },
+    4_000_000,
+  );
+
+const shape = (job: Job) => job.steps.map((step) => [step.name, step.from, step.to, step.planned]);
+
+const closedAt = (job: Job, filled: number, stepIndex: number): Job => {
+  Object.assign(job.steps[0], { status: 'done', qty: filled, text: 't-rb1', venueId: 'o1' });
+  job.realize!.legs[0].filledQty = filled;
+  return Object.assign(job, { status: 'halted', stepIndex });
+};
+
+describe('realize job', () => {
+  it('writes the slices step and its convert before the route', () => {
+    const job = realizeJob([realizeLeg()]);
+
+    expect(shape(job)).toEqual([
+      ['Slices', 'HYPERLIQUID', 'HYPERLIQUID', 53.8],
+      ['Convert', 'HYPERLIQUID', 'CROSSEX', 10298],
+      ['From Hyperliquid', 'HYPERLIQUID', 'CROSSEX', 27228],
+      ['To Gate', 'HYPERLIQUID', 'CROSSEX', 27200],
+      ['Sell USDC', 'HYPERLIQUID', 'CROSSEX', 27200],
+    ]);
+    expect(job.steps[0]).toMatchObject({
+      round: null,
+      status: 'pending',
+      perp: { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'BUY', reduceOnly: true },
+      follow: { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SELL', reduceOnly: false },
+      nextTryAt: null,
+      retry: null,
+    });
+    expect(job.realize).toEqual({
+      legs: [{ symbol: HL_ETH, base: 'ETH', exchange: 'HYPERLIQUID', pool: 'HYPERLIQUID', side: 'SHORT', positionQty: 66, qty: 53.8, filledQty: 0, realizedUsd: 0, hedge: null, closeFeeUsd: 51.2, reopenFeeUsd: 51.19, closeImpactUsd: 9.44, reopenImpactUsd: 9.44, convert: { amount: 10298, feeUsd: 20.6 } }],
+      costUsd: 0,
+    });
+    expect(job).toMatchObject({ status: 'running', stepIndex: 0, fundsAt: 'HYPERLIQUID' });
+  });
+
+  it('a realize with no route steps is the leg alone, and no Convert when the leg needs none', () => {
+    expect(shape(realizeJob([realizeLeg()], [])).map(([name]) => name)).toEqual(['Slices', 'Convert']);
+    const small = realizeJob([realizeLeg({ positionQty: 0.05, qty: 0.02, realizedUsd: 12.4, convert: null })], []);
+
+    expect(shape(small)).toEqual([['Slices', 'HYPERLIQUID', 'HYPERLIQUID', 0.02]]);
+    expect(small.fundsAt).toBe('HYPERLIQUID');
+  });
+
+  it('a Gate long closes with a sell, reopens with a buy, and converts toward USDC · Hyperliquid', () => {
+    const job = realizeJob([gateLong()], []);
+
+    expect(shape(job)).toEqual([
+      ['Slices', 'CROSSEX', 'CROSSEX', 47.1],
+      ['Convert', 'CROSSEX', 'HYPERLIQUID', 8000],
+    ]);
+    expect(job.steps[0].perp).toEqual({ symbol: GATE_ETH, exchange: 'GATE', side: 'SELL', reduceOnly: true });
+    expect(job.steps[0].follow).toEqual({ symbol: GATE_ETH, exchange: 'GATE', side: 'BUY', reduceOnly: false });
+    expect(job.fundsAt).toBe('CROSSEX');
+  });
+
+  it('a $6M realize splits its Convert at 500,000, and each leg runs whole before the next', () => {
+    const big = realizeLeg({ positionQty: 3300, qty: 3000, realizedUsd: 1_917_000, convert: { amount: 1_917_000, count: 4, feeUsd: 3834 } });
+    const btc = realizeLeg({ symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', base: 'BTC', positionQty: 1.2, qty: 0.4, convert: null });
+
+    const job = realizeJob([big, btc]);
+    const converts = job.steps.filter((step) => step.name === 'Convert');
+
+    expect(job.steps.map((step) => step.name)).toEqual([
+      'Slices', 'Convert', 'Convert', 'Convert', 'Convert', 'Slices', 'From Hyperliquid', 'To Gate', 'Sell USDC',
+    ]);
+    expect(converts.every((step) => step.planned! <= 500_000)).toBe(true);
+    expect(Math.round(converts.reduce((sum, step) => sum + step.planned!, 0) * 100)).toBe(191_700_000);
+    expect(job.steps[5].perp?.symbol).toBe('HYPERLIQUID_FUTURE_BTC_USDC');
+    expect(job.realize!.legs.map((leg) => [leg.symbol, leg.qty])).toEqual([[HL_ETH, 3000], ['HYPERLIQUID_FUTURE_BTC_USDC', 0.4]]);
+  });
+
+  it('survives write and read, with a filled slices step and a retry on disk', () => {
+    const d = dir();
+    const job = closedAt(realizeJob([realizeLeg()]), 53.8, 2);
+    Object.assign(job.steps[0], { attempt: 2, nextTryAt: 4_008_000, retry: { reason: 'margin', convertAmount: 1500 } });
+    new JobFile(d).write(job);
+
+    const read = new JobFile(d).read()!;
+
+    expect(read).toMatchObject(JSON.parse(JSON.stringify(job)));
+    expect(read.steps.slice(1).every((step) => step.perp === null && step.nextTryAt === null && step.retry === null)).toBe(true);
+  });
+
+  it('an old job file without realize still parses, with no perp, wait or retry on its steps', () => {
+    const d = dir();
+    const old: Partial<Job> = accountAJob();
+    delete old.realize;
+    writeRaw(d, 'rebalance.json', old);
+
+    const read = new JobFile(d).read()!;
+
+    expect(read.realize).toBeNull();
+    expect(read.steps).toHaveLength(15);
+    expect(read.steps.every((step) => step.perp === null && step.nextTryAt === null && step.retry === null)).toBe(true);
+  });
+
+  it('reads null for a same-wallet step that is not a slices step, a slices step with no perp, or a realize job with no realize', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const bad: ((job: Job) => void)[] = [
+        (job) => Object.assign(job.steps[1], { to: 'HYPERLIQUID' }),
+        (job) => Object.assign(job.steps[0], { perp: null }),
+        (job) => Object.assign(job, { realize: null }),
+        (job) => Object.assign(job, { realize: { legs: 'ETH' } }),
+      ];
+      for (const edit of bad) {
+        const job = realizeJob([realizeLeg()]);
+        edit(job);
+        const d = dir();
+        writeRaw(d, 'rebalance.json', job);
+        expect(new JobFile(d).read()).toBeNull();
+      }
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
+describe('reopen halt texts', () => {
+  const leg = realizeLeg();
+
+  it('stops the reopen on lost trade permission', () => {
+    expect(REOPEN_HALT.tradePermission).toBe('The API key cannot trade. Fix it in Settings, then Resume.');
+  });
+
+  it('stops the reopen on a close-only contract', () => {
+    expect(REOPEN_HALT.closeOnly(leg, 53.8)).toBe(
+      'Gate CrossEx takes no new orders on this contract. Resume when it does, or close 53.8 ETH of the Gate long in Positions.',
+    );
+  });
+
+  it('stops the reopen when no cash is left, and names the wallet of the job', () => {
+    expect(REOPEN_HALT.noCash('CROSSEX')).toBe('Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.');
+    expect(REOPEN_HALT.noCash('HYPERLIQUID')).toBe('Not enough margin, and no cash left to convert. Move USDC into USDC · Hyperliquid, then Resume.');
+    expect(REOPEN_HALT.noCash('LIGHTER')).toBe('Not enough margin, and no cash left to convert. Move USDC into USDC · Lighter, then Resume.');
+    expect(REOPEN_HALT.noBorrow('CROSSEX')).toBe('Not enough margin. USDC · Hyperliquid has no borrow for a Convert to repay. Add margin, then Resume.');
+  });
+
+  it('a perp with no other perp says smaller than before and names no other leg', () => {
+    const alone = { ...leg, hedge: null };
+    expect(REOPEN_HALT.quotesUsedLegOpen(alone, 0.2)).toBe(
+      "Gate's 100 Convert quotes for today are used up. The Hyperliquid short is 0.2 ETH smaller than before. Resume after Gate's count clears, within 24 hours.",
+    );
+    expect(REOPEN_HALT.refused(alone, 0.2, '')).toBe('Gate refused the reopen. The Hyperliquid short is 0.2 ETH smaller than before. Resume to try again.');
+    expect(REOPEN_HALT.underMinimum(alone, 0.2)).toBe(
+      "The rest is under Gate's smallest order. The Hyperliquid short is 0.2 ETH smaller than before. Abandon it and check Positions.",
+    );
+    expect(REOPEN_HALT.closeOnly(alone, 0.2)).toBe('Gate CrossEx takes no new orders on this contract. Resume when it does.');
+  });
+
+  it('stops on the quote limit with the leg open', () => {
+    expect(REOPEN_HALT.quotesUsedLegOpen(leg, 53.8)).toBe(
+      "Gate's 100 Convert quotes for today are used up. The Hyperliquid short is 53.8 ETH smaller than the Gate long. Resume after Gate's count clears, within 24 hours, or close 53.8 ETH of the Gate long in Positions.",
+    );
+  });
+
+  it('a Gate long names the Hyperliquid short, and a part reopen names what is left', () => {
+    expect(REOPEN_HALT.closeOnly(gateLong(), 47.1)).toBe(
+      'Gate CrossEx takes no new orders on this contract. Resume when it does, or close 47.1 ETH of the Hyperliquid short in Positions.',
+    );
+    expect(REOPEN_HALT.quotesUsedLegOpen(leg, 53.8 - 30)).toContain('The Hyperliquid short is 23.8 ETH smaller than the Gate long.');
+    expect(REOPEN_HALT.closeOnly(realizeLeg({ base: 'ETH' }), 3300)).toContain('close 3,300 ETH of the Gate long');
   });
 });
 
@@ -556,6 +769,27 @@ describe('bannerFor', () => {
 
     expect(bannerFor(job)).toBe('Rebalance stopped.');
     expect(bannerFor({ ...exampleEJob(), steps: [] })).toBe('Rebalance stopped.');
+  });
+
+  it('names the leg gap while the slices step has the close filled and the hedge behind', () => {
+    const gapAt = (leg: RealizeLeg, filled: number, hedged: number, hedge: string | null = leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE'): Job => {
+      const job = closedAt(realizeJob([leg]), filled, 0);
+      Object.assign(job.steps[0], { status: 'running', qty: hedged });
+      if (job.realize) job.realize.legs[0].hedge = hedge;
+      return job;
+    };
+
+    expect(bannerFor(gapAt(realizeLeg(), 53.8, 0))).toBe('Rebalance stopped. Hyperliquid short is 53.8 ETH smaller than the Gate long.');
+    expect(bannerFor(gapAt(realizeLeg(), 30, 0))).toBe('Rebalance stopped. Hyperliquid short is 30 ETH smaller than the Gate long.');
+    expect(bannerFor(gapAt(gateLong(), 47.1, 20))).toBe('Rebalance stopped. Gate long is 27.1 ETH smaller than the Hyperliquid short.');
+    expect(bannerFor(gapAt(realizeLeg(), 0.2, 0, null))).toBe('Rebalance stopped. Hyperliquid short is 0.2 ETH smaller than before.');
+  });
+
+  it('reads as a route stop once the slices are done', () => {
+    const job = closedAt(realizeJob([realizeLeg()]), 53.8, 2);
+    Object.assign(job.steps[1], { status: 'done', qty: job.steps[1].planned });
+
+    expect(bannerFor(job)).toBe('Rebalance stopped in round 1.');
   });
 });
 

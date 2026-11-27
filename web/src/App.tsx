@@ -25,13 +25,15 @@ import { SetupPage } from './panels/setup/SetupPage';
 import { SETUP_SHOWN_KEY, useSetupState, type SetupStep } from './panels/setup/setupState';
 import { TrackedAddressProvider } from './panels/trackedAddress';
 import { RollSignalProvider } from './panels/rollSignal';
+import { RebalanceModalHost } from './panels/RebalanceModal';
+import { RebalanceOpenerProvider } from './panels/rebalanceOpener';
 import { RollOverBanner } from './panels/RollOverBanner';
 import { TradesPanel } from './panels/TradesPanel';
-import { Drawer } from './components/Drawer';
+import { Modal } from './components/Modal';
 import { RecoveryBanner } from './trade/RecoveryBanner';
 import { StrategyWizard } from './trade/StrategyWizard';
 import { TradeFlowProvider, useTradeFlow } from './trade/TradeFlow';
-import { TradeRail } from './trade/TradeRail';
+import { TradeRail, TradeRailTabs, type Venue } from './trade/TradeRail';
 
 // The markdown renderer is ~160kB and only the guide needs it — split it out so
 // opening the terminal doesn't pay for a document most sessions never read.
@@ -90,7 +92,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
   const ordersBadge =
     orderCount > 0 ? (
       <Chip
-        sm
+        tab
         tone="info"
         className="num"
         title={t('app.openOrders', { count: orderCount })}
@@ -180,6 +182,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
     <TradeFlowProvider>
       <RollSignalProvider>
       <TrackedAddressProvider onOpenSettings={openSettings} onOpenLogin={openLogin}>
+      <RebalanceOpenerProvider>
         <TooltipLayer />
         <DisclaimerGate />
         {/* Only once the terminal is usable: the disclaimer gate is a locked
@@ -276,9 +279,10 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
           {isTrading && (
             <>
               <StrategyWizard onViewPositions={() => selectTab('positions')} />
-              <OrderTicketDrawer />
+              <OrderTicketModal />
             </>
           )}
+          <RebalanceModalHost />
           <SettingsDrawer
             open={settingsOpen}
             focusStep={settingsFocus}
@@ -297,6 +301,7 @@ export default function App({ settingsOpenOnMount = false }: { settingsOpenOnMou
             </Suspense>
           )}
         </div>
+      </RebalanceOpenerProvider>
       </TrackedAddressProvider>
       </RollSignalProvider>
     </TradeFlowProvider>
@@ -338,25 +343,31 @@ function OrderTicketButton() {
   );
 }
 
-/** The manual ticket, mounted ONLY while its drawer is open — a closed drawer
+/** The manual ticket, mounted ONLY while its popup is open — a closed popup
  * cannot sit armed with a stale order. Closing also clears any prefills.
  * `locked` while a Boros execution is in flight: closing would unmount the
  * ticket, and its fill report — a partial fill's remediation included — and
  * replay-protection order ids are component state that die with it while the
  * order executes at the venue regardless. */
-function OrderTicketDrawer() {
+function OrderTicketModal() {
   const flow = useTradeFlow();
   const [busy, setBusy] = useState(false);
-  const { t } = useTranslation();
+  const [venue, setVenue] = useState<Venue>('perp');
   return (
-    <Drawer
-      open={flow.railOpen}
-      title={t('app.orderTicket')}
-      locked={busy}
-      onClose={flow.closeRail}
-      widthClass="w-[560px]"
-    >
-      <TradeRail onBusyChange={setBusy} />
-    </Drawer>
+    flow.railOpen && (
+      <Modal
+        tabbed
+        widthClass="w-[680px]"
+        locked={busy}
+        onClose={flow.closeRail}
+        title={
+          <span className="flex h-full items-stretch gap-3">
+            <TradeRailTabs venue={venue} onChange={setVenue} />
+          </span>
+        }
+      >
+        <TradeRail venue={venue} onVenueChange={setVenue} onBusyChange={setBusy} />
+      </Modal>
+    )
   );
 }

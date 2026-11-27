@@ -375,7 +375,8 @@ describe('AssetCard with a spread leg', () => {
       const closes = await screen.findAllByRole('button', { name: 'Close Boros' });
       await user.click(closes[closes.length - 1]);
       const dialog = await screen.findByRole('dialog');
-      expect(within(dialog).getAllByText('Boros')).toHaveLength(legs);
+      expect(within(dialog).getAllByText(/^mark \d/)).toHaveLength(legs);
+      expect(within(dialog).queryByText(/ fixed · mark /)).not.toBeInTheDocument();
       await user.keyboard('{Escape}');
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       await user.click(screen.getAllByRole('button', { name: /^Gate\s*LONG/ })[i]);

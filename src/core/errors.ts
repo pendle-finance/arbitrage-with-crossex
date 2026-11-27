@@ -25,6 +25,7 @@ export type ErrorCategory =
   | 'leverage'
   | 'reduce-only-violation'
   | 'rate-limited'
+  | 'order-allowance'
   | 'symbol-invalid'
   | 'venue-rejected'
   | 'validation'
@@ -58,13 +59,15 @@ export class CoreError extends Error {
 const LABEL_RULES: Array<{ match: RegExp; category: ErrorCategory; plain: string }> = [
   // Permission is an auth problem, not a funds problem — must beat the balance rule.
   { match: /INVALID_KEY|INVALID_SIGNATURE|FORBIDDEN|MISSING_REQUIRED_HEADER|INVALID_CREDENTIALS|PERMISSION/, category: 'auth', plain: 'Gate refused this request. Check the Gate API key and its CrossEx permission in Settings.' },
+  { match: /^TRADE_(HYPERLIQUID|LIGHTER)_ORDER_LIMIT_ERROR$/, category: 'order-allowance', plain: 'The venue has no order allowance left through Gate. Wait, then try again.' },
+  { match: /^TRADE_MAX_ORDERS_ERROR$/, category: 'venue-rejected', plain: 'Too many open orders on this market at Gate. Cancel some, then try again.' },
   { match: /TOO_MANY|RATE_LIMIT/, category: 'rate-limited', plain: 'Gate is limiting requests from this account. Try again in a minute.' },
   { match: /POST_ONLY|POC_/, category: 'post-only-would-cross', plain: 'The post-only order would have filled at once. Move the price off the market.' },
   { match: /REDUCE_ONLY/, category: 'reduce-only-violation', plain: 'This reduce-only order would not shrink any position: its side or size does not match what you hold. Check your positions, then try again.' },
   { match: /LEVERAGE|RISK_LIMIT/, category: 'leverage', plain: "Gate refused the leverage or position limit. Lower the size, then try again." },
   // Gate's one-step close (POST /crossex/position) takes dust only; the terminal closes with reduce-only orders.
   { match: /CAN_NOT_DELETE_LARGE_POSITION/, category: 'venue-rejected', plain: "Gate's one-step close takes only tiny positions. Use the Close button instead." },
-  { match: /MIN_NOTIONAL|SIZE_TOO_SMALL|MIN_SIZE|TOO_SMALL/, category: 'size-too-small', plain: "The order is below Gate's minimum size or value. Increase the size." },
+  { match: /MIN_NOTIONAL|SIZE_TOO_SMALL|MIN_SIZE|TOO_SMALL|ORDER_QUANTITY_MIN|ORDER_AMOUNT_MIN/, category: 'size-too-small', plain: "The order is below Gate's minimum size or value. Increase the size." },
   { match: /MAX_MARKET_SIZE|MAX_LIMIT_SIZE|SIZE_TOO_LARGE|TOO_LARGE/, category: 'size-too-large', plain: "The order is above Gate's largest order size. Lower the size." },
   { match: /SIGNIFICANT_FIGURES|PRICE/, category: 'price-limit', plain: 'The price is outside what Gate accepts. Refresh the price and try again.' },
   // Anchor INSUFFICIENT to a funds word so INSUFFICIENT_PERMISSION (handled above) can't reach here.

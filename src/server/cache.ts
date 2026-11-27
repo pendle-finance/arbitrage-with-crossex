@@ -55,8 +55,9 @@ export const TTL = {
    * at 10 pages a tick it is also the fastest way into a 429 cooldown. */
   fills: 300_000,
   /** GitHub version.json update check — hours, not minutes: releases are
-   * hand-bumped and rare, and a FAILED fetch is cached as null for the same
-   * window (one quiet retry per window, silent by design). */
+   * hand-bumped and rare, and a FAILED plain fetch is cached as null for the
+   * same window (one quiet retry per window, silent by design). A press of
+   * Check for updates stores only a good answer. */
   version: 21_600_000,
   /** Short-link creation for the share modal. The backend is idempotent per
    * payload (content-addressed), so reopening the modal within the window
@@ -125,6 +126,12 @@ export class TtlCache {
     } finally {
       if (entry.inflight === inflight) entry.inflight = undefined;
     }
+  }
+
+  /** The last value stored for `key`, expired or not, without fetching. */
+  peek<T>(key: string): T | undefined {
+    const entry = this.entries.get(key);
+    return entry?.has ? (entry.value as T) : undefined;
   }
 
   /** Invalidate every key starting with `prefix` (e.g. after a cancel/leverage write). */

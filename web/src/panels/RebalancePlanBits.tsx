@@ -1,0 +1,134 @@
+import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import { TriangleAlert } from 'lucide-react';
+import type { EvenPlan, Pool, RebalanceBucket, RoutePlan } from '../api/types';
+import { Chip } from '../components/Chip';
+import { TokenIcon } from '../components/AssetIcon';
+import { microLabelClass } from '../components/Th';
+import { t } from '../i18n';
+import { fmtUsd, num } from '../lib/fmt';
+import { shownSteps, StepList, type StepRow } from './RebalanceBits';
+import { HOVER, modalFeeLabel, modalImpactLabel, poolKey, WALLET_LABEL } from './rebalanceCopy';
+import { costPartsUsd, daysText, paybackDays, Term, WORTH_IT_DAYS, worthChip } from './RebalanceHovers';
+
+export const realizeText = (key: string, values?: Record<string, string | number>): string =>
+  t(`accounts.rebalanceRealize.${key}` as 'accounts.rebalanceRealize.howItRuns', values);
+
+const rk = realizeText;
+
+export function refusalOf(plan: EvenPlan): { title: string; body: string } | null {
+  const refused = plan.realize?.refused;
+  if (!refused) return null;
+  const wallet = WALLET_LABEL['USDT/CROSSEX'];
+  if (refused.reason === 'no-fee-rate') return { title: rk('feeRateTitle'), body: rk('feeRateBody') };
+  if (refused.reason === 'no-margin') return { title: rk('marginTitle'), body: rk('marginBody', { wallet }) };
+  if (refused.reason === 'past-book') return { title: rk('bookTitle'), body: rk('bookBody') };
+  return { title: rk('capTitle', { cap: fmtUsd(refused.capUsd ?? 0, 0) }), body: rk('capBody') };
+}
+
+export interface CostRow {
+  label: string;
+  usd: number;
+  strong?: boolean;
+  hover?: string;
+}
+
+export function legacyCostOf(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): { rows: CostRow[]; chip: ReactNode; daysLine: string | null } {
+  const kind = worthChip(plan, route, buckets);
+  const days = paybackDays(plan, route, buckets);
+  const { feeUsd, impactUsd, totalUsd } = costPartsUsd(plan, route);
+  const rows: CostRow[] = [
+    { label: modalFeeLabel(), usd: feeUsd },
+    ...(impactUsd > 0 ? [{ label: modalImpactLabel(), usd: impactUsd, hover: HOVER.priceImpact }] : []),
+    { label: rk('totalCost'), usd: totalUsd, strong: true },
+  ];
+  const chip = kind === null ? null : <Chip tone={kind === 'worth' ? 'info' : 'amber'} sm>{rk(kind === 'worth' ? 'worthIt' : 'notWorthItYet')}</Chip>;
+  const daysLine = kind !== null && days !== null ? rk('daysLine', { days: daysText(days), max: num(WORTH_IT_DAYS, 0) }) : null;
+  return { rows, chip, daysLine };
+}
+
+export function TotalCost({ rows, chip }: { rows: CostRow[]; chip?: ReactNode }) {
+  return (
+    <div className="card flex flex-col gap-1.5 p-3 text-xs">
+      <div className="flex items-center gap-2 text-[14px] font-semibold text-ink-50">
+        {t('accounts.moveCash.cost')}
+        {chip}
+      </div>
+      {rows.map((row) => (
+        <div
+          key={row.label}
+          className={`flex items-center justify-between gap-3 ${row.strong ? 'mt-0.5 border-t border-ink-800 pt-1.5 font-semibold text-ink-50' : 'text-ink-300'}`}
+        >
+          <span>{row.hover ? <Term label={row.label} text={row.hover} /> : row.label}</span>
+          <span className={`num ${row.strong ? 'font-semibold text-ink-50' : 'text-ink-100'}`}>{fmtUsd(row.usd)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function NotHedgedLine({ text }: { text: string }) {
+  return (
+    <p className="num flex items-center gap-2 text-xs text-gold">
+      <TriangleAlert size={14} aria-hidden className="shrink-0" />
+      {text}
+    </p>
+  );
+}
+
+export type PlanStep = { key: string; icon: string | null; text: ReactNode; usd: number | null };
+
+export function PlanSteps({ label, rows }: { label: string; rows: PlanStep[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between gap-3 pr-3">
+        <span className={microLabelClass}>{label}</span>
+        {rows.some((row) => row.usd !== null) && <span className={microLabelClass}>{t('accounts.moveCash.cost')}</span>}
+      </div>
+      <ol className="flex flex-col gap-1">
+        {rows.map((row, index) => (
+          <li key={row.key} className="flex items-center gap-3 rounded border border-ink-800 px-3 py-1.5 text-xs text-ink-100">
+            <span className="num w-4 shrink-0 text-ink-400">{index + 1}</span>
+            {row.icon && <TokenIcon symbol={row.icon} size={16} />}
+            <span className="min-w-0 flex-1">{row.text}</span>
+            {row.usd !== null && <span className="num shrink-0 text-ink-300">{fmtUsd(row.usd)}</span>}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+export const walletOf = (pool: Pool): string => WALLET_LABEL[poolKey(pool)] ?? pool;
+
+export function stepsHoverOf(rounds: number, held: number | null): string | null {
+  if (rounds === 0) return null;
+  return [HOVER.round, held === null ? HOVER.whyMoreThanOne : HOVER.whyMoreThanOneBorrow(fmtUsd(held))].join(' ');
+}
+
+const STEPS_FOLD_AT = 3;
+
+export function StepsFold({ open, onToggle, hover, rows }: { open: boolean; onToggle: () => void; hover: string | null; rows: StepRow[] }) {
+  const { t } = useTranslation();
+  const folds = rows.length >= STEPS_FOLD_AT;
+  const limit = folds && !open ? 0 : null;
+  const shown = shownSteps(rows, limit).length > 0;
+  const label = t('accounts.rebalanceModal.steps');
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className={`flex items-center justify-between gap-3 pr-3 ${microLabelClass}`}>
+        <span className="flex items-center gap-3">
+          {hover === null ? <span>{label}</span> : <Term label={label} text={hover} />}
+          {folds && (
+            <button type="button" className="btn-link text-xs" aria-expanded={open} onClick={onToggle}>
+              {open ? t('accounts.rebalanceModal.hideSteps') : t('accounts.rebalanceModal.showSteps')}
+            </button>
+          )}
+        </span>
+        {shown && <span>{t('accounts.rebalanceModal.time')}</span>}
+      </div>
+      {shown && <StepList rows={rows} limit={limit} />}
+    </div>
+  );
+}

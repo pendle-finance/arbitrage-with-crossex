@@ -23,7 +23,7 @@ import { useToast } from '../../components/Toast';
 import { fmtClock, fmtSyncAge, fmtUsd } from '../../lib/fmt';
 import { useNow } from '../../lib/useNow';
 import { short } from '../HomeControls';
-import { isSameAddress, useTrackedAddressOptional } from '../trackedAddress';
+import { isSameAddress, useActiveWallet, useTrackedAddressOptional } from '../trackedAddress';
 import { Ext } from '../onboardingBits';
 import { SetupRowFrame } from './SetupRowFrame';
 import type { SetupRowProps } from './setupState';
@@ -116,7 +116,7 @@ function stateLine(info: TelegramInfo | undefined, now: number): { text: string 
   };
 }
 
-export function TelegramRow(p: SetupRowProps) {
+export function TelegramRow(p: SetupRowProps & { onLogIn?: () => void }) {
   const telegram = useTelegram();
   const info = telegram.data;
   const start = useStartTelegramLink();
@@ -148,6 +148,11 @@ export function TelegramRow(p: SetupRowProps) {
     info?.alertWallet && viewed && !isSameAddress(info.alertWallet, viewed) ? info.alertWallet : null;
   const isConnected =
     info?.connected === true && info.state === 'connected' && unlinked === null && !checking && otherWallet === null;
+  // The terminal links alerts to the wallet logged in here, but the bot page
+  // signs in with the wallet the browser has connected. Viewing a wallet other
+  // than the logged-in one would link one wallet and sign the other.
+  const active = useActiveWallet();
+  const loginFirst = !isConnected && otherWallet === null && active.viewOnly ? viewed : null;
 
   useEffect(() => {
     if (linkStatus === 'confirmed') {
@@ -340,6 +345,12 @@ export function TelegramRow(p: SetupRowProps) {
     </>
   );
 
+  const loginButton = (
+    <button type="button" className="btn-primary w-fit" onClick={p.onLogIn ?? active.openLogin}>
+      {t('app.telegram.logInToSetUp')}
+    </button>
+  );
+
   const waitingBody = (
     <>
       <div className="flex items-center gap-2 text-xs text-ink-300">
@@ -396,7 +407,15 @@ export function TelegramRow(p: SetupRowProps) {
       title={t('app.telegram.title')}
       row={p}
       isDone={isConnected}
-      state={otherWallet ? t('app.telegram.notForThisWallet') : p.open && isConnected ? null : line.text}
+      state={
+        otherWallet
+          ? t('app.telegram.notForThisWallet')
+          : loginFirst && phase !== 'waiting'
+            ? t('app.telegram.logInFirst')
+            : p.open && isConnected
+              ? null
+              : line.text
+      }
       isWarn={line.isWarn}
       alert={
         ((failure && p.open) || readError) && (
@@ -405,7 +424,17 @@ export function TelegramRow(p: SetupRowProps) {
           </p>
         )
       }
-      setupAction={checking || otherWallet ? <span /> : unlinked ? addWalletButton(unlinked, true) : setupButton}
+      setupAction={
+        checking || otherWallet ? (
+          <span />
+        ) : loginFirst && phase !== 'waiting' ? (
+          loginButton
+        ) : unlinked ? (
+          addWalletButton(unlinked, true)
+        ) : (
+          setupButton
+        )
+      }
       skipConsequence={t('app.telegram.skip')}
     >
       {checking ? (
@@ -421,6 +450,17 @@ export function TelegramRow(p: SetupRowProps) {
             components={{ a: <span className="num text-ink-100" />, b: <span className="num text-ink-100" /> }}
           />
         </p>
+      ) : loginFirst && phase !== 'waiting' ? (
+        <>
+          <p className="text-xs text-ink-300">
+            <Trans
+              i18nKey="app.telegram.logInFirstBody"
+              values={{ viewed: short(loginFirst) }}
+              components={{ a: <span className="num text-ink-100" /> }}
+            />
+          </p>
+          {loginButton}
+        </>
       ) : unlinked && phase !== 'waiting'
         ? unlinkedBody(unlinked)
         : info && isConnected

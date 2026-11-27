@@ -7,6 +7,7 @@
  * committed durable state plus current venue state. There is deliberately no
  * recovery module, no adopt-window, no repeg protocol.
  */
+import { classifyGateError } from '../core/errors';
 import { fx, fxStr } from './fx';
 import { POC_REASON, decide, project, sizeFor, type DecideCtx } from './decide';
 import type { Store } from './db';
@@ -33,6 +34,34 @@ export interface LoopDeps {
    * crash point is just "a fresh tick".) */
   crashAfterCommit?: () => boolean;
   onFinish?: (pairId: string) => void;
+  onSleep?: (gap: SleepGap) => void;
+}
+
+export const SLEEP_GAP_MS = 60_000;
+
+type SleepGap = { fromMs: number; toMs: number };
+
+function reportSleep(deps: LoopDeps, gap: SleepGap): void {
+  try {
+    deps.onSleep?.(gap);
+  } catch (err) {
+    console.error('[engine] sleep handler failed', err);
+  }
+}
+
+export const isOrderAllowanceRefusal = (label: string): boolean =>
+  classifyGateError({ response: { data: { label } } }).category === 'order-allowance';
+
+export const ORDER_ALLOWANCE_STOP = 10;
+
+function allowanceRefusalsOf(orders: OrderRow[]): number {
+  let n = 0;
+  for (const o of orders.filter((x) => x.leg === 'A').sort((x, y) => y.seq - x.seq)) {
+    const label = o.state === 'DEAD' && o.kind === 'maker' && o.closeReason?.startsWith('rejected:') ? o.closeReason.slice('rejected:'.length) : null;
+    if (label === null || !isOrderAllowanceRefusal(label)) break;
+    n++;
+  }
+  return n;
 }
 
 // Open-world status decoder: known strings map; anything else is quarantined,
@@ -154,12 +183,15 @@ function applySnapshot(deps: LoopDeps, pair: PairRow, o: OrderRow, snap: OrderSn
         // Any A-leg progress clears the failure budget (a long clip series with
         // occasional whiffs must not accumulate into a spurious stop).
         if (pair.pocRejects > 0) deps.store.updatePair(pair.id, { pocRejects: 0 });
-      } else if (reason === 'poc-reject' || o.kind === 'taker') {
-        // Zero-progress A-leg terminal: POC insta-reject (requote budget) or a
-        // taker clip that whiffed/was rejected post-acceptance. All draw from
-        // ONE budget — without it a banded clip on a wide spread spins one new
-        // venue order per tick forever, and a REDUCE_ONLY reject (position
-        // vanished) never terminates the deal.
+      } else if (reason === 'poc-reject' || o.kind === 'taker' || !o.cancelRequested) {
+        // Zero-progress A-leg terminal: POC insta-reject (requote budget), a
+        // taker clip that whiffed/was rejected post-acceptance, or a maker the
+        // venue refused after accepting it (CrossEx answers FAIL after a create
+        // succeeds). All draw from ONE budget — without it a banded clip on a
+        // wide spread spins one new venue order per tick forever, a refused
+        // maker is re-placed every fast tick until its deadline, and a
+        // REDUCE_ONLY reject (position vanished) never terminates the deal.
+        // Our own cancels (re-peg, stop, convert) are not failures.
         bumpClipWall(deps, pair, now);
       }
     }
@@ -188,7 +220,8 @@ function bumpClipWall(deps: LoopDeps, pair: PairRow, now: number): void {
     pocRejects: n,
     makerNotBefore: now + tuning(deps).POC_BACKOFF_MS,
   });
-  if (n >= tuning(deps).MAX_POC_REJECTS) {
+  const turnsToMarket = pair.mode === 'OPENING' && pair.a.reduceOnly === true && pair.deadlineAt !== null;
+  if (n >= tuning(deps).MAX_POC_REJECTS && !turnsToMarket) {
     deps.store.alert(
       'error',
       pair.id,
@@ -374,6 +407,25 @@ async function performPlace(
       closeReason: `rejected:${out.label}`,
       resolvedAt: deps.clock.now(),
     });
+    if (a.leg === 'A' && a.kind === 'maker' && isOrderAllowanceRefusal(out.label)) {
+      const refusedAt = deps.clock.now();
+      const wait = refusedAt + tuning(deps).REPEG_REFUSED_WAIT_MS;
+      deps.store.updatePair(pair.id, { limitPrice: pair.limitPrice, repegNotBefore: wait, makerNotBefore: wait });
+      const refusals = allowanceRefusalsOf(deps.store.listOrders(pair.id));
+      if (refusals >= ORDER_ALLOWANCE_STOP) {
+        deps.store.updatePair(pair.id, {
+          mode: 'STOPPING',
+          haltReason: `Gate refused the maker order ${refusals} times in a row: the venue has no order allowance left`,
+        });
+        deps.store.alert(
+          'error',
+          pair.id,
+          `Gate refused the maker order on ${leg.contract} ${refusals} times in a row: the venue has no order allowance left. The deal is stopping with what filled.`,
+          refusedAt,
+        );
+      }
+      return;
+    }
     if (a.leg === 'A') {
       // Every definitive A-leg create rejection draws the SAME failure budget —
       // POC would-cross (requote), REDUCE_ONLY (position vanished), margin/size
@@ -445,7 +497,10 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
       deps.store.updatePair(pair.id, {
         mode: action.mode,
         ...(action.haltReason ? { haltReason: action.haltReason } : {}),
+        ...(action.haltKind ? { haltKind: action.haltKind } : {}),
+        ...(action.resetClipBudget ? { pocRejects: 0, makerNotBefore: 0 } : {}),
       });
+      if (action.alert) deps.store.alert('warn', pair.id, action.alert, deps.clock.now());
       if (action.mode === 'HALTED') deps.onFinish?.(pair.id);
       return;
     case 'cancel':
@@ -471,7 +526,9 @@ async function perform(deps: LoopDeps, pair: PairRow, action: Action): Promise<v
       // with 0.999 filled against a hedge leg whose minimum is 1.0 and the user
       // is 99.9% naked. That must not be discoverable only by reading
       // report_json - raise it where the operator actually looks.
-      if (pair.b) {
+      if (action.alert) {
+        deps.store.alert('error', pair.id, action.alert, deps.clock.now());
+      } else if (pair.b) {
         const left = fx(report.unhedged);
         if (left >= fx(pair.b.lot)) {
           deps.store.alert(
@@ -498,7 +555,7 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
     const pair = deps.store.getPair(pairId)!;
     if (o.state === 'PENDING') await resolvePending(deps, pair, o);
     else if (o.state === 'OPEN' || (o.quarantinedStatus && o.state !== 'DEAD')) {
-      await observeOpen(deps, pair, o); // DEAD rows are proven absent — nothing to observe
+      await observeOpen(deps, pair, o);
     }
   }
 
@@ -514,7 +571,12 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
   // cancels — which needs no price — so skip all fetches then.
   const frozen = proj.anyPending || proj.anyQuarantined;
   const needTouch =
-    !frozen && pair.mode === 'OPENING' && pair.pricePolicy === 'touch' && proj.makerOrder?.state !== 'OPEN';
+    !frozen &&
+    pair.mode === 'OPENING' &&
+    pair.pricePolicy === 'touch' &&
+    pair.repegBehindBp === null &&
+    proj.makerOrder?.state !== 'OPEN';
+  const needBest = !frozen && pair.mode === 'OPENING' && pair.pricePolicy === 'touch' && pair.repegBehindBp !== null;
   // A reference price is needed ONLY for a min-notional sizing check (taker legs
   // are plain MARKET, so no band pricing). Fetch it only when a leg with a
   // min-notional is actually about to submit.
@@ -530,6 +592,7 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
     (fx(pair.a.minNotional) > 0n || pair.clipBandBp !== null);
   const ctx: DecideCtx = {
     touchA: needTouch ? await deps.venue.touch(pair.a.contract, pair.a.side, pair.a.tick) : null,
+    bestA: needBest ? await deps.venue.best(pair.a.contract, pair.a.side, pair.a.tick) : null,
     // '0' (unused) when no hedge is owed; a real fetch only when one is.
     refB: needRefB ? await deps.venue.refPrice(pair.b!.contract) : '0',
     refA: needRefA ? await deps.venue.refPrice(pair.a.contract) : '0',
@@ -582,7 +645,10 @@ export async function tickPair(deps: LoopDeps, pairId: string): Promise<Action> 
   if (
     intent.mode !== pair.mode ||
     intent.limitPrice !== pair.limitPrice ||
-    intent.pricePolicy !== pair.pricePolicy
+    intent.pricePolicy !== pair.pricePolicy ||
+    intent.repegBehindBp !== pair.repegBehindBp ||
+    intent.repegNotBefore !== pair.repegNotBefore ||
+    intent.hedgeNotBefore !== pair.hedgeNotBefore
   ) {
     return { type: 'idle', reason: 'intent changed mid-tick — deferring to a fresh tick' };
   }
@@ -603,7 +669,9 @@ export const commands = {
   },
   stop(store: Store, pairId: string): void {
     const p = store.getPair(pairId);
-    if (p && p.mode !== 'DONE') store.updatePair(pairId, { mode: 'STOPPING' });
+    if (!p || p.mode === 'DONE') return;
+    const pressed = p.mode === 'OPENING' || p.mode === 'CONVERTING';
+    store.updatePair(pairId, { mode: 'STOPPING', ...(pressed ? { haltReason: null } : {}) });
   },
   /**
    * Re-peg the maker remainder. `pricePolicy` must be set to match WHAT the
@@ -627,7 +695,7 @@ export const commands = {
   resumeAfterHalt(store: Store, pairId: string): void {
     const p = store.getPair(pairId);
     if (p && p.mode === 'HALTED') {
-      store.updatePair(pairId, { mode: 'STOPPING', hedgeRejectStreak: 0, hedgeNotBefore: 0 });
+      store.updatePair(pairId, { mode: 'STOPPING', hedgeRejectStreak: 0, hedgeNotBefore: 0, haltKind: null });
     }
   },
 };
@@ -646,12 +714,27 @@ export const commands = {
  * pass queues exactly one immediate follow-up pass (still never overlapping). */
 export function startLoop(deps: LoopDeps, opts?: { signal?: AbortSignal }): { wake: () => void } {
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let scheduledAt: number | null = null;
   let running = false;
   let wakeQueued = false;
+
+  const arm = (delay: number): void => {
+    scheduledAt = Math.min(scheduledAt ?? Infinity, deps.clock.now() + delay);
+    timer = setTimeout(run, delay);
+  };
+
+  const flagSleep = (): void => {
+    const firedAt = deps.clock.now();
+    const due = scheduledAt;
+    scheduledAt = null;
+    if (due === null || firedAt - due <= SLEEP_GAP_MS) return;
+    reportSleep(deps, { fromMs: due, toMs: firedAt });
+  };
 
   const run = async (): Promise<void> => {
     if (opts?.signal?.aborted) return;
     timer = null;
+    flagSleep();
     running = true;
     let acted = false;
     // The loop's spine is fault-isolated end to end: a throw anywhere (listPairs
@@ -678,7 +761,7 @@ export function startLoop(deps: LoopDeps, opts?: { signal?: AbortSignal }): { wa
       running = false;
       const delay = wakeQueued ? 0 : acted ? tuning(deps).FAST_TICK_MS : tuning(deps).TICK_MS;
       wakeQueued = false;
-      timer = setTimeout(run, delay);
+      arm(delay);
     }
   };
 
@@ -691,7 +774,7 @@ export function startLoop(deps: LoopDeps, opts?: { signal?: AbortSignal }): { wa
         return;
       }
       if (timer) clearTimeout(timer);
-      timer = setTimeout(run, 0);
+      arm(0);
     },
   };
 }

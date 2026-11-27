@@ -3,6 +3,244 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.8.0 — 2026-11-19
+
+TLDR: Rebalance can turn a perp's open profit into cash, and Delever makes a pair smaller. Large
+moves run in slices. TWAP splits a perp open or close into timed slices. A perp pair can close
+with Limit + hedge for lower fees. The roll-over signal compares against what holding still earns.
+
+- **Rebalance realizes profit.** When the paying wallet is short of cash, step 1 closes part of
+  the profitable perp, converts the cash and reopens the same size at once. Step 2 moves the rest.
+  A realize the plan refuses (price impact over 25 bp, no margin to reopen, past the book, over
+  the market-order cap) says why in one line, and the plain move still runs. The reopen retries
+  until it is whole and stops only for a reason it names. Resume checks both legs before it
+  reopens. The plan counts the reopen's Convert in the wallet it lands in and never closes more
+  than frees cash, so a plan with two borrowing wallets, or a custom move to Lighter, shows what
+  the run does.
+- **Close a perp pair with Limit + hedge.** The Close perps dialog has a `Perp exit` toggle. One
+  leg rests a reduce-only post-only order that follows the book; each fill closes on the other
+  leg at once with a market order. On Gate CrossEx that is 2 bp + 5 bp instead of 5 bp + 5 bp.
+  Limit + hedge is now the default on the open ticket and the close dialog.
+- **Roll-over compares against what holding still earns.** The banner, the card and the Telegram
+  roll alert used to charge the fees already paid to open the pair against "now". A lower later
+  rate could then read as better. They now compare against the locked rate less the settlement
+  fee.
+- **Telegram alerts set up only for the logged-in wallet.** When the browser shows a wallet other
+  than the one logged in, the Telegram row asks you to log in first. Before, the terminal linked
+  the logged-in wallet while the bot page signed in with the browser's.
+- **Aster perps.** Gate CrossEx now lists Aster BTC, ETH and HYPE perps. Fill estimates read
+  Aster's own order book. Aster margin and fees use the shared USDT · CrossEx wallet, so
+  Rebalance and Transfer need no change.
+- **TWAP for perp opens and closes.** A TWAP switch on the Pair ticket, the Single ticket, Close
+  perps, Close one leg, Delever and Realize uPnL splits the order into timed slices: you pick the
+  duration, the interval and the slice size. Each slice is one limit + hedge deal. A run view
+  shows the slice count, the next slice, fills, average prices, slippage and fees, with Pause,
+  Resume and Hold to stop. A strip on every tab shows a running, paused or stopped TWAP, and the
+  tickets wait until it ends. Unequal close legs close the matched size and name what is left.
+- **Rebalance has three tabs: Move cash, Realize uPnL and Delever.** The Borrow card says "Reduce
+  borrow recommended" only when the whole plan costs less than 30 days of interest. Delever makes
+  a Fixed Rate Pair smaller: the perps first, then the Boros share.
+- **Large realizes and Delevers run in slices** of $25k to $100k, maker or market. A run never
+  closes more than one slice plus one venue minimum at a time. A stopped run shows where the money
+  is, with one hold per fix and Abandon, which names any perp left uneven.
+- **Ticket prices and fees group thousands** (2,866.53, not 2866.53).
+- **Gate's "too many open orders" refusal stops the order and says so.** Before, the terminal sent
+  the order again every 90 s.
+- **A cleaner Rebalance popup.** The three tabs fill the top row, and a running job shows in its
+  tab. Move cash has two-line From and To cards and one head row for Route, Time and Est. cost.
+  Each route shows its fee and price impact under the cost. The After card ends with "Pays back
+  in N days". Realize uPnL picks its wallet and takes an amount box with Debt and All presets.
+  The hold buttons read "Hold to move" and "Hold to realize".
+- **Delever picks its size in the same amount box,** with 10%, 20% and 30% presets and the percent
+  inside the box. A preset value has its own fill, so it reads apart from a typed one. With TWAP
+  off, Delever sends one order in the mode you pick and splits only at a venue's order cap.
+  Realize uPnL runs its slices with TWAP.
+- **Move cash Custom amount lines up.** The From and To cards each show a label row, the wallet
+  select and the amount at one height. "Max X" sits on the From label row.
+- **Move cash steps are one compact row each:** number, coin, the move and the time. One or two
+  steps show open; three or more fold behind "Show all steps". A folded running job still shows
+  its running step, with its leg and a thin progress line.
+- **Move cash drops the wallet bar chart** from the running, stopped and finished views, as the
+  plan view already did. The running step names the money on the way, and a stopped move says
+  where its money sits.
+- **Order tickets show one leg list in the Cost card,** with the side toggle in each leg header and
+  the spread as a plain row. The coin price sits right after the coin chips. The Boros pair ticket
+  lists the dates both markets share and the dates only a spread lists, and shows Slippage, Trade
+  fee and Total cost rows. Size per
+  leg shows only when it differs from the size box. The maker price stays steady for 10 seconds
+  when one order book read fails.
+- **Close perps, Close Boros and Roll over show a Cost card, then an After card.** The After card
+  says which leg is only a slice of a larger venue position, and which legs stay open with floating
+  funding. A notice shows above the button only when it blocks. A roll the account cannot fund
+  says to top up first or roll a smaller size.
+- **Close perps, Close Boros and Roll over open with a Pair picker** set to the clicked pair, so the
+  trader can switch to any open pair. The picked pair stays through a refresh, and the picker locks
+  once an order is sent. The Roll over review shows a headline, two step cards side by side, each
+  with its own Total cost, then "Can it fund?".
+- **Close perps and Close Boros drop the standing line under the button** ("Reduce-only…" and
+  "Cancels resting orders…"). The orders they send are unchanged.
+- **Roll over takes a Custom %** after 25, 50, 75 and 100%. Close perps' After card shows the
+  Boros row's size, not hedged, in amber.
+- **Move cash lists the sale of idle CrossEx Gate USDC as its own step,** so the From amount plus
+  the sale adds up to the amount converted.
+- **One type scale in the Rebalance popup:** 14 px titles, 12 px rows, pickers and amount fields,
+  11 px sub-lines.
+- **The order ticket opens as a centered popup.** The coin row is three chips with icons. Venue
+  and market pickers use the app dropdown with venue icons. The estimate is two cards, Cost and
+  After, on CrossEx perps and Boros rates. A Boros spread's "Trade on" name opens the market on
+  Boros and shows the days to maturity.
+- **Maker settings sit in the Orders group** on Rebalance, the pair ticket and Close perps.
+  Realize uPnL and Delever closes use the taker-after time and re-peg you set there.
+- **One Orders group on the pair ticket, Close perps, Realize uPnL and Delever:** the "Orders"
+  label has a hover that explains Limit + hedge and Market, and each choice shows its estimated
+  cost and time, for example "Limit + hedge ≈ $3.25 · 5 min".
+- **Realize uPnL and Delever steps** show a token icon and the cost of each step. The Realize
+  wallet picker shows the wallet on the left and its uPnL on the right. A stale quote turns the
+  hold button into "Refresh quote". HYPE shows the Hyperliquid mark.
+- **Maker settings with re-peg Off survive a restart,** so a resumed Realize or Delever keeps the
+  wait and re-peg you picked. On the pair ticket, a typed limit price no longer carries over to
+  another coin.
+- **Roll over Boros position in one panel:** the pick, then steps 1 Close and 2 Open, each with
+  its legs, sizes and cost, then one Cost card and one After card. The slippage bound stays fixed
+  while you hold, and Retry sends the bound on screen. A roll refused before anything traded
+  offers Back, so you can raise the max slippage or change the size.
+- **Close perps and Close Boros** take 25, 50, 75 and 100% presets with Custom %, like Delever,
+  and Close perps offers TWAP. Close Boros shows each leg as a step row with its size before and
+  after.
+- **Close perps: Price PnL booked counts what earlier closes on the pair's perps booked,** so a
+  re-opened leg no longer shows a false loss.
+- **Delever from a pair opens over Positions** instead of jumping to Accounts.
+- **An open counts the margin your resting Boros orders hold,** with the same rule Boros uses, so
+  Open only says when Boros would refuse it for margin. The pair ticket's Available is the free
+  cash after your orders.
+- **Roll over:** the steps sit inside the mode box and the hold button spans the panel. After
+  shows the Fixed APR, and Available now on a refused roll. Close perps After shows each leg
+  before → after and says "Realized price PnL". Every window keeps its header padding and draws
+  a line under the header once the body scrolls.
+- **Roll over's Fixed APR follows your Opportunities settings** (exit mode, maker + hedge,
+  rebate). The "roll now" banner prices each roll the way it prices holding, so a better roll
+  is no longer hidden by a setting. A view-only wallet gets no rebate.
+- **A roll refused for margin says how much cross margin is short** and suggests a top-up that
+  also covers the new legs' fees.
+- **Boros slippage shows its dollar cost;** click it to change the max. Every slippage editor
+  says the change is for this trade only.
+- **Close Boros:** the steps sit under Close size, each shows the size it closes and the mark.
+- **A quote that is loading reads "Refreshing…" on the button** instead of a red banner. A
+  quote that failed keeps the action's name on the disabled button. A roll refused for margin
+  lists its open fees, so the figures add up to the shortfall.
+- **Step rows keep equal gaps around the coin icon** and line up as each step runs.
+- **A Market deal's title says "market"**, not "limit + hedge". After a part close, Close Boros
+  says what each leg keeps, and the Delever plan says "0.03 YU each" for its Boros legs. A
+  25% Close perps rounds both legs to the same lot, so it no longer blocks as "not one deal".
+- **Run views show no empty "()"** before the first fill. A paused TWAP with one slice left
+  says "1 slice". The Move cash done view says "Done." above its facts.
+- **Roll over keeps its hold on screen** when the size box is empty. The hold is disabled
+  until a size is typed.
+- **Transfer opens on the wallet you picked** from its first frame, with no flash of the
+  default wallet.
+- **Close perps says when a part close is rounded to the lot**, with the size each leg
+  will close.
+- **Roll over**: the two single legs line up in the steps. The header names the venues
+  without LONG and SHORT tags.
+- **Roll over refused**: one short red alert ("Roll not sent" and the reason). Retry is the
+  same size as Close and Back.
+- **Roll over done**: one green card for exit and re-entry.
+- **Close perps**: the After card shows only the legs in the pair.
+- **Hover labels**: no (i) mark beside an underlined label.
+- **Pair ticket**: the spread note sits in the Net entry spread hover. No "Open: 2 × taker"
+  line, and no "Size set to … so both legs trade the same amount" warning.
+- **TWAP running**: no empty header row. Pause and Hold to stop sit on one line, the order
+  count is a badge, and one keep-awake line sits above the buttons.
+- **Boros ticket**: slippage shows dollars. The hover holds Est and Max.
+- **Move cash**: one row per wallet when a side has more than one wallet.
+- **Slice table**: "Slice size" shows once.
+- **Venue picker**: with no coin picked, it is off and says "Pick a coin to see its venues".
+- **Roll over, Open only**: a hover says the old positions stay open with no perps until they
+  mature.
+- **Borrow card**: one headline "Total cost $29.45 = 23 days of interest". The line under it
+  names only the route. No "Interest a month X → 0".
+- **Interest now hover**: each wallet's daily cost sits under its hourly cost.
+- **Rebalance tabs**: the job status (Done, Stopped, Not hedged) uses the standard small chip,
+  not a tab-sized pill.
+- **Position card**: the Delever button keeps its name while a run goes and opens the run.
+- **Roll over header**: the title alone. The legs sit in the steps below.
+- **Delever not hedged**: the red alert holds the title and the reason. Perp and Boros sizes
+  sit in rows under it.
+- **Wallet hovers** fit their content. Hourly and daily interest start at one edge.
+- **Done, stopped and part results show in one coloured box**: green with a check, red for a
+  stop, amber for a part result. Move cash, Realize uPnL, Delever, TWAP, Limit order placed,
+  Close Boros, Roll over and Open only all use it.
+- **The Close button is gone from result screens.** Resume and Hold to abandon (and Back and
+  Retry) split the panel width.
+- **Roll over steps**: the Close and Open date titles line up with their values.
+- **TWAP: a pause in the last slice stays a pause.** It no longer shows a red "rest not
+  opened" alert. Resume sends the rest as one more slice. The strip says "rest not opened" for
+  an open and "rest not closed" for a close.
+- **Realize uPnL TWAP**: a refused reopen no longer stays stuck. The deal screen after a Limit +
+  hedge fill shows the same coloured result box, with no Close button.
+- **A two-perp Realize TWAP** is held to the 5 min minimum as a whole, not per perp.
+- **With TWAP on, the Realize tab shows the TWAP plan's size and cash.** Two perps are priced at
+  the one slice size the job sends.
+- **Realize uPnL runs with TWAP only; Split is gone.** TWAP turns on by default from the book
+  when one order costs more than 5 bp of price impact or runs past the book, on Realize, Delever,
+  and the open and close tickets.
+- **Realize and Delever keep each perp's venue order cap** (Hyperliquid by leverage). The
+  past-book check judges the TWAP slice that is sent.
+- **The TWAP suggestion stays on when a TWAP plan is refused or a book read fails.** It turns on
+  only when slices save at least 1 bp, and slices are sized to the book.
+- **Abandon ends a halted Realize reopen.** Before, the reopen kept retrying every 3 s after
+  Abandon, so a later fill could open an unhedged position. The gap shown after Abandon counts
+  the fills that landed while the halted slice settled.
+- **Realize works when free margin is too low to reopen.** Slice 1 closes, Converts the cash to
+  pay the debt, then reopens. The plan refuses up front when no slice 1 can fund its reopen and
+  the next slice. The start refuses with "The plan changed" when the fresh plan closes first or
+  grows slice 1 by more than 1%. A restart or a laptop sleep during slice 1 reopens the leg.
+- **The hold waits for the order book.** When a book read fails and no TWAP suggestion comes, the
+  TWAP row says "Reading the order book… Turn TWAP on or off to go on." on the pair, single,
+  close, perp-only close and Delever tickets. One click on the TWAP switch ends the wait.
+- **A stopping close gives up its hedge leg only after 10 reduce-only refusals in a row.** A
+  missed fill or a busy channel no longer counts. A close that turns to market after its resting
+  order fails says why, for example "too many open orders on this market".
+- **TWAP slices fit both venues.** Each slice is cut to the lot both legs accept and to the
+  smaller venue cap. The rest moves to the next slice, so a large last slice adds one more slice
+  instead of stopping the run. Added slices stop at 100, so a run whose slices fill nothing
+  stops with the rest not opened. A slice stuck behind a failing hedge stops the run.
+- **Rebalance after a restart:** a restart in the middle of a slice stops before the next slice
+  goes out, and says when the two perps differ. Resume resets the Convert top-up count. The
+  Convert cost counts in the total.
+- **Realize uPnL sends the amount it priced,** and its After card counts the Convert for Debt and
+  Custom too. Delever with TWAP sends the plan it priced, counts Boros gas in Total cost and shows
+  one After row per leg when the legs differ.
+- **Close perps and Close Boros read the live pair.** At 100% with legs of different sizes,
+  Limit + hedge closes the matched size on both legs, as in 1.7.9.
+- **A deal result is red when nothing filled and amber on a part fill.** When the two legs closed
+  different sizes, the headline names each leg.
+- **Chinese:** 55 more server messages show in Chinese, and two joined sentences no longer show
+  "。.".
+- **Realize uPnL's limit hold rests a maker order.** "Hold to reopen at limit" rests a post-only
+  order at the best price, follows the book and goes to market after at most 5 minutes, inside
+  0.25% of the price. Before, it sent the same market order as "Hedge at market".
+- **Resume never drops an unhedged gap.** After a part "Close filled" on a TWAP, Resume asks you to
+  close or reopen the gap with a hold first. Realize Resume reads both live legs and stops when one
+  moved.
+- **Close one leg at the Max figure closes the whole position,** even when the figure shown is
+  cut to 4 decimals.
+- **Order choices count price impact.** Limit + hedge and Market show fees plus price impact.
+  With TWAP on, Limit + hedge counts the hedge leg's impact per slice, the Cost card title says
+  "total", and Realize uPnL shows "Price impact X → Y".
+- **Every running rebalance keeps the Mac awake,** not only TWAP runs.
+- **Stop reasons name the right wallet,** and a missing borrow or a poor Convert quote gets its
+  own line.
+- **Pair context keeps the 29 Jan 2027 Hyperliquid ETH and BTC singles** whose only same-date
+  partner is an HL-GATE spread.
+- **Single mode opens a Boros single that has no same-date single partner,** as one order.
+- **Switching Single back to Pair re-settles leg B,** from the ticket toggle or the trade rail. A
+  spread-only date keeps its spread and chip.
+- **Complete and Retry on a part-filled pair act only while the ticket still shows that trade.** A
+  mode or wallet switch, Leave it, Dismiss or a card's Open ends an armed completion.
+- **Settings → About has a Check for updates button.** It reads GitHub now instead of waiting up to
+  6 hours, at most once in 5 minutes. A failed read keeps the last good answer.
+
 ## 1.7.10 — 2026-11-27
 
 TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets, in Single mode or as a

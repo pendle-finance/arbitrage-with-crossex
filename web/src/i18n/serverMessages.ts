@@ -2,7 +2,14 @@ import { t } from '.';
 import type en from '../locales/en';
 
 type Messages = (typeof en)['errors'];
-type Key = Exclude<keyof Messages, 'word' | 'sentences' | 'sentencesSpaced'>;
+type Twap = (typeof en)['trade']['twap'];
+type TwapKey =
+  | `trade.twap.server.${keyof Twap['server'] & string}`
+  | `trade.twap.lock.${keyof Twap['lock'] & string}`
+  | `trade.twap.area.${'use' | 'useInterval' | 'turnOff'}`
+  | 'trade.twap.run.restNotOpened'
+  | 'trade.twap.run.restNotClosed';
+type Key = Exclude<keyof Messages, 'word' | 'sentences' | 'sentencesSpaced' | 'sentencesBare' | 'addBackRow' | 'listComma'> | TwapKey;
 type Word = keyof Messages['word'];
 type Names = readonly string[];
 type Rule = readonly [RegExp, Key, Names?];
@@ -38,6 +45,7 @@ const RULES: readonly Rule[] = [
   [/^Gate's one-step close takes only tiny positions\. Use the Close button instead\.$/, 'hintCloseReduceOnly'],
   [/^The price is outside what Gate accepts\. Refresh the price and try again\.$/, 'hintPriceBand'],
   [/^Gate refused this key\. Check the key, the secret and its CrossEx permission\.$/, 'hintCredentialsRejected'],
+  [/^Too many open orders on this market at Gate\. Cancel some, then try again\.$/, 'hintOpenOrderCap'],
   [/^Gate is limiting requests from this account\. Try again in a minute\.$/, 'hintRateLimited'],
   [/^This reduce-only order would not shrink any position: its side or size does not match what you hold\. Check your positions, then try again\.$/, 'hintReduceOnly'],
   [/^Gate refused the leverage or position limit\. Lower the size, then try again\.$/, 'hintLeverage'],
@@ -46,6 +54,7 @@ const RULES: readonly Rule[] = [
   [/^Not enough free margin on CrossEx\. Add margin or lower the size\.$/, 'hintMargin'],
   [/^Gate no longer has this order or position\. Refresh to see where it stands\.$/, 'hintOrderGone'],
   [/^Gate does not list this market on CrossEx\. Pick another market\.$/, 'hintSymbol'],
+  [/^The venue has no order allowance left through Gate\. Wait, then try again\.$/, 'hintOrderAllowance'],
   [/^(.+) \(Gate: (\S+)\)$/, 'gateLabelled', ['inner', 'label']],
   [/^below Gate's minimum of (\S+)$/, 'belowGateMinimum', ['min']],
   [/^Below Gate's minimum of (\S+)\.$/, 'belowGateMinimumSentence', ['min']],
@@ -138,6 +147,7 @@ const RULES: readonly Rule[] = [
   [/^clientOrderIds must name exactly these legs: (.*)$/, 'orderIdsExact', ['legs']],
   [/^invalid marketId$/, 'marketIdInvalid'],
   [/^size must be a positive number$/, 'sizePositive'],
+  [/^(\S+) must be a positive number$/, 'positiveField', ['field']],
   [/^slippageApr must be in \(0, (\S+)\]$/, 'slippageRange', ['max']],
   [/^No Boros root address is configured on this install\.$/, 'noRootAddress'],
   [/^This close is worth \$(\S+)\. Boros takes no order of \$(\S+) or less\. Close more of the position, or all of it\.$/, 'closeTooSmall', ['value', 'min']],
@@ -178,6 +188,7 @@ const RULES: readonly Rule[] = [
   [/^(.+) has a TP\/SL order set — if it triggers, this pair stops being hedged\.$/, 'tpSl', ['market']],
   [/^(.+) is isolated-only\. You need (\S+) (\S+) in its account to open this position\.$/, 'isolatedShort', ['market', 'size', 'coin']],
   [/^Cross margin is short (\S+) (\S+) to open (all positions|both positions|this position)\.$/, 'crossShort', ['size', 'coin', 'legsWord']],
+  [/^Cross margin is short (\S+) (\S+) to roll this position\.$/, 'crossShortRoll', ['size', 'coin']],
   [/^Prepaid gas on this Boros account could not be read, so this order may still be refused for gas\.$/, 'gasUnread'],
   [/^This is gas, not trading collateral: topping up your margin will not fix it\.$/, 'gasNotCollateral'],
   [/^Boros gas is empty and the (\S+) price is unknown, so this order can't top it up\. It may be refused\.$/, 'gasEmptyNoPrice', ['coin']],
@@ -223,12 +234,57 @@ const RULES: readonly Rule[] = [
   [/^unknown route (.*)$/, 'unknownRoute', ['route']],
   [/^This page is out of date\. Reload it and check the plan before you rebalance\.$/, 'pageOutOfDate'],
   [/^The plan changed\. Check the new route before you rebalance\.$/, 'planChanged'],
+  [/^The TWAP plan changed\. Check the new slices before you start\.$/, 'twapPlanChanged'],
   [/^Gate is limiting requests from this account\. Try again in a few seconds\.$/, 'readRateLimited'],
   [/^Already even\.$/, 'alreadyEven'],
   [/^No open positions\. Nothing to rebalance\.$/, 'noPositions'],
   [/^No borrow to repay\.$/, 'noBorrow'],
   [/^Nothing to move\.$/, 'nothingToMove'],
   [/^A deal is still running\. Wait for it to finish\.$/, 'dealWorking'],
+  [/^No perp in profit to realize\.$/, 'noProfitToRealize'],
+  [/^Nothing to close\.$/, 'nothingToClose'],
+  [/^Nothing is left to fix\.$/, 'nothingToFix'],
+  [/^A fix is still running\. Wait for it to finish\.$/, 'fixRunning'],
+  [/^A leg is not hedged\. Close or reopen it with a hold first\.$/, 'twapGapFirst'],
+  [/^Only a sliced run can pause\.$/, 'notSliced'],
+  [/^Pick Clear debt, All or Custom before you realize\.$/, 'realizeTargetNeeded'],
+  [/^Enter the Custom amount before you realize\.$/, 'realizeCustomNeeded'],
+  [/^This wallet has no uPnL to realize now\. Pick another wallet\.$/, 'walletNoUpnl'],
+  [/^A Delever needs perps, Boros legs and an order mode\.$/, 'deleverNeeds'],
+  [/^A TWAP needs a client id, a deal, a duration and a slice count\.$/, 'twapNeeds'],
+  [/^A Delever closes two perps\.$/, 'deleverTwoPerps'],
+  [/^A Boros market is listed twice\.$/, 'borosMarketTwice'],
+  [/^Both perps of a Delever must be on the same coin\.$/, 'deleverSameCoin'],
+  [/^Both perps are on the same side, so a Delever would add to the position\.$/, 'deleverSameSide'],
+  [/^(\S+) takes at least (\S+) (\S+)\.$/, 'venueMinQty', ['venue', 'min', 'coin']],
+  [/^No mark price for (\S+)\.$/, 'noMarkPriceFor', ['symbol']],
+  [/^No order book for (\S+)\.$/, 'noOrderBookFor', ['symbol']],
+  [/^No open Boros position on market (\S+)\.$/, 'noBorosPosition', ['market']],
+  [/^No collateral price for Boros market (\S+)\.$/, 'noCollateralPrice', ['market']],
+  [/^Boros gas price read returned HTTP (\d+)$/, 'gasReadHttp', ['status']],
+  [/^No venue rule for (\S+), so the TWAP is not planned\.$/, 'noVenueRulePlan', ['symbol']],
+  [/^No price for (\S+), so the TWAP is not planned\. Try again\.$/, 'noPricePlan', ['symbol']],
+  [/^No venue rule for (\S+), so the slice was not sent\.$/, 'noVenueRuleSlice', ['symbol']],
+  [/^No best price for (\S+), so the slice was not sent\.$/, 'noBestPriceSlice', ['symbol']],
+  [/^Use at least (\d+) slices, one for each perp\.$/, 'useAtLeastSlices', ['n']],
+  [/^A TWAP slice cannot start while the server boots\.$/, 'twapBooting'],
+  [/^Slice (\d+) stopped on an error\. Check the orders, then resume or stop\.$/, 'sliceStoppedError', ['n']],
+  [/^The order engine is not running\. Restart the app, then resume\.$/, 'engineMissing'],
+  [/^The app has no Boros wallet to close the Boros share with\.$/, 'noBorosWallet'],
+  [/^Gate has no order rules for (\S+)$/, 'noOrderRules', ['symbol']],
+  [/^Gate sent no position size for (\S+)$/, 'noPositionSize', ['symbol']],
+  [/^Gate filled none of the (\S+) order\. Try again\.$/, 'filledNone', ['coin']],
+  [/^Gate has not confirmed the last order yet\. Try again in two minutes\.$/, 'fixUnconfirmed'],
+  [/^Boros may still fill the last close\. Nothing is sent again before then\. Try again in (\d+) min\.$/, 'borosWait', ['min']],
+  [/^Boros did not close (\S+) YU of its share\. It has no perp behind it\.$/, 'borosPartLeft', ['size']],
+  [/^One perp is already added back\. Hold to add back to finish the other first\.$/, 'addBackFirst'],
+  [/^Add back stopped: ((?:(?!\. ).)+)\.$/, 'addBackStopped', ['addBackRows']],
+  [/^Hold to add back to finish\.$/, 'addBackFinish'],
+  [/^Gate has not confirmed the (\S+) add back order\.$/, 'addBackUnconfirmed', ['venue']],
+  [/^Check the (\S+) (long|short) in Positions before you trade\.$/, 'checkLegBeforeTrade', ['venue', 'sideWord']],
+  [/^Close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'closeGapInPositions', ['size', 'base', 'venue', 'sideWord']],
+  [/^Or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'orCloseGapInPositions', ['size', 'base', 'venue', 'sideWord']],
+  [/^A close on (\S+) is still running\. Wait for it to finish or stop it, then try again\.$/, 'closeBusy', ['symbol']],
   [/^transfer store not configured$/, 'transferStoreMissing'],
   [/^Transfer id must be text\.$/, 'transferIdText'],
   [/^Unknown transfer path\.$/, 'transferPathUnknown'],
@@ -242,11 +298,14 @@ const RULES: readonly Rule[] = [
   [/^A transfer is still moving\.$/, 'lockMoving'],
   [/^Rebalance waits until the transfer ends\.$/, 'lockRebalanceWaits'],
   [/^The app restarted during the run\. Nothing failed\. Press Resume\.$/, 'haltRestart'],
+  [/^The app restarted in the middle of a slice\. The two perps are not the same size yet\. Press Resume to finish the slice\.$/, 'haltRestartGap'],
+  [/^Gate still wants more margin after (\d+) Converts in this run\. Add margin, then Resume\.$/, 'haltConvertCap', ['n']],
   [/^Not enough free margin for the next round\.$/, 'haltMarginTooLow'],
   [/^Not enough cash for an 11 USDC round\.$/, 'haltCashTooLow'],
   [/^Gate did not confirm the last order\. Press Resume to check again\.$/, 'haltUnconfirmed'],
   [/^The USDC buy filled under 11 USDC\.$/, 'haltShortBuy'],
   [/^Convert quote was more than 0\.3% under the Gate spot price\.$/, 'haltPoorQuote'],
+  [/^Gate did not answer the Convert quote\.$/, 'haltConvertUnreachable'],
   [/^Gate takes at most 500,000 in one Convert\. Abandon this rebalance and start a new one\.$/, 'haltConvertTooBig'],
   [/^Gate refused the move: free margin or wallet cash is too low\.$/, 'haltMarginRefused'],
   [/^Gate has no record of this transfer\. Try again\.$/, 'haltNoRecord'],
@@ -260,6 +319,40 @@ const RULES: readonly Rule[] = [
   [/^Gate did not sell all the USDC in USDC · Gate\. Press Resume to sell the rest\.$/, 'haltSellStuck'],
   [/^Could not read the Gate spot price to check the Convert quote\. Press Resume to try again\.$/, 'haltNoPrice'],
   [/^Gate does not show the last step after 2 min\. Press Resume to check again\. If Gate still does not show it, Resume sends it again\.$/, 'haltNotListed'],
+  [/^The API key cannot trade\. Fix it in Settings, then Resume\.$/, 'haltTradePermission'],
+  [/^Gate CrossEx takes no new orders on this contract\.$/, 'haltCloseOnly'],
+  [/^Not enough margin, and no cash left to convert\. Move (\S+) into (\S+ · \S+), then Resume\.$/, 'haltNoCashWallet', ['coin', 'wallet']],
+  [/^Not enough margin\. (\S+ · \S+) has no borrow for a Convert to repay\. Add margin, then Resume\.$/, 'haltNoBorrow', ['wallet']],
+  [/^Not enough free margin for the next slice\. Nothing is open\. Add margin, then Resume\.$/, 'haltMarginLow'],
+  [/^The margin ratio is under 103%, so the app will not Convert\. Add margin, then Resume\.$/, 'haltRatioLow'],
+  [/^Free margin ran short again after 5 Converts in this run\. Both legs are hedged\. Add margin, then Resume\.$/, 'haltFallbackCap'],
+  [/^Too few Convert quotes are left today for (\S+) slice 1\. No \S+ was closed\. Press Resume later\.$/, 'haltQuotesLow', ['base']],
+  [/^Free margin and cash are too low to close (\S+) slice 1 and reopen it\. No \S+ was closed\. Add margin, then Resume\.$/, 'haltGapNoFit', ['base']],
+  [/^(\S+) slice 1 must close (\S+) \S+, not the planned (\S+) \S+, to fund its Convert\. No \S+ was closed\. Press Resume to close \S+ \S+\.$/, 'haltGapGrew', ['base', 'now', 'planned']],
+  [/^Not enough free margin to reopen\. Add margin, then Resume\.$/, 'haltMarginShort'],
+  [/^Cash no longer covers the Convert before (\S+) slice 1\. \S+ slice 1 must close (\S+) \S+ alone, unhedged from its first close fill until it reopens\. No \S+ was closed\. Press Resume to go on\.$/, 'haltGapSwitched', ['base', 'now']],
+  [/^(\S+) slice 1 must close (\S+) \S+ in all to fund its Convert, not (\S+) \S+\. Press Resume to close (\S+) \S+ more\.$/, 'haltGapMore', ['base', 'now', 'agreed', 'more']],
+  [/^The margin ratio is under 103%, so the Convert cannot run before (\S+) slice 1\. \S+ slice 1 must close (\S+) \S+ alone, unhedged from its first close fill until it reopens\. No \S+ was closed\. Press Resume to go on\.$/, 'haltGapSwitchedRatio', ['base', 'now']],
+  [/^Could not find the other perp of this pair\. Close the gap in Positions\.$/, 'haltNoHedgePerp'],
+  [/^Gate refused the hedge again\. Nothing else changed\.$/, 'haltHedgeRefusedAgain'],
+  [/^Gate's 100 Convert quotes for today are used up\.$/, 'haltQuotesUsedToday'],
+  [/^Gate refused the reopen\.$/, 'haltReopenRefused'],
+  [/^The rest is under Gate's smallest order\.$/, 'haltUnderMinimum'],
+  [/^The (\S+) (long|short) is (\S+) (\S+) on Gate, not the (\S+) \S+ this rebalance left\.$/, 'haltSizeChanged', ['venue', 'sideWord', 'live', 'base', 'expected']],
+  [/^The (\S+) (long|short) is (\S+) (\S+) on Gate, not the (\S+) \S+ it was when this rebalance started\.$/, 'haltHedgeChanged', ['venue', 'sideWord', 'live', 'base', 'expected']],
+  [/^The (\S+) (long|short) was not reopened\.$/, 'haltNotReopened', ['venue', 'sideWord']],
+  [/^Abandon it and check Positions\.$/, 'haltAbandonCheck'],
+  [/^The (\S+) (long|short) is (\S+) (\S+) smaller than the (\S+) (long|short)\.$/, 'legGapThe', ['venue', 'sideWord', 'size', 'base', 'otherVenue', 'otherSideWord']],
+  [/^(\S+) (long|short) is (\S+) (\S+) smaller than the (\S+) (long|short)\.$/, 'legGap', ['venue', 'sideWord', 'size', 'base', 'otherVenue', 'otherSideWord']],
+  [/^The (\S+) (long|short) is (\S+) (\S+) smaller than before\.$/, 'legGapBeforeThe', ['venue', 'sideWord', 'size', 'base']],
+  [/^(\S+) (long|short) is (\S+) (\S+) smaller than before\.$/, 'legGapBefore', ['venue', 'sideWord', 'size', 'base']],
+  [/^Resume when it does\.$/, 'closeOnlyResume'],
+  [/^Resume after Gate's count clears, within 24 hours\.$/, 'quotesUsedNextAlone'],
+  [/^Resume to try again\.$/, 'resumeTryAgain'],
+  [/^Resume when it does, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'closeOnlyNext', ['size', 'base', 'venue', 'sideWord']],
+  [/^Resume after Gate's count clears, within 24 hours, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'quotesUsedNext', ['size', 'base', 'venue', 'sideWord']],
+  [/^Resume to try again, or close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'refusedNext', ['size', 'base', 'venue', 'sideWord']],
+  [/^Abandon, then close (\S+) (\S+) of the (\S+) (long|short) in Positions\.$/, 'underMinimumNext', ['size', 'base', 'venue', 'sideWord']],
   [/^unknown step (.+)$/, 'unknownStep', ['step']],
   [/^Transfer failed\.$/, 'transferFailed'],
   [/^Transfer failed: (.+)\.$/, 'transferFailedReason', ['inner']],
@@ -306,6 +399,7 @@ const RULES: readonly Rule[] = [
   [/^unknown deal (\S+)$/, 'unknownDeal', ['id']],
   [/^deal (\S+) is not awaiting a maker fill \(mode: (\S+)\)$/, 'dealNotMaker', ['id', 'mode']],
   [/^re-peg price "(.*)" is not a positive number$/, 'repegNotPositive', ['price']],
+  [/^Re-peg if behind must be 0\.02%, 0\.05%, 0\.1% or Off\.$/, 'repegChoice'],
   [/^re-peg price (\S+) is below one tick \((\S+)\)$/, 'repegBelowTick', ['price', 'tick']],
   [/^no fresh touch price available — re-peg aborted \(book unavailable\)$/, 'repegNoTouch'],
   [/^deal (\S+) is already done$/, 'dealDone', ['id']],
@@ -401,7 +495,6 @@ const RULES: readonly Rule[] = [
   [/^Maker leg is post-only \(was (\S+)\)$/, 'makerTifForced', ['tif']],
   [/^Price rounded to the venue's price step: (\S+) → (\S+)$/, 'priceAdjusted', ['from', 'to']],
   [/^No reference price, so no estimates$/, 'noRefPriceEstimates'],
-  [/^Size set to (\S+) \(was (.*)\) so both legs trade the same amount$/, 'sizeSetShared', ['size', 'was']],
   [/^Close size rounded down to the lot (\S+): (\S+) → (\S+)$/, 'closeQtyFloored', ['lot', 'from', 'to']],
   [/^looks like a delta-neutral pair with action #(\d+) — link them \(pairGroupId\) to arm the unhedged guard$/, 'looksLikePair', ['index']],
   [/^No fill estimate \(no book, no reference price\)$/, 'noFillEstimate'],
@@ -430,17 +523,27 @@ const RULES: readonly Rule[] = [
   [/^Order (\S+) had an unknown status \("(.*)"\), but the venue confirmed the cancel\. It is closed at (\S+) filled so the deal can settle\.$/, 'alertForceResolved', ['order', 'status', 'filled']],
   [/^Deal ended with (\S+) unhedged on (\S+), below the venue minimum\. You hold a one-sided position\. Close it by hand\.$/, 'alertUnhedgedLeft', ['size', 'contract']],
   [/^Deal check failed and retries on its own: (.+)$/, 'alertTickFailed', ['inner']],
+  [/^The resting close order on (\S+) was cancelled on the venue\.$/, 'alertRestingCancelled', ['contract']],
+  [/^The resting close order on (\S+) kept crossing the market\.$/, 'alertRestingCrossing', ['contract']],
+  [/^Gate refused the resting close order on (\S+): too many open orders on this market\.$/, 'alertRestingOrderCap', ['contract']],
+  [/^Closing the rest at market\.$/, 'alertClosingRest'],
+  [/^The close stopped with the rest still open\.$/, 'alertCloseStoppedRest'],
+  [/^Gate refused the maker order on (\S+) (\d+) times in a row: the venue has no order allowance left\. The deal is stopping with what filled\.$/, 'alertAllowanceStop', ['contract', 'n']],
+  [/^The close stopped: (\S+) refused (\d+) reduce-only orders in a row, so its position may already be closed\. Check both legs on Gate\.$/, 'alertHedgeReduceRefused', ['contract', 'n']],
   [/^Some old orders were open during the upgrade: (.+)\. Check open orders and positions on Gate by hand\.$/, 'alertLegacyBaskets', ['ids']],
   // Deal report reasons (src/engine/decide.ts). The unhedged note is appended after the residual note, so it is peeled first.
+  [/^(.+) \(hedge leg refused (\d+) times — its position may already be closed; unhedged (\S+)\)$/, 'dealHedgeRefusedSuffix', ['inner', 'n', 'size']],
   [/^(.+) \(unhedged (\S+) — below (\S+)'s lot, not submittable\)$/, 'dealUnhedgedSuffix', ['inner', 'size', 'contract']],
   [/^(.+) \(unacquired residual (\S+) — below the venue minimum or blocked\)$/, 'dealResidualSuffix', ['inner', 'size']],
   [/^(.+) \(unacquired residual (\S+) — not filled before the stop\)$/, 'dealResidualStopped', ['inner', 'size']],
+  [/^Gate refused the maker order (\d+) times in a row: the venue has no order allowance left$/, 'dealAllowanceRefused', ['count']],
   [/^stopped$/, 'dealStopped'],
   [/^converted$/, 'dealConverted'],
   [/^target reached$/, 'dealTargetReached'],
   [/^target reached \(unacquired sub-minimum residual (\S+) on the maker leg\)$/, 'dealTargetResidual', ['size']],
   [/^hedge failed (\d+)x — stopped acquiring unhedgeable exposure$/, 'dealHedgeFailed', ['count']],
   [/^A-leg failing repeatedly \(position gone, venue wall, or persistent whiffs\) — stopped honestly$/, 'dealALegFailing'],
+  [/^Gate refused the order: too many open orders on this market\. Cancel some on Gate, then start again\.$/, 'dealOpenOrderCap'],
   [/^the limit price kept crossing the market — the venue rejected the post-only maker (\d+) times in a row$/, 'dealCrossing', ['count']],
   // Order close reasons (closeReasonOf in src/engine/loop.ts).
   [/^cancelled$/, 'orderCancelled'],
@@ -448,10 +551,53 @@ const RULES: readonly Rule[] = [
   [/^poc-reject$/, 'orderPocReject'],
   [/^never-reached-venue$/, 'orderNeverSent'],
   [/^rejected:(.*)$/s, 'orderRejected', ['detail']],
+  [/^Too small for 2 slices: (.+?) takes at least (\S+) (\S+) \((\S+)\) a slice\.$/, 'trade.twap.server.tooSmall', ['venue', 'min', 'coin', 'usd']],
+  [/^(.+?) takes at least (\S+) (\S+) \((\S+)\) a slice\.$/, 'trade.twap.server.sliceMin', ['venue', 'min', 'coin', 'usd']],
+  [/^Interval at least 1m\.$/, 'trade.twap.server.intervalMin'],
+  [/^Duration at least 5m\.$/, 'trade.twap.server.durationMin'],
+  [/^Duration at most 24h\.$/, 'trade.twap.server.durationMax'],
+  [/^([\d,]+) slices\. Max 100: slice size at least (\S+) (\S+)\.$/, 'trade.twap.server.tooMany', ['count', 'min', 'coin']],
+  [/^Book too thin for (\S+) (\S+) a slice\.$/, 'trade.twap.server.bookThin', ['qty', 'coin']],
+  [/^Taker after must be 30s to 24h\.$/, 'trade.twap.server.takerAfterRange'],
+  [/^(.+?) refused slice (\d+): not enough margin$/, 'trade.twap.server.refusedSlice', ['venue', 'n']],
+  [/^Add (USDT|USDC) to (.+?) CrossEx, then resume\.$/, 'trade.twap.server.refusedFix', ['coin', 'venue']],
+  [/^Slice (\d+) is under (.+?)'s (.+?) minimum$/, 'trade.twap.server.underMin', ['n', 'venue', 'min']],
+  [
+    /^Rest (\S+) (\S+) is under (.+?)'s (.+?) minimum\. Resume cannot send it\. Stop ends the run\.$/,
+    'trade.twap.server.restUnderMin',
+    ['qty', 'coin', 'venue', 'min'],
+  ],
+  [/^(.+?) refused the hedge in slice (\d+)$/, 'trade.twap.server.hedgeRefused', ['venue', 'n']],
+  [/^(\S+) (\S+) not hedged \((\S+)\)$/, 'trade.twap.server.hedgeGap', ['qty', 'coin', 'usd']],
+  [/^Add (USDT|USDC) to (.+?) on CrossEx to hedge$/, 'trade.twap.server.hedgeFix', ['coin', 'venue']],
+  [/^A TWAP is running\. Orders and transfers wait until it ends\.$/, 'trade.twap.lock.running'],
+  [/^A TWAP is paused\. Orders wait until it ends\.$/, 'trade.twap.lock.paused'],
+  [/^A TWAP stopped on an error\. Orders and transfers wait until you resume or stop it\.$/, 'trade.twap.lock.error'],
+  [/^A TWAP stopped on an error\. Orders wait until you resume or stop it\.$/, 'trade.twap.lock.errorOrders'],
+  [/^(\d+) slices\. Min 2: slice size at most (\S+) (\S+)\.$/, 'trade.twap.server.countLowSize', ['n', 'qty', 'coin']],
+  [/^1 slice\. Min 2: slice size at most (\S+) (\S+)\.$/, 'trade.twap.server.countLowSizeOne', ['qty', 'coin']],
+  [/^Interval at most (\d+[hms](?: \d+[hms])*)\.$/, 'trade.twap.server.intervalMax', ['span']],
+  [/^(.+?) takes at most (\S+) (\S+) a slice\.$/, 'trade.twap.server.sliceMax', ['venue', 'qty', 'coin']],
+  [/^Taker after must be 80% of the interval or less \((\d+)s\)\.$/, 'trade.twap.server.takerOver', ['cap']],
+  [/^Slice (\d+) is over (.+?)'s (\S+) (\S+) maximum$/, 'trade.twap.server.sliceOverMax', ['n', 'venue', 'max', 'coin']],
+  [/^This Mac slept during the TWAP\. Nothing was sent while it slept\. Press Resume\.$/, 'trade.twap.server.slept'],
+  [/^(\S+) (\S+) not opened$/, 'trade.twap.run.restNotOpened', ['qty', 'coin']],
+  [/^(\S+) (\S+) not closed$/, 'trade.twap.run.restNotClosed', ['qty', 'coin']],
+  [/^Turn TWAP off$/, 'trade.twap.area.turnOff'],
+  [/^Use (\d+[hms](?: \d+[hms])*) interval$/, 'trade.twap.area.useInterval', ['value']],
+  [/^Use (\d+[hms](?: \d+[hms])*)$/, 'trade.twap.area.use', ['value']],
+  [/^Use ([\d,]+) slices$/, 'useSlices', ['n']],
+  [/^Use ([\d,.]+ [A-Za-z0-9]+)$/, 'trade.twap.area.use', ['value']],
 ];
+
+function addBackRow(row: string): string {
+  const m = /^(\S+) (\S+) of (\S+) (\S+)$/.exec(row);
+  return m ? t('errors.addBackRow', { venue: m[1], filled: m[2], qty: m[3], base: m[4] }) : row;
+}
 
 function valueOf(name: string, raw: string): string {
   if (name === 'inner') return localizeServerText(raw);
+  if (name === 'addBackRows') return raw.split(', ').map(addBackRow).join(t('errors.listComma'));
   const word = name.endsWith('Word') ? WORDS[raw] : undefined;
   return word ? t(`errors.word.${word}`) : raw;
 }
@@ -462,13 +608,17 @@ const byKey = t as unknown as (key: string, values: Record<string, string>) => s
 function matchWhole(text: string): string | null {
   for (const [re, key, names = []] of RULES) {
     const m = re.exec(text);
-    if (m) return byKey(`errors.${key}`, Object.fromEntries(names.map((name, i) => [name, valueOf(name, m[i + 1] ?? '')])));
+    if (m) return byKey(key.startsWith('trade.') ? key : `errors.${key}`, Object.fromEntries(names.map((name, i) => [name, valueOf(name, m[i + 1] ?? '')])));
   }
   return null;
 }
 
 function join(first: string, rest: string): string {
   return /[.!?]$/.test(first) ? t('errors.sentencesSpaced', { first, rest }) : t('errors.sentences', { first, rest });
+}
+
+export function joinSentences(first: string, rest: string): string {
+  return /[.!?。！？]$/.test(first) ? join(first, rest) : t('errors.sentencesBare', { first, rest });
 }
 
 function translate(text: string): string | null {

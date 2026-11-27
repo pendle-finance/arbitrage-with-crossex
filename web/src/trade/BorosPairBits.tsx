@@ -23,12 +23,14 @@ import type {
   BorosSimulatedLeg,
 } from '../api/types';
 import { Chip } from '../components/Chip';
+import { HoverCard } from '../components/HoverCard';
+import { ListPicker } from '../components/ListPicker';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
 import { fmtDateShort, fmtDateUtc, fmtPct, fmtUsd, sigGrouped } from '../lib/fmt';
 import { spreadName, type SpreadVenues } from '../lib/spread';
 import { SpreadName } from '../components/SpreadName';
-import { ChevronDown } from 'lucide-react';
 import { localizeServerText } from '../i18n/serverMessages';
+import { EstimateRow } from './PairTicketBits';
 
 /** Was this leg actually sent to the venue? A not-submitted sentinel is
  * all-zero with no failure (orders.ts `notSubmitted`); a REJECTED leg has
@@ -81,64 +83,6 @@ export const size = (n: number | null | undefined): string => {
  * The rates reading is kept in the tooltip on the control.
  */
 const directionLabel = (d: BorosLegDirection): string => t(d === 'long' ? 'common.long' : 'common.short');
-
-export function DirectionToggle({
-  value,
-  onChange,
-  idPrefix,
-  compact,
-}: {
-  value: BorosLegDirection;
-  onChange: (d: BorosLegDirection) => void;
-  idPrefix: string;
-  /** Shrink-to-fit, for the single ticket's market header where it sits
-   * beside the caption rather than on a row of its own. */
-  compact?: boolean;
-}) {
-  const { t } = useTranslation();
-  return (
-    // Full width by default: the two options are the whole choice, so they
-    // take the whole row rather than huddling left with dead space beside them.
-    <div
-      className={compact ? 'seg seg-xs inline-flex' : 'seg flex w-full'}
-      role="radiogroup"
-      aria-label={t('pairTicket.borosBits.directionAria', { prefix: idPrefix })}
-    >
-      {(['long', 'short'] as const).map((d) => {
-        const active = value === d;
-        const long = d === 'long';
-        return (
-          <button
-            key={d}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            data-active={active}
-            // Green long / rose short, the same pairing SideChip gives the
-            // cards — the direction must read the same on both surfaces. Only
-            // the ACTIVE side carries colour; an inactive one stays neutral so
-            // the chosen side is unambiguous at a glance.
-            className={`seg-btn ${compact ? '' : 'flex-1'} text-center ${
-              active
-                ? long
-                  ? '!bg-emerald-500/15 !text-emerald-300'
-                  : '!bg-rose-500/15 !text-rose-300'
-                : ''
-            }`}
-            title={
-              long
-                ? t('pairTicket.borosBits.longRateHint')
-                : t('pairTicket.borosBits.shortRateHint')
-            }
-            onClick={() => onChange(d)}
-          >
-            {t(long ? 'common.longAction' : 'common.shortAction')}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /**
  * One leg's market as a CARD — venue, then the three facts that decide
@@ -258,6 +202,11 @@ export function MarketSelect({
 }) {
   const eligible = markets.filter((m) => reasonFor(m) === null);
   const { t } = useTranslation();
+  const rows = eligible.map((m) => ({
+    key: String(m.marketId),
+    icon: m.spreadVenues ? <SpreadIcon venues={m.spreadVenues} size={16} /> : <VenueIcon venue={m.venue} size={16} />,
+    name: marketLabel(m),
+  }));
   return (
     <div className="flex flex-col gap-1">
       {label ? (
@@ -265,26 +214,15 @@ export function MarketSelect({
           {label}
         </label>
       ) : null}
-      <div className="relative">
-        <select
-          id={id}
-          className="select"
-          aria-label={label ? undefined : ariaLabel}
-          value={value ?? ''}
-          disabled={disabled}
-          onChange={(e) => onPick(e.target.value === '' ? null : Number(e.target.value))}
-        >
-          <option value="">{t('pairTicket.borosBits.selectMarket')}</option>
-          {eligible.map((m) => (
-            <option key={m.marketId} value={m.marketId}>
-              {marketLabel(m)}
-            </option>
-          ))}
-        </select>
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-ink-400">
-          <ChevronDown size={14} aria-hidden />
-        </span>
-      </div>
+      <ListPicker
+        id={id}
+        label={label || ariaLabel || ''}
+        value={value === null ? '' : String(value)}
+        onChange={(key) => onPick(Number(key))}
+        rows={rows}
+        placeholder={t('pairTicket.borosBits.selectMarket')}
+        disabled={disabled}
+      />
     </div>
   );
 }
@@ -316,8 +254,16 @@ function Row({
         ? 'text-[12px] text-ink-300'
         : 'text-[12.5px] text-ink-50';
   return (
-    <div className="flex items-baseline justify-between gap-3" title={title}>
-      <span className={`shrink-0 ${dim ? 'pl-3 text-[11.5px] text-ink-400' : 'text-[12px] text-ink-200'}`}>{label}</span>
+    <div className="flex items-baseline justify-between gap-3">
+      <span className={`shrink-0 ${dim ? 'pl-3 text-[11.5px] text-ink-400' : 'text-[12px] text-ink-200'}`}>
+        {title ? (
+          <HoverCard label={label} widthPx={260}>
+            <span className="whitespace-pre-line">{title}</span>
+          </HoverCard>
+        ) : (
+          label
+        )}
+      </span>
       <span className={`num truncate text-right ${tone}`}>{value}</span>
     </div>
   );
@@ -329,14 +275,43 @@ function Row({
  * dollars entirely, for a breakdown line under a total that already carries
  * them (his call 2026-09-18).
  */
+export function UsdNote({ usd }: { usd: number | null }) {
+  return usd === null ? null : <span className="text-[11px] text-ink-400"> ({usdAt(usd)})</span>;
+}
+
 function CollateralAmount({ n, sim, bare }: { n: number | null; sim: BorosPairSimulation; bare?: boolean }) {
   if (n === null) return <>—</>;
   const usd = sim.collateralPriceUsd === null ? null : n * sim.collateralPriceUsd;
   return (
     <>
       {size(n)} {sim.collateral}
-      {!bare && usd !== null && <span className="text-[11px] text-ink-400"> ({usdAt(usd)})</span>}
+      {!bare && <UsdNote usd={usd} />}
     </>
+  );
+}
+
+const YEAR_SECONDS = 365 * 86_400;
+
+export function aprCost(sim: BorosPairSimulation, parts: { apr: number; size: number }[]): number {
+  const years = Math.max(0, sim.secondsToMaturity) / YEAR_SECONDS;
+  return parts.reduce((sum, part) => sum + Math.max(0, part.apr) * Math.abs(part.size) * years, 0);
+}
+
+export const usdOf = (sim: BorosPairSimulation, n: number | null): number | null =>
+  n === null || sim.collateralPriceUsd === null ? null : n * sim.collateralPriceUsd;
+
+export const amountText = (sim: BorosPairSimulation, n: number | null): string | null =>
+  n === null ? null : sim.collateralPriceUsd === null ? `${size(n)} ${sim.collateral}` : usdAt(n * sim.collateralPriceUsd);
+
+
+export function TotalCostRow({ sim, slippage }: { sim: BorosPairSimulation; slippage: number | null }) {
+  const { t } = useTranslation();
+  return (
+    <Row
+      label={t('pairTicket.borosBits.totalCost')}
+      value={<CollateralAmount n={slippage === null ? null : sim.costToCrossSize + slippage} sim={sim} />}
+      weight="strong"
+    />
   );
 }
 
@@ -359,16 +334,11 @@ const loneOf = (sim: BorosPairSimulation, solo: SoloLeg | undefined): BorosSimul
 export function SpreadReadout({
   sim,
   singleLeg,
-  boxed = false,
 }: {
   sim: BorosPairSimulation;
   /** The one leg that trades, when only one does — the readout is then that
    * leg's rate, whichever slot it sits in. */
   singleLeg?: SoloLeg;
-  /** The headline in its own tinted box, label over figure, as the Boros
-   * app sets its summary apart from the figures under it. Off where a hero
-   * above already states the rate (a roll's "You lock"). */
-  boxed?: boolean;
 }) {
   const { t } = useTranslation();
   const solo = soloOf(sim, singleLeg);
@@ -380,41 +350,25 @@ export function SpreadReadout({
     // the side chip beside it says which way it faces.
     : sim.legs.map((leg) => [leg.venue, leg]);
   return (
-    <div className="flex flex-col gap-1.5">
-      {/* One leg has no spread to report: the headline becomes the rate that
-          leg locks, which is the same question ("what do I get?") answered for
-          a trade that has only one side. Net of fees either way; a negative
-          figure turns rose so a trade that loses money says so. */}
-      <div
-        className={
-          boxed
-            ? 'flex flex-col gap-1 rounded-lg border border-ink-700/80 bg-ink-800/50 px-3 py-2.5'
-            : 'flex items-baseline justify-between gap-3'
-        }
-      >
-        {/* The two execution rates the spread is the difference of ride on
-            HOVER: the spread is the figure, its parts are detail (his call
-            2026-09-18). */}
-        <span
-          className={`${legs.length > 0 ? 'cursor-help ' : ''}${boxed ? 'self-start text-[12px] text-ink-300' : 'text-[12.5px] text-ink-50'}`}
-          title={
-            legs.length > 0
-              ? t('pairTicket.borosBits.spreadHint', {
-                  rates: legs.map(([label, leg]) => `${label} ${pct(leg.execApr)}`).join('\n'),
-                })
-              : undefined
-          }
-        >
-          {solo ? t('pairTicket.borosBits.estimatedRate') : t('pairTicket.borosBits.estimatedSpread')}
-          {legs.length > 0 && <span className="ml-1 text-ink-400">ⓘ</span>}
-        </span>
-        <span
-          className={`num font-semibold ${boxed ? 'text-[22px] leading-none tracking-[-0.02em]' : 'text-lg'} ${negative ? 'text-rose-300' : 'text-emerald-400'}`}
-        >
-          {pct(headline)}
-        </span>
-      </div>
-    </div>
+    <EstimateRow
+      label={
+        legs.length > 0 ? (
+          <HoverCard label={t('pairTicket.borosBits.estimatedSpread')} widthPx={260}>
+            <span className="whitespace-pre-line">
+              {t('pairTicket.borosBits.spreadHint', {
+                rates: legs.map(([label, leg]) => `${label} ${pct(leg.execApr)}`).join('\n'),
+              })}
+            </span>
+          </HoverCard>
+        ) : solo ? (
+          t('pairTicket.borosBits.estimatedRate')
+        ) : (
+          t('pairTicket.borosBits.estimatedSpread')
+        )
+      }
+      value={<span className={negative ? 'text-rose-300' : 'text-emerald-400'}>{pct(headline)}</span>}
+      strong
+    />
   );
 }
 
@@ -611,40 +565,59 @@ export function PairCosts({
         />
         <Row
           label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
-          title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
           value={fee}
         />
       </div>
     );
   }
-  // Margin leads, the fee sits under it quieter, as in the
-  // Boros app; which leg posts what is the margin's hover.
-  const required = sim.marginRequiredTotal;
   return (
     <div className="flex flex-col gap-1.5">
-      <Row
-        label={t('pairTicket.borosBits.marginUsage')}
-        title={
-          oneLeg
-            ? t('pairTicket.borosBits.marginLegHint')
-            : [
-                t('pairTicket.borosBits.totalMarginHint'),
-                ...sim.legs.map(
-                  (leg) => `${leg.venue} ${leg.marginRequired === null ? '—' : `${size(leg.marginRequired)} ${sim.collateral}`}`,
-                ),
-              ].join('\n')
-        }
-        value={<CollateralAmount n={required} sim={sim} />}
-        weight="strong"
-      />
+      <MarginUsageRow sim={sim} singleLeg={singleLeg} />
       {afterMargin}
-      <Row
-        label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
-        title={oneLeg ? t('pairTicket.borosBits.tradeFeeHint') : t('pairTicket.borosBits.tradeFeeLegsHint')}
-        value={fee}
-        weight="quiet"
-      />
+      <TradeFeeRow sim={sim} singleLeg={singleLeg} weight="quiet" />
     </div>
+  );
+}
+
+export function MarginUsageRow({ sim, singleLeg }: { sim: BorosPairSimulation; singleLeg?: SoloLeg }) {
+  const { t } = useTranslation();
+  const oneLeg = loneOf(sim, singleLeg) !== null;
+  return (
+    <Row
+      label={t('pairTicket.borosBits.marginUsage')}
+      title={
+        oneLeg
+          ? t('pairTicket.borosBits.marginLegHint')
+          : [
+              t('pairTicket.borosBits.totalMarginHint'),
+              ...sim.legs.map(
+                (leg) => `${leg.venue} ${leg.marginRequired === null ? '—' : `${size(leg.marginRequired)} ${sim.collateral}`}`,
+              ),
+            ].join('\n')
+      }
+      value={<CollateralAmount n={sim.marginRequiredTotal} sim={sim} />}
+      weight="strong"
+    />
+  );
+}
+
+export function TradeFeeRow({
+  sim,
+  singleLeg,
+  weight,
+}: {
+  sim: BorosPairSimulation;
+  singleLeg?: SoloLeg;
+  weight?: 'strong' | 'quiet';
+}) {
+  const { t } = useTranslation();
+  const oneLeg = loneOf(sim, singleLeg) !== null;
+  return (
+    <Row
+      label={oneLeg ? t('pairTicket.borosBits.tradeFee') : t('pairTicket.borosBits.tradeFeeLegs', { n: sim.legs.length })}
+      value={<CollateralAmount n={sim.costToCrossSize} sim={sim} />}
+      weight={weight}
+    />
   );
 }
 
@@ -685,14 +658,18 @@ export function AvailableMarginLines({
   return (
     <>
       {lines.map((l) => (
-        <div key={l.key} className="flex items-baseline justify-between gap-3" title={t('pairTicket.borosBits.availableMarginHint')}>
-          <span className="text-[11.5px] text-ink-200">{l.label}</span>
+        <div key={l.key} className="flex items-baseline justify-between gap-3">
+          <span className="text-[11.5px] text-ink-200">
+            <HoverCard label={l.label} widthPx={260}>
+              {t('pairTicket.borosBits.availableMarginHint')}
+            </HoverCard>
+          </span>
           <span className="num text-[12px] text-ink-400">
             {size(l.before)}
-            {l.after !== null && (
+            {l.after !== null && l.after >= 0 && (
               <>
                 <span className="mx-1 text-ink-600">→</span>
-                <span className={`font-semibold ${l.after < 0 ? 'text-rose-300' : 'text-ink-50'}`}>{size(l.after)}</span>
+                <span className="font-semibold text-ink-50">{size(l.after)}</span>
               </>
             )}{' '}
             {unit}

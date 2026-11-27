@@ -144,16 +144,14 @@ describe('AssetCard — roll over', () => {
     expect(within(panel).getByText('Ready to roll')).toBeInTheDocument();
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
 
-    // The popup names the pair; with nothing to roll into there is no target,
-    // so the pick page's "Roll over →" stays disabled.
     const dialog = screen.getByRole('dialog');
-    // Venues only — the maturity heads the Exit card inside (his call 2026-09-18).
-    expect(within(dialog).getByRole('heading', { name: 'Roll over — Gate / Hyperliquid' })).toBeInTheDocument();
-    expect(within(dialog).getByRole('button', { name: 'Roll over' })).toBeDisabled();
+    expect(within(dialog).getByRole('heading', { name: 'Roll over Boros position' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Pair' })).toHaveTextContent(/Gate.*LONG.*Hyperliquid.*SHORT/);
+    expect(within(dialog).queryByRole('button', { name: 'Roll over' })).toBeNull();
     // No maturity lists a market at BOTH venues, so there is nothing to roll
     // into -- the table says so rather than inventing a target.
     expect(await within(dialog).findByText(/No later maturity on both venues yet/)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'close' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
@@ -208,16 +206,20 @@ describe('AssetCard — roll over', () => {
   it.each([
     // An older server: no ladder, so the modal opens on the whole position
     // at the seed.
-    ['a fifth of the pair rolling at a better rate makes the banner loud and flags the card', undefined, 0.01],
+    ['a fifth of the pair rolling at a better rate makes the banner loud and flags the card', undefined, 0.01, 0],
     // A stray 0.01 ETH inside the 1% seed ahead of 1,000 ETH at 1.3%: at the
     // seed the fit was 0.0095 ETH, under a fifth, and the banner stayed quiet
     // (his catch 2026-09-23). Sized at the band the whole 100 rolls, quoted
     // at the tolerance the modal widens to: 1.3% × 1.1 headroom.
-    ['a stray level inside the seed does not hide the opportunity: sized at the band', [[0.004, 0.01], [0.013, 1000]], 0.0143],
-  ] as const)('%s', async (_name, depth, wantSlip) => {
+    ['a stray level inside the seed does not hide the opportunity: sized at the band', [[0.004, 0.01], [0.013, 1000]], 0.0143, 0],
+    // Fees already paid to open the pair are not charged to "now": rolling
+    // cannot get them back. "Now" stays the forward 14.29%.
+    ['fees already paid do not lower the rate the roll is compared with', undefined, 0.01, 2_000, 0.02, 0.01],
+    ['the first quote takes half the tightest cap of the new markets, not the mean', undefined, 0.01, 0, 0.01, 0.005],
+  ] as const)('%s', async (_name, depth, wantSlip, paidFeeUsd, lateCap = 0.02, wantFirst = 0.01) => {
     const now = Math.floor(Date.now() / 1000);
     const LATER = now + 45 * DAY;
-    const row = (marketId: number, venue: string, maturity: number) => ({
+    const row = (marketId: number, venue: string, maturity: number, cap = 0.02) => ({
       marketId,
       name: `${venue} ETH`,
       venue,
@@ -227,7 +229,7 @@ describe('AssetCard — roll over', () => {
       maturity,
       midApr: 0.06,
       markApr: 0.06,
-      maxRateDeviationApr: 0.02,
+      maxRateDeviationApr: cap,
       isolatedOnly: false,
       onIsolatedMargin: false,
       isolatedHasPositionOrOrders: false,
@@ -242,7 +244,7 @@ describe('AssetCard — roll over', () => {
           data: {
             // The markets the pair HOLDS (its own 8-day maturity), plus the
             // one later maturity it can roll into.
-            markets: [row(1, 'Gate', now + 8 * DAY), row(2, 'Hyperliquid', now + 8 * DAY), row(11, 'Gate', LATER), row(12, 'Hyperliquid', LATER)],
+            markets: [row(1, 'Gate', now + 8 * DAY), row(2, 'Hyperliquid', now + 8 * DAY), row(11, 'Gate', LATER), row(12, 'Hyperliquid', LATER, lateCap)],
             crossByToken: [],
             isolatedByMarket: [],
             defaultSlippageApr: 0.0025,
@@ -303,7 +305,30 @@ describe('AssetCard — roll over', () => {
       }),
     );
     localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: '0x1111111111111111111111111111111111111111' }));
-    renderCard(book(8));
+    const held = book(8);
+    renderCard(
+      paidFeeUsd > 0
+        ? {
+            ...held,
+            borosHistory: held.borosOpen.map((b) => ({
+              marketId: b.marketId,
+              venue: b.venue,
+              spreadVenues: null,
+              maturity: b.maturity,
+              settleUsd: 0,
+              settleFeeUsd: 0,
+              rebateUsd: 0,
+              tradePnlUsd: -paidFeeUsd / 2,
+              tradeFeeUsd: paidFeeUsd / 2,
+              peakSizeToken: b.sizeToken,
+              peakNotionalUsd: b.notionalUsd,
+              firstEventSec: now - 10 * DAY,
+              entryApr: b.entryApr,
+              side: b.side,
+            })),
+          }
+        : held,
+    );
 
     const panel = screen.getByRole('tabpanel', { name: /^Fixed Rate Pairs/ });
     // A generous wait: the context and the probe are two round trips, and the
@@ -322,7 +347,7 @@ describe('AssetCard — roll over', () => {
     // seeded tolerance (half of 2%, floored to 1 s.f.) …
     const first = sims.find((b) => b.intent === 'open');
     expect(first?.size).toBe(20);
-    expect(first?.legA.slippageApr).toBeCloseTo(0.01, 9);
+    expect(first?.legA.slippageApr).toBeCloseTo(wantFirst, 9);
     // … then the size the modal opens on (the whole position here), both
     // batches, at the tolerance the modal gives that size, so the promise IS
     // the modal's headline.
@@ -335,13 +360,13 @@ describe('AssetCard — roll over', () => {
     );
     await userEvent.click(within(panel).getByRole('button', { name: 'Roll over' }));
     const dialog = screen.getByRole('dialog');
-    // The first option's headline: the 20px figure with "fixed" beside it.
-    const headline = await within(dialog).findByText(
-      (_, el) => el?.classList.contains('text-[20px]') === true && /^\+?\d+\.\d+%fixed$/.test(el.textContent ?? ''),
+    const options = await within(dialog).findByRole('radiogroup', { name: 'Roll into' });
+    const [headline] = await within(options).findAllByText(
+      (_, el) => el?.classList.contains('text-right') === true && /^\+?\d+\.\d+%$/.test(el.textContent ?? ''),
       undefined,
       { timeout: 10_000 },
     );
-    expect(headline.textContent).toBe(`${promised.textContent}fixed`);
+    expect(headline.textContent).toBe(promised.textContent);
   }, 20_000);
 
   it('a pair with no rate (under $100) sends no roll probe: there is nothing to compare it with', async () => {
@@ -459,7 +484,7 @@ describe('AssetCard — roll over', () => {
     const roll = within(panel).getByRole('button', { name: 'Roll over' });
     expect(roll).not.toHaveClass('roll-nudge');
     await userEvent.click(roll);
-    expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'Roll over — Gate / Hyperliquid' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Pair' })).toHaveTextContent(/Gate.*LONG.*Hyperliquid.*SHORT/);
     // Opening it by hand raises no banner and no flag.
     expect(screen.queryByText(/due to roll|Roll over now/)).not.toBeInTheDocument();
     expect(screen.queryByText('Ready to roll')).not.toBeInTheDocument();

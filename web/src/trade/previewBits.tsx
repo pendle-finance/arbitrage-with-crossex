@@ -12,7 +12,7 @@ import type {
 import { Chip } from '../components/Chip';
 import { SideChip } from '../components/VenueChip';
 import { SignedNumber } from '../components/SignedNumber';
-import { bps, fmtUsd, sig } from '../lib/fmt';
+import { bps, fmtUsd, qtyGrouped, sigGrouped } from '../lib/fmt';
 import { t } from '../i18n';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -37,10 +37,10 @@ export function feeText(fees: FeeEstimate | undefined): string {
   if (!fees) return '—';
   const { est, quote } = fees;
   if (est.maker !== undefined && est.taker !== undefined) {
-    return t('pairTicket.fee.rangeText', { maker: sig(est.maker), taker: sig(est.taker), quote });
+    return t('pairTicket.fee.rangeText', { maker: sigGrouped(est.maker), taker: sigGrouped(est.taker), quote });
   }
-  if (est.taker !== undefined) return t('pairTicket.fee.takerText', { amount: sig(est.taker), quote, rate: bps(fees.takerRate) });
-  if (est.maker !== undefined) return t('pairTicket.fee.makerText', { amount: sig(est.maker), quote, rate: bps(fees.makerRate) });
+  if (est.taker !== undefined) return t('pairTicket.fee.takerText', { amount: sigGrouped(est.taker), quote, rate: bps(fees.takerRate) });
+  if (est.maker !== undefined) return t('pairTicket.fee.makerText', { amount: sigGrouped(est.maker), quote, rate: bps(fees.makerRate) });
   return '—';
 }
 
@@ -59,9 +59,9 @@ export function feeKind(fees: FeeEstimate | undefined): string {
 export function feeAmount(fees: FeeEstimate | undefined): string {
   if (!fees) return '—';
   const { est, quote } = fees;
-  if (est.maker !== undefined && est.taker !== undefined) return `${sig(est.maker)}–${sig(est.taker)} ${quote}`;
-  if (est.taker !== undefined) return `${sig(est.taker)} ${quote}`;
-  if (est.maker !== undefined) return `${sig(est.maker)} ${quote}`;
+  if (est.maker !== undefined && est.taker !== undefined) return `${sigGrouped(est.maker)}–${sigGrouped(est.taker)} ${quote}`;
+  if (est.taker !== undefined) return `${sigGrouped(est.taker)} ${quote}`;
+  if (est.maker !== undefined) return `${sigGrouped(est.maker)} ${quote}`;
   return '—';
 }
 
@@ -70,8 +70,35 @@ export function estFeeOf(p: PreviewResult): number {
   return p.fees?.est.taker ?? p.fees?.est.maker ?? 0;
 }
 
+export function legNotional(p: PreviewResult): number | null {
+  const mid = p.fillEstimate?.midPrice;
+  const q = Number(p.qty);
+  return mid && Number.isFinite(q) ? q * mid : (p.estNotional ?? null);
+}
+
+export function pairModeFees(
+  previews: readonly (PreviewResult | undefined)[] | undefined,
+  makerIdx: number | null,
+  slicedLegs: readonly number[] | null = null,
+): { maker: number | null; market: number | null } {
+  const legs = (previews ?? []).map((p) => {
+    const n = p?.fees ? legNotional(p) : null;
+    const impact = p?.fillEstimate ? (Math.max(0, p.fillEstimate.slippagePct) / 100) * (n ?? 0) : 0;
+    return p?.fees && n !== null ? { n, fees: p.fees, impact } : null;
+  });
+  const [a, b] = legs;
+  if (legs.length !== 2 || !a || !b) return { maker: null, market: null };
+  const asMaker = (l: typeof a) => l.fees.est.maker ?? l.n * l.fees.makerRate;
+  const takerFee = (l: typeof a) => l.fees.est.taker ?? l.n * l.fees.takerRate;
+  const asTaker = (l: typeof a) => takerFee(l) + l.impact;
+  const sliced = slicedLegs?.length === 2 ? slicedLegs : null;
+  const rest = (m: typeof a, h: typeof a, hi: number) => asMaker(m) + takerFee(h) + (sliced ? sliced[hi] : h.impact);
+  const maker = makerIdx === 0 ? rest(a, b, 1) : makerIdx === 1 ? rest(b, a, 0) : Math.min(rest(a, b, 1), rest(b, a, 0));
+  return { maker, market: asTaker(a) + asTaker(b) };
+}
+
 /** Violations (red, blocking) + warnings (dim) as a compact list. */
-export function ViolationList({ violations, warnings }: { violations: Violation[]; warnings?: string[] }) {
+export function ViolationList({ violations, warnings }: { violations: Pick<Violation, 'message'>[]; warnings?: string[] }) {
   if (!violations.length && !(warnings ?? []).length) return null;
   return (
     <ul className="flex flex-col gap-0.5 text-[11px]">
@@ -95,7 +122,7 @@ export function PreviewFallback({ isError, error }: { isError: boolean; error: u
   return isError ? (
     <span className="text-rose-400">{t('pairTicket.preview.failed', { message: (error as Error).message })}</span>
   ) : (
-    <span className="text-ink-500">{t('trade.execute.pricing')}</span>
+    <span className="text-ink-500">{t('common.refreshing')}</span>
   );
 }
 
@@ -232,7 +259,7 @@ export function ClosePreviewPanel({
   }
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-ink-800 bg-ink-950/60 px-3 py-2.5 text-[11px]">
-      {estimating && <span className="text-amber-400">{t('trade.execute.pricing')}</span>}
+      {estimating && <span className="text-amber-400">{t('common.refreshing')}</span>}
       {previews.map((p, i) => {
         const realized = realizedFor?.(p, i) ?? null;
         return (
@@ -240,7 +267,7 @@ export function ClosePreviewPanel({
             <span className="flex items-center gap-1.5 text-ink-300">
               <SideChip side={p.side} />
               <span className="text-ink-200">{labelFor(p, i)}</span>
-              <span className="num ml-auto text-ink-100">{p.qty ? sig(p.qty) : '—'}</span>
+              <span className="num ml-auto text-ink-100">{p.qty ? qtyGrouped(p.qty) : '—'}</span>
             </span>
             {hedgeAtMarket && i > 0 ? (
               <span className="flex justify-between text-ink-400">
@@ -250,7 +277,7 @@ export function ClosePreviewPanel({
             ) : (
               <span className="flex justify-between text-ink-400">
                 <span title={t('trade.close.limitPxTitle')}>{t('pairTicket.preview.limitPx')}</span>
-                <span className="num text-ink-100">{p.price ? sig(p.price) : '—'}</span>
+                <span className="num text-ink-100">{p.price ? sigGrouped(p.price) : '—'}</span>
               </span>
             )}
             {p.fillEstimate && (

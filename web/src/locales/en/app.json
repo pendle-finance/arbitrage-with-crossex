@@ -128,8 +128,15 @@
   "about": {
     "seconds": "about {{n}}s",
     "minutes": "about {{n}} min",
-    "hours": "about {{n}} h",
-    "hoursMinutes": "about {{h}} h {{m}} m"
+    "hours": "about {{n}}h",
+    "hoursMinutes": "about {{h}}h {{m}}m"
+  },
+  "approx": {
+    "mark": "about",
+    "seconds": "{{n}}s",
+    "minutes": "{{n}} min",
+    "hours": "{{n}}h",
+    "hoursMinutes": "{{h}}h {{m}}m"
   },
   "syncAge": {
     "s": "{{n}} s ago",
@@ -194,6 +201,10 @@
     "available": " — v{{version}} available",
     "commitUnknown": "Commit unknown",
     "installed": " · installed {{date}}",
+    "checkUpdates": "Check for updates",
+    "upToDate": " · up to date",
+    "checkFailed": " · could not reach GitHub",
+    "checkedRecently": " · checked in the last 5 min",
     "sourceCheckout": "Source checkout"
   },
   "permissions": {
@@ -280,7 +291,10 @@
     "notForThisWallet": "Not set up for this wallet",
     "skip": "No warning near liquidation, interest or maturity.",
     "checkingBot": "Checking with the Telegram bot…",
-    "linkedElsewhere": "Alerts are linked to <a>{{other}}</a>, not <b>{{viewed}}</b>. Log in as this wallet to set up its alerts."
+    "linkedElsewhere": "Alerts are linked to <a>{{other}}</a>, not <b>{{viewed}}</b>. Log in as this wallet to set up its alerts.",
+    "logInFirst": "Log in first",
+    "logInToSetUp": "Log in to set up",
+    "logInFirstBody": "Alerts go to the wallet logged in on this terminal. Log in as <a>{{viewed}}</a> to set up its alerts."
   },
   "api": {
     "network": "Network error on {{path}}: {{error}}",

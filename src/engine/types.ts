@@ -14,6 +14,7 @@ export type PairMode = 'OPENING' | 'CONVERTING' | 'STOPPING' | 'HALTED' | 'DONE'
 export type OrderState = 'PENDING' | 'OPEN' | 'CLOSED' | 'DEAD';
 export type Leg = 'A' | 'B';
 export type Side = 'BUY' | 'SELL';
+export type PairHaltKind = 'hedge-margin';
 
 /** Venue trading rules for one leg, snapshotted at deal creation (decimal strings). */
 export interface LegSpec {
@@ -58,6 +59,10 @@ export interface PairRow {
    * Closes carry the user's slippage here — the clip becomes LIMIT IOC at
    * ref·(1 ± band), the close-protection semantics. */
   clipBandBp: number | null;
+  repegBehindBp: number | null;
+  repegAutoBp: number | null;
+  repegNotBefore: number;
+  haltKind: PairHaltKind | null;
   haltReason: string | null;
   reportJson: string | null;
   createdAt: number;
@@ -166,6 +171,7 @@ export interface VenuePort {
    * (tick-snapped + Hyperliquid 5-sig-fig cap — `tick` is the leg's tick size);
    * null when the book is unavailable. */
   touch(contract: string, side: Side, tick: string): Promise<string | null>;
+  best(contract: string, side: Side, tick: string): Promise<string | null>;
   /** Reference price for min-notional checks; null when unavailable. */
   refPrice(contract: string): Promise<string | null>;
 }
@@ -189,6 +195,8 @@ export interface Projection {
   residualA: string;
   /** Newest leg-A maker order, if any. */
   makerOrder: OrderRow | null;
+  lastHedge: OrderRow | null;
+  hedgeReduceOnlyRefusals: number;
   anyPending: boolean;
   anyQuarantined: boolean;
   /** The first order stuck on a status the decoder cannot classify (any leg).
@@ -212,10 +220,23 @@ export interface Report {
 
 export type Action =
   | { type: 'idle'; reason?: string }
-  | { type: 'setMode'; mode: PairMode; reason: string; haltReason?: string }
+  | {
+      type: 'setMode';
+      mode: PairMode;
+      reason: string;
+      haltReason?: string;
+      haltKind?: PairHaltKind;
+      /** Start the new mode with a fresh leg-A failure budget. A close that
+       * enters CONVERTING because the maker kept failing would otherwise stop
+       * on its first tick there, with the budget already spent. */
+      resetClipBudget?: boolean;
+      /** Raised as a warn alert when the mode changes. */
+      alert?: string;
+    }
   | { type: 'place'; leg: Leg; kind: 'maker' | 'taker'; tif: 'poc' | 'ioc'; qty: string; price?: string }
   | { type: 'cancel'; order: OrderRow }
-  | { type: 'finish'; report: Report };
+  /** `alert` replaces the generic "below the venue minimum" error alert. */
+  | { type: 'finish'; report: Report; alert?: string };
 
 export interface Tuning {
   TICK_MS: number;
@@ -232,6 +253,13 @@ export interface Tuning {
   HEDGE_REJECT_HALT: number;
   /** Convert clips: caps peak unhedged exposure during completion. */
   MAX_CLIP: string;
+  REPEG_MIN_GAP_MS: number;
+  REPEG_REFUSED_WAIT_MS: number;
+  /** Reduce-only refusals on the hedge in a row after which a STOPPING close gives up on its
+   * reduce-only hedge leg. That leg's position is most likely already gone
+   * (closed by hand, liquidated, ADL), and every retry is refused; without a
+   * limit the deal never ends and blocks rebalance, key changes and updates. */
+  STOP_HEDGE_GIVE_UP: number;
   /** Consecutive failed reads on ONE live order before alerting. A live order we
    * cannot read is filling untracked, so this is deliberately small — but not 1,
    * which would fire on any transient blip. */
@@ -247,5 +275,8 @@ export const TUNING: Tuning = {
   MAX_POC_REJECTS: 5,
   HEDGE_REJECT_HALT: 3,
   MAX_CLIP: '1000000000', // effectively uncapped by default; pairs may be created with less
+  REPEG_MIN_GAP_MS: 5_000,
+  REPEG_REFUSED_WAIT_MS: 60_000,
+  STOP_HEDGE_GIVE_UP: 10,
   READ_FAIL_ALERT: 5,
 };

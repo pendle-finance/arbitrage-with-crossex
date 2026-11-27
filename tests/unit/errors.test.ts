@@ -30,10 +30,21 @@ describe('classifyGateError label anchoring', () => {
     expect(classifyGateError(gate(429, 'TOO_MANY_REQUESTS')).category).toBe('rate-limited');
     expect(classifyGateError(gate(400, 'LEVERAGE_TOO_LARGE')).category).toBe('leverage');
     expect(classifyGateError(gate(400, 'SIZE_TOO_SMALL')).category).toBe('size-too-small');
+    expect(classifyGateError(gate(400, 'TRADE_ORDER_QUANTITY_MIN_ERROR')).category).toBe('size-too-small');
+    expect(classifyGateError(gate(400, 'TRADE_ORDER_AMOUNT_MIN_ERROR')).category).toBe('size-too-small');
     expect(classifyGateError(gate(400, 'MAX_MARKET_SIZE')).category).toBe('size-too-large');
     expect(classifyGateError(gate(400, 'POST_ONLY_REJECT')).category).toBe('post-only-would-cross');
     expect(classifyGateError(gate(400, 'REDUCE_ONLY_VIOLATION')).category).toBe('reduce-only-violation');
     expect(classifyGateError(gate(400, 'CAN_NOT_DELETE_LARGE_POSITION')).category).toBe('venue-rejected');
+  });
+
+  it.each([
+    ['TRADE_REDUCE_ONLY_POSITION_QTY_ERROR', 'Can not place ReduceOnly order when position quantity is zero'],
+    ['TRADE_REDUCE_ONLY_SIDE_ERROR', 'ReduceOnly orders must be in the opposite direction of the position'],
+  ])('the reduce-only refusal Gate CrossEx sends live (%s) is a definite reduce-only violation', (label, message) => {
+    const c = classifyGateError({ response: { status: 400, data: { label, message } } });
+    expect(c.category).toBe('reduce-only-violation');
+    expect(c.retryable).toBe(false);
   });
 
   it('a CoreError keeps its category; a bare network error is retryable', () => {
@@ -47,6 +58,25 @@ describe('classifyGateError label anchoring', () => {
     const c = classifyGateError(gate(422, 'TRANSFER_AMOUNT_INSUFFICIENT'));
     expect(c.category).toBe('insufficient-margin');
     expect(c.retryable).toBe(false);
+  });
+
+  it('hyperliquid order allowance kind', () => {
+    const c = classifyGateError(gate(400, 'TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR'));
+    expect(c.category).toBe('order-allowance');
+    expect(c.label).toBe('TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR');
+    expect(c.retryable).toBe(false);
+  });
+
+  it('lighter order allowance kind, and a rate limit stays rate-limited', () => {
+    expect(classifyGateError(gate(400, 'TRADE_LIGHTER_ORDER_LIMIT_ERROR')).category).toBe('order-allowance');
+    expect(classifyGateError(gate(400, 'TOO_MANY_REQUESTS')).category).toBe('rate-limited');
+  });
+
+  it('too many open orders on the symbol is a venue refusal, not an order allowance', () => {
+    const c = classifyGateError(gate(400, 'TRADE_MAX_ORDERS_ERROR'));
+    expect(c.category).toBe('venue-rejected');
+    expect(c.retryable).toBe(false);
+    expect(c.message).toBe('Too many open orders on this market at Gate. Cancel some, then try again. (Gate: TRADE_MAX_ORDERS_ERROR)');
   });
 
   it('transfer amount below minimum is still unknown', () => {

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
@@ -6,16 +6,27 @@ import nock from 'nock';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeClients } from '../../src/core/clients';
 import { roundToStep } from '../../src/core/numbers';
-import type { EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
+import type { NormalizedBook } from '../../src/core/estimate/books';
+import type { AccountLike, EvenPlan, PlannedStep } from '../../src/core/rebalance/plan';
+import type { RealizeLeg, RealizePerp, RealizePlan } from '../../src/core/rebalance/realize';
+import type { SliceOption } from '../../src/core/rebalance/slices';
+import { FEE_ROWS, GATE_ETH, HL_BTC, HL_ETH as HL_ETH_BOOK, OWNER_HL_ETH, ownerBook, perp, PERP_RULES, realizeBook, twoLegs, type RealizeBook } from '../unit/fixtures/realize-books';
 import { Store } from '../../src/engine/db';
+import { closeBorosLegs } from '../../src/server/borosClose';
+import { marketAcc, raw } from '../helpers/boros-fixtures';
+import { borosStub } from '../helpers/boros-stub';
 import { gateVenue } from '../../src/engine/venueGate';
 import { GATE_HISTORY_FLOOR_MS } from '../../src/server/interestLedger';
 import { InterestFile } from '../../src/server/interestLedger';
-import { JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
-import { gate, HOST, makeTestApp, mockGateGet, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
+import { asRealize, convertSteps, gapsLeftBy, HALT_TEXT, JobFile, newJob, newTransferJob, TransferFile, type Job } from '../../src/server/rebalanceJob';
+import { LOOKUP_WINDOW_MS } from '../../src/server/rebalanceRunner';
+import { isShownRealize, marginGrew } from '../../src/server/routes/rebalance';
+import { gate, HOST, makeTestApp, mockGateGet, orderBody, TEST_KEY, TEST_SECRET } from './helpers/gate-nock';
 import { accountA, asset, waitFor } from './helpers/rebalance';
 
-const planEdit = vi.hoisted(() => ({ dropConvertSteps: false, convertCost: null as number | null }));
+const planEdit = vi.hoisted(() => ({ dropConvertSteps: false, convertCost: null as number | null, realize: null as RealizePlan | null }));
+
+vi.mock(import('../../src/server/borosClose'), async (importOriginal) => ({ ...(await importOriginal()), closeBorosLegs: vi.fn() }));
 
 vi.mock(import('../../src/core/rebalance/plan'), async (importOriginal) => {
   const plan = await importOriginal();
@@ -26,13 +37,14 @@ vi.mock(import('../../src/core/rebalance/plan'), async (importOriginal) => {
       const convert = { ...made.routes.convert };
       if (planEdit.dropConvertSteps) convert.steps = [];
       if (planEdit.convertCost !== null) convert.costUsd = planEdit.convertCost;
-      return { ...made, routes: { ...made.routes, convert } };
+      return { ...made, routes: { ...made.routes, convert }, ...(planEdit.realize ? { realize: planEdit.realize } : {}) };
     },
   };
 });
 
 const API = '/api/v4';
 const DAY_MS = 24 * 60 * 60 * 1000;
+const NO_ESTIMATES = { maker: { feeUsd: 0, impactUsd: 0, totalUsd: 0 }, market: { feeUsd: 0, impactUsd: 0, totalUsd: 0 } };
 
 let t: number;
 let apps: FastifyInstance[];
@@ -42,6 +54,7 @@ beforeEach(() => {
   apps = [];
   planEdit.dropConvertSteps = false;
   planEdit.convertCost = null;
+  planEdit.realize = null;
 });
 
 afterEach(async () => {
@@ -122,7 +135,27 @@ const HEDGED_POSITIONS = [
   { symbol: 'GATE_FUTURE_ETH_USDT', position_side: 'NONE', position_qty: '0.1', position_value: '250', mark_price: '2500' },
 ];
 
-function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?: number; positions?: unknown[] } = {}): void {
+const PERP_RULE_ROWS = Object.entries(PERP_RULES).map(([symbol, rule]) => ({
+  symbol,
+  exchange_type: symbol.split('_')[0],
+  business_type: 'FUTURE',
+  state: 'live',
+  lot_size: rule.lotSize,
+  min_size: rule.minSize,
+  min_notional: rule.minNotional,
+}));
+
+const FEE_WIRE_ROWS = FEE_ROWS.map((row) => ({
+  exchange_type: row.exchangeType,
+  future_maker_fee: row.futureMakerFee,
+  future_taker_fee: row.futureTakerFee,
+  ...(row.exchangeType === 'GATE' ? { spot_maker_fee: '0', spot_taker_fee: '0' } : {}),
+  special_fee_list: [],
+}));
+
+function mockView(
+  opts: { account?: unknown; disabled?: string; accountDelayMs?: number; positions?: unknown[]; rates?: unknown[] } = {},
+): void {
   const accounts = gate().persist().get(`${API}/crossex/accounts`).query(true);
   if (opts.accountDelayMs) accounts.delay(opts.accountDelayMs);
   accounts.reply(200, opts.account ?? accountA);
@@ -130,7 +163,7 @@ function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?:
     .persist()
     .get(`${API}/crossex/interest_rate`)
     .query(true)
-    .reply(200, [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }]);
+    .reply(200, opts.rates ?? [{ coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: '0.000005', time: String(t) }]);
   gate().persist().get(`${API}/crossex/history_margin_interests`).query(true).reply(200, []);
   gate().persist().get(`${API}/crossex/positions`).query(true).reply(200, opts.positions ?? HEDGED_POSITIONS);
   gate()
@@ -142,12 +175,8 @@ function mockView(opts: { account?: unknown; disabled?: string; accountDelayMs?:
     .persist()
     .get(`${API}/crossex/rule/symbols`)
     .query(true)
-    .reply(200, [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }]);
-  gate()
-    .persist()
-    .get(`${API}/crossex/fee`)
-    .query(true)
-    .reply(200, [{ exchange_type: 'GATE', spot_maker_fee: '0', spot_taker_fee: '0', special_fee_list: [] }]);
+    .reply(200, [{ symbol: 'GATE_SPOT_USDC_USDT', exchange_type: 'GATE', business_type: 'SPOT', state: 'live' }, ...PERP_RULE_ROWS]);
+  gate().persist().get(`${API}/crossex/fee`).query(true).reply(200, FEE_WIRE_ROWS);
   gate()
     .persist()
     .get(`${API}/spot/tickers`)
@@ -160,22 +189,26 @@ function refuseSends(): void {
   gate().persist().post(`${API}/crossex/orders`).query(true).reply(400, REFUSAL);
 }
 
-function boot(over: { job?: unknown } = {}) {
+function boot(over: { job?: unknown; borosFetch?: ReturnType<typeof borosStub> } = {}) {
   const dataDir = mkdtempSync(path.join(tmpdir(), 'rebalance-'));
   if (over.job) writeFileSync(path.join(dataDir, 'rebalance.json'), JSON.stringify(over.job));
   const getClients = () => makeClients({ key: TEST_KEY, secret: TEST_SECRET });
   const jobs = new JobFile(dataDir);
   const transfers = new TransferFile(dataDir);
+  const store = new Store(':memory:');
   const app = makeTestApp({
     getClients,
     rebalance: { jobs, sleep },
     transfer: { jobs: transfers },
-    engine: { store: new Store(':memory:'), venue: gateVenue(getClients), clock: { now: () => t } },
+    engine: { store, venue: gateVenue(getClients), clock: { now: () => t } },
+    ...(over.borosFetch ? { borosFetch: over.borosFetch } : {}),
   });
   apps.push(app);
   return {
     jobs,
     transfers,
+    store,
+    dataDir,
     ready: () => app.ready(),
     file: () => JSON.parse(readFileSync(path.join(dataDir, 'rebalance.json'), 'utf8')) as Job,
     get: (url: string) => app.inject({ method: 'GET', url, headers: HOST }),
@@ -746,5 +779,1576 @@ describe('GET /api/rebalance prices a $6,000,000 Spot loop from the order book',
     } finally {
       clock.mockRestore();
     }
+  });
+});
+
+describe('POST /api/rebalance with a close and reopen', () => {
+  const HL_ETH = 'HYPERLIQUID_FUTURE_ETH_USDC';
+  const owner = ownerBook();
+
+  const wireAccount = (account: AccountLike) => ({
+    user_id: '1',
+    available_margin: account.availableMargin,
+    margin_balance: account.marginBalance,
+    initial_margin: account.initialMargin,
+    account_mode: 'CROSS_EXCHANGE',
+    assets: (account.assets ?? []).map((a) =>
+      asset(a.coin ?? '', a.exchangeType ?? '', {
+        balance: a.balance ?? '0',
+        available_balance: a.availableBalance ?? '0',
+        upnl: a.upnl ?? '0',
+        equity: a.equity ?? '0',
+        liability: a.liability ?? '0',
+        borrowing_initial_margin: a.borrowingInitialMargin,
+        borrowing_maintenance_margin: a.borrowingMaintenanceMargin,
+      }),
+    ),
+  });
+
+  const wirePosition = (perp: RealizePerp) => ({
+    symbol: perp.symbol,
+    position_side: 'NONE',
+    position_qty: perp.positionQty,
+    position_value: String(Math.abs(Number(perp.positionQty)) * Number(perp.markPrice)),
+    entry_price: perp.entryPrice,
+    mark_price: perp.markPrice,
+    initial_margin: perp.initialMargin,
+    upnl: String(Number(perp.positionQty) * (Number(perp.markPrice) - Number(perp.entryPrice))),
+    ...(perp.maxLeverage ? { max_leverage: perp.maxLeverage } : {}),
+  });
+
+  const OWNER_RATES = [
+    { coin: 'USDT', exchange_type: 'CROSSEX', hour_interest_rate: String(0.0596 / 8760), time: String(Date.now()) },
+    { coin: 'USDC', exchange_type: 'HYPERLIQUID', hour_interest_rate: String(0.05 / 8760), time: String(Date.now()) },
+  ];
+
+  const THIN_HL_ETH: NormalizedBook = { bids: [[1811, 1000]], asks: [[1831, 1000]], ts: 0 };
+
+  function mockOwnerBook(book: NormalizedBook = OWNER_HL_ETH, view: { accountDelayMs?: number } = {}): void {
+    mockView({
+      account: wireAccount(owner.account),
+      positions: owner.spec.perps.map(wirePosition),
+      rates: OWNER_RATES,
+      ...view,
+    });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(book.bids), levels(book.asks)] });
+  }
+
+  function refuseQuotes(): void {
+    gate().persist().post(`${API}/crossex/convert/quote`).query(true).reply(400, REFUSAL);
+  }
+
+  const shownOf = (plan: EvenPlan) => {
+    const route = plan.routes[plan.recommended ?? 'convert']!;
+    const legs = plan.realize?.legs ?? [];
+    const fees = legs.reduce((total, leg) => total + leg.closeFeeUsd + leg.reopenFeeUsd + (leg.convert?.feeUsd ?? 0), 0);
+    const impact = legs.reduce((total, leg) => total + leg.closeImpactUsd + leg.reopenImpactUsd, 0);
+    return {
+      route: plan.recommended ?? 'convert',
+      costUsd: route.costUsd + fees + Math.max(0, impact),
+      realizeQty: legs.map((leg) => ({ symbol: leg.symbol, qty: leg.qty })),
+    };
+  };
+
+  const OWNER_MARK = 1_821;
+  const ownerAccount = (): RealizeBook =>
+    realizeBook({
+      usdt: { cash: -7_169.33, upnl: 0 },
+      usdc: { cash: 55.98, upnl: 66 * (2_100 - OWNER_MARK) },
+      availableMargin: 2_000,
+      perps: [perp(HL_ETH, -66, 2_100, OWNER_MARK), perp('GATE_FUTURE_ETH_USDT', 66, OWNER_MARK, OWNER_MARK)],
+      books: { [HL_ETH]: OWNER_HL_ETH, GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: 66 * OWNER_MARK,
+    });
+
+  function mockAccount(book: RealizeBook): void {
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(OWNER_HL_ETH.bids), levels(OWNER_HL_ETH.asks)] });
+  }
+
+  function mockGateEthBook(): void {
+    nock('https://api.gateio.ws')
+      .persist()
+      .get('/api/v4/futures/usdt/contracts/ETH_USDT')
+      .query(true)
+      .reply(200, { name: 'ETH_USDT', quanto_multiplier: '0.01', order_price_round: '0.01' });
+    nock('https://api.gateio.ws')
+      .persist()
+      .get('/api/v4/futures/usdt/order_book')
+      .query(true)
+      .reply(200, { bids: [{ p: '1820.9', s: 1_000_000 }], asks: [{ p: '1821.1', s: 1_000_000 }] });
+  }
+
+  const DELEVER_ASK = {
+    perps: [
+      { symbol: HL_ETH, qty: 100 },
+      { symbol: 'GATE_FUTURE_ETH_USDT', qty: 100 },
+    ],
+    boros: [],
+    exec: 'maker',
+  };
+
+  const REALIZE_TWAP = { durationSec: 3600, slices: 12 };
+  const TWAP_QUERY = '/api/rebalance?twapDurationSec=3600&twapSlices=12';
+  const twapQtys = (plan: { slices: number; sliceQty: string; lastQty: string }) => Number(plan.sliceQty) * (plan.slices - 1) + Number(plan.lastQty);
+
+  function mockTwoLegs(): void {
+    const book = twoLegs();
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    for (const [coin, levelBook] of [['ETH', HL_ETH_BOOK], ['BTC', HL_BTC]] as const) {
+      nock('https://api.hyperliquid.xyz')
+        .persist()
+        .post('/info', (body) => body.type === 'l2Book' && body.coin === coin)
+        .reply(200, { coin, levels: [levels(levelBook.bids), levels(levelBook.asks)] });
+    }
+  }
+
+  it('GET /rebalance plans a one-leg realize TWAP with its cost', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const res = await h.get(TWAP_QUERY);
+
+    expect(res.statusCode, res.body).toBe(200);
+    const { realize, realizeTwap } = res.json().data;
+    const twap = realizeTwap.clearDebt;
+    expect(twap.refusal).toBeNull();
+    expect(twap.plan).toMatchObject({ slices: 12, intervalSec: 300, durationSec: 3600 });
+    expect(twap.legs).toEqual([{ symbol: HL_ETH, slices: 12, plan: twap.plan }]);
+    expect(twapQtys(twap.plan)).toBeCloseTo(realize.clearDebt.legs[0].qty, 8);
+    for (const exec of ['maker', 'market'] as const) {
+      expect(twap.estimates[exec].feeUsd).toBeCloseTo(realize.clearDebt.estimates[exec].feeUsd, 6);
+      expect(twap.estimates[exec].impactUsd).toBeLessThanOrEqual(realize.clearDebt.estimates[exec].impactUsd + 1e-9);
+      expect(twap.estimates[exec].totalUsd).toBeCloseTo(twap.estimates[exec].feeUsd + twap.estimates[exec].impactUsd, 9);
+    }
+    expect((await h.get('/api/rebalance')).json().data.realizeTwap).toBeNull();
+  });
+
+  it('GET /rebalance splits a two-leg realize TWAP by notional on one interval', async () => {
+    mockTwoLegs();
+    const h = boot();
+
+    const res = await h.get(TWAP_QUERY);
+
+    expect(res.statusCode, res.body).toBe(200);
+    const { realize, realizeTwap } = res.json().data;
+    const twap = realizeTwap.all;
+    expect(realize.all.legs).toHaveLength(2);
+    expect(twap.refusal).toBeNull();
+    expect(twap.legs.map((leg: { symbol: string }) => leg.symbol)).toEqual(realize.all.legs.map((leg: RealizeLeg) => leg.symbol));
+    const counts = twap.legs.map((leg: { slices: number }) => leg.slices);
+    expect(counts.reduce((sum: number, count: number) => sum + count, 0)).toBe(twap.plan.slices);
+    expect(Math.min(...counts)).toBeGreaterThanOrEqual(1);
+    const usd = realize.all.legs.map((leg: RealizeLeg) => leg.qty * (leg.symbol.includes('BTC') ? 64_394.5 : 1_821.7));
+    expect(counts[usd[0] > usd[1] ? 0 : 1]).toBeGreaterThanOrEqual(counts[usd[0] > usd[1] ? 1 : 0]);
+    for (const [index, leg] of twap.legs.entries()) {
+      expect(leg.plan.intervalSec).toBe(twap.plan.intervalSec);
+      expect(twapQtys(leg.plan)).toBeCloseTo(realize.all.legs[index].qty, 8);
+    }
+    expect(twap.estimates.market.totalUsd).toBeGreaterThan(0);
+  });
+
+  it('GET /rebalance gives every perp of a two-leg realize TWAP at least 2 book-checked slices', async () => {
+    mockTwoLegs();
+    const h = boot();
+
+    const res = await h.get('/api/rebalance?twapDurationSec=3600&twapSlices=2');
+
+    expect(res.statusCode, res.body).toBe(200);
+    const twap = res.json().data.realizeTwap.all;
+    expect(twap.legs).toHaveLength(2);
+    for (const leg of twap.legs) expect(leg.slices).toBeGreaterThanOrEqual(2);
+    expect(twap.plan.slices).toBe(twap.legs.reduce((sum: number, leg: { slices: number }) => sum + leg.slices, 0));
+  });
+
+  it('GET /rebalance returns the TWAP refusal and refuses a bad TWAP query', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const refused = (await h.get('/api/rebalance?twapDurationSec=3600&twapSlices=500')).json().data.realizeTwap.clearDebt;
+    expect(refused.refusal).toMatchObject({ text: expect.any(String) });
+    expect(refused.estimates).toBeNull();
+    expect((await h.get('/api/rebalance?twapDurationSec=3600&twapSlices=abc')).statusCode).toBe(400);
+  });
+
+  it('GET /rebalance takes the Realize order setting and taker-after, and refuses a bad one', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    expect((await h.get('/api/rebalance?realizeExec=market')).statusCode).toBe(200);
+    expect((await h.get('/api/rebalance?realizeExec=maker&realizeTakerAfterSec=600')).statusCode).toBe(200);
+    expect((await h.get('/api/rebalance?realizeExec=maker&realizeTakerAfterSec=never')).statusCode).toBe(200);
+    expect((await h.get('/api/rebalance?realizeExec=maker&realizeTakerAfterSec=0')).statusCode).toBe(400);
+    const bad = await h.get('/api/rebalance?realizeExec=fast');
+    expect(bad.statusCode).toBe(400);
+    expect(bad.body).toContain('unknown order mode fast');
+    expect((await h.get('/api/rebalance?realizeExec=maker&realizeTakerAfterSec=abc')).statusCode).toBe(400);
+  });
+
+  it('a realize start with a TWAP stores the plan with its legs, ignores maker, and checks the TWAP cost', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const twap = (await h.get(TWAP_QUERY)).json().data.realizeTwap.clearDebt;
+    const ask = { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', twap: { ...REALIZE_TWAP, takerAfterSec: 120, repegBehindBp: 2 }, maker: { takerAfterSec: 600, repegBehindBp: 5 } };
+
+    const res = await h.post('/api/rebalance', { ...ask, costUsd: twap.estimates.maker.totalUsd });
+
+    expect(res.statusCode, res.body).toBe(202);
+    const job = h.file();
+    expect(job.deleverTwap).toEqual({ durationSec: 3600, intervalSec: 300, slices: 12, takerAfterSec: 120, repegBehindBp: 2, legs: [{ symbol: HL_ETH, slices: 12 }] });
+    expect(job.maker ?? null).toBeNull();
+    expect(job.slice).toMatchObject({ count: 12 });
+    expect(job.estimate?.totalUsd).toBeCloseTo(twap.estimates.maker.totalUsd, 6);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize start with a TWAP that cannot be planned returns 400 and starts nothing', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd: 1_000_000, twap: { durationSec: 3600, slices: 500 } });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.message).toEqual(expect.any(String));
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+  });
+
+  it('a running realize TWAP is stopped and halted at boot', async () => {
+    mockView();
+    const base = slicedJob({ status: 'running' });
+    const id = `${base.id}-s1-1`;
+    const job: Job = {
+      ...base,
+      kind: 'realize',
+      delever: null,
+      deleverTwap: { durationSec: 3600, intervalSec: 300, slices: 12, legs: [{ symbol: HL_ETH, slices: 12 }] },
+    };
+    Object.assign(job.steps[0], {
+      status: 'running',
+      startedAt: t,
+      lead: { text: id, venueId: null, sentAt: t, credited: 0, poc: true, price: null, side: 'BUY', mid: 2500, entry: null },
+      cut: { qty: 1, from: 0, at: t, ioc: false, n: 1 },
+    });
+    const h = boot({ job });
+    const leg = (contract: string, side: 'BUY' | 'SELL', reduceOnly: boolean) => ({ contract, side, lot: '0.0001', minSize: '0', minNotional: '0', tick: '0.1', reduceOnly });
+    h.store.createPair({
+      id,
+      mode: 'OPENING',
+      a: leg(HL_ETH, 'BUY', true),
+      b: leg(HL_ETH, 'SELL', false),
+      targetQty: '1',
+      limitPrice: '2500',
+      pricePolicy: 'touch',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: null,
+      haltReason: null,
+      reportJson: null,
+      createdAt: t,
+    });
+
+    await h.ready();
+
+    expect(h.file()).toMatchObject({ kind: 'realize', status: 'halted', haltKind: 'restart' });
+    expect(h.store.getPair(id)?.mode).not.toBe('OPENING');
+  });
+
+  it('a realize TWAP restarted with one leg open halts with the text that names the open gap, not "Nothing failed"', async () => {
+    mockView();
+    const base = slicedJob({ status: 'running' });
+    const id = `${base.id}-s1-1`;
+    const job: Job = {
+      ...base,
+      kind: 'realize',
+      delever: null,
+      deleverTwap: { durationSec: 3600, intervalSec: 300, slices: 12, legs: [{ symbol: HL_ETH, slices: 12 }] },
+    };
+    Object.assign(job.steps[0], {
+      status: 'running',
+      startedAt: t,
+      lead: { text: id, venueId: null, sentAt: t, credited: 0, poc: false, price: null, side: 'BUY', mid: 2500, entry: null },
+      cut: { qty: 1, from: 0, at: t, ioc: true, n: 1 },
+    });
+    const h = boot({ job });
+    const leg = (contract: string, side: 'BUY' | 'SELL', reduceOnly: boolean) => ({ contract, side, lot: '0.0001', minSize: '0', minNotional: '0', tick: '0.1', reduceOnly });
+    h.store.createPair({
+      id,
+      mode: 'HALTED',
+      a: leg(HL_ETH, 'BUY', true),
+      b: leg(HL_ETH, 'SELL', false),
+      targetQty: '1',
+      limitPrice: '2500',
+      pricePolicy: 'touch',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: 'hedge-margin',
+      haltReason: null,
+      reportJson: null,
+      createdAt: t,
+    });
+    const order = h.store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'taker', side: 'BUY', qty: '1', price: null, tif: 'ioc', now: t });
+    h.store.updateOrder(id, 'A', order.seq, { state: 'CLOSED', cumQty: '1', avgFillPrice: '2500', resolvedAt: t });
+
+    await h.ready();
+
+    expect(h.file()).toMatchObject({ kind: 'realize', status: 'halted', haltKind: 'restart', haltReason: HALT_TEXT.restartGap, notHedgedQty: 1 });
+  });
+
+  it('a realize stopped on an unsent retry Convert at boot marks the open reopen gap and says the perps differ', async () => {
+    mockView();
+    const base = slicedJob({ status: 'running' });
+    const id = `${base.id}-s1-1`;
+    const retry = { reason: 'margin' as const, convertAmount: 100 };
+    const converts = asRealize(convertSteps('HYPERLIQUID', 'CROSSEX', 100)).map((step) => ({ ...step, retry }));
+    const job: Job = { ...base, kind: 'realize', delever: null, deleverTwap: null, steps: [...converts, ...base.steps], stepIndex: 0 };
+    const slice = job.steps[converts.length];
+    Object.assign(slice, {
+      status: 'running',
+      startedAt: t,
+      retry,
+      lead: { text: id, venueId: null, sentAt: t, credited: 0, poc: false, price: null, side: 'BUY', mid: 2500, entry: null },
+      cut: { qty: 1, from: 0, at: t, ioc: true, n: 1 },
+    });
+    const h = boot({ job });
+    const leg = (contract: string, side: 'BUY' | 'SELL', reduceOnly: boolean) => ({ contract, side, lot: '0.0001', minSize: '0', minNotional: '0', tick: '0.1', reduceOnly });
+    h.store.createPair({
+      id,
+      mode: 'HALTED',
+      a: leg(HL_ETH, 'BUY', true),
+      b: leg(HL_ETH, 'SELL', false),
+      targetQty: '1',
+      limitPrice: '2500',
+      pricePolicy: 'touch',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: 'hedge-margin',
+      haltReason: null,
+      reportJson: null,
+      createdAt: t,
+    });
+    const order = h.store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'taker', side: 'BUY', qty: '1', price: null, tif: 'ioc', now: t });
+    h.store.updateOrder(id, 'A', order.seq, { state: 'CLOSED', cumQty: '1', avgFillPrice: '2500', resolvedAt: t });
+
+    await h.ready();
+
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    expect(h.file()).toMatchObject({ status: 'halted', haltKind: 'restart', haltReason: HALT_TEXT.restartGap, notHedgedQty: 1, stepIndex: 0 });
+    expect(h.store.getPair(id)?.mode).toBe('HALTED');
+  });
+
+  it('Resume resets the retry Convert count, the top-up count and the ran-short count', async () => {
+    mockView();
+    refuseQuotes();
+    const convert: PlannedStep = { round: null, kind: 'convert', buy: 0, move: 12, arrives: 11.97, borrowLeft: 0, seconds: 0, from: 'CROSSEX', to: 'HYPERLIQUID' };
+    const job = newJob({ route: 'convert', steps: [convert], amount: 12, costUsd: 0, target: [], userId: '1' }, t);
+    Object.assign(job, { status: 'halted', haltReason: 'Gate took too long on this step.', retryConverts: 3, topUps: 3, topUpPending: true, fallbackConverts: 5 });
+    const h = boot({ job });
+
+    const res = await h.post(`/api/rebalance/${job.id}/resume`);
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data).toMatchObject({ retryConverts: 0, topUps: 0, topUpPending: false, fallbackConverts: 0 });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    expect(h.file()).toMatchObject({ retryConverts: 0, topUps: 0, topUpPending: false, fallbackConverts: 0 });
+  });
+
+  describe('a realize start checks the slice 1 margin the screen showed', () => {
+    const startWith = async (free: number, shownOf: (legs: RealizeLeg[]) => unknown) => {
+      mockAccount(realizeBook({ ...ownerAccount().spec, availableMargin: free }));
+      refuseSends();
+      const h = boot();
+      const data = (await h.get(`${TWAP_QUERY}&realizeExec=maker`)).json().data;
+      const legs = data.realize.clearDebt.legs as RealizeLeg[];
+      const shown = shownOf(legs);
+      const ask = { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', twap: REALIZE_TWAP, costUsd: data.realizeTwap.clearDebt.estimates.maker.totalUsd };
+      const res = await h.post('/api/rebalance', shown === undefined ? ask : { ...ask, realizeShown: shown });
+      return { h, legs, res };
+    };
+    const refusedWithNoJob = (h: ReturnType<typeof boot>, res: { statusCode: number; json: () => { error: unknown } }) => {
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+      expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+    };
+
+    it('a fresh gap slice 1 of 2.6618 ETH that the screen showed as hedged returns 409 PLAN_CHANGED and starts no job', async () => {
+      const { h, legs, res } = await startWith(300, (fresh) => fresh.map((leg) => ({ symbol: leg.symbol, at: null, firstQty: null })));
+      expect(legs[0].margin).toMatchObject({ at: 'gap', firstQty: 2.6618 });
+      refusedWithNoJob(h, res);
+    });
+
+    it('a start with no shown margin, from an old client, refuses a fresh gap plan', async () => {
+      const { h, legs, res } = await startWith(300, () => undefined);
+      expect(legs[0].margin?.at).toBe('gap');
+      refusedWithNoJob(h, res);
+    });
+
+    it('a fresh gap slice 1 of 2.6618 ETH more than 1 percent over a shown 2.6 ETH returns 409 PLAN_CHANGED', async () => {
+      const { h, res } = await startWith(300, (fresh) => fresh.map((leg) => ({ symbol: leg.symbol, at: 'gap', firstQty: 2.6 })));
+      refusedWithNoJob(h, res);
+    });
+
+    it('a fresh gap slice 1 of 2.6618 ETH two lots over a shown 2.6616 ETH starts, inside the 1 percent band', async () => {
+      const { h, res } = await startWith(300, (fresh) => fresh.map((leg) => ({ symbol: leg.symbol, at: 'gap', firstQty: 2.6616 })));
+      expect(res.statusCode, res.body).toBe(202);
+      await waitFor(() => h.file().status === 'halted', 'the halt');
+    });
+
+    it('a fresh gap slice 1 equal to the shown one starts', async () => {
+      const { h, res } = await startWith(300, (fresh) => fresh.map((leg) => ({ symbol: leg.symbol, at: 'gap', firstQty: leg.margin?.firstQty ?? null })));
+      expect(res.statusCode, res.body).toBe(202);
+      await waitFor(() => h.file().status === 'halted', 'the halt');
+    });
+
+    it('a shown gap that is hedged on the fresh read starts, because hedged is safer', async () => {
+      const { h, legs, res } = await startWith(2_000, (fresh) => fresh.map((leg) => ({ symbol: leg.symbol, at: 'gap', firstQty: 2.6618 })));
+      expect(legs[0].margin ?? null).toBeNull();
+      expect(res.statusCode, res.body).toBe(202);
+      await waitFor(() => h.file().status === 'halted', 'the halt');
+    });
+
+    const gapLeg = (symbol: string, firstQty: number) => ({ symbol, margin: { at: 'gap', amount: 1, firstQty, impactUsd: 0, impactBp: 0, closeWalkUsd: 0, reopenWalkUsd: 0 } }) as RealizeLeg;
+    const BTC = 'HYPERLIQUID_FUTURE_BTC_USDC';
+
+    it('at $6M, a fresh gap within 1 percent of the shown size starts, past it refuses, and 79 over 40 ETH refuses', () => {
+      expect(marginGrew([gapLeg(HL_ETH, 79)], [{ symbol: HL_ETH, at: 'gap', firstQty: 40 }], PERP_RULES)).toBe(true);
+      expect(marginGrew([gapLeg(HL_ETH, 40)], [{ symbol: HL_ETH, at: 'gap', firstQty: 40 }], PERP_RULES)).toBe(false);
+      expect(marginGrew([gapLeg(HL_ETH, 100.1)], [{ symbol: HL_ETH, at: 'gap', firstQty: 100 }], PERP_RULES)).toBe(false);
+      expect(marginGrew([gapLeg(HL_ETH, 101)], [{ symbol: HL_ETH, at: 'gap', firstQty: 100 }], PERP_RULES)).toBe(false);
+      expect(marginGrew([gapLeg(HL_ETH, 101.5)], [{ symbol: HL_ETH, at: 'gap', firstQty: 100 }], PERP_RULES)).toBe(true);
+      expect(marginGrew([gapLeg(HL_ETH, 40)], [{ symbol: HL_ETH, at: 'before', firstQty: 40 }], PERP_RULES)).toBe(true);
+      expect(marginGrew([gapLeg(HL_ETH, 40)], undefined, PERP_RULES)).toBe(true);
+      expect(marginGrew([{ symbol: HL_ETH, margin: null } as RealizeLeg], [{ symbol: HL_ETH, at: 'gap', firstQty: 40 }], PERP_RULES)).toBe(false);
+    });
+
+    it('at $50, a fresh gap of 0.00022 BTC over a shown 0.0002 BTC grew, 0.00021 did not, and a shown hedged leg refuses any gap', () => {
+      expect(marginGrew([gapLeg(BTC, 0.00022)], [{ symbol: BTC, at: 'gap', firstQty: 0.0002 }], PERP_RULES)).toBe(true);
+      expect(marginGrew([gapLeg(BTC, 0.00021)], [{ symbol: BTC, at: 'gap', firstQty: 0.0002 }], PERP_RULES)).toBe(false);
+      expect(marginGrew([gapLeg(BTC, 0.00011)], [{ symbol: BTC, at: null, firstQty: null }], PERP_RULES)).toBe(true);
+      expect(marginGrew([gapLeg(BTC, 0.0002)], [{ symbol: BTC, at: 'gap', firstQty: 0.00053 }], PERP_RULES)).toBe(false);
+    });
+  });
+
+  it('at $6M a realize restarted mid-gap after the slice 1 Convert creates one taker reopen of the open 133.611 ETH at boot that the deal lock lets through, with no extra close and no Convert', async () => {
+    const scale = 50;
+    const spec = ownerAccount().spec;
+    const big = realizeBook({ ...spec, usdt: { cash: spec.usdt.cash * scale, upnl: 0 }, usdc: { cash: spec.usdc.cash * scale, upnl: spec.usdc.upnl * scale }, availableMargin: 300 * scale, perps: spec.perps.map((row) => ({ ...row, positionQty: String(Number(row.positionQty) * scale), initialMargin: String(Number(row.initialMargin) * scale) })), notionalUsd: spec.notionalUsd * scale });
+    mockAccount(big);
+    refuseSends();
+    const h = boot();
+    const data = (await h.get(`${TWAP_QUERY}&realizeExec=market`)).json().data;
+    const legs = data.realize.clearDebt.legs as RealizeLeg[];
+    expect(legs[0].margin).toMatchObject({ at: 'gap', firstQty: 133.611 });
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'market', twap: REALIZE_TWAP, costUsd: data.realizeTwap.clearDebt.estimates.market.totalUsd, realizeShown: legs.map((leg) => ({ symbol: leg.symbol, at: leg.margin?.at ?? null, firstQty: leg.margin?.firstQty ?? null })) });
+    expect(res.statusCode, res.body).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+    const job = h.file();
+    const q1 = legs[0].margin!.firstQty;
+    Object.assign(job, { status: 'running', haltReason: null, haltKind: null, stepIndex: 0, notHedgedQty: q1 });
+    Object.assign(job.steps[0], { status: 'running', startedAt: t, cut: { qty: q1, from: 0, at: t, ioc: true, n: 1, gap: 'convert', capQty: 2 * q1 } });
+    job.realize!.legs[0].filledQty = q1;
+    nock.cleanAll();
+    const unmatched: string[] = [];
+    const onMiss = (req: { method?: string; path?: string }) => unmatched.push(`${req.method} ${req.path}`);
+    nock.emitter.on('no match', onMiss);
+    const orders: Record<string, string>[] = [];
+    const quotes: unknown[] = [];
+    gate().persist().get(`${API}/crossex/rule/symbols`).query(true).reply(200, PERP_RULE_ROWS.map((row) => ({ ...row, tick_size: '0.1' })));
+    gate().persist().get(`${API}/crossex/rule/risk_limits`).query(true).reply(200, [{ symbol: HL_ETH, tiers: [{ max_risk_limit_value: '1000000000', leverage_max: '25' }] }]);
+    gate().persist().get(`${API}/crossex/open_orders`).query(true).reply(200, []);
+    gate().persist().get(`${API}/crossex/positions/leverage`).query(true).reply(200, { [HL_ETH]: '25' });
+    gate().persist().post(`${API}/crossex/positions/leverage`).query(true).reply(200, (_uri, body) => body as Record<string, string>);
+    gate().persist().post(`${API}/crossex/convert/quote`).query(true).reply(200, (_uri, body) => {
+      quotes.push(body);
+      return REFUSAL;
+    });
+    gate().persist().post(`${API}/crossex/orders`).query(true).reply(200, (_uri, body) => {
+      const order = body as Record<string, string>;
+      orders.push(order);
+      return { order_id: `r${orders.length}`, text: order.text };
+    });
+    gate().persist().get(/\/crossex\/orders\/r\d+/).query(true).reply(200, (uri) => {
+      const order = orders[Number(uri.split('/').pop()!.split('?')[0].slice(1)) - 1]!;
+      return orderBody({ order_id: uri.split('/').pop()!.split('?')[0], text: order.text, symbol: order.symbol, side: order.side, exchange_type: 'HYPERLIQUID', qty: order.qty, executed_qty: order.qty, last_executed_qty: order.qty, executed_avg_price: '1821', price: '1821', reduce_only: String(order.reduce_only ?? 'false') });
+    });
+    const after = realizeBook({ ...big.spec, perps: big.spec.perps.map((row) => (row.symbol === HL_ETH ? { ...row, positionQty: String(Number(row.positionQty) + q1) } : row)) });
+    mockAccount(after);
+    try {
+      const h2 = boot({ job });
+      await h2.ready();
+      await waitFor(() => h2.store.listPairs({}).length > 0 || h2.file().status !== 'running', 'the reopen');
+      expect(h2.store.listPairs({}).map((pair) => ({ id: pair.id, a: [pair.a.contract, pair.a.side], b: pair.b, qty: pair.targetQty, mode: pair.mode }))).toEqual([
+        { id: `${job.id}-g0`, a: [HL_ETH, 'SELL'], b: null, qty: '133.611', mode: 'CONVERTING' },
+      ]);
+      expect(String(h2.file().haltReason ?? '')).not.toContain('A rebalance is still running');
+      expect(quotes).toEqual([]);
+      expect(unmatched).toEqual([]);
+    } finally {
+      nock.emitter.removeListener('no match', onMiss);
+    }
+  }, 10_000);
+
+  it('full plan priced at limit + hedge', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const res = await h.get('/api/rebalance');
+
+    expect(res.statusCode).toBe(200);
+    const { fullPlan, realize, imUsed, plans } = res.json().data;
+    expect(fullPlan.costUsd).toBeGreaterThanOrEqual(40);
+    expect(fullPlan.costUsd).toBeLessThanOrEqual(42);
+    expect(fullPlan).toMatchObject({ days: 36, clearsBorrow: true, needsRealize: true });
+    expect(realize.clearDebt.legs[0]).toMatchObject({ symbol: HL_ETH, side: 'SHORT' });
+    expect(imUsed).toEqual([{ account: 'CROSSEX', pct: expect.any(Number) }]);
+    expect(plans.repay.realize).toBeNull();
+  });
+
+  it('a realize read prices only the one order row and ignores a sent slice size', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+
+    const res = await h.get('/api/rebalance?sliceUsd=30000');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().data.realize.sliceOptions).toEqual([expect.objectContaining({ whole: true, custom: false })]);
+  });
+
+  it('a realize job is rebuilt from realizeUsd and ignores sent leg sizes', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const plan = realize.clearDebt;
+
+    const res = await h.post('/api/rebalance', {
+      kind: 'realize',
+      realizeTarget: 'clear-debt',
+      exec: 'maker',
+      costUsd: plan.estimates.maker.totalUsd,
+      realizeQty: [{ symbol: HL_ETH, qty: 999 }],
+    });
+
+    expect(res.statusCode).toBe(202);
+    const job = h.file();
+    expect(job).toMatchObject({ kind: 'realize', exec: 'maker', slice: { index: 1, sizeUsd: 0 } });
+    expect(job.realize!.legs.map((leg) => leg.qty)).toEqual(plan.legs.map((leg: RealizeLeg) => leg.qty));
+    expect(job.steps.map((step) => step.name)).toContain('Slices');
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a Limit + hedge realize keeps the maker settings it is sent, and fills the defaults when none are sent', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const costUsd = realize.clearDebt.estimates.maker.totalUsd;
+    const ask = { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd };
+
+    const res = await h.post('/api/rebalance', { ...ask, maker: { takerAfterSec: 600, repegBehindBp: 2 } });
+
+    expect(res.statusCode).toBe(202);
+    expect(h.file().maker).toEqual({ takerAfterSec: 600, repegBehindBp: 2 });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize refuses a wait before taker outside 30s to 24h, and Market keeps no maker settings', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const ask = { kind: 'realize', realizeTarget: 'clear-debt', costUsd: realize.clearDebt.estimates.maker.totalUsd };
+
+    const short = await h.post('/api/rebalance', { ...ask, exec: 'maker', maker: { takerAfterSec: 10, repegBehindBp: 5 } });
+    const repeg = await h.post('/api/rebalance', { ...ask, exec: 'maker', maker: { takerAfterSec: 300, repegBehindBp: 3 } });
+    expect(short.statusCode).toBe(400);
+    expect(short.json().error.message).toBe('Taker after must be 30s to 24h.');
+    expect(repeg.statusCode).toBe(400);
+
+    const market = await h.post('/api/rebalance', { ...ask, exec: 'market', costUsd: realize.clearDebt.estimates.market.totalUsd, maker: { takerAfterSec: 600, repegBehindBp: 2 } });
+    expect(market.statusCode).toBe(202);
+    expect(h.file().maker ?? null).toBeNull();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize job needs the picked target', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+
+    const bare = await h.post('/api/rebalance', { kind: 'realize', exec: 'maker', costUsd: realize.clearDebt.estimates.maker.totalUsd });
+    const custom = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'custom', exec: 'maker', costUsd: 1 });
+
+    expect(bare.statusCode).toBe(400);
+    expect(bare.json().error.message).toBe('Pick Clear debt, All or Custom before you realize.');
+    expect(custom.statusCode).toBe(400);
+    expect(custom.json().error.message).toBe('Enter the Custom amount before you realize.');
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+
+    const all = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd: realize.all.estimates.maker.totalUsd });
+
+    expect(all.statusCode).toBe(202);
+    expect(h.file().realize!.legs.map((leg) => leg.qty)).toEqual(realize.all.legs.map((leg: RealizeLeg) => leg.qty));
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize for a wallet with no uPnL is refused, and a wallet name the app does not know is a 400', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    expect(realize.pools).toEqual(['HYPERLIQUID']);
+
+    const view = await h.get('/api/rebalance?realizePool=LIGHTER');
+    const bad = await h.get('/api/rebalance?realizePool=BINANCE');
+    const start = await h.post('/api/rebalance', {
+      kind: 'realize', realizeTarget: 'all', realizePool: 'LIGHTER', exec: 'maker', costUsd: realize.all.estimates.maker.totalUsd,
+    });
+
+    expect(view.json().data.realize.pool).toBe('HYPERLIQUID');
+    expect(bad.statusCode).toBe(400);
+    expect(start.statusCode).toBe(409);
+    expect(start.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: 'This wallet has no uPnL to realize now. Pick another wallet.' });
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+
+    const own = await h.post('/api/rebalance', {
+      kind: 'realize', realizeTarget: 'all', realizePool: 'HYPERLIQUID', exec: 'maker', costUsd: realize.all.estimates.maker.totalUsd,
+    });
+    expect(own.statusCode).toBe(202);
+    expect(h.file().realize!.legs.every((leg) => leg.pool === 'HYPERLIQUID')).toBe(true);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('realize cost counts in plan changed', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    const plan = (await h.view()).data.realize.clearDebt;
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'market', costUsd: plan.estimates.maker.totalUsd / 2 });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+  });
+
+  it('a move job carries no realize', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const plan = (await h.view()).data.plans.repay as EvenPlan;
+    const route = plan.recommended ?? 'convert';
+
+    const res = await h.post('/api/rebalance', { goal: 'repay', route, costUsd: plan.routes[route]!.costUsd });
+
+    expect(res.statusCode).toBe(202);
+    expect(h.file()).toMatchObject({ kind: 'move', realize: null });
+    expect(h.file().steps.map((step) => step.name)).not.toContain('Slices');
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('delever clamps to the position', async () => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+
+    const planned = await h.post('/api/rebalance/delever/plan', DELEVER_ASK);
+
+    expect(planned.statusCode).toBe(200);
+    const plan = planned.json().data;
+    for (const leg of plan.legs) expect(leg.closeQty).toBeLessThanOrEqual(66);
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
+
+    expect(res.statusCode).toBe(202);
+    const job = h.file();
+    expect(job.kind).toBe('delever');
+    for (const leg of job.delever!.legs) expect(leg.before - leg.after).toBeLessThanOrEqual(66);
+    expect(job.imUsedStart).toEqual([{ account: 'CROSSEX', pct: plan.imUsed[0].before }]);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever job starts with the plan IM used at end', async () => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
+
+    expect(res.statusCode).toBe(202);
+    expect(plan.imUsed[0].after).toBeLessThan(plan.imUsed[0].before);
+    expect(h.file().imUsedEnd).toEqual([{ account: 'CROSSEX', pct: plan.imUsed[0].after }]);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each(['market', 'maker'] as const)('a delever with TWAP off starts one order in the picked mode (%s)', async (exec) => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec, costUsd: plan.estimates[exec].totalUsd, delever: DELEVER_ASK });
+    expect(res.statusCode).toBe(202);
+    expect(h.file()).toMatchObject({ exec, slice: { count: 1 } });
+    expect(h.file().deleverTwap ?? null).toBeNull();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  const DELEVER_TWAP = { durationSec: 3600, slices: 12 };
+
+  it('delever plan with twap', async () => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    const h = boot();
+
+    const res = await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, twap: DELEVER_TWAP });
+
+    expect(res.statusCode, res.body).toBe(200);
+    const { twap, priceImpact, legs, makerLeg } = res.json().data;
+    expect(twap.refusal).toBeNull();
+    expect(twap.plan).toMatchObject({ slices: 12, intervalSec: 300, durationSec: 3600 });
+    const lots = Number(twap.plan.sliceQty) * 11 + Number(twap.plan.lastQty);
+    expect(lots).toBeCloseTo(legs[makerLeg].closeQty, 8);
+    expect(twap.price).toBeGreaterThan(0);
+    expect(priceImpact.sliced).toBeGreaterThanOrEqual(0);
+    expect(priceImpact.whole === null || priceImpact.whole >= priceImpact.sliced).toBe(true);
+  });
+
+  it('delever plan slice past the book', async () => {
+    const book = ownerAccount();
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [[{ px: '1820.9', sz: '2', n: 1 }], [{ px: '1821.1', sz: '2', n: 1 }]] });
+    mockGateEthBook();
+    const h = boot();
+
+    const res = await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, twap: DELEVER_TWAP });
+
+    expect(res.statusCode, res.body).toBe(200);
+    const { twap } = res.json().data;
+    expect(twap.refusal.text).toMatch(/^Book too thin for [\d.]+ ETH a slice\.$/);
+    expect(twap.refusal.fix.label).toBe('Use 1m 49s interval');
+    expect(twap.refusal.fix.patch).toMatchObject({ durationSec: 3600, intervalSec: 109 });
+  });
+
+  async function deleverPlanAt(usd: number) {
+    const qty = Math.max(0.02, Math.floor((usd / OWNER_MARK) * 100) / 100);
+    const half = Math.floor((qty / 2) * 100) / 100;
+    const deep: NormalizedBook = { bids: [[1_820.9, 100_000]], asks: [[1_821.1, 100_000]], ts: 0 };
+    const book = realizeBook({
+      usdt: { cash: usd * 0.5, upnl: 0 },
+      usdc: { cash: usd * 0.5, upnl: 0 },
+      availableMargin: usd * 0.6,
+      perps: [perp(HL_ETH, -qty, OWNER_MARK, OWNER_MARK), perp('GATE_FUTURE_ETH_USDT', qty, OWNER_MARK, OWNER_MARK)],
+      books: { [HL_ETH]: deep, GATE_FUTURE_ETH_USDT: deep },
+      notionalUsd: qty * OWNER_MARK,
+    });
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(deep.bids), levels(deep.asks)] });
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const ask = { ...DELEVER_ASK, perps: DELEVER_ASK.perps.map((leg) => ({ ...leg, qty: half })) };
+    const planned = await h.post('/api/rebalance/delever/plan', ask);
+    expect(planned.statusCode).toBe(200);
+    return { h, ask, half, plan: planned.json().data };
+  }
+
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start of %d USD closes in one order and sizes IM used from the plan', async (usd) => {
+    const { h, ask, half, plan } = await deleverPlanAt(usd);
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: ask });
+
+    expect(res.statusCode).toBe(202);
+    const job = h.file();
+    const closeUsd = half * OWNER_MARK;
+    for (const leg of job.delever!.legs) expect(leg.before - leg.after).toBeCloseTo(half, 8);
+    expect(job.slice!.count).toBe(1);
+    expect(job.slice!.sizeUsd).toBeGreaterThanOrEqual(closeUsd);
+    expect(plan.notHedgedMaxQty).toBeCloseTo(half, 8);
+    expect(job.costUsd).toBeGreaterThan(0);
+    expect(job.costUsd).toBeLessThan(closeUsd * 0.01);
+    expect(job.imUsedEnd![0].pct).toBeLessThanOrEqual(job.imUsedStart![0].pct);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('a delever start refuses a cost rise past max($1, 5%%) at %d USD', async (usd) => {
+    const { h, ask, plan } = await deleverPlanAt(usd);
+    const fresh = Math.round(plan.estimates.maker.totalUsd * 100);
+    const passCents = fresh >= 2100 ? Math.ceil((fresh * 20) / 21) : Math.max(0, fresh - 100);
+    const start = (cents: number) => h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: cents / 100, delever: ask });
+
+    if (passCents > 0) {
+      const refused = await start(passCents - 1);
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
+      expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+    }
+    const passed = await start(passCents);
+    expect(passed.statusCode).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([100, 6_000_000])('a delever TWAP start at %d USD keeps the taker-after and re-peg it was sent', async (usd) => {
+    const { h, ask, plan } = await deleverPlanAt(usd);
+    const twap = { durationSec: 3600, slices: 2, takerAfterSec: 600, repegBehindBp: 2 };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap } });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().deleverTwap).toEqual({ durationSec: 3600, intervalSec: 1800, slices: 2, takerAfterSec: 600, repegBehindBp: 2 });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([100_000, 6_000_000])('a delever TWAP plan at %d USD prices the TWAP slices, not one order', async (usd) => {
+    const { h, ask, plan } = await deleverPlanAt(usd);
+    const twap = { durationSec: 3600, slices: 4 };
+
+    const planned = await h.post('/api/rebalance/delever/plan', { ...ask, twap });
+
+    expect(planned.statusCode, planned.body).toBe(200);
+    const twapped = planned.json().data;
+    expect(twapped.twap.plan.slices).toBe(4);
+    expect(twapped.notHedgedMaxQty).toBeCloseTo(Math.max(Number(twapped.twap.plan.sliceQty), Number(twapped.twap.plan.lastQty)), 8);
+    for (const exec of ['maker', 'market'] as const) {
+      expect(twapped.estimates[exec].feePerpsUsd).toBeCloseTo(plan.estimates[exec].feePerpsUsd, 6);
+      expect(twapped.estimates[exec].impactUsd).toBeLessThanOrEqual(plan.estimates[exec].impactUsd);
+    }
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'market', costUsd: twapped.estimates.market.totalUsd, delever: { ...ask, twap } });
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().costUsd).toBeCloseTo(twapped.estimates.market.totalUsd, 6);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever with TWAP off keeps the maker settings it is sent; with TWAP on the TWAP keeps its own', async () => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const maker = { takerAfterSec: null, repegBehindBp: 10 };
+
+    const off = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: ask, maker });
+    expect(off.statusCode, off.body).toBe(202);
+    expect(h.file().maker).toEqual(maker);
+    expect(h.file().deleverTwap ?? null).toBeNull();
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever TWAP start ignores a top-level maker setting', async () => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const twap = { durationSec: 3600, slices: 2, takerAfterSec: 600, repegBehindBp: 2 };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap }, maker: { takerAfterSec: 10, repegBehindBp: 5 } });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().maker ?? null).toBeNull();
+    expect(h.file().deleverTwap).toMatchObject({ takerAfterSec: 600, repegBehindBp: 2 });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a delever TWAP start with Never and re-peg off keeps both', async () => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const twap = { durationSec: 3600, slices: 2, takerAfterSec: null, repegBehindBp: null };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap } });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().deleverTwap).toMatchObject({ takerAfterSec: null, repegBehindBp: null });
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each([
+    ['a taker-after past 80% of the interval', { takerAfterSec: 1441 }],
+    ['a taker-after under 30 s', { takerAfterSec: 29 }],
+    ['a re-peg of 3 bp', { repegBehindBp: 3 }],
+  ])('a delever TWAP start refuses %s and writes no job', async (_name, over) => {
+    const { h, ask, plan } = await deleverPlanAt(5_000);
+    const twap = { durationSec: 3600, slices: 2, ...over };
+
+    const res = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: { ...ask, twap } });
+
+    expect(res.statusCode, res.body).toBe(400);
+    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
+  });
+
+  it('a delever plan with no Boros leg sends no Boros close', async () => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    const h = boot();
+
+    const res = await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, twap: DELEVER_TWAP });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data).toMatchObject({ borosCloses: 0, borosGasUsd: 0 });
+  });
+
+  const SHALLOW_HL_ETH: NormalizedBook = { bids: [[1_820.9, 20]], asks: [[1_821.1, 20]], ts: 0 };
+
+  function mockShallowHlBook(): void {
+    const book = ownerAccount();
+    mockView({ account: wireAccount(book.account), positions: book.spec.perps.map(wirePosition), rates: OWNER_RATES });
+    const levels = (side: Array<[number, number]>) => side.map(([px, sz]) => ({ px: String(px), sz: String(sz), n: 1 }));
+    nock('https://api.hyperliquid.xyz')
+      .persist()
+      .post('/info', (body) => body.type === 'l2Book' && body.coin === 'ETH')
+      .reply(200, { coin: 'ETH', levels: [levels(SHALLOW_HL_ETH.bids), levels(SHALLOW_HL_ETH.asks)] });
+  }
+
+  it('a delever on a thin book refuses one order, and the same close with TWAP on starts', async () => {
+    mockShallowHlBook();
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
+    expect((plan.sliceOptions as SliceOption[]).find((option) => option.whole)?.pastBook).toBe(true);
+
+    const refused = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
+
+    expect(refused.statusCode).toBe(409);
+    const twap = { durationSec: 3600, slices: 40 };
+    const twapped = (await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, twap })).json().data;
+    expect(twapped.twap.refusal).toBeNull();
+    const started = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: twapped.estimates.maker.totalUsd, delever: { ...DELEVER_ASK, twap } });
+    expect(started.statusCode, started.body).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize on a thin book refuses one order, and the same start with TWAP on starts', async () => {
+    mockShallowHlBook();
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    expect((realize.sliceOptions as SliceOption[]).find((option) => option.whole)?.pastBook).toBe(true);
+    const costUsd = realize.all.estimates.maker.totalUsd;
+
+    const refused = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd });
+
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.label).toBe('PLAN_CHANGED');
+    expect(realize.all.refused).toMatchObject({ reason: 'past-book' });
+    const started = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd, twap: { durationSec: 3600, slices: 40 } });
+    expect(started.statusCode, started.body).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize start with TWAP off sends no slice size, runs one order, and stores the Hyperliquid cap of 10x', async () => {
+    const book = ownerAccount();
+    mockAccount({ ...book, spec: { ...book.spec, perps: book.spec.perps.map((perp) => (perp.symbol === HL_ETH ? { ...perp, maxLeverage: '10' } : perp)) } });
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    const whole = (realize.sliceOptions as SliceOption[]).find((option) => option.whole)!;
+    expect(whole.count).toBe(1);
+    const plan = realize.all;
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd: plan.estimates.maker.totalUsd });
+
+    expect(res.statusCode, res.body).toBe(202);
+    expect(h.file().slice).toMatchObject({ count: 1, sizeUsd: 0 });
+    expect(h.file().slice?.capsUsd?.[HL_ETH]).toBe(2_000_000);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize job amount is the plan realized total', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    const h = boot();
+    const plan = (await h.view()).data.realize.clearDebt;
+    const gross = plan.legs.reduce((total: number, leg: RealizeLeg) => total + leg.realizedUsd, 0);
+
+    const res = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd: plan.estimates.maker.totalUsd });
+
+    expect(res.statusCode).toBe(202);
+    expect(gross).toBeGreaterThan(plan.estimates.maker.totalUsd);
+    expect(Math.abs(h.file().amount - gross)).toBeLessThanOrEqual(0.005 + 1e-9);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it.each(['realize', 'delever'] as const)('two %s starts at once make one job', async (kind) => {
+    mockAccount(ownerAccount());
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const body =
+      kind === 'realize'
+        ? { kind, realizeTarget: 'clear-debt', exec: 'maker', costUsd: (await h.view()).data.realize.clearDebt.estimates.maker.totalUsd }
+        : { kind, exec: 'maker', costUsd: (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data.estimates.maker.totalUsd, delever: DELEVER_ASK };
+
+    const [a, b] = await Promise.all([h.post('/api/rebalance', body), h.post('/api/rebalance', body)]);
+
+    expect([a.statusCode, b.statusCode].sort()).toEqual([202, 409]);
+    expect(h.file().kind).toBe(kind);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a running job refuses a realize and a delever start', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    h.jobs.write(slicedJob({ status: 'running' }));
+
+    const realize = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', exec: 'maker', costUsd: 1 });
+    const delever = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: 1, delever: DELEVER_ASK });
+
+    expect(realize.statusCode).toBe(409);
+    expect(delever.statusCode).toBe(409);
+    expect(h.file().id).toBe(slicedJob({}).id);
+  });
+
+  const DEAL = { id: 'deal-1', a: { symbol: 'GATE_FUTURE_ETH_USDT' }, b: { symbol: HL_ETH } };
+
+  const slicedJob = (over: Partial<Job>): Job => ({
+    ...newJob({ route: 'mix', steps: [], amount: 0, costUsd: 30, target: [], userId: '1', kind: 'delever', delever: DELEVER_JOB, sliceCount: 14, sliceUsd: 25_000 }, t),
+    ...over,
+  });
+
+  const DELEVER_JOB = {
+    makerLeg: 0 as const,
+    legs: [
+      { symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT' as const, before: 66, after: 33, closeQty: 33 },
+      { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', base: 'ETH', side: 'LONG' as const, before: 66, after: 33, closeQty: 33 },
+    ],
+    boros: [],
+  };
+
+  it('delever holds the money lock', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    h.jobs.write(slicedJob({ status: 'running' }));
+
+    const rebalance = await h.post('/api/rebalance', { goal: 'repay', route: 'convert', costUsd: 1 });
+    const deal = await h.post('/api/deals', DEAL);
+
+    expect(rebalance.statusCode).toBe(409);
+    expect(deal.statusCode).toBe(409);
+  });
+
+  describe('a Delever TWAP job', () => {
+    const TWAP = { durationSec: 3600, intervalSec: 300, slices: 12 };
+    const ETH_MARKET = {
+      marketId: 7,
+      tokenId: 2,
+      imData: { name: 'Hyperliquid ETH 31 Dec 2099', maturity: 4_102_358_400 },
+      extConfig: { settleFeeRate: '0', paymentPeriod: 3600 },
+      config: { status: 2 },
+      platform: { platformId: 'Hyperliquid' },
+      metadata: { underlyingSymbol: 'ETH' },
+      data: { markApr: 0.07, floatingApr: 0.07, assetMarkPrice: 2400 },
+    };
+    const marketsBody = (results: unknown[]) => ({ '/apis/v1/markets': { results, total: results.length, skip: 0 } });
+
+    const twapJob = (filled: number, over: Partial<Job> = {}): Job => {
+      const delever = { ...DELEVER_JOB, boros: [{ marketId: 7, before: 10, after: 0, closeSize: 10 }] };
+      const job: Job = { ...newJob({ route: 'mix', steps: [], amount: 0, costUsd: 30, target: [], userId: '1', kind: 'delever', delever, sliceCount: 12, twap: TWAP }, t), ...over };
+      const id = `${job.id}-s1-1`;
+      Object.assign(job.steps[0], {
+        status: 'running',
+        lead: { text: id, venueId: null, sentAt: t, credited: 0, poc: true, price: null, side: 'BUY', mid: 2500, entry: null },
+        cut: { qty: filled, from: 0, at: t, ioc: false },
+      });
+      return job;
+    };
+
+    const doneChild = (store: Store, id: string, filled: number): void => {
+      const leg = (contract: string, side: 'BUY' | 'SELL') => ({ contract, side, lot: '0.0001', minSize: '0', minNotional: '0', tick: '0.1', reduceOnly: true });
+      store.createPair({
+        id,
+        mode: 'DONE',
+        a: leg(HL_ETH, 'BUY'),
+        b: leg('GATE_FUTURE_ETH_USDT', 'SELL'),
+        targetQty: String(filled),
+        limitPrice: '2500',
+        pricePolicy: 'touch',
+        deadlineAt: null,
+        makerNotBefore: 0,
+        hedgeNotBefore: 0,
+        pocRejects: 0,
+        hedgeRejectStreak: 0,
+        maxClip: null,
+        clipBandBp: null,
+        repegBehindBp: null,
+        repegAutoBp: null,
+        repegNotBefore: 0,
+        haltKind: null,
+        haltReason: null,
+        reportJson: null,
+        createdAt: t,
+      });
+      for (const [side, which] of [['BUY', 'A'], ['SELL', 'B']] as const) {
+        const order = store.insertPendingOrder({ pairId: id, leg: which, kind: 'taker', side, qty: String(filled), price: null, tif: 'ioc', now: t });
+        store.updateOrder(id, which, order.seq, { state: 'CLOSED', cumQty: String(filled), avgFillPrice: '2500', resolvedAt: t });
+      }
+    };
+
+    beforeEach(() => {
+      process.env.BOROS_ROOT_ADDRESS = '0x00000000000000000000000000000000000000a1';
+      vi.mocked(closeBorosLegs).mockReset();
+      vi.mocked(closeBorosLegs).mockImplementation(async (_deps, input) => ({ filled: input.legs.map(({ marketId, size }) => ({ marketId, size })), held: [] }) as never);
+    });
+
+    afterEach(() => {
+      delete process.env.BOROS_ROOT_ADDRESS;
+    });
+
+    const heldBoros = (gas: unknown): Record<string, unknown> => ({
+      ...marketsBody([ETH_MARKET]),
+      '/apis/v1/accounts/market-acc-infos-by-root': {
+        results: [
+          {
+            marketAcc: marketAcc('0x00000000000000000000000000000000000000a1', 2),
+            netBalance: raw(20),
+            initialMargin: raw(1),
+            availableInitialMargin: raw(19),
+            positions: [{ marketId: 7, signedSize: raw(10), initialMargin: raw(1), maintMargin: raw(0.5), liquidationApr: raw(0.2), orders: [] }],
+          },
+        ],
+      },
+      '/apis/v1/accounts/active-positions': { results: [] },
+      ...(gas === undefined ? {} : { '/apis/v1/gas-price/current': gas }),
+    });
+
+    it.each([
+      ['prices the closes at the Boros gas read', { estimatedOrderGasCostUsd: 0.004 }, 12 * 0.004],
+      ['shows no gas figure when the gas read fails', undefined, null],
+      ['shows no gas figure when Boros has no estimate', { estimatedOrderGasCostUsd: null }, null],
+    ])('a delever TWAP plan with one Boros leg counts one close a slice and %s', async (_name, gas, gasUsd) => {
+      mockAccount(ownerAccount());
+      mockGateEthBook();
+      const h = boot({ borosFetch: borosStub(heldBoros(gas)) });
+
+      const res = await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, boros: [{ marketId: 7, size: 10 }], twap: { durationSec: 3600, slices: 12 } });
+
+      expect(res.statusCode, res.body).toBe(200);
+      const data = res.json().data;
+      expect(data.boros[0].closeSize).toBeGreaterThan(0);
+      expect(data.boros[0].name).toBe('Hyperliquid ETH 31 Dec 2099');
+      expect(data.borosCloses).toBe(12);
+      if (gasUsd === null) expect(data.borosGasUsd).toBeNull();
+      else expect(data.borosGasUsd).toBeCloseTo(gasUsd, 9);
+    });
+
+    it.each([
+      ['waits for the $10 floor when the route reads the ETH price', [ETH_MARKET], 0],
+      ['closes the Boros share at once when the route has no collateral price', [], 1],
+    ])('a slice of 0.01 ETH: the Boros share %s', async (_name, markets, closes) => {
+      mockView();
+      const h = boot({ borosFetch: borosStub(marketsBody(markets)) });
+      await h.ready();
+      const job = twapJob(0.01, { status: 'halted', haltReason: 'stopped', pauseRequested: true });
+      doneChild(h.store, job.steps[0].lead!.text, 0.01);
+      h.jobs.write(job);
+
+      const res = await h.post(`/api/rebalance/${job.id}/resume`);
+      expect(res.statusCode).toBe(200);
+      await waitFor(() => h.file().paused === true, 'the pause after the slice');
+
+      expect(vi.mocked(closeBorosLegs)).toHaveBeenCalledTimes(closes);
+      const share = (10 * 0.01) / 33;
+      expect(h.file().delever?.boros[0].closed).toBeCloseTo(closes ? share : 0, 9);
+      expect(share * 2400).toBeLessThan(10);
+    });
+
+    it('GET /rebalance returns the TWAP view for a Delever job with a TWAP, and none without', async () => {
+      mockView();
+      const h = boot();
+      await h.ready();
+      const job = twapJob(0.01, { status: 'running' });
+      doneChild(h.store, job.steps[0].lead!.text, 0.01);
+      h.jobs.write(job);
+
+      const { data } = await h.view();
+      expect(data.job).toMatchObject({ id: job.id, kind: 'delever' });
+      expect(data.job.twap).toBeDefined();
+      expect(data.job.orders).toEqual(expect.any(Array));
+      expect(data.job.orders.length).toBeGreaterThan(0);
+
+      h.jobs.write({ ...job, deleverTwap: null });
+      const plain = await h.view();
+      expect(plain.data.job).not.toHaveProperty('orders');
+    });
+  });
+
+  it('paused job keeps the lock, no alert', async () => {
+    mockAccount(ownerAccount());
+    const h = boot({ job: slicedJob({ status: 'halted', paused: true, haltReason: null }) });
+    await h.ready();
+
+    const rebalance = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'clear-debt', costUsd: 1 });
+    const deal = await h.post('/api/deals', DEAL);
+
+    expect(rebalance.statusCode).toBe(409);
+    expect(deal.statusCode).toBe(409);
+    expect(h.store.listAlerts({ unackedOnly: true })).toEqual([]);
+  });
+
+  it('pause needs a running job', async () => {
+    const h = boot({ job: slicedJob({ status: 'halted', haltReason: 'stopped' }) });
+    await h.ready();
+
+    const res = await h.post(`/api/rebalance/${h.file().id}/pause`);
+
+    expect(res.statusCode).toBe(409);
+    expect(h.file().pauseRequested).toBe(false);
+  });
+
+  it('pause and fix are idempotent', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'running' });
+    h.jobs.write(job);
+
+    const [first, second] = await Promise.all([h.post(`/api/rebalance/${job.id}/pause`), h.post(`/api/rebalance/${job.id}/pause`)]);
+
+    expect([first.statusCode, second.statusCode]).toEqual([200, 200]);
+    expect(h.file()).toMatchObject({ status: 'running', pauseRequested: true });
+
+    const halted = slicedJob({ status: 'halted', haltReason: 'stopped', borosLeftYu: 0, follow: null });
+    h.jobs.write(halted);
+    const fixes = await Promise.all([
+      h.post(`/api/rebalance/${halted.id}/fix`, { action: 'market' }),
+      h.post(`/api/rebalance/${halted.id}/fix`, { action: 'market' }),
+    ]);
+    expect(fixes.map((res) => res.statusCode)).toEqual([409, 409]);
+    expect(fixes[0].json().error.message).toBe('Nothing is left to fix.');
+  });
+
+  it('fix answers in the states the run view draws its holds', async () => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const running = slicedJob({ status: 'running', followMisses: 2 });
+    h.jobs.write(running);
+    const early = await h.post(`/api/rebalance/${running.id}/fix`, { action: 'market' });
+    expect(early.statusCode).toBe(409);
+    expect(early.json().error.message).toBe(`rebalance ${running.id} is running`);
+
+    const abandoned = slicedJob({ status: 'abandoned', borosGapYu: 5, delever: null });
+    h.jobs.write(abandoned);
+    const notDelever = await h.post(`/api/rebalance/${abandoned.id}/fix`, { action: 'boros-retry' });
+    expect(notDelever.statusCode).toBe(409);
+    expect(notDelever.json().error.message).toBe(`rebalance ${abandoned.id} is abandoned`);
+
+    const paused = slicedJob({ status: 'halted', paused: true, borosGapYu: 5, borosLeftYu: 0, delever: { pct: 0.2, legs: [], boros: [] } });
+    h.jobs.write(paused);
+    const gap = await h.post(`/api/rebalance/${paused.id}/fix`, { action: 'boros-retry' });
+    expect(gap.json().error?.message).not.toBe('Nothing is left to fix.');
+
+    const addedBack = slicedJob({ status: 'halted', borosLeftYu: 5, delever: { pct: 0.2, legs: [], boros: [] } });
+    addedBack.steps[addedBack.stepIndex].addBack = { qty: 3, legs: [{ symbol: HL_ETH, filled: 3, order: null }] };
+    h.jobs.write(addedBack);
+    const retry = await h.post(`/api/rebalance/${addedBack.id}/fix`, { action: 'boros-retry' });
+    expect(retry.statusCode).toBe(409);
+    expect(retry.json().error.message).toBe('One perp is already added back. Hold to add back to finish the other first.');
+
+    const abandonedAddBack = slicedJob({ status: 'abandoned', borosLeftYu: 5, delever: { pct: 0.2, legs: [], boros: [] } });
+    abandonedAddBack.steps[abandonedAddBack.stepIndex].addBack = { qty: 3, legs: [{ symbol: HL_ETH, filled: 3, order: null }] };
+    h.jobs.write(abandonedAddBack);
+    const abandonedRetry = await h.post(`/api/rebalance/${abandonedAddBack.id}/fix`, { action: 'boros-retry' });
+    expect(abandonedRetry.json().error?.message).not.toBe('One perp is already added back. Hold to add back to finish the other first.');
+    expect(abandonedRetry.statusCode).not.toBe(409);
+  });
+
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('a part add back refuses Resume, and Abandon names each perp and the gap without a hold, %d ETH', async (q, size) => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: 'GATE_FUTURE_ETH_USDT', filled: 0, order: null }] };
+    h.jobs.write(job);
+
+    const resume = await h.post(`/api/rebalance/${job.id}/resume`);
+    expect(resume.statusCode).toBe(409);
+    expect(resume.json().error.message).toBe('One perp is already added back. Hold to add back to finish the other first.');
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'Add back stopped.' });
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+    expect(abandon.statusCode).toBe(200);
+    expect(h.file()).toMatchObject({
+      status: 'abandoned',
+      haltReason: `Add back stopped: Hyperliquid ${size} of ${size} ETH, Gate 0 of ${size} ETH. The Gate long is ${size} ETH smaller than the Hyperliquid short. Close ${size} ETH of the Hyperliquid short in Positions.`,
+    });
+  });
+
+  const GATE_ETH_PERP = 'GATE_FUTURE_ETH_USDT';
+  const addBackOrder = (venueId: string | null, sentAt: number) => ({ text: `t-ab-${sentAt}`, venueId, sentAt, credited: 0, poc: false, price: null, side: 'SELL' as const, mid: null });
+  const gapText = (size: string) => `The Gate long is ${size} ETH smaller than the Hyperliquid short. Close ${size} ETH of the Hyperliquid short in Positions.`;
+
+  const addBackChild = (store: Store, id: string, filled: number, mode: 'DONE' | 'OPENING'): void => {
+    store.createPair({
+      id,
+      mode,
+      a: { contract: HL_ETH, side: 'SELL', lot: '0.0001', minSize: '0', minNotional: '0', tick: '0.1' },
+      b: null,
+      targetQty: String(filled),
+      limitPrice: '2500',
+      pricePolicy: 'touch',
+      deadlineAt: null,
+      makerNotBefore: 0,
+      hedgeNotBefore: 0,
+      pocRejects: 0,
+      hedgeRejectStreak: 0,
+      maxClip: null,
+      clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: null,
+      haltReason: null,
+      reportJson: null,
+      createdAt: t,
+    });
+    const order = store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'taker', side: 'SELL', qty: String(filled), price: null, tif: 'ioc', now: t });
+    store.updateOrder(id, 'A', order.seq, { state: 'CLOSED', cumQty: String(filled), avgFillPrice: '2500', resolvedAt: t });
+  };
+
+  const withAddBackChild = (h: ReturnType<typeof boot>, q: number, mode: 'DONE' | 'OPENING') => {
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Gate has not confirmed the last order yet. Try again in two minutes.' });
+    const order = { ...addBackOrder(null, t), text: `${job.id}-f1` };
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: 0, order }, { symbol: GATE_ETH_PERP, filled: 0, order: null }] };
+    addBackChild(h.store, order.text, q, mode);
+    h.jobs.write(job);
+    return job;
+  };
+
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('Abandon reads an unconfirmed add back child from the engine store, credits its fill and names the gap, %d ETH', async (q, size) => {
+    mockAccount(ownerAccount());
+    const posts = gate().persist().post(/\/api\/v4\/crossex\/orders/).query(true).reply(200, {});
+    const reads = gate().persist().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).reply(200, {});
+    const h = boot();
+    await h.ready();
+    const job = withAddBackChild(h, q, 'DONE');
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(abandon.statusCode).toBe(200);
+    const file = h.file();
+    expect(file.status).toBe('abandoned');
+    expect(file.haltReason).toBe(`Add back stopped: Hyperliquid ${size} of ${size} ETH, Gate 0 of ${size} ETH. ${gapText(size)}`);
+    expect(file.steps[file.stepIndex].addBack?.legs[0]).toMatchObject({ filled: q, order: null });
+    expect(file.openGaps).toEqual([
+      {
+        leg: { symbol: GATE_ETH_PERP, base: 'ETH', exchange: 'GATE', side: 'LONG', positionQty: 66, hedge: 'HYPERLIQUID' },
+        qty: q,
+        hedges: [{ symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SHORT', qty: 66 }],
+      },
+    ]);
+    expect(posts.isDone()).toBe(false);
+    expect(reads.isDone()).toBe(false);
+  });
+
+  it.each([0.0166, 2_000])('Abandon refuses while the add back child is still live in the engine, %d ETH', async (q) => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = withAddBackChild(h, q, 'OPENING');
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(abandon.statusCode).toBe(409);
+    expect(abandon.json().error.message).toBe('Gate has not confirmed the last order yet. Try again in two minutes.');
+    expect(h.file()).toMatchObject({ status: 'halted' });
+    expect(h.file().steps[job.stepIndex].addBack?.legs[0].order).toMatchObject({ text: `${job.id}-f1` });
+    expect(h.file().openGaps).toBeUndefined();
+  });
+
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('Abandon refuses while an add back order is still unknown inside the lookup window, %d ETH', async (q) => {
+    mockAccount(ownerAccount());
+    gate().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).reply(404, { label: 'ORDER_NOT_FOUND', message: 'not found' });
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    const order = addBackOrder('902', t - 1_000);
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order }] };
+    h.jobs.write(job);
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(abandon.statusCode).toBe(409);
+    expect(abandon.json().error.message).toBe('Gate has not confirmed the last order yet. Try again in two minutes.');
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: 'Add back stopped.' });
+    expect(h.file().steps[job.stepIndex].addBack?.legs[1].order).toMatchObject({ venueId: '902' });
+    expect(h.file().openGaps).toBeUndefined();
+  });
+
+  it.each([
+    [0.0166, '0.0166'],
+    [2_000, '2,000'],
+  ])('after the lookup window with no order found, Abandon goes ahead and names the fills it knows, %d ETH', async (q, size) => {
+    mockAccount(ownerAccount());
+    gate().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).reply(404, { label: 'ORDER_NOT_FOUND', message: 'not found' });
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    const order = addBackOrder('903', t - LOOKUP_WINDOW_MS - 1);
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order }] };
+    h.jobs.write(job);
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(abandon.statusCode).toBe(200);
+    expect(h.file()).toMatchObject({
+      status: 'abandoned',
+      haltReason: `Add back stopped: Hyperliquid ${size} of ${size} ETH, Gate 0 of ${size} ETH. ${gapText(size)} Gate has not confirmed the Gate add back order. Check the Gate long in Positions before you trade.`,
+    });
+    expect(h.file().steps[job.stepIndex].addBack?.legs[1].order).toBeNull();
+  });
+
+  it.each([
+    [0.004, 'BTC', '0.004', '0.004'],
+    [333.3333, 'ETH', '333.3333', '333.33'],
+    [2_000, 'ETH', '2,000', '2,000'],
+  ])('the add back gap prints the whole lot size, %d %s', async (q, coin, size, target) => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    for (const leg of job.delever!.legs) leg.base = coin;
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order: null }] };
+    h.jobs.write(job);
+
+    await h.post(`/api/rebalance/${job.id}/abandon`);
+
+    expect(h.file().haltReason).toBe(
+      `Add back stopped: Hyperliquid ${size} of ${target} ${coin}, Gate 0 of ${target} ${coin}. The Gate long is ${size} ${coin} smaller than the Hyperliquid short. Close ${size} ${coin} of the Hyperliquid short in Positions.`,
+    );
+  });
+
+  it.each([0.0166, 2_000])('an abandoned part add back keeps its perp gap after the Boros close, %d ETH', async (q) => {
+    mockAccount(ownerAccount());
+    const h = boot();
+    await h.ready();
+    const job = slicedJob({ status: 'halted', haltKind: 'boros', borosLeftYu: 30, haltReason: 'Add back stopped.' });
+    job.steps[job.stepIndex].addBack = { qty: q, legs: [{ symbol: HL_ETH, filled: q, order: null }, { symbol: GATE_ETH_PERP, filled: 0, order: null }] };
+    h.jobs.write(job);
+    await h.post(`/api/rebalance/${job.id}/abandon`);
+    h.jobs.write({ ...h.file(), borosLeftYu: 0, borosGapYu: 0 });
+
+    const closed = h.file();
+    const uneven = [
+      { symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SHORT' as const, qty: 33 + q },
+      { symbol: GATE_ETH_PERP, exchange: 'GATE', side: 'LONG' as const, qty: 33 },
+    ];
+    expect(gapsLeftBy(closed, uneven)).toEqual([expect.objectContaining({ qty: q, leg: expect.objectContaining({ symbol: GATE_ETH_PERP, side: 'LONG' }) })]);
+    const even = [{ ...uneven[0], qty: 33 }, uneven[1]];
+    expect(gapsLeftBy(closed, even)).toEqual([]);
+  });
+
+  it('a fix sent while the boot cancel runs is answered, and Abandon works after it', async () => {
+    mockAccount(ownerAccount());
+    refuseSends();
+    gate().get(/\/api\/v4\/crossex\/orders\/.+/).query(true).delay(300).reply(404, { label: 'ORDER_NOT_FOUND', message: 'not found' });
+    const job = slicedJob({ status: 'running', followMisses: 3 });
+    const slices = job.steps.find((step) => step.name === 'Slices')!;
+    slices.status = 'running';
+    slices.lead = { text: 't-boot-1', venueId: null, sentAt: t, credited: 0, poc: true, price: '2999.9', side: 'BUY', mid: null };
+    job.realize!.legs[0].filledQty = 5;
+    job.notHedgedQty = 5;
+    job.follow = { symbol: 'GATE_FUTURE_ETH_USDT', side: 'SELL', qty: 5 } as Job['follow'];
+    const h = boot({ job });
+    await h.ready();
+
+    const fix = await h.post(`/api/rebalance/${job.id}/fix`, { action: 'market' });
+    expect(fix.statusCode).toBeGreaterThanOrEqual(200);
+    await waitFor(() => h.file().status === 'halted', 'the boot halt');
+
+    const abandon = await h.post(`/api/rebalance/${job.id}/abandon`);
+    expect(abandon.json().error?.message).not.toBe('A fix is still running. Wait for it to finish.');
+    expect(abandon.statusCode).toBe(200);
+  });
+
+  it('plan check allows a 1% size gap at 6M', () => {
+    const lot = Number(PERP_RULES[HL_ETH].lotSize);
+    const qty = 3_294.6;
+    const fresh = [{ symbol: HL_ETH, qty } as RealizeLeg];
+    const shownAt = (shownQty: number) => isShownRealize(fresh, [{ symbol: HL_ETH, qty: shownQty }], PERP_RULES);
+    expect(shownAt(qty * 1.01)).toBe(true);
+    expect(shownAt(qty * 0.99)).toBe(true);
+    expect(shownAt(qty * 1.0102)).toBe(false);
+    expect(shownAt(qty * 0.9898)).toBe(false);
+    const small = [{ symbol: HL_ETH, qty: 0.01 } as RealizeLeg];
+    expect(isShownRealize(small, [{ symbol: HL_ETH, qty: 0.01 + lot }], PERP_RULES)).toBe(true);
+    expect(isShownRealize(small, [{ symbol: HL_ETH, qty: 0.01 + 2 * lot }], PERP_RULES)).toBe(false);
+  });
+
+  it('job stores the route price impact apart', async () => {
+    mockOwnerBook();
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const plan = await h.plan();
+    const shown = shownOf(plan);
+
+    const res = await h.post('/api/rebalance', shown);
+
+    expect(res.statusCode).toBe(202);
+    expect(h.file().routeImpactUsd).toBe(plan.routes[shown.route]!.priceImpactUsd);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a second post while the realize runs is refused', async () => {
+    mockOwnerBook(OWNER_HL_ETH, { accountDelayMs: 50 });
+    refuseSends();
+    refuseQuotes();
+    const h = boot();
+    const shown = shownOf(await h.plan());
+
+    const [first, second] = await Promise.all([h.post('/api/rebalance', shown), h.post('/api/rebalance', shown)]);
+
+    expect([first.statusCode, second.statusCode].sort()).toEqual([202, 409]);
+    const refused = first.statusCode === 409 ? first : second;
+    expect(refused.json().error.message).toMatch(new RegExp(`^rebalance ${h.file().id} is (running|halted)$`));
+    await waitFor(() => h.file().status === 'halted', 'the halt');
   });
 });

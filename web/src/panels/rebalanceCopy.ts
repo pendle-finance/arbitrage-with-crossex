@@ -1,6 +1,6 @@
-import type { GoalKind, Pool } from '../api/types';
+import type { GoalKind, PerpSide, Pool, RealizeExec, RealizeLeg, RealizeRefusal } from '../api/types';
 import { t } from '../i18n';
-import { num, WALLET_SHORT } from '../lib/fmt';
+import { fmtUsd, num, sigGrouped, WALLET_SHORT } from '../lib/fmt';
 
 export const roundCount = (n: number) => t('accounts.rebalance.rounds', { count: n, n: num(n, 0) });
 
@@ -42,6 +42,12 @@ export const CARD_LABEL: Readonly<Record<GoalKind, string>> = {
   get repay() { return t('accounts.rebalance.card.repay'); },
   get custom() { return t('accounts.rebalance.card.custom'); },
 };
+export function realizeBlockedReason(refused: RealizeRefusal): string {
+  if (refused.reason === 'no-margin') return t('accounts.borrowCard.reasonNoMargin');
+  if (refused.reason === 'no-fee-rate') return t('accounts.borrowCard.reasonNoFeeRate');
+  if (refused.reason === 'past-book') return t('accounts.borrowCard.reasonPastBook');
+  return t('accounts.borrowCard.reasonOverCap', { cap: fmtUsd(refused.capUsd ?? 0, 0) });
+}
 export const PRESET_OFF: Readonly<Record<'even' | 'repay', string>> = {
   get even() { return t('accounts.rebalance.presetOff.even'); },
   get repay() { return t('accounts.rebalance.presetOff.repay'); },
@@ -56,13 +62,6 @@ export const HOLD_LABEL: Readonly<Record<GoalKind, string>> = {
   get even() { return t('accounts.rebalance.hold.even'); },
   get repay() { return t('accounts.rebalance.hold.repay'); },
   get custom() { return t('accounts.rebalance.hold.custom'); },
-};
-/** The confirm when the verdict does not ask for the move: the trader may
- * still run it, but the button no longer reads as the recommended step. */
-export const HOLD_ANYWAY_LABEL: Readonly<Record<GoalKind, string>> = {
-  get even() { return t('accounts.rebalance.holdAnyway.even'); },
-  get repay() { return t('accounts.rebalance.holdAnyway.repay'); },
-  get custom() { return t('accounts.rebalance.holdAnyway.custom'); },
 };
 /** Under a "nothing to save" verdict in the dialog, where a fee is priced
  * right below it: the move is a choice, and this is what it costs. */
@@ -101,51 +100,12 @@ export const MOVE_TEXT = {
   },
 };
 
-const h = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.now');
+const h = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.walletUsdt');
 
 export const HOVER = {
   rebalanceTitle: {
     get equity() { return h('title.equity'); },
-    get walletHead() {
-      return { wallet: h('title.walletHead.wallet'), legs: h('title.walletHead.legs'), interest: h('title.walletHead.interest') };
-    },
-    get wallets() {
-      return [
-        { wallet: 'USDT · CrossEx', legs: 'Gate, Binance, OKX, Bybit', interest: h('title.interest.usdt') },
-        { wallet: 'USDC · Hyperliquid', legs: 'Hyperliquid', interest: h('title.interest.hyperliquid') },
-        { wallet: 'USDC · Lighter', legs: 'Lighter', interest: h('title.interest.lighter') },
-      ];
-    },
     get borrow() { return h('title.borrow'); },
-    get rounds() { return h('title.rounds'); },
-    get routeHead() {
-      return { route: h('title.routeHead.route'), path: h('title.routeHead.path'), time: h('title.routeHead.time'), cost: h('title.routeHead.cost') };
-    },
-    get routes() {
-      const min = (n: string) => h(`title.time.min${n}`);
-      const from = (usd: string) => t('accounts.rebalance.hover.title.costFrom', { usd });
-      return [
-        {
-          route: h('title.spotLoop'),
-          paths: [
-            { path: h('title.path.usdtToHyperliquid'), time: min('2'), cost: from('$0.05') },
-            { path: h('title.path.hyperliquidToUsdt'), time: min('6_5'), cost: from('$1.00') },
-            { path: h('title.path.usdtToLighter'), time: min('4'), cost: from('$1.03') },
-            { path: h('title.path.lighterToUsdt'), time: min('3'), cost: from('$0') },
-            { path: h('title.path.hyperliquidToLighter'), time: min('10'), cost: from('$2.03') },
-            { path: h('title.path.lighterToHyperliquid'), time: min('5'), cost: from('$0.05') },
-          ],
-        },
-        {
-          route: h('title.convert'),
-          paths: [
-            { path: 'USDT ↔ USDC', time: h('title.time.instant'), cost: '0.2%' },
-            { path: 'Hyperliquid ↔ Lighter', time: h('title.time.instant'), cost: h('title.twoSwaps') },
-          ],
-        },
-      ];
-    },
-    get recommended() { return h('title.recommended'); },
   },
   get presets() { return h('presets'); },
   get custom() { return h('custom'); },
@@ -153,7 +113,6 @@ export const HOVER = {
   get walletUsdc() { return h('walletUsdc'); },
   get walletLighter() { return h('walletLighter'); },
   get walletGate() { return h('walletGate'); },
-  get now() { return h('now'); },
   interestNow: {
     get lead() { return h('interestNow.lead'); },
     get head() {
@@ -181,7 +140,6 @@ export const HOVER = {
   get frees() { return h('frees'); },
   get priceImpact() { return h('priceImpact'); },
   get interestMonth() { return h('interestMonth'); },
-  get onTheWay() { return h('onTheWay'); },
   get gateSpot() { return h('gateSpot'); },
   get gateSpotAssets() { return h('gateSpotAssets'); },
   get abandon() { return h('abandon'); },
@@ -226,20 +184,15 @@ export const factInterestPaid = () => t('accounts.rebalance.fact.interestPaid');
 export const gateSpot = () => t('accounts.rebalance.gateSpot');
 
 export const hoverCash = () => t('accounts.rebalance.bar.cash');
-export const hoverUpnl = () => t('accounts.rebalance.bar.upnl');
-export const hoverTarget = () => t('accounts.rebalance.bar.target');
 
-export const MODAL_FEE = (usdText: string) => t('accounts.rebalance.modal.feeUsd', { usd: usdText });
 export const modalFrees = () => t('accounts.rebalance.modal.frees');
 export const modalInterest = () => t('accounts.rebalance.modal.interest');
 export const modalFeeLabel = () => t('accounts.rebalance.modal.fee');
 export const modalImpactLabel = () => t('accounts.rebalance.modal.priceImpact');
-export const MODAL_IMPACT = (usdText: string) => t('accounts.rebalance.modal.priceImpactUsd', { usd: usdText });
 /** "$0.20 + $231.80 price impact": a route's cost with the price part named. */
 export const FEE_PLUS_IMPACT = (fee: string, impact: string) => t('accounts.rebalance.modal.feePlusImpact', { fee, impact });
 export const PER_MONTH = (nowText: string, afterText: string) =>
   t('accounts.rebalance.modal.perMonth', { now: nowText, after: afterText });
-export const modalSteps = () => t('accounts.rebalance.modal.steps');
 /** Replaces the confirm while the quote is stale: the plan moved under the
  * dialog, so the only next step is to price the new one. */
 export const modalRefreshRoute = () => t('accounts.rebalance.modal.refreshRoute');
@@ -255,4 +208,29 @@ export const transferCta = () => t('accounts.rebalance.transferCta');
 
 export const rateUnknown = () => t('accounts.rebalance.rateUnknown');
 export const INTEREST_PER_HOUR = (usdText: string) => t('accounts.rebalance.interestPerHour', { usd: usdText });
+export const INTEREST_PER_DAY = (usdText: string) => t('accounts.rebalance.interestPerDay', { usd: usdText });
 export const RATE_PER_YEAR = (pctText: string) => t('accounts.rebalance.ratePerYear', { pct: pctText });
+
+export const PLATFORM = 'Gate CrossEx';
+
+export const CONVERT_MAX = 500_000;
+
+export const CONVERT_TO: Record<Pool, Pool> = { CROSSEX: 'HYPERLIQUID', HYPERLIQUID: 'CROSSEX', LIGHTER: 'CROSSEX' };
+
+export const poolCoin = (pool: Pool): string => (pool === 'CROSSEX' ? 'USDT' : 'USDC');
+
+export const sizeText = (qty: number): string => {
+  const size = sigGrouped(qty);
+  return size.includes('.') ? size : `${size}.0`;
+};
+
+export const sideText = (side: PerpSide): string => t(side === 'LONG' ? 'errors.word.long' : 'errors.word.short');
+
+export const legFeeUsd = (leg: RealizeLeg): number => leg.closeFeeUsd + leg.reopenFeeUsd + (leg.convert?.feeUsd ?? 0);
+
+export const legImpactUsd = (leg: RealizeLeg): number => Math.max(0, leg.closeImpactUsd + leg.reopenImpactUsd);
+
+export const execModeKey = (mode: RealizeExec, whole: boolean) =>
+  whole
+    ? mode === 'maker' ? 'accounts.realizeTab.limitHedgeWhole' : 'accounts.realizeTab.marketWhole'
+    : mode === 'maker' ? 'accounts.realizeTab.limitHedge' : 'accounts.realizeTab.market';

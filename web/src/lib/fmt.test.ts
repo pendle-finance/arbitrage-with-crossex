@@ -8,15 +8,18 @@ import {
   fmtClock,
   fmtDateLocal,
   fmtDateShort,
+  fmtNotionalShort,
   fmtPct,
   fmtSyncAge,
   fmtTokenQty,
   fmtUsd,
   fmtUsdCompact,
+  groupedExact,
   num,
   parseDateLocal,
   parseSymbol,
   prettyVenue,
+  qtyGrouped,
   sig,
   sigGrouped,
   toDate,
@@ -41,6 +44,22 @@ describe('sig (port of core numbers.sig)', () => {
     [0.000012345, '0.00001234'],
   ])('sig(%f) -> %s', (value, expected) => {
     expect(sig(value)).toBe(expected);
+  });
+});
+
+describe('groupedExact', () => {
+  it.each([
+    ['2675.5', '2,675.5'],
+    ['65010.55', '65,010.55'],
+    ['1234567.123456', '1,234,567.123456'],
+    ['2.123456', '2.123456'],
+    ['999.995', '999.995'],
+    ['0.00001234', '0.00001234'],
+    ['-1234.5', '-1,234.5'],
+    ['—', '—'],
+    ['1e-7', '1e-7'],
+  ])('%s keeps every digit and reads %s', (input, out) => {
+    expect(groupedExact(input)).toBe(out);
   });
 });
 
@@ -159,10 +178,11 @@ describe('fmtAbout', () => {
     [650, 'about 11 min'],
     [780, 'about 13 min'],
     [1430, 'about 24 min'],
-    [3570, 'about 1 h'],
-    [3600, 'about 1 h'],
-    [3601, 'about 1 h'],
-    [62520, 'about 17 h 22 m'],
+    [3570, 'about 1h'],
+    [3600, 'about 1h'],
+    [3601, 'about 1h'],
+    [5400, 'about 1h 30m'],
+    [62520, 'about 17h 22m'],
   ])('fmtAbout(%i) -> %s', (seconds, expected) => {
     expect(fmtAbout(seconds)).toBe(expected);
   });
@@ -252,6 +272,19 @@ describe('fmtUsdCompact', () => {
   });
 });
 
+describe('fmtNotionalShort', () => {
+  it.each([
+    [999_499.99, '$999k'],
+    [999_500, '$1M'],
+    [999_999.99, '$1M'],
+    [1_000_000, '$1M'],
+    [99_949, '$99.9k'],
+    [99_950, '$100k'],
+  ])('fmtNotionalShort(%f) -> %s', (n, expected) => {
+    expect(fmtNotionalShort(n)).toBe(expected);
+  });
+});
+
 describe('fmtAge', () => {
   it.each([
     [Number.NaN, '—'],
@@ -264,5 +297,30 @@ describe('fmtAge', () => {
     [3 * 86_400_000, '3d'],
   ])('%d ms reads %s', (ms, text) => {
     expect(fmtAge(ms)).toBe(text);
+  });
+});
+
+describe('qtyGrouped: one rule for every quantity, never shown above the real amount', () => {
+  it.each<[number | string, string, number?]>([
+    [1234.5678, '1,234.567'],
+    [12.34567, '12.3456'],
+    [0.123456789, '0.12345678'],
+    [0.123456, '0.1234', 4],
+    [2.9999999999999996, '3'],
+    [0.30000000000000004, '0.3'],
+    [4.03, '4.03'],
+    ['4.03', '4.03'],
+    [2_000.0005, '2,000'],
+    [1_500_000.1239, '1,500,000.123'],
+    [-1234.5678, '-1,234.567'],
+    [-0.000000001, '0'],
+    [0.0000001, '0.0000001'],
+    [0, '0'],
+  ])('%s reads %s', (value, text, maxDp) => {
+    expect(qtyGrouped(value, maxDp)).toBe(text);
+  });
+
+  it('keeps a non-number as it came', () => {
+    expect(qtyGrouped('abc')).toBe('abc');
   });
 });

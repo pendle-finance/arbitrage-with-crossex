@@ -13,8 +13,9 @@ import nock from 'nock';
 import { afterEach, describe, expect, it } from 'vitest';
 import { tickPair, type LoopDeps } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
+import { TUNING } from '../../src/engine/types';
 import { TTL, TtlCache } from '../../src/server/cache';
-import { JobFile, newJob, newTransferJob, TransferFile } from '../../src/server/rebalanceJob';
+import { JobFile, newJob, newTransferJob, newTwapJob, TransferFile } from '../../src/server/rebalanceJob';
 import { A_CONTRACT, B_CONTRACT, FakeVenue, VirtualClock } from '../unit/engine-sim';
 import { fixture, gate, HOST, makeTestApp, mockGateGet } from './helpers/gate-nock';
 
@@ -119,6 +120,25 @@ describe('POST /api/deals', () => {
     expect(view.projection.bFilled).toBe('0.152');
   });
 
+  it('names the venue on the deal view while a re-peg is refused, and clears it once an order is accepted', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    const pair = w.store.getPair('deal-000001')!;
+    const place = (price: string) =>
+      w.store.insertPendingOrder({ pairId: pair.id, leg: 'A', kind: 'maker', side: pair.a.side, qty: pair.targetQty, price, tif: 'poc', now: 1 });
+    const refusedOf = async () => (await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST })).json().data.repegRefused;
+    const refused = place('2400');
+    w.store.updateOrder(pair.id, 'A', refused.seq, { state: 'DEAD', closeReason: 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR', resolvedAt: 2 });
+    expect(await refusedOf()).toBe('HYPERLIQUID');
+    const accepted = place('2401');
+    w.store.updateOrder(pair.id, 'A', accepted.seq, { state: 'OPEN' });
+    expect(await refusedOf()).toBeNull();
+  });
+
   it('refuses to start or resume a deal while a rebalance is running, and not while one is halted', async () => {
     const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
     const store = new Store(':memory:');
@@ -156,6 +176,10 @@ describe('POST /api/deals', () => {
       hedgeRejectStreak: 0,
       maxClip: null,
       clipBandBp: null,
+      repegBehindBp: null,
+      repegAutoBp: null,
+      repegNotBefore: 0,
+      haltKind: null,
       haltReason: 'test',
       reportJson: null,
       createdAt: Date.now(),
@@ -799,6 +823,30 @@ describe('POST /api/deals', () => {
     expect(w.store.listPairs()).toHaveLength(0);
   });
 
+  it('a close and reopen on the same contract near the cap is not counted as new size', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/positions', { body: [{ symbol: A_CONTRACT, position_qty: '0.38', mark_price: '2500' }], times: 5 });
+    mockGateGet('/rule/risk_limits', { body: tieredLimits });
+
+    capReads();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({
+        a: { symbol: A_CONTRACT, side: 'SELL', reduceOnly: true },
+        b: { symbol: A_CONTRACT, side: 'BUY' },
+        pricePolicy: 'touch',
+        repegBehindBp: 5,
+      }),
+    });
+
+    expect(res.statusCode, res.body).toBe(202);
+  });
+
   it('a deal that shrinks an opposite position stays under the cap', async () => {
     const w = mkApp();
     app = w.app;
@@ -962,6 +1010,178 @@ describe('POST /api/deals', () => {
     await tickPair(w.loop, pair.id);
     expect(w.store.getPair(pair.id)!.mode).toBe('DONE');
   });
+
+  it('creates a maker + hedge close, and refuses a second close on a leg it is still closing', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules(), times: 6 });
+    mockGateGet('/positions', {
+      body: [
+        { symbol: A_CONTRACT, position_qty: '0.5', mark_price: '2500' },
+        { symbol: B_CONTRACT, position_qty: '-0.5', mark_price: '2500' },
+      ],
+      times: 6,
+    });
+    capReads();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: {
+        id: 'mclose-000001',
+        a: { symbol: A_CONTRACT, side: 'SELL', reduceOnly: true },
+        b: { symbol: B_CONTRACT, side: 'BUY', reduceOnly: true },
+        qty: '0.2',
+        execution: 'maker',
+        price: '2500',
+        pricePolicy: 'touch',
+        timeoutSec: 300,
+        clipBandPct: 0.5,
+        maxClip: '0.1',
+      },
+    });
+    expect(res.statusCode, res.body).toBe(202);
+    const pair = w.store.getPair('mclose-000001')!;
+    expect(pair.mode).toBe('OPENING');
+    expect(pair.a.reduceOnly && pair.b?.reduceOnly).toBe(true);
+    expect(pair.clipBandBp).toBe(50);
+    expect(pair.maxClip).toBe('0.1');
+
+    // The single-leg close of B while the maker close still rests: refused.
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: {
+        id: 'close-000002',
+        a: { symbol: B_CONTRACT, side: 'BUY', reduceOnly: true },
+        qty: '0.1',
+        execution: 'taker',
+        clipBandPct: 0.5,
+      },
+    });
+    expect(second.statusCode, second.body).toBe(409);
+    expect(second.json().error.message).toMatch(new RegExp(`A close on ${B_CONTRACT} is still running`));
+    expect(w.store.getPair('close-000002')).toBeNull();
+
+    // Once the first close is done, the same close goes through.
+    w.store.updatePair('mclose-000001', { mode: 'DONE' });
+    const third = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: {
+        id: 'close-000003',
+        a: { symbol: B_CONTRACT, side: 'BUY', reduceOnly: true },
+        qty: '0.1',
+        execution: 'taker',
+        clipBandPct: 0.5,
+      },
+    });
+    expect(third.statusCode, third.body).toBe(202);
+  });
+});
+
+describe('deal window fee', () => {
+  const feeWire = [
+    { exchange_type: 'HYPERLIQUID', future_maker_fee: '0.00015', future_taker_fee: '0.00028', special_fee_list: [] },
+    { exchange_type: 'OKX', future_maker_fee: '0.0002', future_taker_fee: '0.0005', special_fee_list: [] },
+  ];
+
+  async function filledDeal(trades: unknown[]) {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/fee', { body: feeWire }).persist();
+    mockGateGet('/history_trades', { body: trades }).persist();
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    await tickPair(w.loop, 'deal-000001');
+    w.store.updateOrder('deal-000001', 'A', 1, { venueOrderId: 'v1', cumQty: '0.1', avgFillPrice: '2500' });
+    return w;
+  }
+
+  it('counts an unread fill at the account rate, not the flat default', async () => {
+    await filledDeal([]);
+    const res = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    const fees = res.json().data.fees;
+    expect(fees.readUsd).toBe(0);
+    expect(fees.estUsd).toBeCloseTo(0.1 * 2500 * 0.00015, 10);
+    expect(fees.est).toBe(true);
+  });
+
+  it('replaces the estimate with the fee Gate charged', async () => {
+    await filledDeal([{ order_id: 'v1', qty: '0.1', fee: '-0.07', fee_coin: 'USDT' }]);
+    const res = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    const fees = res.json().data.fees;
+    expect(fees.readUsd).toBeCloseTo(0.07, 10);
+    expect(fees.estUsd).toBe(0);
+    expect(fees.est).toBe(false);
+  });
+
+  it('returns the estimate inside the deadline when the trade read hangs, then skips the read on the next poll', async () => {
+    let reads = 0;
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    mockGateGet('/fee', { body: feeWire }).persist();
+    gate()
+      .get((uri) => uri.includes('/history_trades'))
+      .query(true)
+      .delay(8000)
+      .reply(200, () => {
+        reads += 1;
+        return [];
+      })
+      .persist();
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    await tickPair(w.loop, 'deal-000001');
+    w.store.updateOrder('deal-000001', 'A', 1, { venueOrderId: 'v1', cumQty: '0.1', avgFillPrice: '2500' });
+    const started = Date.now();
+    const first = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(first.json().data.fees.est).toBe(true);
+    expect(first.json().data.fees.estUsd).toBeCloseTo(0.1 * 2500 * 0.00015, 10);
+    const readsAfterFirst = reads;
+    const again = Date.now();
+    const second = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - again).toBeLessThan(500);
+    expect(second.json().data.fees.est).toBe(true);
+    expect(reads).toBe(readsAfterFirst);
+  });
+
+  it('answers inside the deadline when the account fee read hangs, then skips it on the next poll', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    gate()
+      .get((uri) => uri.includes('/history_trades'))
+      .query(true)
+      .reply(200, [])
+      .persist();
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload() });
+    await tickPair(w.loop, 'deal-000001');
+    w.store.updateOrder('deal-000001', 'A', 1, { venueOrderId: 'v1', cumQty: '0.1', avgFillPrice: '2500' });
+    gate()
+      .get((uri) => uri.endsWith('/fee'))
+      .query(true)
+      .delay(8000)
+      .reply(200, feeWire)
+      .persist();
+    const started = Date.now();
+    const first = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(first.statusCode).toBe(200);
+    const again = Date.now();
+    const second = await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST });
+    expect(Date.now() - again).toBeLessThan(500);
+    expect(second.statusCode).toBe(200);
+  });
 });
 
 describe('deal commands + alerts', () => {
@@ -987,17 +1207,37 @@ describe('deal commands + alerts', () => {
     expect(unknown.statusCode).toBe(400);
   });
 
-  it('repeg updates the price intent from the venue touch when no price is given', async () => {
+  it('repeg updates the price intent from the best price when no price is given and re-peg is on', async () => {
     const w = await mkWorking();
-    w.venue.touchA = '2499';
+    w.venue.bestA = '2499';
+    w.venue.touchA = '2498';
     const res = await app.inject({ method: 'POST', url: `/api/deals/${w.id}/repeg`, headers: HOST, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(res.json().data.price).toBe('2499');
     expect(w.store.getPair(w.id)!.limitPrice).toBe('2499');
-    // Book unavailable → 400, intent untouched.
-    w.venue.touchA = null;
+    w.venue.bestA = null;
     const down = await app.inject({ method: 'POST', url: `/api/deals/${w.id}/repeg`, headers: HOST, payload: {} });
     expect(down.statusCode).toBe(400);
+  });
+
+  it('repeg with re-peg off reads the touch, and a missing book is refused', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload({ repegBehindBp: null }) });
+    await tickPair(w.loop, 'deal-000001');
+    w.venue.bestA = '2499';
+    w.venue.touchA = '2498';
+    const res = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: {} });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data.price).toBe('2498');
+    expect(w.store.getPair('deal-000001')!.repegBehindBp).toBeNull();
+    w.venue.touchA = null;
+    const down = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: {} });
+    expect(down.statusCode).toBe(400);
+    expect(down.json().error.message).toMatch(/book unavailable/);
   });
 
   // A pair ticket's maker leg is pricePolicy 'touch', and decide() re-derives
@@ -1035,7 +1275,7 @@ describe('deal commands + alerts', () => {
   it('re-peg to touch restores book tracking on a pinned deal', async () => {
     const w = await mkWorking();
     w.store.updatePair(w.id, { pricePolicy: 'fixed', limitPrice: '2470' });
-    w.venue.touchA = '2499';
+    w.venue.bestA = '2499';
     const res = await app.inject({ method: 'POST', url: `/api/deals/${w.id}/repeg`, headers: HOST, payload: {} });
     expect(res.statusCode).toBe(200);
     const pair = w.store.getPair(w.id)!;
@@ -1110,5 +1350,461 @@ describe('deal commands + alerts', () => {
     w.store.updatePair(w.id, { mode: 'DONE' });
     const after = (await app.inject({ method: 'GET', url: '/api/deals?active=1', headers: HOST })).json().data;
     expect(after).toHaveLength(0);
+  });
+
+  const getView = async (id: string) => (await app.inject({ method: 'GET', url: `/api/deals/${id}`, headers: HOST })).json().data;
+
+  async function partHedged(): Promise<ReturnType<typeof mkApp> & { id: string }> {
+    const w = await mkWorking();
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, '0.05');
+    for (let i = 0; i < 4; i++) {
+      await tickPair(w.loop, w.id);
+      w.clock.advance(1000);
+    }
+    return w;
+  }
+
+  it('the deal view counts the fee of every fill so far', async () => {
+    const w = await partHedged();
+    const view = await getView(w.id);
+    const orders = w.store.listOrders(w.id);
+    const expected = orders.reduce((sum, o) => sum + (Number(o.cumQty) * Number(o.avgFillPrice) * (o.kind === 'maker' ? 2 : 5)) / 10_000, 0);
+    expect(expected).toBeGreaterThan(0);
+    expect(view.fees.readUsd).toBe(0);
+    expect(view.fees.est).toBe(true);
+    expect(view.fees.estUsd).toBeCloseTo(expected, 10);
+  });
+
+  it('the deal view gives the taker leg its average price while the deal runs', async () => {
+    const w = await partHedged();
+    const view = await getView(w.id);
+    expect(view.pair.mode).toBe('OPENING');
+    expect(view.projection.bFilled).toBe('0.05');
+    expect(view.avgPrice.b).not.toBeNull();
+    expect(view.avgPrice).toEqual({ a: w.store.avgFillPrice(w.id, 'A'), b: w.store.avgFillPrice(w.id, 'B') });
+    expect(view.endedAt).toBeNull();
+  });
+
+  it('the deal view gives the end time once the deal is done', async () => {
+    const w = await partHedged();
+    await app.inject({ method: 'POST', url: `/api/deals/${w.id}/stop`, headers: HOST });
+    for (let i = 0; i < 6; i++) {
+      await tickPair(w.loop, w.id);
+      w.clock.advance(1000);
+    }
+    const view = await getView(w.id);
+    expect(view.pair.mode).toBe('DONE');
+    const last = Math.max(...w.store.listOrders(w.id).map((o) => o.resolvedAt ?? 0));
+    expect(last).toBeGreaterThan(view.pair.createdAt);
+    expect(view.endedAt).toBe(last);
+  });
+});
+
+describe('TWAP children, Taker after, maker leg and re-peg', () => {
+  const twapJob = (intervalSec: number, repegBehindBp: 2 | 5 | 10 | null = 5) =>
+    newTwapJob(
+      {
+        userId: null,
+        deal: { a: { symbol: A_CONTRACT, side: 'BUY' }, b: { symbol: B_CONTRACT, side: 'SELL' }, execution: 'maker', totalQty: '1.824', coin: 'ETH', rules: [] },
+        plan: { slices: 12, sliceQty: '0.152', lastQty: '0.152', intervalSec, durationSec: intervalSec * 12, takerAfterSec: Math.floor(intervalSec * 0.8) },
+        makerLeg: 'a',
+        repegBehindBp,
+        takerAfterSec: Math.floor(intervalSec * 0.8),
+        clientId: 'client-1',
+      },
+      Date.now(),
+    );
+
+  async function mkTwapApp(intervalSec: number) {
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    const store = new Store(':memory:');
+    const venue = new FakeVenue();
+    const clock = new VirtualClock();
+    app = makeTestApp({ engine: { store, venue, clock }, rebalance: { jobs } });
+    await app.ready();
+    const job = twapJob(intervalSec);
+    jobs.write(job);
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    return { store, venue, clock, job, loop: { store, venue, clock } as LoopDeps };
+  }
+
+  const post = (payload: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload(payload) });
+
+  it('child deadline over 80% of its interval', async () => {
+    const t = await mkTwapApp(720);
+    const res = await post({ id: `${t.job.id}-s1-1`, timeoutSec: 600 });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(t.store.getPair(`${t.job.id}-s1-1`)).toBeNull();
+    const ok = await post({ id: `${t.job.id}-s1-2`, timeoutSec: 576 });
+    expect(ok.statusCode, ok.body).toBe(202);
+  });
+
+  it('single leg child gets a deadline', async () => {
+    const t = await mkTwapApp(300);
+    const id = `${t.job.id}-s1-1`;
+    const res = await post({ id, b: null, timeoutSec: 240 });
+    expect(res.statusCode, res.body).toBe(202);
+    expect(t.store.getPair(id)!.deadlineAt).toBe(t.clock.now() + 240_000);
+  });
+
+  it('custom taker after', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    const res = await post({ timeoutSec: 1800 });
+    expect(res.statusCode, res.body).toBe(202);
+    expect(w.store.getPair('deal-000001')!.deadlineAt).toBe(w.clock.now() + 1_800_000);
+  });
+
+  it('taker after out of range is refused', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    for (const timeoutSec of [90_000, 20]) {
+      const res = await post({ timeoutSec });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toBe('Taker after must be 30s to 24h.');
+    }
+    expect(w.store.getPair('deal-000001')).toBeNull();
+  });
+
+  it('maker leg b', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    const res = await post({ makerLeg: 'b' });
+    expect(res.statusCode, res.body).toBe(202);
+    const pair = w.store.getPair('deal-000001')!;
+    expect(pair.a.contract).toBe(B_CONTRACT);
+    expect(pair.a.side).toBe('SELL');
+    expect(pair.b!.contract).toBe(A_CONTRACT);
+    expect(pair.b!.side).toBe('BUY');
+  });
+
+  async function restingChild() {
+    const t = await mkTwapApp(720);
+    const id = `${t.job.id}-s1-1`;
+    const res = await post({ id, pricePolicy: 'touch', repegBehindBp: 5 });
+    expect(res.statusCode, res.body).toBe(202);
+    await tickPair(t.loop, id);
+    return { ...t, id };
+  }
+
+  it('repeg to price turns auto off', async () => {
+    const t = await restingChild();
+    const res = await app.inject({ method: 'POST', url: `/api/deals/${t.id}/repeg`, headers: HOST, payload: { price: '1729.50' } });
+    expect(res.statusCode, res.body).toBe(200);
+    const pair = t.store.getPair(t.id)!;
+    expect(pair.limitPrice).toBe('1729.5');
+    expect(pair.pricePolicy).toBe('fixed');
+    expect(pair.repegBehindBp).toBeNull();
+  });
+
+  it('repeg to touch turns auto back on', async () => {
+    const t = await restingChild();
+    await app.inject({ method: 'POST', url: `/api/deals/${t.id}/repeg`, headers: HOST, payload: { price: '2470' } });
+    expect(t.store.getPair(t.id)!.repegBehindBp).toBeNull();
+    t.venue.touchA = '2499';
+    const res = await app.inject({ method: 'POST', url: `/api/deals/${t.id}/repeg`, headers: HOST, payload: {} });
+    expect(res.statusCode, res.body).toBe(200);
+    const pair = t.store.getPair(t.id)!;
+    expect(pair.pricePolicy).toBe('touch');
+    expect(pair.repegBehindBp).toBe(5);
+  });
+
+  it('repeg to touch on a plain deal turns auto back on at its own value', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    const created = await post({ pricePolicy: 'touch', repegBehindBp: 10 });
+    expect(created.statusCode, created.body).toBe(202);
+    await tickPair(w.loop, 'deal-000001');
+    const typed = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: { price: '2470' } });
+    expect(typed.statusCode, typed.body).toBe(200);
+    expect(w.store.getPair('deal-000001')!.repegBehindBp).toBeNull();
+    w.venue.touchA = '2499';
+    const res = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: {} });
+    expect(res.statusCode, res.body).toBe(200);
+    const pair = w.store.getPair('deal-000001')!;
+    expect(pair.pricePolicy).toBe('touch');
+    expect(pair.repegBehindBp).toBe(10);
+    expect(pair.repegAutoBp).toBe(10);
+  });
+
+  it('re-peg to best replies with the price the engine rests at, and keeps a maker already there', async () => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    w.venue.touchA = '2499';
+    w.venue.bestA = '2500';
+    const created = await post({ pricePolicy: 'touch', repegBehindBp: 10 });
+    expect(created.statusCode, created.body).toBe(202);
+    await tickPair(w.loop, 'deal-000001');
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    expect(maker.price).toBe('2500');
+
+    const res = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/repeg', headers: HOST, payload: {} });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data.price).toBe('2500');
+    for (let i = 0; i < 4; i++) {
+      await tickPair(w.loop, 'deal-000001');
+      w.clock.advance(1000);
+    }
+    expect(w.venue.liveOrder(A_CONTRACT)?.clientText).toBe(maker.clientText);
+  });
+});
+
+describe('money paths at every size', () => {
+  const RUNGS: Array<{ usd: number; qty: string; filled: string; rest: string }> = [
+    { usd: 50, qty: '0.021', filled: '0.008', rest: '0.013' },
+    { usd: 5_000, qty: '2.003', filled: '0.801', rest: '1.202' },
+    { usd: 100_000, qty: '40.007', filled: '16.002', rest: '24.005' },
+    { usd: 1_000_000, qty: '400.009', filled: '160.003', rest: '240.006' },
+    { usd: 6_000_000, qty: '2400.011', filled: '960.004', rest: '1440.007' },
+  ];
+  const plainDecimal = /^\d+(\.\d+)?$/;
+  const onLot = (qty: string) => Number.isInteger(Math.round(Number(qty) * 1000)) && /^\d+(\.\d{1,3})?$/.test(qty);
+
+  async function drive(w: { loop: LoopDeps; clock: VirtualClock }, id: string, ticks: number): Promise<void> {
+    for (let i = 0; i < ticks; i++) {
+      await tickPair(w.loop, id);
+      w.clock.advance(1000);
+    }
+  }
+
+  async function twapApp() {
+    const jobs = new JobFile(mkdtempSync(path.join(tmpdir(), 'rebalance-')));
+    const w = mkApp();
+    await w.app.close();
+    const sleep = () => new Promise<void>((resolve) => setTimeout(resolve, 1));
+    app = makeTestApp({ engine: { store: w.store, venue: w.venue, clock: w.clock }, rebalance: { jobs, sleep } });
+    await app.ready();
+    const job = newTwapJob(
+      {
+        userId: null,
+        deal: { a: { symbol: A_CONTRACT, side: 'BUY' }, b: { symbol: B_CONTRACT, side: 'SELL' }, execution: 'maker', totalQty: '7200', coin: 'ETH', rules: [] },
+        plan: { slices: 12, sliceQty: '600', lastQty: '600', intervalSec: 720, durationSec: 8640, takerAfterSec: 576 },
+        makerLeg: 'a',
+        repegBehindBp: 5,
+        takerAfterSec: 576,
+        clientId: 'client-money',
+      },
+      Date.now(),
+    );
+    jobs.write(job);
+    return { ...w, job, jobs };
+  }
+
+  it.each(RUNGS)('market now closes the rest at every rung ($usd)', async ({ qty, filled, rest }) => {
+    const w = mkApp();
+    app = w.app;
+    mockGateGet('/rule/symbols', { body: simRules() });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    const res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload({ qty }) });
+    expect(res.statusCode, res.body).toBe(202);
+    await tickPair(w.loop, 'deal-000001');
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, filled);
+    await drive(w, 'deal-000001', 4);
+
+    const now = await app.inject({ method: 'POST', url: '/api/deals/deal-000001/convert', headers: HOST });
+    expect(now.statusCode, now.body).toBe(200);
+    await drive(w, 'deal-000001', 12);
+
+    const orders = w.store.listOrders('deal-000001');
+    const clips = orders.filter((o) => o.leg === 'A' && o.kind === 'taker');
+    expect(clips).toHaveLength(1);
+    expect(clips[0].qty).toBe(rest);
+    expect(clips[0].qty).toMatch(plainDecimal);
+    expect(onLot(clips[0].qty)).toBe(true);
+    for (const o of orders) expect(o.qty).toMatch(plainDecimal);
+    const view = (await app.inject({ method: 'GET', url: '/api/deals/deal-000001', headers: HOST })).json().data;
+    expect(view.pair.mode).toBe('DONE');
+    expect(view.projection.aFilled).toBe(qty);
+    expect(view.projection.bFilled).toBe(qty);
+  });
+
+  it('market step respects the rule max market size', async () => {
+    const w = mkApp();
+    app = w.app;
+    const withCap = (cap: string, symbol: string) =>
+      (simRules() as Array<Record<string, unknown>>).map((r) => (r.symbol === symbol ? { ...r, max_market_size: cap } : r));
+    for (const symbol of [A_CONTRACT, B_CONTRACT]) {
+      mockGateGet('/rule/symbols', { body: withCap('0.1', symbol) });
+      capReads();
+      const res = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload({ qty: '0.35' }) });
+      expect(res.statusCode, symbol).toBe(400);
+      expect(res.json().error.message, symbol).toBe(`Size 0.35 is above ${symbol}'s largest market order (0.1). Lower the size.`);
+    }
+    expect(w.store.listPairs()).toHaveLength(0);
+    expect(w.venue.createCalls).toHaveLength(0);
+
+    const atCap = (simRules() as Array<Record<string, unknown>>).map((r) => ({ ...r, max_market_size: '0.35' }));
+    mockGateGet('/rule/symbols', { body: atCap });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    const ok = await app.inject({ method: 'POST', url: '/api/deals', headers: HOST, payload: makerPayload({ qty: '0.35' }) });
+    expect(ok.statusCode, ok.body).toBe(202);
+    await tickPair(w.loop, 'deal-000001');
+    w.venue.fill(w.venue.liveOrder(A_CONTRACT)!.clientText, '0.1');
+    await drive(w, 'deal-000001', 4);
+    await app.inject({ method: 'POST', url: '/api/deals/deal-000001/convert', headers: HOST });
+    await drive(w, 'deal-000001', 12);
+    const takers = w.store.listOrders('deal-000001').filter((o) => o.kind === 'taker');
+    for (const o of takers) expect(Number(o.qty)).toBeLessThanOrEqual(0.35);
+    expect(takers.find((o) => o.leg === 'A')?.qty).toBe('0.25');
+    expect(w.store.getPair('deal-000001')!.mode).toBe('DONE');
+  });
+
+  it('hedge refused at a lower leverage tier halts as hedge-margin', async () => {
+    const t = await twapApp();
+    const tiers = (symbol: string) => ({
+      symbol,
+      tiers: [
+        { max_risk_limit_value: '1200000', leverage_max: '25' },
+        { max_risk_limit_value: '3000000', leverage_max: '10' },
+      ],
+    });
+    gate().get('/api/v4/crossex/rule/risk_limits').query(true).times(20).reply(200, [tiers(A_CONTRACT), tiers(B_CONTRACT)]);
+    mockGateGet('/rule/symbols', { body: simRules(), times: 4 });
+    mockGateGet('/accounts', { fixture: 'account.json', times: 4 });
+    let held: Array<Record<string, string>> = [];
+    gate().get('/api/v4/crossex/positions').query(true).times(20).reply(200, () => held);
+    capReads();
+    const id = `${t.job.id}-s1-1`;
+    const child = (qty: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/deals',
+        headers: HOST,
+        payload: makerPayload({ id, qty, pricePolicy: 'touch', repegBehindBp: 5, timeoutSec: 576 }),
+      });
+    const past = await child('600');
+    expect(past.statusCode, past.body).toBe(400);
+    expect(past.json().error.category).toBe('leverage');
+    expect(t.store.getPair(id)).toBeNull();
+    expect(t.venue.createCalls).toHaveLength(0);
+
+    const res = await child('460');
+    expect(res.statusCode, res.body).toBe(202);
+    await tickPair(t.loop, id);
+    const maker = t.venue.liveOrder(A_CONTRACT)!;
+    t.venue.fill(maker.clientText, '460');
+    t.venue.nextCreate = Array.from({ length: 50 }, () => 'reject:INSUFFICIENT_MARGIN');
+    for (let i = 0; i < 30 && t.store.getPair(id)!.mode !== 'HALTED'; i++) await drive(t, id, 1);
+
+    const halted = t.store.getPair(id)!;
+    expect(halted.mode).toBe('HALTED');
+    expect(halted.haltKind).toBe('hedge-margin');
+    const orders = t.store.listOrders(id);
+    expect(orders.filter((o) => o.leg === 'A').reduce((s, o) => s + Number(o.cumQty), 0)).toBe(460);
+    const hedgesAtHalt = orders.filter((o) => o.leg === 'B').length;
+    expect(hedgesAtHalt).toBe(TUNING.HEDGE_REJECT_HALT);
+
+    t.venue.nextCreate = ['unknown-delivered'];
+    t.venue.nextIocFill = [0.5];
+    const inDoubt = () => t.store.listOrders(id).some((o) => o.leg === 'B' && o.state === 'PENDING');
+    for (let i = 0; i < 10 && !inDoubt(); i++) await drive(t, id, 1);
+    expect(inDoubt()).toBe(true);
+    expect(t.store.getPair(id)!.mode).toBe('HALTED');
+    const hedgesAtUnwind = t.store.listOrders(id).filter((o) => o.leg === 'B').length;
+
+    held = [{ symbol: A_CONTRACT, position_qty: '460', mark_price: '2500' }];
+    t.jobs.write({ ...t.job, status: 'halted', haltKind: 'hedge-margin', haltReason: 'Hedge refused for margin.', twap: { ...t.job.twap!, sliceIndex: 1 } });
+    const reversalId = `${t.job.id}-f1`;
+    let fixed = false;
+    const fix = app
+      .inject({ method: 'POST', url: `/api/rebalance/${t.job.id}/fix`, headers: HOST, payload: { action: 'unwind' } })
+      .finally(() => {
+        fixed = true;
+      });
+    const hedgeHeld = () => t.store.getPair(id)!.hedgeNotBefore > t.clock.now() + 86_400_000;
+    for (let i = 0; i < 200 && !fixed && !hedgeHeld(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(hedgeHeld()).toBe(true);
+    expect(inDoubt()).toBe(true);
+    for (let i = 0; i < 200 && !fixed; i++) {
+      await tickPair(t.loop, id);
+      await tickPair(t.loop, reversalId);
+      t.clock.advance(1000);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const unwound = await fix;
+    expect(unwound.statusCode, unwound.body).toBe(200);
+    await drive(t, id, 30);
+
+    const cumOf = (pairId: string, leg: 'A' | 'B') =>
+      t.store.listOrders(pairId).filter((o) => o.leg === leg).reduce((s, o) => s + Number(o.cumQty), 0);
+    expect(t.store.listOrders(id).filter((o) => o.leg === 'B')).toHaveLength(hedgesAtUnwind);
+    expect(t.store.listOrders(id).every((o) => o.state === 'CLOSED' || o.state === 'DEAD')).toBe(true);
+    expect(t.store.getPair(id)!.mode).toBe('DONE');
+    const hedged = cumOf(id, 'B');
+    expect(hedged).toBeGreaterThan(0);
+    expect(t.store.getPair(reversalId)!.mode).toBe('DONE');
+    expect(cumOf(id, 'A') - cumOf(reversalId, 'A')).toBeCloseTo(hedged, 9);
+  });
+
+  it.each(RUNGS)('reopen on the same contract cancels the rest first at every rung ($usd)', async ({ qty, filled }) => {
+    const t = await twapApp();
+    mockGateGet('/rule/symbols', { body: simRules(), times: 2 });
+    mockGateGet('/positions', { body: [{ symbol: A_CONTRACT, position_qty: qty, mark_price: '2500' }], times: 4 });
+    mockGateGet('/accounts', { fixture: 'account.json' });
+    capReads();
+    const events: string[] = [];
+    const create = t.venue.create.bind(t.venue);
+    const cancel = t.venue.cancel.bind(t.venue);
+    t.venue.create = async (req) => {
+      events.push(`create ${req.clientText}`);
+      return create(req);
+    };
+    t.venue.cancel = async (ref) => {
+      events.push(`cancel ${ref.clientText}`);
+      return cancel(ref);
+    };
+    const id = `${t.job.id}-s1-1`;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/deals',
+      headers: HOST,
+      payload: makerPayload({
+        id,
+        a: { symbol: A_CONTRACT, side: 'SELL', reduceOnly: true },
+        b: { symbol: A_CONTRACT, side: 'BUY' },
+        qty,
+        pricePolicy: 'touch',
+        repegBehindBp: 5,
+        timeoutSec: 300,
+      }),
+    });
+    expect(res.statusCode, res.body).toBe(202);
+    await tickPair(t.loop, id);
+    const close = t.venue.liveOrder(A_CONTRACT)!;
+    expect(close.tif).toBe('poc');
+    expect(close.reduceOnly).toBe(true);
+    t.venue.fill(close.clientText, filled);
+    await drive(t, id, 4);
+
+    const reopen = t.store.listOrders(id).find((o) => o.leg === 'B');
+    expect(reopen).toBeDefined();
+    const cancelAt = events.indexOf(`cancel ${close.clientText}`);
+    const reopenAt = events.indexOf(`create ${reopen!.clientId}`);
+    expect(cancelAt).toBeGreaterThanOrEqual(0);
+    expect(cancelAt).toBeLessThan(reopenAt);
+    const closed = t.store.listOrders(id).find((o) => o.clientId === close.clientText)!;
+    expect(closed.cumQty).toBe(filled);
+    expect(reopen!.qty).toBe(closed.cumQty);
+    expect(reopen!.qty).toMatch(plainDecimal);
   });
 });

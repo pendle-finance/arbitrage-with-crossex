@@ -20,16 +20,19 @@
  */
 import { Check, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { sigFigsDirectional } from '../lib/ticks';
 import type { BorosLegFill, BorosPairRequest, BorosSimulatedLeg, StrategyLeg } from '../api/types';
 import { SpreadIcon, VenueIcon } from '../components/AssetIcon';
-import { fixedRateText } from '../components/FixedRate';
 import { SignedNumber } from '../components/SignedNumber';
 import { QueryError } from '../components/QueryError';
+import { ResultBox } from '../components/ResultBox';
 import { daysToMaturity, knownRate } from '../lib/boros';
 import { spreadName } from '../lib/spread';
 import { fieldValue, fmtDateLocal, fmtPct, fmtTokenQty, fmtUsd, prettyVenue, sigGrouped } from '../lib/fmt';
-import { AffixedInput, EstimateCard, EstimateRow, LegCard, SlippageLine } from './PairTicketBits';
-import { FieldLabel } from './SymbolCombobox';
+import { Chip } from '../components/Chip';
+import { EstimateAge, EstimateRow, SlippageLine, SummaryCard } from './PairTicketBits';
+import { TotalCostRow, TradeFeeRow } from './BorosPairBits';
+import { CloseSizePresets } from '../panels/ClosePairFormBits';
 import {
   useBorosAgent,
   useBorosCancelAndClose,
@@ -37,12 +40,14 @@ import {
   useBorosPairSimulation,
   useExecuteBorosPair,
 } from '../api/queries';
-import { Trans, useTranslation } from 'react-i18next';
+import { useTranslation } from 'react-i18next';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
+import { StepList, type StepRow } from '../panels/RebalanceBits';
 import { BorosLogInButton } from './BorosAgentSetup';
 import { localizeServerText } from '../i18n/serverMessages';
+import { microLabelClass } from '../components/Th';
 
 const newOrderIds = (count: number): string[] => Array.from({ length: count }, (_, i) => `${i}-${uuid()}`);
 
@@ -75,21 +80,26 @@ type CloseLeg = StrategyLeg & { spreadVenues?: [string, string] | null };
 /** Used until the market's own deviation cap is known, or if it is degenerate. */
 const FALLBACK_SLIPPAGE_PCT = 1;
 
-/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8). */
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  // toPrecision trims the float noise that `Math.floor(x / step) * step`
-  // leaves behind (0.4 / 0.1 is 4.000000000000001 in binary floating point).
-  return Number((Math.floor(x / step) * step).toPrecision(12));
+export function seedBorosSlipPct(caps: ReadonlyArray<number | null | undefined>): number {
+  const usable = caps.filter((c): c is number => typeof c === 'number' && c > 0);
+  if (usable.length === 0) return FALLBACK_SLIPPAGE_PCT;
+  const floored = sigFigsDirectional((Math.min(...usable) / 2) * 100, 1, 'down');
+  return floored > 0 ? floored : FALLBACK_SLIPPAGE_PCT;
 }
 
 export function CloseBorosForm({
   legs,
+  perpsUnhedged = null,
+  underPicker = false,
+  closed = false,
   onClosed,
-  onDone,
+  onSent,
 }: {
   legs: CloseLeg[];
+  perpsUnhedged?: { qty: number; coin: string } | null;
+  underPicker?: boolean;
+  closed?: boolean;
+  onSent?: () => void;
   /**
    * What actually came off each market, so the caller can shrink a claim that
    * states an absolute size.
@@ -156,20 +166,7 @@ export function CloseBorosForm({
    * Per market, so a multi-leg close seeds from the tightest of them: one
    * tolerance drives the form, and the tighter cap is the binding one.
    */
-  const seededSlipPct = (() => {
-    const caps = closable
-      .map((l) => rowOf(l.marketId)?.maxRateDeviationApr)
-      .filter((v): v is number => typeof v === 'number' && v > 0);
-    if (caps.length === 0) return FALLBACK_SLIPPAGE_PCT;
-    const pct = (Math.min(...caps) / 2) * 100;
-    // Round DOWN to one significant figure: 0.8208% ⇒ 0.8%. Down rather than
-    // to-nearest so the seeded bound always stays strictly inside the venue's
-    // cap — rounding up could seed a tolerance the venue will not accept.
-    // Flooring a positive number to 1 s.f. cannot reach zero, but a degenerate
-    // cap can, and a zero tolerance would block every close.
-    const floored = floorTo1Sf(pct);
-    return floored > 0 ? floored : FALLBACK_SLIPPAGE_PCT;
-  })();
+  const seededSlipPct = seedBorosSlipPct(closable.map((l) => rowOf(l.marketId)?.maxRateDeviationApr));
   const [slipEdited, setSlipEdited] = useState<string | null>(null);
   /** The tolerance popover — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
@@ -297,8 +294,17 @@ export function CloseBorosForm({
    * sole-owned 0.01 announced that the remaining 0.006 was "another position's
    * share, not yours".
    */
-  const residualYours = done.reduce((sum, d) => sum + d.yours, 0);
-  const residualOthers = done.reduce((sum, d) => sum + d.others, 0);
+  const residualLines = (pick: (d: (typeof done)[number]) => number): { key: string; prefix: string; amount: number }[] => {
+    const open = done.filter((d) => pick(d) > 0);
+    const same = open.length === closable.length && open.every((d) => sigGrouped(pick(d)) === sigGrouped(pick(open[0])));
+    if (same) return [{ key: 'all', prefix: '', amount: pick(open[0]) }];
+    return open.map((d) => {
+      const leg = closable.find((l) => l.marketId === d.marketId);
+      return { key: String(d.marketId), prefix: closable.length > 1 && leg ? `${venueLabel(leg)}: ` : '', amount: pick(d) };
+    });
+  };
+  const residualYours = residualLines((d) => d.yours);
+  const residualOthers = residualLines((d) => d.others);
 
   /**
    * One leg's venue answer, folded into the form's outcomes.
@@ -382,6 +388,7 @@ export function CloseBorosForm({
     setPartial([]);
     setBatchError(null);
     if (legsBlocked) return;
+    onSent?.();
 
     if (atomic && closeReq) {
       try {
@@ -447,48 +454,41 @@ export function CloseBorosForm({
     return <p className="text-[12px] text-ink-400">{t('pairTicket.closeBoros.noLegs')}</p>;
   }
 
-  // A close that landed says so, and stays said until dismissed — the dialog
-  // closing on its own gave no confirmation that anything had happened.
   if (allDone) {
     const unit = closable[0]?.collateral ?? '';
     return (
-      <div className="flex flex-col gap-3">
-        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2.5 text-[12px] leading-relaxed text-emerald-300">
-          {t('pairTicket.closeBoros.closedDone', { count: closable.length })}
-        </p>
-        {/* The venue leg outliving the close is normal. Said plainly and NOT
-            as an amber warning: nothing went wrong. But the two halves are
-            not interchangeable — one is the user's to close whenever they
-            like, the other is not theirs at all. */}
-        {residualYours > 0 && (
-          <p className="text-[11px] leading-relaxed text-ink-400">
-            {t('pairTicket.closeBoros.residualYours', { amount: `${sigGrouped(residualYours)} ${unit}` })}
-          </p>
-        )}
-        {residualOthers > 0 && (
-          <p className="text-[11px] leading-relaxed text-ink-400">
-            {t('pairTicket.closeBoros.residualOthers', { amount: `${sigGrouped(residualOthers)} ${unit}` })}
-          </p>
-        )}
-        <button type="button" className="btn-primary w-full" onClick={onDone}>
-          {t('common.done')}
-        </button>
-      </div>
+      <ResultBox
+        tone="done"
+        title={t('pairTicket.closeBoros.closedDoneTitle', { count: closable.length })}
+        lines={[
+          ...residualYours.map((r) => `${r.prefix}${t('pairTicket.closeBoros.residualYours', { amount: `${sigGrouped(r.amount)} ${unit}` })}`),
+          ...residualOthers.map((r) => `${r.prefix}${t('pairTicket.closeBoros.residualOthers', { amount: `${sigGrouped(r.amount)} ${unit}` })}`),
+        ]}
+      />
     );
   }
 
   const unit0 = closable[0]?.collateral ?? '';
-  const px = sim.data?.simulation.collateralPriceUsd;
+  const simulation = sim.data?.simulation ?? null;
+  const px = simulation?.collateralPriceUsd;
   const inUsd = px != null && px > 0;
-  /** A collateral figure, in dollars when the quote carries a price. */
   const money = (n: number) =>
     inUsd ? <SignedNumber value={n * (px as number)} format={(v) => fmtUsd(v)} /> : <SignedNumber value={n} format={(v) => fmtTokenQty(v, unit0)} />;
+  const usdNote = (n: number | null): string => {
+    if (n === null || !inUsd) return '';
+    const usd = n * (px as number);
+    return ` (${fmtUsd(usd, Math.abs(usd) < 100 ? 2 : 0)})`;
+  };
   const nowSec = Date.now() / 1000;
+  const yearsOf = (l: CloseLeg): number | null =>
+    l.maturity
+      ? Math.max(0, l.maturity - nowSec) / 31_536_000
+      : simulation
+        ? Math.max(0, simulation.secondsToMaturity) / 31_536_000
+        : null;
   const legFacts = closable.map((l) => {
     const q = simLegFor(l);
     const value = sizeOf(l);
-    // PnL at the rate the book would actually give, over the leg's life:
-    // (locked − exec) × size × years, signed by the side being closed.
     const years = l.maturity ? Math.max(0, l.maturity - nowSec) / 31_536_000 : null;
     const estPnl =
       q?.execApr != null && l.entryApr !== undefined && years !== null
@@ -499,307 +499,283 @@ export function CloseBorosForm({
   const totalPnl = legFacts.some((f) => f.estPnl !== null)
     ? legFacts.reduce((s, f) => s + (f.estPnl ?? 0), 0)
     : null;
+  const pendingFacts = legFacts.filter((f) => pending.includes(f.l));
+  const slipCost = (aprOf: (f: (typeof legFacts)[number]) => number | null): number | null => {
+    if (pendingFacts.length === 0) return null;
+    let sum = 0;
+    for (const f of pendingFacts) {
+      const apr = aprOf(f);
+      const years = yearsOf(f.l);
+      if (apr === null || years === null) return null;
+      sum += Math.max(0, apr) * f.value * years;
+    }
+    return sum;
+  };
+  const estSlipCost = simulation ? slipCost((f) => f.q?.estSlippageApr ?? null) : null;
+  const maxSlipCost = slipInvalid ? null : slipCost(() => slipPct / 100);
   const atMax = closesAll;
-  // A leg this close holds only a SLICE of (a pair's share of a shared venue
-  // leg) never goes flat at the max: the rest of the leg stays open.
-  const sharedLeg = closable.some((l) => {
+  const legShared = (l: CloseLeg): boolean => {
     const open = Math.abs(rowOf(l.marketId)?.currentSize ?? 0);
     return open > 0 ? wholeOf(l) < open : (l.share ?? 1) < 0.9995;
-  });
+  };
+  const sharedLeg = closable.some(legShared);
   const flatAfter = atMax && !sharedLeg;
-  const soleSpread = closable.length === 1 ? spreadOf(closable[0]) : null;
+  const closedShare = anySizeInvalid ? 0 : closesAll ? 1 : maxCloseSize > 0 ? Math.min(1, typedSize / maxCloseSize) : 0;
+  const perpsLeft = perpsUnhedged && closedShare > 0 ? perpsUnhedged.qty * closedShare : null;
+  const leftOf = (l: CloseLeg): number => {
+    const left = heldWei(l) - toWei(sizeOf(l));
+    return left > 0n ? fromWei(left) : 0;
+  };
+  const cancelsOn = sim.data?.cancelOrdersOn ?? [];
+  const cancelFacts = pendingFacts.filter((f) => cancelsOn.includes(f.l.marketId as number));
+  const ordersLabel = (l: CloseLeg): string => {
+    const maturity = l.maturity ?? rowOf(l.marketId)?.maturity;
+    return t('assetCard.roll.openOrders', {
+      date: closable.length > 1 || maturity === undefined ? venueLabel(l) : fmtDateLocal(maturity),
+    });
+  };
+  const legName = (l: CloseLeg) => {
+    const venues = spreadOf(l);
+    return (
+      <span className="flex min-w-0 items-center gap-1.5">
+        {venues ? <SpreadIcon venues={venues} size={14} /> : <VenueIcon venue={l.venue} size={14} />}
+        <span className="truncate">{venueLabel(l)}</span>
+      </span>
+    );
+  };
+
+  const stepRows: StepRow[] = closable.map((l) => {
+    const venues = spreadOf(l);
+    const days = l.maturity ? daysToMaturity(l.maturity, nowSec) : null;
+    const mark = knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : '';
+    const facts = underPicker
+      ? ''
+      : `${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`;
+    return {
+      key: String(l.marketId),
+      coin: l.base,
+      text: (
+        <span className="inline-flex max-w-full items-center gap-1.5">
+          <span className="font-semibold text-ink-50">{t('common.close')}</span>
+          <span className="num shrink-0 text-ink-50">{anySizeInvalid ? '—' : `${sigGrouped(sizeOf(l))} ${l.collateral ?? ''}`}</span>
+          {venues ? <SpreadIcon venues={venues} size={14} /> : <VenueIcon venue={l.venue} size={14} />}
+          <span className="truncate">{venueLabel(l)}</span>
+          <Chip sm tone={l.side === 'LONG' ? 'green' : 'red'} className="font-semibold">
+            {t(l.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
+          </Chip>
+          {facts && <span className="truncate text-ink-400">{facts}</span>}
+        </span>
+      ),
+      sub: null,
+      right: mark,
+      state: done.some((d) => d.marketId === l.marketId) ? 'done' : busy && pending.includes(l) ? 'running' : 'pending',
+      progress: null,
+    };
+  });
+
+  const rateOf = (q: BorosSimulatedLeg | null) =>
+    q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? t('common.refreshing') : '—';
+  const feeOf = (q: BorosSimulatedLeg | null, unit: string) =>
+    q?.takerFeeCost === undefined ? '—' : inUsd ? fmtUsd(q.takerFeeCost * (px as number)) : fmtTokenQty(q.takerFeeCost, unit);
+
+  type Notice = { key: string; tone: 'amber' | 'rose' | 'dim'; text: string };
+  const notices: Notice[] = [];
+  if (agentBlocked && !loginLabel) notices.push({ key: 'agent', tone: 'amber', text: agentReason });
+  if (legsBlocked) notices.push({ key: 'legs', tone: 'amber', text: legsReason });
+  for (const f of legFacts) {
+    const id = f.l.marketId as number;
+    const unit = f.l.collateral ?? '';
+    const prefix = closable.length > 1 ? `${venueLabel(f.l)}: ` : '';
+    const finished = done.find((d) => d.marketId === id);
+    const belowMin = sim.data?.gate.blockers.find((b) => b.code === 'below-min-order-value' && b.marketId === id);
+    const err = failed.find((x) => x.marketId === id);
+    const part = partial.find((x) => x.marketId === id);
+    const q = f.q;
+    if (finished && finished.yours > 0) {
+      notices.push({ key: `yours-${id}`, tone: 'dim', text: t('pairTicket.closeBoros.legClosedYours', { prefix, amount: `${sigGrouped(finished.yours)} ${unit}` }) });
+    }
+    if (!finished && belowMin) notices.push({ key: `min-${id}`, tone: 'rose', text: `${prefix}${localizeServerText(belowMin.message)}` });
+    if (!finished && q && q.shortfallSize > Math.max(1e-6, f.value * 1e-6)) {
+      notices.push({ key: `short-${id}`, tone: 'amber', text: t('pairTicket.closeBoros.bookShort', { prefix, amount: sigGrouped(q.estFillSize), unit }) });
+    }
+    if (!finished && q && q.bookStatus === 'unavailable') {
+      notices.push({ key: `book-${id}`, tone: 'amber', text: t('pairTicket.closeBoros.bookUnavailable', { prefix }) });
+    }
+    if (part) {
+      notices.push({ key: `part-${id}`, tone: 'amber', text: t('pairTicket.closeBoros.partFilled', { prefix, filled: sigGrouped(part.filled), left: sigGrouped(part.left), unit }) });
+    }
+    if (err) notices.push({ key: `err-${id}`, tone: 'rose', text: `${prefix}${err.message}` });
+  }
+  for (const b of batchBlockers) notices.push({ key: `batch-${b.code}-${b.marketId ?? ''}`, tone: 'rose', text: localizeServerText(b.message) });
+  if (batchError) notices.push({ key: 'batch-error', tone: 'rose', text: batchError });
+  if (!loginLabel && unquoted) notices.push({ key: 'unquoted', tone: 'amber', text: t('pairTicket.closeBoros.unquoted', { slip: slipStr }) });
+  const toneClass = { amber: 'text-amber-400/90', rose: 'text-rose-400', dim: 'text-ink-400' } as const;
+
+  const beforeAfter = (before: number, after: number) => `${sigGrouped(before)} ${unit0} → ${sigGrouped(after)} ${unit0}`;
+  const positionAfter =
+    atMax && !flatAfter
+      ? t('pairTicket.closeBoros.sharedOpen')
+      : closable.length === 1
+        ? beforeAfter(heldOf(closable[0]), flatAfter ? 0 : leftOf(closable[0]))
+        : null;
 
   return (
     <div className="flex flex-col gap-4">
-      {agentBlocked && !loginLabel && (
-        <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
-          {agentReason}
-        </p>
-      )}
-      {legsBlocked && (
-        <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
-          {legsReason}
-        </p>
-      )}
-
-      {/* What is held, leg by leg: the market, its size, the rate it locked
-          and where the mark is now. */}
-      <div className="flex flex-col gap-1.5">
-        {closable.map((l) => {
-          const days = l.maturity ? daysToMaturity(l.maturity, nowSec) : null;
-          return (
-            <LegCard
-              key={l.marketId}
-              kind="Boros"
-              venue={venueLabel(l)}
-              spreadVenues={spreadOf(l)}
-              side={l.side}
-              sub={`${l.base}${l.maturity ? ` · ${fmtDateLocal(l.maturity)}` : ''}${days !== null ? ` · ${t('pairTicket.closeBoros.daysShort', { n: days })}` : ''}`}
-              value={`${sigGrouped(l.notionalToken ?? 0)} ${l.collateral ?? ''}`}
-              valueSub={
-                l.entryApr !== undefined || knownRate(l.markApr) ? (
-                  <>
-                    {l.entryApr !== undefined ? t('pairTicket.closeBoros.locked', { rate: fixedRateText(t, l.side === 'SHORT' ? l.entryApr : -l.entryApr) }) : ''}
-                    {l.entryApr !== undefined && knownRate(l.markApr) ? ' · ' : ''}
-                    {knownRate(l.markApr) ? t('pairTicket.closeBoros.mark', { rate: fmtPct(l.markApr) }) : ''}
-                  </>
-                ) : undefined
-              }
-            />
-          );
-        })}
-        {soleSpread && (
-          <span className="inline-flex items-center gap-1.5 text-[11px] text-ink-400">
-            <Trans
-              i18nKey="pairTicket.closeBoros.leavesBundles"
-              values={{ a: prettyVenue(soleSpread[0]), b: prettyVenue(soleSpread[1]) }}
-              components={{ i0: <VenueIcon venue={soleSpread[0]} size={14} />, i1: <VenueIcon venue={soleSpread[1]} size={14} /> }}
-            />
-          </span>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-1.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <FieldLabel htmlFor="boros-close-size">{closable.length > 2 ? t('pairTicket.closeBoros.closeSizeAll') : closable.length > 1 ? t('pairTicket.closeBoros.closeSizeBoth') : t('pairTicket.closeBoros.closeSize')}</FieldLabel>
-          {/* The ceiling, stated where the number is typed — and clickable.
-              It was only discoverable by overshooting and reading an error. */}
-          <button
-            type="button"
-            className="num text-[11px] text-ink-400 transition-colors hover:text-ink-100"
-            title={closable.length > 1 ? t('pairTicket.closeBoros.closeWholeEvery') : t('pairTicket.closeBoros.closeWhole')}
-            onClick={() => setSizeEdited(fieldValue(maxCloseSize))}
-          >
-            {t('common.max')}{' '}
-            <span className="text-link underline decoration-link/40 underline-offset-2">
-              {`${sigGrouped(maxCloseSize)} ${unit0}`}
-            </span>
-          </button>
-        </div>
-        <AffixedInput affix={unit0 ? <span>{unit0}</span> : null}>
-          <input
-            id="boros-close-size"
-            className={`input num pr-16 ${anySizeInvalid ? '!border-rose-500/60' : ''}`}
-            inputMode="decimal"
-            value={shownSize()}
-            onChange={(e) => setSizeEdited(e.target.value)}
-            aria-label={t('pairTicket.closeBoros.sizeAria')}
-          />
-        </AffixedInput>
+      <CloseSizePresets
+        label={closable.length > 2 ? t('pairTicket.closeBoros.closeSizeAll') : closable.length > 1 ? t('pairTicket.closeBoros.closeSizeBoth') : t('pairTicket.closeBoros.closeSize')}
+        inputLabel={t('pairTicket.closeBoros.sizeAria')}
+        coin={unit0}
+        max={maxCloseSize}
+        value={shownSize()}
+        invalid={anySizeInvalid}
+        onChange={setSizeEdited}
+      >
         {anySizeInvalid ? (
           <span className="text-[11px] text-rose-300">
             {t('pairTicket.closeBoros.sizeInvalid', { max: sigGrouped(maxCloseSize), unit: unit0 })}
           </span>
         ) : (
-          <span className="text-[11px] text-ink-400">
-            {flatAfter ? (
-              closable.length > 1 ? (
-                <Trans
-                  i18nKey={closable.length > 2 ? 'pairTicket.closeBoros.wholePairAll' : 'pairTicket.closeBoros.wholePairBoth'}
-                  values={{ n: closable.length }}
-                  components={{ b: <span className="text-ink-200" /> }}
-                />
-              ) : (
-                <Trans i18nKey="pairTicket.closeBoros.wholePosition" components={{ b: <span className="text-ink-200" /> }} />
-              )
-            ) : atMax ? (
-              <span title={t('pairTicket.closeBoros.sharedHint')}>
-                {t('pairTicket.closeBoros.sharedLabel')}
-              </span>
-            ) : (
-              t('pairTicket.closeBoros.partialClose')
-            )}
-            {closable.length === 1 && (
-              <>
-                {' · '}
-                <span title={t('pairTicket.closeBoros.cappedHint')}>
-                  {t('pairTicket.closeBoros.capped')}
-                </span>
-              </>
-            )}
-          </span>
+          atMax && sharedLeg && <span className="text-[11px] text-ink-400">{t('pairTicket.closeBoros.sharedLabel')}</span>
         )}
-      </div>
-
-      {sim.isError && <QueryError title={t('pairTicket.closeBoros.quoteFailed')} error={sim.error} onRetry={() => sim.refetch()} />}
-      <EstimateCard
-        dataUpdatedAt={sim.dataUpdatedAt}
-        estimating={sim.isPlaceholderData || (sim.isFetching && !sim.data)}
-        isError={sim.isError}
-      >
-        {/* The PnL this close realises — (locked − execution rate) × size ×
-            time to maturity, before the fee — summed over the legs. */}
-        <div className="flex items-end justify-between gap-3">
-          <div className="flex flex-col">
-            <span className="text-[12.5px] text-ink-50">{t('pairTicket.closeBoros.estPnl')}</span>
-            <span className="text-[11px] text-ink-400">{t('pairTicket.closeBoros.beforeFee')}</span>
-          </div>
-          <span className="num text-lg font-semibold">
-            {totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
-          </span>
-        </div>
-        {/* Per-leg simulation. One leg: plain rows. Two legs: a table, one
-            row per market, with any per-leg notice under it. */}
-        {(() => {
-          const noticeFor = (f: (typeof legFacts)[number]) => {
-            const id = f.l.marketId as number;
-            const unit = f.l.collateral ?? '';
-            /** Read off the quote, not recomputed: the gate owns the threshold,
-             * the collateral price and the flatten exemption. Matched on
-             * marketId — the quote is a pair, and its other blockers are about
-             * the partner leg. */
-            const belowMin = sim.data?.gate.blockers.find(
-              (b) => b.code === 'below-min-order-value' && b.marketId === id,
-            );
-            const err = failed.find((x) => x.marketId === id);
-            const part = partial.find((x) => x.marketId === id);
-            const finished = done.find((d) => d.marketId === id);
-            const q = f.q;
-            const prefix = closable.length > 1 ? `${venueLabel(f.l)}: ` : '';
-            return (
-              <>
-                {finished && (
-                  <span className="text-[11px] text-ink-400">
-                    {finished.yours > 0
-                      ? t('pairTicket.closeBoros.legClosedYours', { prefix, amount: `${sigGrouped(finished.yours)} ${unit}` })
-                      : t('pairTicket.closeBoros.legClosed', { prefix })}
-                  </span>
-                )}
-                {/* The server's own words — a copy here could disagree at the boundary. */}
-                {!finished && belowMin && <span className="text-[11px] text-rose-400">{prefix}{localizeServerText(belowMin.message)}</span>}
-                {/* A dust residual is not a shortfall: the walk returns sizes
-                    like 419.49999999 for a book that fully covers 419.5, and
-                    warning on that reads as "no depth" on a market that has
-                    plenty. */}
-                {!finished && q && q.shortfallSize > Math.max(1e-6, f.value * 1e-6) && (
-                  <span className="text-[11px] text-amber-400/90">
-                    {t('pairTicket.closeBoros.bookShort', { prefix, amount: sigGrouped(q.estFillSize), unit })}
-                  </span>
-                )}
-                {!finished && q && q.bookStatus === 'unavailable' && (
-                  <span className="text-[11px] text-amber-400/90">
-                    {t('pairTicket.closeBoros.bookUnavailable', { prefix })}
-                  </span>
-                )}
-                {part && (
-                  <span className="text-[11px] text-amber-400/90">
-                    {t('pairTicket.closeBoros.partFilled', { prefix, filled: sigGrouped(part.filled), left: sigGrouped(part.left), unit })}
-                  </span>
-                )}
-                {err && <span className="text-[11px] text-rose-400">{prefix}{err.message}</span>}
-              </>
-            );
-          };
-          const rateOf = (q: BorosSimulatedLeg | null) =>
-            q?.execApr != null ? fmtPct(q.execApr) : sim.isFetching ? t('pairTicket.closeBoros.quoting') : '—';
-          const feeOf = (q: BorosSimulatedLeg | null, unit: string) =>
-            q?.takerFeeCost !== undefined ? (
-              <span className="text-guava">
-                −{inUsd ? fmtUsd(q.takerFeeCost * (px as number)) : fmtTokenQty(q.takerFeeCost, unit)}
-              </span>
-            ) : (
-              '—'
-            );
-          if (closable.length === 1) {
-            const f = legFacts[0];
-            return (
-              <div className="flex flex-col gap-1.5 border-t border-ink-800/80 pt-2">
-                <EstimateRow
-                  label={t('pairTicket.closeBoros.estRate')}
-                  title={t('pairTicket.closeBoros.estRateHint')}
-                  value={rateOf(f.q)}
-                />
-                {/* The taker fee THIS order pays, from the simulation: rate ×
-                    size × years to maturity. Settlement fees are not here —
-                    a close ends the settlements that would have paid them. */}
-                <EstimateRow
-                  label={t('pairTicket.closeBoros.estFee')}
-                  title={t('pairTicket.closeBoros.estFeeHint')}
-                  value={feeOf(f.q, f.l.collateral ?? '')}
-                />
-                {noticeFor(f)}
-              </div>
-            );
-          }
-          return (
-            <div className="flex flex-col gap-1">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-[12px] font-normal text-ink-300">
-                    <th className="pb-1 text-left font-medium">{t('common.position')}</th>
-                    <th className="pb-1 text-right font-medium">{t('pairTicket.closeBoros.colRate')}</th>
-                    <th className="pb-1 text-right font-medium">{t('pairTicket.closeBoros.colPnl')}</th>
-                    <th className="pb-1 text-right font-medium">{t('pairTicket.preview.estFee')}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {legFacts.map((f) => {
-                    const id = f.l.marketId as number;
-                    const finished = done.find((d) => d.marketId === id);
-                    const venues = spreadOf(f.l);
-                    return (
-                      <tr key={id} className="border-t border-ink-800/80">
-                        <td className="py-1.5 text-[12px] text-ink-50">
-                          <span className="inline-flex items-center gap-1.5">
-                            {venues ? (
-                              <SpreadIcon venues={venues} size={14} />
-                            ) : (
-                              <VenueIcon venue={f.l.venue} size={14} />
-                            )}
-                            {venueLabel(f.l)}
-                          </span>
-                          {finished && <span className="ml-1.5 inline-flex items-center gap-1 text-[11px] text-emerald-300">{t('pairTicket.closeBoros.closedTag')}<Check size={12} aria-hidden /></span>}
-                        </td>
-                        <td className="num py-1.5 text-right text-[12.5px] text-ink-50">{rateOf(f.q)}</td>
-                        <td className="num py-1.5 text-right text-[12px]">
-                          {f.estPnl !== null ? money(f.estPnl) : <span className="text-ink-500">—</span>}
-                        </td>
-                        <td className="num py-1.5 text-right text-[12px] text-ink-50">{feeOf(f.q, f.l.collateral ?? '')}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {legFacts.map((f) => (
-                <span key={f.l.marketId} className="contents">
-                  {noticeFor(f)}
-                </span>
-              ))}
-              {/* What stops the batch as a whole — the server's own words,
-                  the same list it will refuse on. */}
-              {batchBlockers.map((b) => (
-                <span key={`${b.code}-${b.marketId ?? ''}`} className="text-[11px] text-rose-400">
-                  {localizeServerText(b.message)}
-                </span>
-              ))}
-              {batchError && <span className="text-[11px] text-rose-400">{batchError}</span>}
-            </div>
-          );
-        })()}
-
-        {/* Same shape as the Boros ticket: the bound is stated inline and only
-            becomes editable when asked for. A close differs in that the bound
-            applies to EACH leg being closed — there is no spread here, just one
-            rate per market — so it is never summed. */}
-        <div className="border-t border-ink-800/80 pt-2">
-          <SlippageLine
-            est={estSlippageApr !== null ? fmtPct(estSlippageApr) : null}
-            max={`${slipStr}%`}
-            unit="APR"
-            open={slipOpen}
-            onToggle={() => setSlipOpen((v) => !v)}
-            value={slipStr}
-            onChange={setSlipEdited}
-            invalid={slipInvalid}
-            invalidText={t('pairTicket.closeBoros.slipInvalid', { max: MAX_SLIP_PCT })}
-            inputAriaLabel={t('pairTicket.closeBoros.slipAria')}
-            title={t('pairTicket.closeBoros.slipTitle')}
-            hint={t('trade.close.bandHint')}
-          />
-        </div>
-      </EstimateCard>
+      </CloseSizePresets>
 
       <div className="flex flex-col gap-1.5">
+        <span className={microLabelClass}>{t('accounts.rebalanceModal.steps')}</span>
+        <StepList rows={stepRows} />
+      </div>
+
+      <SummaryCard
+        title={t('accounts.moveCash.cost')}
+        aside={
+          <EstimateAge
+            dataUpdatedAt={sim.dataUpdatedAt}
+            estimating={sim.isPlaceholderData || (sim.isFetching && !sim.data)}
+            isError={sim.isError}
+          />
+        }
+      >
+        {closable.length === 1 ? (
+          <EstimateRow label={t('pairTicket.closeBoros.estRate')} value={rateOf(legFacts[0].q)} />
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="text-[11px] text-ink-400">
+                <th className="pb-1 text-left font-normal">{t('common.position')}</th>
+                <th className="pb-1 text-right font-normal">{t('pairTicket.closeBoros.estRate')}</th>
+                <th className="pb-1 text-right font-normal">{t('pairTicket.borosBits.tradeFee')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {legFacts.map((f) => {
+                const id = f.l.marketId as number;
+                const finished = done.find((d) => d.marketId === id);
+                return (
+                  <tr key={id} className="border-t border-ink-800/80">
+                    <td className="py-1.5 text-[12px] text-ink-50">
+                      <span className="flex items-center gap-1.5">
+                        {legName(f.l)}
+                        <Chip sm tone={f.l.side === 'LONG' ? 'green' : 'red'} className="font-semibold">
+                          {t(f.l.side === 'LONG' ? 'common.longUpper' : 'common.shortUpper')}
+                        </Chip>
+                        {finished && (
+                          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-300">
+                            {t('pairTicket.closeBoros.closedTag')}
+                            <Check size={12} aria-hidden />
+                          </span>
+                        )}
+                      </span>
+                    </td>
+                    <td className="num py-1.5 text-right text-[12.5px] text-ink-50">{rateOf(f.q)}</td>
+                    <td className="num py-1.5 text-right text-[12px] text-ink-50">{feeOf(f.q, f.l.collateral ?? '')}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+        <SlippageLine
+          est={estSlippageApr !== null ? `${fmtPct(estSlippageApr)} APR${usdNote(estSlipCost)}` : null}
+          cost={estSlipCost === null ? null : inUsd ? fmtUsd(estSlipCost * (px as number), Math.abs(estSlipCost * (px as number)) < 100 ? 2 : 0) : fmtTokenQty(estSlipCost, unit0)}
+          max={`${slipStr}%`}
+          unit={`APR${usdNote(maxSlipCost)}`}
+          open={slipOpen}
+          onToggle={() => setSlipOpen((v) => !v)}
+          value={slipStr}
+          onChange={setSlipEdited}
+          invalid={slipInvalid}
+          invalidText={t('pairTicket.closeBoros.slipInvalid', { max: MAX_SLIP_PCT })}
+          inputAriaLabel={t('pairTicket.closeBoros.slipAria')}
+          hint={t('trade.close.bandHint')}
+        />
+        {simulation ? (
+          <TradeFeeRow sim={simulation} />
+        ) : (
+          <EstimateRow label={t('pairTicket.borosBits.tradeFee')} value="—" />
+        )}
+        <div className="mt-0.5 border-t border-ink-800 pt-1.5">
+          {simulation ? (
+            <TotalCostRow sim={simulation} slippage={estSlipCost} />
+          ) : (
+            <EstimateRow strong label={t('pairTicket.borosBits.totalCost')} value="—" />
+          )}
+        </div>
+      </SummaryCard>
+
+      <SummaryCard title={t('accounts.moveCash.after')}>
+        <EstimateRow
+          strong
+          label={t('pairTicket.closeBoros.estPnl')}
+          sub={t('pairTicket.closeBoros.beforeFee')}
+          value={totalPnl !== null ? money(totalPnl) : <span className="text-ink-500">—</span>}
+        />
+        {closable.length > 1 &&
+          legFacts.map((f) => (
+            <div key={f.l.marketId} className="flex items-baseline justify-between gap-3 pl-3 text-[11.5px] text-ink-400">
+              {legName(f.l)}
+              <span className="num text-[12px]">{f.estPnl !== null ? money(f.estPnl) : '—'}</span>
+            </div>
+          ))}
+        <EstimateRow
+          label={t('pairTicket.borosBits.positionAfter')}
+          value={positionAfter ?? ''}
+        />
+        {positionAfter === null &&
+          pendingFacts.map((f) => (
+            <div key={f.l.marketId} className="flex items-baseline justify-between gap-3 pl-3 text-[11.5px] text-ink-400">
+              {legName(f.l)}
+              <span className="num text-[12px] text-ink-300">{`${sigGrouped(heldOf(f.l))} ${f.l.collateral ?? ''} → ${sigGrouped(leftOf(f.l))} ${f.l.collateral ?? ''}`}</span>
+            </div>
+          ))}
+        {cancelFacts.map((f) => (
+          <EstimateRow
+            key={`orders-${f.l.marketId}`}
+            label={ordersLabel(f.l)}
+            value={t(leftOf(f.l) > 0 || legShared(f.l) ? 'assetCard.roll.cancelledPart' : 'assetCard.roll.cancelled')}
+          />
+        ))}
+        {perpsUnhedged && perpsLeft !== null && (
+          <EstimateRow
+            label={t('accounts.closePair.after.perps')}
+            value={
+              <span className="text-rose-400">
+                {t('pairTicket.closeBoros.perpsUnhedged', { qty: sigGrouped(perpsLeft), coin: perpsUnhedged.coin })}
+              </span>
+            }
+          />
+        )}
+      </SummaryCard>
+
+      <div className="flex flex-col gap-1.5">
+        {(sim.isError || notices.length > 0) && (
+          <div className="flex flex-col gap-1">
+            {sim.isError && <QueryError title={t('pairTicket.closeBoros.quoteFailed')} error={sim.error} onRetry={() => sim.refetch()} />}
+            {notices.map((n) => (
+              <p key={n.key} className={`text-[11px] leading-relaxed ${toneClass[n.tone]}`}>
+                {n.text}
+              </p>
+            ))}
+          </div>
+        )}
         {loginLabel ? (
           <BorosLogInButton />
         ) : (
@@ -818,7 +794,8 @@ export function CloseBorosForm({
             ctx.isLoading ||
             (simReq !== null && !sim.data) ||
             anyBelowMin ||
-            batchBlockers.length > 0
+            batchBlockers.length > 0 ||
+            closed
           }
           onConfirm={run}
           className="w-full"
@@ -832,22 +809,6 @@ export function CloseBorosForm({
             </>
           )}
         </HoldToConfirmButton>
-        )}
-        {!loginLabel && unquoted && (
-          <p className="text-[11px] leading-relaxed text-amber-400/90">
-            {t('pairTicket.closeBoros.unquoted', { slip: slipStr })}
-          </p>
-        )}
-        {!loginLabel && (
-          <p className="text-[11px] leading-relaxed text-ink-400">
-            {closable.length === 1
-              ? t(soleSpread ? 'pairTicket.closeBoros.footOnePerps' : 'pairTicket.closeBoros.footOnePerp')
-              : pending.length < closable.length
-                ? t('pairTicket.closeBoros.footLeft', { count: pending.length })
-                : closable.length > 2
-                  ? t('pairTicket.closeBoros.footAll', { n: closable.length })
-                  : t('pairTicket.closeBoros.footBoth')}
-          </p>
         )}
       </div>
     </div>

@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse } from '../api/types';
+import type { ActionInput, CrossexPosition, DealRequest, PreviewResponse, TwapStartBody } from '../api/types';
 import { sig } from '../lib/fmt';
-import { baseHandlers, ethPosition, makeCrossexPosition, previewFor } from '../test/fixtures';
+import { baseHandlers, ethPosition, makeCrossexPosition, previewFor, TWAP_OFF } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
 import { ClosePopover } from './ClosePopover';
@@ -16,6 +16,7 @@ function closePreviewHandler() {
     const a = actions[0];
     return HttpResponse.json(
       env<PreviewResponse>({
+        twapDefault: null,
         previews: [
           previewFor(a, {
             side: 'SELL',
@@ -66,6 +67,17 @@ describe('ClosePopover', () => {
     expect(screen.getByText(/holds 0.1 of the 0.3 on the venue/)).toBeInTheDocument();
   });
 
+  it('shows a whale position with its lot digit and a comma', async () => {
+    server.use(...baseHandlers(), closePreviewHandler());
+    renderWithClient(
+      <ClosePopover
+        position={makeCrossexPosition({ positionQty: '3468.208', positionValue: '5999999.84', markPrice: '1730' })}
+        onDismiss={() => {}}
+      />,
+    );
+    expect((await screen.findAllByText('3,468.208 ETH')).length).toBeGreaterThan(0);
+  });
+
   it('opens an unshared position on its whole size', async () => {
     server.use(...baseHandlers(), closePreviewHandler());
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
@@ -78,8 +90,8 @@ describe('ClosePopover', () => {
     renderWithClient(<ClosePopover position={ethPosition} onDismiss={() => {}} />);
 
     expect(await screen.findByText(/limit price/i)).toBeInTheDocument();
-    expect(screen.getByText('2497.45')).toBeInTheDocument();
-    expect(screen.getByText('Reduce-only')).toBeInTheDocument();
+    expect(screen.getByText('2,497.45')).toBeInTheDocument();
+    expect(screen.getByText('Reduce-only.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled();
   });
 
@@ -130,6 +142,29 @@ describe('ClosePopover', () => {
 
     expect(screen.queryByText(/Above the position/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled());
+  });
+
+  it('typing the Max label figure, cut toward zero, closes the whole position', async () => {
+    const sent: ActionInput[] = [];
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        sent.push(((await request.clone().json()) as { actions: ActionInput[] }).actions[0]);
+      }),
+      closePreviewHandler(),
+    );
+    renderWithClient(
+      <ClosePopover position={makeCrossexPosition({ ...ethPosition, positionQty: '1.23456789' })} onDismiss={() => {}} />,
+    );
+    await screen.findByText(/limit price/i);
+    expect(screen.getByRole('button', { name: /Max 1\.2345 ETH/ })).toBeInTheDocument();
+
+    await userEvent.clear(screen.getByLabelText('Close size'));
+    await userEvent.type(screen.getByLabelText('Close size'), '1.2345');
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.filter((a) => a.kind === 'close-position' && a.qty)).toEqual([]);
   });
 
   it('holding "Close now" POSTs a reduce-only banded close deal (no review modal)', async () => {
@@ -470,4 +505,239 @@ describe('ClosePopover — the conversion mark is latched at open', () => {
     expect(screen.queryByText(/Above the position/)).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Close now' })).toBeEnabled());
   });
+});
+
+describe('ClosePopover: TWAP', () => {
+  const bigLeg = makeCrossexPosition({ positionQty: '150', markPrice: '1730', upnl: '4740.43' });
+
+  function twapPreviewHandler() {
+    return http.post('/api/preview', async ({ request }) => {
+      const { actions } = (await request.json()) as { actions: ActionInput[] };
+      return HttpResponse.json(
+        env<PreviewResponse>({
+          previews: [
+            previewFor(actions[0], {
+              side: 'SELL',
+              type: 'LIMIT',
+              tif: 'IOC',
+              reduceOnly: true,
+              qty: '150',
+              price: '1721.35',
+              estNotional: 259_500,
+              closing: { positionQty: '150', upnl: '4740.43', mark: 1730 },
+              fees: { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { taker: 129.75 } },
+            }),
+          ],
+          priceImpact: { whole: 8, sliced: 1, slicedLegs: [1] }, twapDefault: TWAP_OFF,
+          twap: {
+            plan: { slices: 5, sliceQty: '30', lastQty: '30', intervalSec: 180, durationSec: 900, takerAfterSec: 144 },
+            refusal: null,
+          },
+        }),
+      );
+    });
+  }
+
+  async function turnOnTwap() {
+    fireEvent.click(await screen.findByRole('switch', { name: 'TWAP' }));
+    fireEvent.change(await screen.findByLabelText('Duration'), { target: { value: '15m' } });
+    fireEvent.change(await screen.findByLabelText('Interval'), { target: { value: '3m' } });
+  }
+
+  it('twap off keeps reduce-only ioc', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+
+    expect(await screen.findByText('Reduce-only IOC')).toBeInTheDocument();
+    expect(screen.getByText('Order')).toBeInTheDocument();
+    expect(screen.getAllByText(/0\.5%/).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Close now' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Start TWAP close' })).toBeNull();
+  });
+
+  it('twap on slices as reduce-only makers', async () => {
+    const starts: TwapStartBody[] = [];
+    server.use(
+      ...baseHandlers(),
+      twapPreviewHandler(),
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as TwapStartBody);
+        return HttpResponse.json(env({ id: 'job-1' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+    await turnOnTwap();
+
+    const btn = await screen.findByRole('button', { name: 'Start TWAP close' });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 3_000 });
+    fireEvent.pointerDown(btn);
+    await waitFor(() => expect(starts).toHaveLength(1), { timeout: 3_000 });
+    expect(starts[0]).toMatchObject({
+      kind: 'twap',
+      durationSec: 900,
+      slices: 5,
+      deal: {
+        a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'SELL', reduceOnly: true },
+        execution: 'maker',
+        pricePolicy: 'touch',
+        timeoutSec: 144,
+      },
+    });
+    expect(screen.queryByText('Reduce-only IOC')).toBeNull();
+  });
+
+  it('leg card and warning stay', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(
+      <ClosePopover position={bigLeg} hedgedSibling={{ venue: 'GATE', side: 'SHORT' }} onDismiss={() => {}} />,
+    );
+    await turnOnTwap();
+
+    expect(await screen.findByRole('button', { name: 'Start TWAP close' })).toBeInTheDocument();
+    expect(screen.getByText(/This leg hedges the Gate Short/)).toBeInTheDocument();
+    expect(screen.getByText(/mark 1,730/)).toBeInTheDocument();
+    expect(screen.getByText('Reduce-only.')).toBeInTheDocument();
+    expect(screen.getByText('Realized as each slice fills')).toBeInTheDocument();
+  });
+
+  it('twap on shows the plan line, the maker trade cost and a Book button that opens the graph', async () => {
+    server.use(
+      ...baseHandlers(),
+      twapPreviewHandler(),
+      http.get('/api/books/:symbol', ({ params }) =>
+        HttpResponse.json(env({ symbol: String(params.symbol), bestBid: 1729.9, bestAsk: 1730, mid: 1729.95 })),
+      ),
+    );
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+    await turnOnTwap();
+
+    expect(await screen.findByText('≈ 51.90 USDT')).toBeInTheDocument();
+    expect(screen.getByText('Trade cost')).toBeInTheDocument();
+    expect(screen.getByText(/Gate · rests as maker/)).toBeInTheDocument();
+    expect(screen.getAllByText('150 ETH').length).toBeGreaterThan(1);
+    const book = screen.getByRole('button', { name: 'Book' });
+    expect(book).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(book);
+    expect(book).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByText('SELL')).toBeNull();
+  });
+
+  it('twap off has no Book button', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+    expect(await screen.findByText('Reduce-only IOC')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
+  });
+
+  it('names the leg by the position it closes, and the order by the side it trades', async () => {
+    server.use(...baseHandlers(), twapPreviewHandler());
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+
+    expect(await screen.findByText('Reduce-only IOC')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Close Gate Long perp' })).toBeInTheDocument();
+    const order = screen.getByText('SELL');
+    expect(order.className).toContain('text-guava');
+    expect(order.parentElement?.textContent).toBe('SELL150 ETH');
+    expect(screen.queryByText('BUY')).toBeNull();
+  });
+
+  it('a short leg orders a green BUY', async () => {
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const { actions } = (await request.json()) as { actions: ActionInput[] };
+        return HttpResponse.json(
+          env<PreviewResponse>({
+            twapDefault: TWAP_OFF,
+            previews: [
+              previewFor(actions[0], {
+                side: 'BUY',
+                type: 'LIMIT',
+                tif: 'IOC',
+                reduceOnly: true,
+                qty: '2',
+                price: '1738.65',
+                closing: { positionQty: '-2', upnl: '-4', mark: 1730 },
+              }),
+            ],
+          }),
+        );
+      }),
+    );
+    renderWithClient(
+      <ClosePopover position={makeCrossexPosition({ positionQty: '-2', markPrice: '1730' })} onDismiss={() => {}} />,
+    );
+
+    const order = await screen.findByText('BUY');
+    expect(order.className).toContain('text-grass');
+    expect(order.parentElement?.textContent).toBe('BUY2 ETH');
+  });
+
+  it('a TWAP suggestion that turns off during the hold cancels the hold', async () => {
+    const deals: DealRequest[] = [];
+    const starts: TwapStartBody[] = [];
+    let thin = false;
+    let deferred = false;
+    let refetched: () => void = () => {};
+    const refetchSeen = new Promise<void>((resolve) => {
+      refetched = resolve;
+    });
+    let release: () => void = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      ...baseHandlers(),
+      http.post('/api/preview', async ({ request }) => {
+        const body = (await request.json()) as { actions: ActionInput[]; twap?: unknown };
+        if (thin && body.twap !== undefined && !deferred) {
+          deferred = true;
+          refetched();
+          await released;
+        }
+        return HttpResponse.json(
+          env<PreviewResponse>({
+            previews: [
+              previewFor(body.actions[0], {
+                side: 'SELL',
+                type: 'LIMIT',
+                tif: 'IOC',
+                reduceOnly: true,
+                qty: '150',
+                price: '1721.35',
+                closing: { positionQty: '150', upnl: '4740.43', mark: 1730 },
+                fees: { makerRate: 0.0002, takerRate: 0.0005, specialOverride: false, quote: 'USDT', est: { taker: 129.75 } },
+              }),
+            ],
+            priceImpact: { whole: 8, sliced: 1, slicedLegs: [1] },
+            twapDefault: { ...TWAP_OFF, on: !thin },
+            twap: {
+              plan: { slices: 12, sliceQty: '12.5', lastQty: '12.5', intervalSec: 300, durationSec: 3_600, takerAfterSec: 240 },
+              refusal: null,
+            },
+          }),
+        );
+      }),
+      http.post('/api/deals', async ({ request }) => {
+        deals.push((await request.json()) as DealRequest);
+        return HttpResponse.json(env({ id: deals[0].id }), { status: 202 });
+      }),
+      http.post('/api/rebalance', async ({ request }) => {
+        starts.push((await request.json()) as TwapStartBody);
+        return HttpResponse.json(env({ id: 'job-1' }), { status: 202 });
+      }),
+    );
+    renderWithClient(<ClosePopover position={bigLeg} onDismiss={() => {}} />);
+
+    const btn = await screen.findByRole('button', { name: 'Start TWAP close' });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 3_000 });
+    thin = true;
+    await refetchSeen;
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Start TWAP close' }));
+    release();
+    expect(await screen.findByRole('button', { name: 'Close now' }, { timeout: 2_000 })).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    expect(deals).toHaveLength(0);
+    expect(starts).toHaveLength(0);
+  }, 15_000);
 });

@@ -22,9 +22,10 @@
  * distance on the book; "0.25% of the rate" would be a different number of
  * ticks on a 3% book than on a 30% one, which is not what a tolerance means.
  */
-import { ChevronRight } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { ChevronRight, ExternalLink } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { sigFigsDirectional } from '../lib/ticks';
 import { useTradeFlowOptional, type BorosOpenPrefill } from './TradeFlow';
 import { doubledCover, type BorosOverlap } from './borosOverlap';
 import {
@@ -45,36 +46,41 @@ import type {
 import { Chip } from '../components/Chip';
 import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { legLetter, OpposingAcknowledgement, type SoloLeg } from './BorosPairBits';
-import { AffixedInput, EstimateCard, ShareSlider } from './PairTicketBits';
+import { AffixedInput, EstimateAge, LegHeader, ShareSlider, SlippageCostHead, SummaryCard } from './PairTicketBits';
 import { QueryError } from '../components/QueryError';
 import { SegmentedToggle } from '../components/SegmentedToggle';
 import { SpreadIcon } from '../components/AssetIcon';
 import { amountError } from '../lib/amount';
 import { spreadName } from '../lib/spread';
-import { daysToMaturity, isUsdCollateral } from '../lib/boros';
+import { borosMarketUrl, daysToMaturity, isUsdCollateral } from '../lib/boros';
+import { daysLeftText } from '../panels/assets/pairs';
 import { fieldValue, fmtDateLocal, fmtDateShort, fmtPct, sigGrouped } from '../lib/fmt';
 import { useNow } from '../lib/useNow';
 import { uuid } from '../lib/uuid';
 import { useActiveWallet } from '../panels/trackedAddress';
 import { BorosAgentSetup, BorosLogInButton } from './BorosAgentSetup';
 import { maxOpenSize } from './borosMaxSize';
-import { FieldLabel, PickChip } from './SymbolCombobox';
+import { CoinCombobox, FieldLabel, PickChip } from './SymbolCombobox';
+import { SwapButton } from '../components/SwapButton';
 import {
   AvailableMarginLines,
   BlockerList,
   blockerButtonReason,
-  DirectionToggle,
   liqWarnOf,
   LiquidationLines,
   MarketCard,
   MarketSelect,
   marketLabel,
   marketName,
-  PairCosts,
+  MarginUsageRow,
   PairResultReport,
   PositionArithmetic,
   SpreadReadout,
   SuggestedTopUpLines,
+  TradeFeeRow,
+  aprCost,
+  TotalCostRow,
+  amountText,
 } from './BorosPairBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
@@ -91,15 +97,6 @@ const SIMULATION_MAX_AGE_MS = 12_000;
  */
 const FALLBACK_SLIP_PCT = 0.25;
 const MAX_SLIP_PCT = 10;
-
-/** Largest 1-significant-figure value at or below `x` (0.8208 → 0.8). */
-function floorTo1Sf(x: number): number {
-  if (!Number.isFinite(x) || x <= 0) return 0;
-  const step = 10 ** Math.floor(Math.log10(x));
-  // toPrecision trims the binary noise `Math.floor(x / step) * step` leaves
-  // (0.0001234 floors to 0.00009999999999999999 without it).
-  return Number((Math.floor(x / step) * step).toPrecision(12));
-}
 
 /** Client order ids must survive a lost response so a resend cannot double-fill,
  * but must be fresh for a genuinely new order. Keyed on the intent below. */
@@ -170,8 +167,12 @@ export function BorosPairTicket({
   twoColumn = false,
   guided = false,
   hedge,
+  mode: modeProp,
+  onModeChange,
 }: {
   active?: boolean;
+  mode?: 'pair' | 'single';
+  onModeChange?: (mode: 'pair' | 'single') => void;
   /**
    * Lay the form and its readouts side by side (wide surfaces only — the
    * drawer stays one column).
@@ -310,6 +311,9 @@ export function BorosPairTicket({
     }
     if (!spread?.spreadVenues) setBehind(null);
     setIntent('open');
+    // A new trade: the last order's report and any completion end here.
+    setReport(null);
+    setOnlyLeg(null);
     setOverlaps(openPrefill.overlaps ?? []);
     /**
      * A Boros size is denominated in the market's COLLATERAL, so the collateral
@@ -337,6 +341,8 @@ export function BorosPairTicket({
   /** True when the report on screen is a REPLAY of an earlier submission —
    * the server answered from its memo and no new order went out. */
   const [reportReplayed, setReportReplayed] = useState(false);
+  /** The markets, sides and intent the report's order went out with. */
+  const [reportOf, setReportOf] = useState<string | null>(null);
   /** Set by "complete now at market": trade only the leg that filled LESS. */
   /**
    * Set by a PARTIAL FILL: "the pair half-filled, send the deficient leg".
@@ -347,7 +353,9 @@ export function BorosPairTicket({
    */
   const [onlyLeg, setOnlyLeg] = useState<number | null>(null);
   /** Pair (both legs) or Single (leg A alone) — the user's own choice. */
-  const [mode, setMode] = useState<'pair' | 'single'>('pair');
+  const [ownMode, setOwnMode] = useState<'pair' | 'single'>('pair');
+  const mode = modeProp ?? ownMode;
+  const setMode = onModeChange ?? setOwnMode;
   /**
    * The two single markets a spread stands in for. Set when the ticket swaps
    * a picked Pair for the spread market that covers it, so "Use 2 single
@@ -606,8 +614,45 @@ export function BorosPairTicket({
    * it holds a position, held singles or not (owner 2026-10-16): one held
    * single left the spread with a max of 0. Singles close in Single mode. */
   const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
+  /** The legs for a switch to `next`, from the ticket's toggle or the rail's. */
+  const settleLegsFor = (next: 'pair' | 'single') => {
+    if (next === 'single') {
+      // Single trades leg A alone, so a spread hands back its singles
+      // (leg A is the first); a spread with none behind it clears.
+      if (isSpread) {
+        setMarketA(behind ? behind.a : null);
+        setMarketB(behind ? behind.b : null);
+        if (behind) setDirA(behind.dirA);
+      }
+      setBehind(null);
+      return;
+    }
+    // A spread here came with the switch (a card's Open): it stays.
+    if (isSpread || !rowA || !rowB) return;
+    // Single moves leg A alone, so leg B may now be on A's venue
+    // (each picker then hides the other's venue) or at another date.
+    // Keep B only at A's date; where B has none there, take the
+    // spread over both at A's date (HL-GATE 29 Jan 2027).
+    const b = rowB.tokenId === rowA.tokenId && marketKey(rowB) !== marketKey(rowA) ? rowB : null;
+    const bAt = b ? marketAt(b, rowA.maturity) : null;
+    const spread = b && !bAt ? spreadsOver(rowA, b).find((m) => m.maturity === rowA.maturity && wantSpread(m)) : undefined;
+    if (b && spread) {
+      setBehind({ a: rowA.marketId, b: b.marketId, dirA });
+      setMarketA(spread.marketId);
+      setMarketB(null);
+      setDirA(sameCoin(rowA.venue, spread.spreadVenues?.[0] ?? '') ? dirA : dirA === 'short' ? 'long' : 'short');
+      return;
+    }
+    setMarketB(bAt?.marketId ?? null);
+  };
+  const lastMode = useRef(modeProp);
+  useEffect(() => {
+    if (lastMode.current === modeProp) return;
+    lastMode.current = modeProp;
+    if (modeProp) settleLegsFor(modeProp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeProp]);
   const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
-  /** A spread at a date the two singles do not share (HL-GATE 29 Jan 2027, no Gate single then). */
   const spreadOnly =
     mode === 'pair' && onlyLeg === null
       ? spreadsOver(slotA, slotB).filter((m) => (wantSpread(m) || m.marketId === marketA) && !maturities.includes(m.maturity))
@@ -675,7 +720,7 @@ export function BorosPairTicket({
     const caps = ids.map(capOf).filter((c): c is number => c !== null);
     if (caps.length === 0) return FALLBACK_SLIP_PCT;
     const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-    const pctVal = floorTo1Sf(meanHalf * 100);
+    const pctVal = sigFigsDirectional(meanHalf * 100, 1, 'down');
     return pctVal > 0 ? pctVal : FALLBACK_SLIP_PCT;
   };
   // One leg drives a single-leg ticket; both drive a spread.
@@ -817,6 +862,21 @@ export function BorosPairTicket({
     // slippage, not a negative one.
     return lone.estSlippageApr == null ? null : Math.max(0, lone.estSlippageApr);
   })();
+  const slip = ((): { est: number | null; max: number } | null => {
+    if (!simulation) return null;
+    const sizeOf = (i: number): number => Math.abs(simulation.legs[i]?.sizing.deltaSize ?? 0);
+    const est =
+      estSlippageApr === null
+        ? null
+        : aprCost(simulation, [{ apr: estSlippageApr, size: loneLeg === null ? simulation.hedgedSize : sizeOf(loneLeg) }]);
+    const max = aprCost(
+      simulation,
+      simulation.legs
+        .map((_, i) => ({ apr: i === 0 ? aprA : aprB, size: sizeOf(i), traded: loneLeg === null || i === loneLeg }))
+        .filter((part) => part.traded),
+    );
+    return { est, max };
+  })();
   const gate = sim.data?.gate ?? null;
   const liqWarn = liqWarnOf(gate?.funding);
   const fundingName = (marketId: number | null): string =>
@@ -845,9 +905,14 @@ export function BorosPairTicket({
 
   // A completion is armed for ONE specific residual; changing the pair or the
   // intent makes it meaningless, so it must not survive into a normal ticket.
+  // The size box holds that residual, sized for the leg that fell short; on
+  // any other trade (Single trades leg A, the leg that filled more) it would
+  // widen the gap, so it clears with the completion.
   useEffect(() => {
+    if (onlyLeg !== null) setSizeStr('');
     setOnlyLeg(null);
-  }, [marketA, marketB, dirA, dirB, intent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, marketA, marketB, dirA, dirB, intent, mode]);
 
   const execute = useExecuteBorosPair();
 
@@ -923,13 +988,28 @@ export function BorosPairTicket({
     !execute.isPending &&
     closeOnlyLeg === null;
 
+  /**
+   * The trade the form shows: wallet, mode, intent and each shown leg's market
+   * and side. Not the size (Complete and Retry set their own) and not Single's
+   * zero-size partner (never traded).
+   */
+  const formKey =
+    marketA === null
+      ? null
+      : [address, mode, intent, `${marketA}:${dirA}`, ...(mode === 'pair' && !isSpread ? [`${marketB}:${dirB}`] : [])].join('|');
+  /** Complete and Retry re-send on the form's markets, so they act only while
+   * the form still shows the trade that part-filled. */
+  const reportFits = report !== null && formKey === reportOf;
+
   const onConfirm = () => {
     if (!request) return;
+    const sentKey = formKey;
     execute.mutate(
       { ...request, legs: request.legs.map((leg, i) => ({ ...leg, clientOrderId: orderIds[i] })) },
       {
         onSuccess: (res) => {
           setReport(res.result);
+          setReportOf(sentKey);
           setReportReplayed(Boolean(res.replayed));
           // A replay is the EARLIER submission's result — it already fired.
           // The server's own pre-trade estimate rides along: its per-leg
@@ -989,38 +1069,14 @@ export function BorosPairTicket({
       {/* Pair or one leg. A spread is the usual trade here, so Pair leads;
           Single is for locking one venue's rate on its own — the same control
           the perp rail carries, so the two tickets read alike. */}
-      {!guided && (
+      {!guided && modeProp === undefined && (
         <SegmentedToggle<'pair' | 'single'>
           ariaLabel={t('pairTicket.boros.modeAria')}
           value={mode}
           onChange={(next) => {
             // The toggle also fires on the option already on.
             if (next === mode) return;
-            // Single trades leg A alone, so a spread hands back its singles
-            // (leg A is the first); a spread with none behind it clears.
-            if (isSpread) {
-              setMarketA(behind ? behind.a : null);
-              setMarketB(behind ? behind.b : null);
-              if (behind) setDirA(behind.dirA);
-            } else if (next === 'pair' && rowA && rowB) {
-              // Single moves leg A alone, so leg B may now be on A's venue
-              // (each picker then hides the other's venue) or at another date.
-              // Keep B only at A's date; where B has none there, take the
-              // spread over both at A's date (HL-GATE 29 Jan 2027).
-              const b = rowB.tokenId === rowA.tokenId && marketKey(rowB) !== marketKey(rowA) ? rowB : null;
-              const bAt = b ? marketAt(b, rowA.maturity) : null;
-              const spread = b && !bAt ? spreadsOver(rowA, b).find((m) => m.maturity === rowA.maturity && wantSpread(m)) : undefined;
-              if (b && spread) {
-                setBehind({ a: rowA.marketId, b: b.marketId, dirA });
-                setMarketA(spread.marketId);
-                setMarketB(null);
-                setDirA(sameCoin(rowA.venue, spread.spreadVenues?.[0] ?? '') ? dirA : dirA === 'short' ? 'long' : 'short');
-                setMode(next);
-                return;
-              }
-              setMarketB(bAt?.marketId ?? null);
-            }
-            setBehind(null);
+            settleLegsFor(next);
             setMode(next);
           }}
           fill
@@ -1039,18 +1095,7 @@ export function BorosPairTicket({
       {/* The coin as chips — the perp ticket's coin row — then the markets,
           then a maturity they share (below the legs). The wizard fixes both
           markets, so it has nothing to choose. */}
-      {!guided && (
-        <div className="flex flex-col gap-2">
-          <FieldLabel>{t('common.coin')}</FieldLabel>
-          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t('common.coin')}>
-            {coins.map((c) => (
-              <PickChip key={c} active={coin !== null && sameCoin(c, coin)} onClick={() => pickCoin(c)}>
-                {c}
-              </PickChip>
-            ))}
-          </div>
-        </div>
-      )}
+      {!guided && <CoinCombobox value={coin} coins={coins} onSelect={pickCoin} />}
       {isSpread && !behind ? (
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
@@ -1070,15 +1115,7 @@ export function BorosPairTicket({
               )}
             </div>
             {!guided && (
-              <button
-                type="button"
-                aria-label={t('pairTicket.boros.swapSides')}
-                title={t('pairTicket.boros.swapSidesHint')}
-                onClick={swapSpread}
-                className="mb-[2px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50"
-              >
-                ⇄
-              </button>
+              <SwapButton label={t('pairTicket.boros.swapSides')} title={t('pairTicket.boros.swapSidesHint')} onClick={swapSpread} className="mb-[2px]" />
             )}
           </div>
         </div>
@@ -1114,9 +1151,8 @@ export function BorosPairTicket({
           {guided ? (
             <span aria-hidden className="w-2" />
           ) : (
-          <button
-            type="button"
-            aria-label={t('pairTicket.boros.swapMarkets')}
+          <SwapButton
+            label={t('pairTicket.boros.swapMarkets')}
             title={t('pairTicket.boros.swapMarketsHint')}
             disabled={slotA === null && slotB === null}
             onClick={() => {
@@ -1124,10 +1160,7 @@ export function BorosPairTicket({
               setMarketA(marketB);
               setMarketB(marketA);
             }}
-            className="mb-[7px] flex h-6 w-6 items-center justify-center rounded-full border border-ink-600 bg-ink-900 text-[11px] text-ink-300 transition-colors hover:border-ink-400 hover:text-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            ⇄
-          </button>
+          />
           )}
           <div className="relative min-w-0">
             <MarketCard label={t(guided ? 'pairTicket.boros.borosMarketLetter' : 'pairTicket.boros.marketLetter', { letter: 'B' })} row={slotB} side={slotDirA === 'short' ? 'long' : 'short'} locked={guided}>
@@ -1156,19 +1189,12 @@ export function BorosPairTicket({
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2">
-              <Chip sm tone={dirA === 'long' ? 'green' : 'red'} className="font-semibold">
-                {t(dirA === 'long' ? 'common.longUpper' : 'common.shortUpper')}
-              </Chip>
-              {/* The rates reading of the side, stated beside it: long pays
-                  the fixed rate, short receives it. */}
-              <span className="text-[12px] font-normal text-ink-300">
-                {t(dirA === 'long' ? 'pairTicket.boros.marketPayFixed' : 'pairTicket.boros.marketReceiveFixed')}
-              </span>
-            </span>
-            <DirectionToggle value={dirA} onChange={setDirA} idPrefix={t('pairTicket.borosBits.legLetter', { letter: 'A' })} compact />
-          </div>
+          <LegHeader
+            dir={dirA}
+            caption={t(dirA === 'long' ? 'pairTicket.boros.marketPayFixed' : 'pairTicket.boros.marketReceiveFixed')}
+            onDir={setDirA}
+            hints={{ long: t('pairTicket.borosBits.longRateHint'), short: t('pairTicket.borosBits.shortRateHint') }}
+          />
           <MarketSelect
             id="boros-leg-a"
             label=""
@@ -1210,7 +1236,19 @@ export function BorosPairTicket({
           <FieldLabel>{t('pairTicket.boros.tradeOn')}</FieldLabel>
           <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium text-ink-50">
             <SpreadIcon venues={rowA.spreadVenues} />
-            <span className="truncate">{spreadName(rowA.base, rowA.spreadVenues)}</span>
+            <a
+              href={borosMarketUrl(rowA.marketId, dirA)}
+              target="_blank"
+              rel="noreferrer"
+              title={t('pairTicket.boros.openOnBoros')}
+              className="flex min-w-0 items-center gap-1 hover:text-link"
+            >
+              <span className="truncate">{spreadName(rowA.base, rowA.spreadVenues)}</span>
+              <ExternalLink size={12} aria-hidden className="shrink-0 text-ink-400" />
+            </a>
+            <span className="num shrink-0 font-normal text-ink-400">
+              · {daysLeftText(rowA.maturity, Math.floor(now / 1000))}
+            </span>
           </span>
         </div>
       )}
@@ -1327,134 +1365,91 @@ export function BorosPairTicket({
       <div className={twoColumn ? 'flex flex-col gap-3' : 'contents'}>
       {sim.isError && <QueryError title={t('pairTicket.boros.priceFailed')} error={sim.error} onRetry={() => sim.refetch()} />}
       {simulation && (
-        <EstimateCard
-          dataUpdatedAt={sim.dataUpdatedAt}
-          estimating={sim.isPlaceholderData}
-          isError={sim.isError}
+        <>
+        <SummaryCard
+          title={t('accounts.moveCash.cost')}
+          aside={<EstimateAge dataUpdatedAt={sim.dataUpdatedAt} estimating={sim.isPlaceholderData} isError={sim.isError} />}
         >
-          {/* Renders in BOTH modes now that it carries the per-leg rates: on
-              one leg it is that leg's Est. APR, and the spread lines above it
-              are suppressed, since a "spread" against a borrowed partner
-              would be a number about a trade nobody is making. */}
-          {/* `singleLeg` (not `mode`): a one-leg completion after a half fill
-              is single-leg too, and reading it as a pair printed dashes for
-              the spread beside an enabled Confirm. */}
-          {/* In the order a trader reads it: what the
-              trade locks; where it liquidates; what it takes from the
-              account and what the account keeps, with any suggested top-up;
-              then the slippage. What it leaves held is under the size. */}
-          <SpreadReadout sim={simulation} singleLeg={activeLeg} boxed />
-          {/* One flat list under the box, no section rules: the Boros app's
-              own ticket reads cleaner for it. */}
+            <div className="flex flex-col gap-1.5">
+              <SlippageCostHead
+                name={t('pairTicket.bits.slippage')}
+                est={estSlippageApr === null ? null : `${fmtPct(estSlippageApr)} APR${slip ? ` (${amountText(simulation, slip.est)})` : ''}`}
+                max={fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
+                unit={`APR${slip?.max != null ? ` (${amountText(simulation, slip.max)})` : ''}`}
+                cost={amountText(simulation, slip?.est ?? null)}
+                title={loneLeg === null ? t('pairTicket.boros.changeTolerancePair', { slip: slipStrShared }) : undefined}
+                onToggle={() => setSlipOpen((v) => !v)}
+              />
+              {slipOpen && (
+                <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
+                  <span className="text-[10.5px] leading-relaxed text-ink-400">
+                    <span className="text-ink-200">{t('pairTicket.bits.thisTradeOnly')}</span> {t('trade.close.bandHint')}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {['0.2', '0.4', '1', '2'].map((q) => (
+                      <button
+                        key={q}
+                        type="button"
+                        className={`btn-ghost-xs ${slipStrShared === q ? '!border-info/60 !text-pastel-blue' : ''}`}
+                        onClick={() => setSharedSlip(q)}
+                      >
+                        {q}%
+                      </button>
+                    ))}
+                    <input
+                      className="input num h-7 flex-1 px-2 py-0.5 text-[12px]"
+                      inputMode="decimal"
+                      aria-label={t('pairTicket.boros.slipAria')}
+                      value={slipStrShared}
+                      onChange={(e) => setSharedSlip(e.target.value)}
+                    />
+                    <span className="text-[11px] text-ink-400">%</span>
+                  </div>
+                  {slipInvalid && (
+                    <span className="text-[11px] text-rose-300">
+                      {t('pairTicket.boros.slipInvalid', { max: MAX_SLIP_PCT })}
+                    </span>
+                  )}
+                  {!guided && mode === 'pair' && onlyLeg === null && !isSpread && (
+                    <>
+                      <button
+                        type="button"
+                        className="self-start text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
+                        onClick={() => {
+                          setPerLeg((v) => !v);
+                          setSlipA(slipStrShared);
+                          setSlipB(slipStrShared);
+                        }}
+                      >
+                        {perLeg ? t('pairTicket.boros.oneValue') : t('pairTicket.boros.eachLeg')}
+                      </button>
+                      {perLeg && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <SlipInput id="boros-slip-a" label={t('pairTicket.boros.legPct', { letter: 'A' })} value={slipStrA} onChange={setSlipA} />
+                          <SlipInput id="boros-slip-b" label={t('pairTicket.boros.legPct', { letter: 'B' })} value={slipStrB} onChange={setSlipB} />
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            <TradeFeeRow sim={simulation} singleLeg={activeLeg} />
+            {slip && (
+              <div className="mt-0.5 border-t border-ink-800 pt-1.5">
+                <TotalCostRow sim={simulation} slippage={slip.est} />
+              </div>
+            )}
+        </SummaryCard>
+        <SummaryCard title={t('accounts.moveCash.after')}>
+          <SpreadReadout sim={simulation} singleLeg={activeLeg} />
           <div className="flex flex-col gap-1.5">
             <LiquidationLines sim={simulation} singleLeg={activeLeg} warn={liqWarn} />
-            <PairCosts
-              sim={simulation}
-              singleLeg={activeLeg}
-              afterMargin={gate?.funding && <SuggestedTopUpLines sim={simulation} funding={gate.funding} nameOf={fundingName} />}
-            />
-              {/* --- Slippage (§2) ------------------------------------------
-                  One line, the way the Boros app states it — what the book is
-                  expected to give up, against the bound that caps it. The bound
-                  is the automatic seed (half each market's max rate deviation);
-                  the editor behind "Max" is for a large size or a thin book. */}
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-baseline justify-between gap-3">
-                  <span
-                    className="text-[12px] text-ink-200"
-                    title={t('pairTicket.boros.slippageHint')}
-                  >
-                    {t('pairTicket.bits.slippage')}
-                  </span>
-                  <span className="num text-[12px] text-ink-400">
-                    {t('pairTicket.bits.est')}{' '}
-                    <span className="text-ink-50">
-                      {estSlippageApr !== null ? fmtPct(estSlippageApr) : '—'}
-                    </span>
-                    {' / '}{t('pairTicket.bits.max')}{' '}
-                    <button
-                      type="button"
-                      className="text-link underline decoration-link/40 underline-offset-2 hover:text-ink-50"
-                      title={
-                        loneLeg === null
-                          ? t('pairTicket.boros.changeTolerancePair', { slip: slipStrShared })
-                          : t('pairTicket.bits.changeTolerance')
-                      }
-                      onClick={() => setSlipOpen((v) => !v)}
-                    >
-                      {/* The estimate beside this is BOTH legs, so the bound has to
-                          be both legs too: a per-leg number here read as though the
-                          pair could only give up half what it can. Built from the
-                          per-leg tolerances actually sent (aprA/aprB), so a per-leg
-                          override moves it, and a single-leg ticket — Single mode
-                          or a one-leg completion — shows that leg's bound alone. */}
-                      {fmtPct(loneLeg === 0 ? aprA : loneLeg === 1 ? aprB : aprA + aprB)}
-                    </button>
-                    {' '}APR
-                  </span>
-                </div>
-                {/* Adjustable, but out of the way until asked for: the seeded bound
-                    is right for almost every trade, and a wider one is a deliberate
-                    act for a large size or a thin book. */}
-                {slipOpen && (
-                  <div className="flex flex-col gap-1.5 rounded border border-ink-700 bg-ink-900/60 px-2.5 py-2">
-                    <span className="text-[10.5px] leading-relaxed text-ink-400">
-                      {t('trade.close.bandHint')}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      {['0.2', '0.4', '1', '2'].map((q) => (
-                        <button
-                          key={q}
-                          type="button"
-                          className={`btn-ghost-xs ${slipStrShared === q ? '!border-info/60 !text-pastel-blue' : ''}`}
-                          onClick={() => setSharedSlip(q)}
-                        >
-                          {q}%
-                        </button>
-                      ))}
-                      <input
-                        className="input num h-7 flex-1 px-2 py-0.5 text-[12px]"
-                        inputMode="decimal"
-                        aria-label={t('pairTicket.boros.slipAria')}
-                        value={slipStrShared}
-                        onChange={(e) => setSharedSlip(e.target.value)}
-                      />
-                      <span className="text-[11px] text-ink-400">%</span>
-                    </div>
-                    {slipInvalid && (
-                      <span className="text-[11px] text-rose-300">
-                        {t('pairTicket.boros.slipInvalid', { max: MAX_SLIP_PCT })}
-                      </span>
-                    )}
-                    {/* Per-leg tolerances: a thin book on one venue can need more
-                        room than the other. Only meaningful with two legs, and
-                        only in the free-form ticket. */}
-                    {!guided && mode === 'pair' && onlyLeg === null && !isSpread && (
-                      <>
-                        <button
-                          type="button"
-                          className="self-start text-[10.5px] text-ink-400 underline decoration-dotted hover:text-ink-200"
-                          onClick={() => {
-                            setPerLeg((v) => !v);
-                            setSlipA(slipStrShared);
-                            setSlipB(slipStrShared);
-                          }}
-                        >
-                          {perLeg ? t('pairTicket.boros.oneValue') : t('pairTicket.boros.eachLeg')}
-                        </button>
-                        {perLeg && (
-                          <div className="grid grid-cols-2 gap-2">
-                            <SlipInput id="boros-slip-a" label={t('pairTicket.boros.legPct', { letter: 'A' })} value={slipStrA} onChange={setSlipA} />
-                            <SlipInput id="boros-slip-b" label={t('pairTicket.boros.legPct', { letter: 'B' })} value={slipStrB} onChange={setSlipB} />
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+            <div className="mt-0.5 flex flex-col gap-1.5 border-t border-ink-800 pt-1.5">
+              <MarginUsageRow sim={simulation} singleLeg={activeLeg} />
+              {gate?.funding && <SuggestedTopUpLines sim={simulation} funding={gate.funding} nameOf={fundingName} />}
+            </div>
           </div>
-
           {simulation.reasons.length ? (
             <ul className="flex flex-col gap-1 border-t border-ink-800/80 pt-2 text-[10.5px] leading-relaxed text-ink-400">
               {simulation.reasons.map((r) => (
@@ -1462,7 +1457,8 @@ export function BorosPairTicket({
               ))}
             </ul>
           ) : null}
-        </EstimateCard>
+        </SummaryCard>
+        </>
       )}
       {/* --- §4 acknowledgement ------------------------------------------- */}
       {gate?.requiresAcknowledgement && simulation && (
@@ -1500,7 +1496,7 @@ export function BorosPairTicket({
           collateral={simulation?.collateral ?? ''}
           legName={legName}
           fee={simulation?.costToCrossSize ?? null}
-          busy={execute.isPending}
+          busy={execute.isPending || !reportFits}
           onComplete={() => {
             // The gap is closed by adding to the leg that filled LESS — which
             // is the OPPOSITE of `unhedgedLeg`, the one carrying the surplus.
@@ -1551,13 +1547,19 @@ export function BorosPairTicket({
              * the replay guard does not cover it.) The size that produced this
              * report has been spent; re-entering one is the point of
              * dismissing rather than using Complete or Retry, which set their
-             * own sizes.
-             *
+             * own sizes. A completion ends with it too, or the next size
+             * typed would trade one market alone.
              */
             setSizeStr('');
+            setOnlyLeg(null);
             setReport(null);
           }}
         />
+      )}
+      {report?.partial && !reportFits && (
+        <p className="text-[11px] leading-relaxed text-ink-300" role="status">
+          {t('pairTicket.boros.reportOtherTrade')}
+        </p>
       )}
 
       {/* --- Confirm ------------------------------------------------------- */}

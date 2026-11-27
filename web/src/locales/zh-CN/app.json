@@ -130,6 +130,13 @@
     "hours": "约 {{n}} 小时",
     "hoursMinutes": "约 {{h}} 小时 {{m}} 分钟"
   },
+  "approx": {
+    "mark": "约",
+    "seconds": "{{n}} 秒",
+    "minutes": "{{n}} 分钟",
+    "hours": "{{n}} 小时",
+    "hoursMinutes": "{{h}} 小时 {{m}} 分钟"
+  },
   "syncAge": {
     "s": "{{n}} 秒前",
     "m": "{{n}} 分钟前",
@@ -192,6 +199,10 @@
     "available": " — v{{version}} 可更新",
     "commitUnknown": "提交未知",
     "installed": " · 安装于 {{date}}",
+    "checkUpdates": "检查更新",
+    "upToDate": " · 已是最新",
+    "checkFailed": " · 无法连接 GitHub",
+    "checkedRecently": " · 5 分钟内已检查",
     "sourceCheckout": "源码运行"
   },
   "permissions": {
@@ -278,7 +289,10 @@
     "notForThisWallet": "此钱包未设置",
     "skip": "接近清算、开始计息或临近到期时将不会收到预警。",
     "checkingBot": "正在向 Telegram 机器人查询…",
-    "linkedElsewhere": "提醒绑定的是 <a>{{other}}</a>，而不是 <b>{{viewed}}</b>。请以此钱包登录来设置它的提醒。"
+    "linkedElsewhere": "提醒绑定的是 <a>{{other}}</a>，而不是 <b>{{viewed}}</b>。请以此钱包登录来设置它的提醒。",
+    "logInFirst": "请先登录",
+    "logInToSetUp": "登录以设置",
+    "logInFirstBody": "提醒发给在此终端登录的钱包。请以 <a>{{viewed}}</a> 登录来设置它的提醒。"
   },
   "api": {
     "network": "请求 {{path}} 时网络出错：{{error}}",

@@ -1,14 +1,85 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { prettyVenue, WALLET_SHORT } from '../../web/src/lib/fmt';
+import { fmtSize } from '../core/boros/pair';
 import { classifyGateError, plainErrorFor } from '../core/errors';
-import { CONVERT_MAX, CONVERT_RATE, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
-import type { GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
+import { parseSymbol } from '../core/numbers';
+import { CONVERT_MAX, CONVERT_RATE, CONVERT_TO, floorCents, PAIR_CONVERT_MAX, POOLS, poolWallet, spotArrivalFor, walletKey } from '../core/rebalance/plan';
+import type { Bucket, GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
+import type { PerpSide, RealizeEstimate, RealizeExec, RealizeLeg, RealizeMargin, RealizePlan } from '../core/rebalance/realize';
+import type { TwapLegRule, TwapPlan } from '../core/twap';
+import type { DealRequest } from '../engine/create';
 import { restrictToOwner } from './secretFile';
 
 export type { Pool, RouteName };
 export type JobStatus = 'running' | 'halted' | 'done' | 'abandoned';
 export type StepStatus = 'pending' | 'running' | 'done';
+export type StepPhase = 'realize' | 'route';
 export type FundsAt = 'CROSSEX' | 'GATE' | 'SPOT' | 'HYPERLIQUID' | 'LIGHTER';
+export type JobKind = 'move' | 'realize' | 'delever' | 'twap';
+export type FixAction = 'market' | 'limit' | 'boros-retry' | 'add-back' | 'unwind';
+
+export const RETRY_CONVERT_CAP = 3;
+export const FOLLOW_MISSES_RED = 3;
+export const MAKER_REST_MS = 300_000;
+export const MAKER_REPEG_MS = 5_000;
+
+export interface StepPerp {
+  symbol: string;
+  exchange: string;
+  side: 'BUY' | 'SELL';
+  reduceOnly: boolean;
+}
+
+export interface StepRetry {
+  reason: 'margin' | 'fallback';
+  convertAmount: number;
+}
+
+export interface RealizeJobLeg {
+  symbol: string;
+  base: string;
+  exchange: string;
+  pool: Pool;
+  side: PerpSide;
+  positionQty: number;
+  qty: number;
+  filledQty: number;
+  realizedUsd: number;
+  closePrice?: number;
+  hedge?: string | null;
+  closeFeeUsd?: number;
+  reopenFeeUsd?: number;
+  closeImpactUsd?: number;
+  reopenImpactUsd?: number;
+  convert?: { amount: number; feeUsd: number } | null;
+  takerRate?: number;
+  makerRate?: number;
+  shrunkQty?: number;
+  margin?: RealizeMargin | null;
+  hedgedFirstQty?: number;
+  preClose?: { imRate: number; entry: number } | null;
+  gapSwitched?: 'cash' | 'ratio' | null;
+  gapPaused?: boolean;
+}
+
+export interface JobPerp {
+  symbol: string;
+  exchange: string;
+  side: PerpSide;
+  qty: number;
+}
+
+export interface JobBefore {
+  buckets: Bucket[];
+  perps: JobPerp[];
+}
+
+export interface OpenGap {
+  leg: Pick<RealizeJobLeg, 'symbol' | 'base' | 'exchange' | 'side' | 'positionQty' | 'hedge'>;
+  qty: number;
+  hedges: JobPerp[];
+}
 
 export interface Step {
   name: string;
@@ -28,7 +99,164 @@ export interface Step {
   to: Pool;
   cashBefore?: number;
   sentAt?: number;
+  perp?: StepPerp | null;
+  nextTryAt?: number | null;
+  retry?: StepRetry | null;
+  phase?: StepPhase;
+  follow?: StepPerp | null;
+  lead?: PerpOrder | null;
+  hedge?: PerpOrder | null;
+  cut?: SliceCut | null;
+  addBack?: AddBack | null;
+  leg?: string;
 }
+
+export interface AddBack {
+  qty: number;
+  legs: { symbol: string; filled: number; order: PerpOrder | null }[];
+}
+
+export interface PerpOrder {
+  text: string;
+  venueId: string | null;
+  sentAt: number;
+  credited: number;
+  poc: boolean;
+  price: string | null;
+  side?: 'BUY' | 'SELL';
+  mid?: number | null;
+  entry?: number | null;
+  sweep?: boolean;
+}
+
+export interface SliceCut {
+  qty: number;
+  from: number;
+  at: number;
+  ioc: boolean;
+  n?: number;
+  taker?: boolean;
+  gap?: 'close' | 'convert';
+  closedBefore?: number;
+  extras?: number;
+  quoteTries?: number;
+  capQty?: number;
+  netTries?: number;
+  netSince?: number;
+  moreOnResume?: boolean;
+  reopenOnly?: boolean;
+  failed?: string;
+}
+
+export interface ProfitStop {
+  symbol: string;
+  exchange: string;
+  base: string;
+  side: PerpSide;
+  entry: number;
+  mark: number;
+  closedQty: number;
+  plannedQty: number;
+  at: number;
+}
+
+export interface JobSlice {
+  index: number;
+  count: number;
+  sizeUsd: number;
+  qty?: number;
+  capsUsd?: Record<string, number>;
+}
+
+export interface JobFollow {
+  symbol: string;
+  exchange: string;
+  side: 'BUY' | 'SELL';
+  qty: number;
+  reduceOnly: boolean;
+}
+
+export interface ImUsedRow {
+  account: Pool;
+  pct: number;
+}
+
+export interface JobDelever {
+  pct: number;
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeAll?: boolean }[];
+  boros: { marketId: number; before: number; after: number; closed: number; sent?: BorosSend | null }[];
+}
+
+export interface BorosSend {
+  tag: string;
+  size: number;
+  sentAt: number;
+}
+
+export interface DeleverJobInput {
+  makerLeg: 0 | 1;
+  legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number; closeAll?: boolean }[];
+  boros: { marketId: number; before: number; after: number; closeSize: number }[];
+}
+
+const HALT_KINDS = [
+  'margin',
+  'not-hedged',
+  'boros',
+  'restart',
+  'other',
+  'refused',
+  'hedge-margin',
+  'sleep',
+  'error',
+  'capped-rest',
+] as const;
+export type HaltKind = (typeof HALT_KINDS)[number];
+
+export type TwapDealTemplate = Omit<
+  DealRequest,
+  'id' | 'qty' | 'price' | 'pricePolicy' | 'timeoutSec' | 'deadlineCapSec' | 'repegBehindBp' | 'makerLeg'
+> & {
+  totalQty: string;
+  coin: string;
+  rules: TwapLegRule[];
+};
+
+export interface JobTwap {
+  deal: TwapDealTemplate;
+  durationSec: number;
+  intervalSec: number;
+  slices: number;
+  sliceQty: string;
+  sliceIndex: number;
+  nextAt: number | null;
+  carryQty: string;
+  behindQty: string;
+  replan: boolean;
+  makerLeg: 'a' | 'b';
+  repegBehindBp: Exclude<DealRequest['repegBehindBp'], undefined>;
+  takerAfterSec: number | null;
+  clientId: string;
+  startedAt: number;
+}
+
+export interface SizeRefusal {
+  slice: number;
+  venue: string;
+  limit: string;
+  bound: 'min' | 'max';
+  wholeRest: boolean;
+}
+
+export const childIdFor = (jobId: string, slice: number, k: number): string => `${jobId}-s${slice}-${k}`;
+
+const CHILD_SUFFIX = /^(s[1-9]\d*-[1-9]\d*|f[1-9]\d*(-[1-9]\d*)?)$/;
+
+export const isChildOf = (jobId: string, dealId: string): boolean =>
+  jobId !== '' && dealId.startsWith(`${jobId}-`) && CHILD_SUFFIX.test(dealId.slice(jobId.length + 1));
+
+export const isGapChildOf = (jobId: string, dealId: string): boolean =>
+  jobId !== '' && dealId.startsWith(`${jobId}-`) && /^g\d+$/.test(dealId.slice(jobId.length + 1));
 
 export interface Job {
   id: string;
@@ -50,6 +278,55 @@ export interface Job {
   tagCount: number;
   createdAt: number;
   updatedAt: number;
+  realize: { legs: RealizeJobLeg[]; costUsd: number } | null;
+  before?: JobBefore;
+  routeImpactUsd?: number;
+  openGaps?: OpenGap[];
+  kind: JobKind;
+  exec: RealizeExec;
+  slice: JobSlice | null;
+  notHedgedQty: number;
+  followMisses: number;
+  follow: JobFollow | null;
+  borosGapYu: number;
+  borosLeftYu: number;
+  feeSoFarUsd: number;
+  estimate: RealizeEstimate | null;
+  pauseRequested: boolean;
+  paused: boolean;
+  delever: JobDelever | null;
+  imUsedNow: ImUsedRow[] | null;
+  imUsedEnd: ImUsedRow[] | null;
+  imUsedStart: ImUsedRow[] | null;
+  totalCostUsd: number | null;
+  retryConverts: number;
+  haltKind?: HaltKind | null;
+  twap?: JobTwap | null;
+  sizeRefusal?: SizeRefusal | null;
+  deleverTwap?: DeleverTwap | null;
+  profitStops?: ProfitStop[];
+  unwindTarget?: JobFollow | null;
+  topUps?: number;
+  topUpPending?: boolean;
+  fallbackConverts?: number;
+  fallbackPending?: boolean;
+  maker?: MakerOpts | null;
+  sleptFrom?: number | null;
+  sleptTo?: number | null;
+}
+
+export interface MakerOpts {
+  takerAfterSec: number | null;
+  repegBehindBp: 2 | 5 | 10 | null;
+}
+
+export interface DeleverTwap {
+  durationSec: number;
+  intervalSec: number;
+  slices: number;
+  takerAfterSec?: number | null;
+  repegBehindBp?: 2 | 5 | 10 | null;
+  legs?: { symbol: string; slices: number }[];
 }
 
 export const TO_VENUE_STEP = { HYPERLIQUID: 'To Hyperliquid', LIGHTER: 'To Lighter' } as const;
@@ -57,6 +334,8 @@ export const FROM_VENUE_STEP = { HYPERLIQUID: 'From Hyperliquid', LIGHTER: 'From
 export const TO_USDC_STEPS = ['Buy USDC', 'To spot', TO_VENUE_STEP.HYPERLIQUID] as const;
 export const TO_USDT_STEPS = [FROM_VENUE_STEP.HYPERLIQUID, 'To Gate', 'Sell USDC'] as const;
 export const CONVERT_STEPS = ['Convert', 'Convert to USDT', 'Convert to USDC'] as const;
+export const SLICE_STEP = 'Slices';
+export const BOROS_STEP = 'Close Boros';
 export type StepName =
   | 'Buy USDC'
   | 'To spot'
@@ -64,7 +343,9 @@ export type StepName =
   | 'Sell USDC'
   | (typeof TO_VENUE_STEP)[Venue]
   | (typeof FROM_VENUE_STEP)[Venue]
-  | (typeof CONVERT_STEPS)[number];
+  | (typeof CONVERT_STEPS)[number]
+  | typeof SLICE_STEP
+  | typeof BOROS_STEP;
 export const STEP_NAMES: readonly string[] = [
   'Buy USDC',
   'To spot',
@@ -73,6 +354,8 @@ export const STEP_NAMES: readonly string[] = [
   ...Object.values(TO_VENUE_STEP),
   ...Object.values(FROM_VENUE_STEP),
   ...CONVERT_STEPS,
+  SLICE_STEP,
+  BOROS_STEP,
 ];
 
 export function roundStepNames(from: Pool, to: Pool): StepName[] {
@@ -90,6 +373,7 @@ const LEGACY_MOVE: Record<string, { from: Pool; to: Pool }> = {
 const LEGACY_STEP: Record<string, StepName> = { 'Pull from Hyperliquid': 'From Hyperliquid' };
 
 const JOB_STATUSES: readonly string[] = ['running', 'halted', 'done', 'abandoned'];
+const STEP_PHASES: readonly string[] = ['realize', 'route'];
 const FUNDS_AT: readonly string[] = ['CROSSEX', 'GATE', 'SPOT', 'HYPERLIQUID', 'LIGHTER'];
 const IN_TRANSIT_STATUSES: readonly JobStatus[] = ['running', 'halted', 'abandoned'];
 const MOVES_TO: Record<string, string> = {
@@ -105,11 +389,13 @@ const TRANSFER_STATUSES: readonly string[] = ['moving', 'done', 'failed'];
 
 export const HALT_TEXT = {
   restart: 'The app restarted during the run. Nothing failed. Press Resume.',
+  restartGap: 'The app restarted in the middle of a slice. The two perps are not the same size yet. Press Resume to finish the slice.',
   marginTooLow: 'Not enough free margin for the next round.',
   cashTooLow: 'Not enough cash for an 11 USDC round.',
   unconfirmed: 'Gate did not confirm the last order. Press Resume to check again.',
   shortBuy: 'The USDC buy filled under 11 USDC.',
   poorQuote: 'Convert quote was more than 0.3% under the Gate spot price.',
+  convertUnreachable: 'Gate did not answer the Convert quote.',
   convertTooBig: 'Gate takes at most 500,000 in one Convert. Abandon this rebalance and start a new one.',
   marginRefused: 'Gate refused the move: free margin or wallet cash is too low.',
   noRecord: 'Gate has no record of this transfer. Try again.',
@@ -126,15 +412,168 @@ export const HALT_TEXT = {
   notListed: 'Gate does not show the last step after 2 min. Press Resume to check again. If Gate still does not show it, Resume sends it again.',
 } as const;
 
+type OpenLeg = Pick<RealizeJobLeg, 'exchange' | 'side' | 'base' | 'hedge'>;
+
+const legName = (leg: OpenLeg): string => `${prettyVenue(leg.exchange)} ${leg.side.toLowerCase()}`;
+const otherLegName = (leg: OpenLeg): string =>
+  `${prettyVenue(leg.hedge ?? (leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE'))} ${leg.side === 'SHORT' ? 'long' : 'short'}`;
+const closeOtherText = (leg: OpenLeg, open: number): string =>
+  `close ${fmtSize(open)} ${leg.base} of the ${otherLegName(leg)} in Positions`;
+const orCloseOther = (leg: OpenLeg, open: number): string => (leg.hedge === null ? '' : `, or ${closeOtherText(leg, open)}`);
+
+const legGapText = (leg: OpenLeg, open: number): string =>
+  leg.hedge === null
+    ? `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than before.`
+    : `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than the ${otherLegName(leg)}.`;
+
+const walletName = (pool: Pool): string => {
+  const { coin, venue } = poolWallet(pool);
+  return `${coin} · ${WALLET_SHORT[walletKey(coin, venue)] ?? prettyVenue(venue)}`;
+};
+
+export const borosPartText = (leftYu: number): string =>
+  `Boros did not close ${fmtSize(leftYu)} YU of its share. It has no perp behind it.`;
+
+export const FIX_UNCONFIRMED = 'Gate has not confirmed the last order yet. Try again in two minutes.';
+
+export const borosWaitText = (waitMs: number): string =>
+  `Boros may still fill the last close. Nothing is sent again before then. Try again in ${Math.max(1, Math.ceil(waitMs / 60_000))} min.`;
+
+export const ADD_BACK_FIRST = 'One perp is already added back. Hold to add back to finish the other first.';
+
+type AddBackRow = Pick<RealizeJobLeg, 'symbol' | 'exchange' | 'side' | 'base'> & { filled: number; qty: number; before: number };
+
+export const addBackRowsOf = (job: Job): AddBackRow[] => {
+  const plan = job.steps[job.stepIndex]?.addBack;
+  if (!plan) return [];
+  return (job.delever?.legs ?? []).map((perp) => ({
+    symbol: perp.symbol,
+    exchange: perp.exchange,
+    side: perp.side,
+    base: perp.base,
+    filled: plan.legs.find((row) => row.symbol === perp.symbol)?.filled ?? 0,
+    qty: plan.qty,
+    before: perp.before,
+  }));
+};
+
+const lotSize = (qty: number): string => qty.toLocaleString('en-US', { maximumFractionDigits: 8 });
+
+const addBackStoppedText = (rows: Pick<AddBackRow, 'exchange' | 'base' | 'filled' | 'qty'>[]): string =>
+  `Add back stopped: ${rows.map((row) => `${prettyVenue(row.exchange)} ${lotSize(row.filled)} of ${fmtSize(row.qty)} ${row.base}`).join(', ')}.`;
+
+export const addBackPartText = (rows: Pick<AddBackRow, 'exchange' | 'base' | 'filled' | 'qty'>[]): string =>
+  `${addBackStoppedText(rows)} Hold to add back to finish.`;
+
+function addBackSplit(rows: AddBackRow[]): { small: AddBackRow; large: AddBackRow; diff: number } | null {
+  if (rows.length < 2) return null;
+  const small = rows.reduce((a, b) => (b.filled < a.filled ? b : a));
+  const large = rows.reduce((a, b) => (b.filled > a.filled ? b : a));
+  const diff = Math.round((large.filled - small.filled) * 1e8) / 1e8;
+  return diff > 0 ? { small, large, diff } : null;
+}
+
+export function addBackAbandonText(job: Job, unread: readonly string[] = []): string | null {
+  const rows = addBackRowsOf(job);
+  const unconfirmed = rows.filter((row) => unread.includes(row.symbol));
+  if (!rows.some((row) => row.filled > 0) && unconfirmed.length === 0) return null;
+  const split = addBackSplit(rows);
+  const checks = unconfirmed.map(
+    (row) => ` Gate has not confirmed the ${prettyVenue(row.exchange)} add back order. Check the ${legName(row)} in Positions before you trade.`,
+  );
+  if (!split) return `${addBackStoppedText(rows)}${checks.join('')}`;
+  const { small, large, diff } = split;
+  const leg: OpenLeg = { exchange: small.exchange, side: small.side, base: small.base, hedge: large.exchange };
+  const gap = `The ${legName(leg)} is ${lotSize(diff)} ${leg.base} smaller than the ${otherLegName(leg)}. Close ${lotSize(diff)} ${leg.base} of the ${otherLegName(leg)} in Positions.`;
+  return `${addBackStoppedText(rows)} ${gap}${checks.join('')}`;
+}
+
+export function addBackGapsOf(job: Job, unread: readonly string[] = []): OpenGap[] {
+  const rows = addBackRowsOf(job);
+  const most = (row: AddBackRow): number => (unread.includes(row.symbol) ? Math.max(row.filled, row.qty) : row.filled);
+  return rows.flatMap((small) =>
+    rows.flatMap((large): OpenGap[] => {
+      const diff = Math.round((most(large) - small.filled) * 1e8) / 1e8;
+      if (large === small || diff <= 0) return [];
+      return [
+        {
+          leg: { symbol: small.symbol, base: small.base, exchange: small.exchange, side: small.side, positionQty: small.before, hedge: large.exchange },
+          qty: diff,
+          hedges: [{ symbol: large.symbol, exchange: large.exchange, side: large.side, qty: large.before }],
+        },
+      ];
+    }),
+  );
+}
+
+export function restGapOf(job: Job, lead: RealizeJobLeg, followSymbol: string, rest: number): OpenGap | null {
+  const { symbol, base, exchange, side, positionQty } = lead;
+  if (job.kind === 'realize') {
+    const hedge = hedgeBeforeOf(job, lead);
+    return { leg: { symbol, base, exchange, side, positionQty, hedge: hedge?.exchange ?? null }, qty: rest, hedges: hedge ? [hedge] : [] };
+  }
+  const other = job.delever?.legs.find((row) => row.symbol === followSymbol && row.symbol !== lead.symbol);
+  if (!other) return null;
+  return {
+    leg: { symbol, base, exchange, side, positionQty, hedge: other.exchange },
+    qty: rest,
+    hedges: [{ symbol: other.symbol, exchange: other.exchange, side: other.side, qty: other.before }],
+  };
+}
+
+export const REOPEN_HALT = {
+  tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',
+  closeOnly: (leg: OpenLeg, open: number): string =>
+    open > 0
+      ? `Gate CrossEx takes no new orders on this contract. Resume when it does${orCloseOther(leg, open)}.`
+      : 'Gate CrossEx takes no new orders on this contract. Resume when it does.',
+  noCash: (pool: Pool): string =>
+    `Not enough margin, and no cash left to convert. Move ${poolWallet(pool).coin} into ${walletName(pool)}, then Resume.`,
+  noBorrow: (pool: Pool): string =>
+    `Not enough margin. ${walletName(CONVERT_TO[pool])} has no borrow for a Convert to repay. Add margin, then Resume.`,
+  poorQuoteLegOpen: (leg: OpenLeg, open: number): string =>
+    `${HALT_TEXT.poorQuote} The ${legGapText(leg, open)} Resume to try again${orCloseOther(leg, open)}.`,
+  marginLow: 'Not enough free margin for the next slice. Nothing is open. Add margin, then Resume.',
+  ratioLow: 'The margin ratio is under 103%, so the app will not Convert. Add margin, then Resume.',
+  fallbackCap: 'Free margin ran short again after 5 Converts in this run. Both legs are hedged. Add margin, then Resume.',
+  quotesLow: (leg: OpenLeg): string => `Too few Convert quotes are left today for ${leg.base} slice 1. No ${leg.base} was closed. Press Resume later.`,
+  gapNoFit: (leg: OpenLeg): string => `Free margin and cash are too low to close ${leg.base} slice 1 and reopen it. No ${leg.base} was closed. Add margin, then Resume.`,
+  gapGrew: (leg: OpenLeg, planned: number, now: number): string =>
+    `${leg.base} slice 1 must close ${fmtSize(now)} ${leg.base}, not the planned ${fmtSize(planned)} ${leg.base}, to fund its Convert. No ${leg.base} was closed. Press Resume to close ${fmtSize(now)} ${leg.base}.`,
+  marginShort: 'Not enough free margin to reopen. Add margin, then Resume.',
+  gapSwitched: (leg: OpenLeg, now: number, cause: 'cash' | 'ratio' = 'cash'): string =>
+    `${cause === 'ratio' ? 'The margin ratio is under 103%, so the Convert cannot run before' : 'Cash no longer covers the Convert before'} ${leg.base} slice 1. ${leg.base} slice 1 must close ${fmtSize(now)} ${leg.base} alone, unhedged from its first close fill until it reopens. No ${leg.base} was closed. Press Resume to go on.`,
+  gapMore: (leg: OpenLeg, agreed: number, now: number, closed: number): string =>
+    `${leg.base} slice 1 must close ${fmtSize(now)} ${leg.base} in all to fund its Convert, not ${fmtSize(agreed)} ${leg.base}. Press Resume to close ${fmtSize(Math.max(0, now - closed))} ${leg.base} more.`,
+  marginLegOpen: (reason: string, leg: OpenLeg, open: number): string => `${reason} The ${legGapText(leg, open)}${leg.hedge === null ? '' : ` Or ${closeOtherText(leg, open)}.`}`,
+  convertCap: `Gate still wants more margin after ${RETRY_CONVERT_CAP} Converts in this run. Add margin, then Resume.`,
+  noHedgePerp: 'Could not find the other perp of this pair. Close the gap in Positions.',
+  hedgeRefusedAgain: 'Gate refused the hedge again. Nothing else changed.',
+  quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>
+    `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours${orCloseOther(leg, open)}.`,
+  refused: (leg: OpenLeg, open: number, reason: string): string =>
+    ['Gate refused the reopen.', reason, `The ${legGapText(leg, open)}`, `Resume to try again${orCloseOther(leg, open)}.`].filter(Boolean).join(' '),
+  underMinimum: (leg: OpenLeg, open: number): string =>
+    `The rest is under Gate's smallest order. The ${legGapText(leg, open)} ${leg.hedge === null ? 'Abandon it and check Positions.' : `Abandon, then ${closeOtherText(leg, open)}.`}`,
+  sizeChanged: (leg: OpenLeg, live: number, expected: number): string =>
+    `The ${legName(leg)} is ${fmtSize(live)} ${leg.base} on Gate, not the ${fmtSize(expected)} ${leg.base} this rebalance left. Abandon it and check Positions.`,
+  hedgeChanged: (leg: OpenLeg, hedge: Pick<JobPerp, 'exchange' | 'side'>, live: number, expected: number): string =>
+    `The ${legName({ ...hedge, base: leg.base })} is ${fmtSize(live)} ${leg.base} on Gate, not the ${fmtSize(expected)} ${leg.base} it was when this rebalance started. The ${legName(leg)} was not reopened. Abandon it and check Positions.`,
+} as const;
+
 export const LOCK_TEXT = {
   halted: 'Transfers wait until you resume or abandon the rebalance.',
   rebalance: 'Transfers wait until the rebalance ends.',
   deal: 'Transfers wait until the deal ends.',
   moving: 'A transfer is still moving.',
   rebalanceWaits: 'Rebalance waits until the transfer ends.',
+  twapRunning: 'A TWAP is running. Orders and transfers wait until it ends.',
+  twapPaused: 'A TWAP is paused. Orders wait until it ends.',
+  twapError: 'A TWAP stopped on an error. Orders and transfers wait until you resume or stop it.',
+  twapErrorOrders: 'A TWAP stopped on an error. Orders wait until you resume or stop it.',
 } as const;
 
-export type TransferLock = 'rebalance' | 'halted' | 'deal';
+export type TransferLock = 'rebalance' | 'halted' | 'deal' | 'twapRunning' | 'twapError';
 
 export interface TransferJob {
   id: string;
@@ -168,8 +607,11 @@ export const pendingStep = (
   status: 'pending',
   startedAt: null,
   doneAt: null,
+  phase: 'route',
   ...plan,
 });
+
+export const asRealize = (steps: Step[]): Step[] => steps.map((step) => ({ ...step, phase: 'realize' }));
 
 export function convertSteps(from: Pool, to: Pool, amount: number): Step[] {
   const move = { from, to, round: null, arrives: null, borrowLeft: null };
@@ -216,6 +658,93 @@ function stepsFor(step: PlannedStep): Step[] {
   ];
 }
 
+const sideOf = (side: PerpSide, closing: boolean): StepPerp['side'] => ((side === 'SHORT') === closing ? 'BUY' : 'SELL');
+
+const poolOf = (exchange: string): Pool => (exchange === 'HYPERLIQUID' || exchange === 'LIGHTER' ? exchange : 'CROSSEX');
+
+function sliceStep(pool: Pool, planned: number, perp: StepPerp, follow: StepPerp): Step {
+  const at = { from: pool, to: pool, round: null, planned, arrives: null, borrowLeft: null };
+  return { ...pendingStep(SLICE_STEP, at), phase: 'realize', perp, follow, nextTryAt: null, retry: null, lead: null, hedge: null, cut: null };
+}
+
+function slicedRealizeSteps(leg: RealizeLeg): Step[] {
+  const perp = { symbol: leg.symbol, exchange: leg.exchange, side: sideOf(leg.side, true), reduceOnly: true };
+  const follow = { ...perp, side: sideOf(leg.side, false), reduceOnly: false };
+  const slice = sliceStep(leg.pool, leg.qty, perp, follow);
+  const convertsOf = (amount: number): Step[] => (amount > 0 ? asRealize(convertSteps(leg.pool, CONVERT_TO[leg.pool], amount)).map((step) => ({ ...step, leg: leg.symbol })) : []);
+  const total = leg.convert?.amount ?? 0;
+  if (leg.margin?.at !== 'before') return [slice, ...convertsOf(total)];
+  const first = Math.min(total, leg.margin.amount);
+  return [...convertsOf(first), slice, ...convertsOf(floorCents(total - first))];
+}
+
+function deleverParts(input: DeleverJobInput): { leg: RealizeJobLeg; steps: Step[]; delever: JobDelever } | null {
+  const lead = input.legs[input.makerLeg];
+  const other = input.legs[input.makerLeg === 0 ? 1 : 0];
+  if (!lead || !other || !(lead.closeQty > 0) || !(lead.before > 0)) return null;
+  const pool = poolOf(lead.exchange);
+  const perp = { symbol: lead.symbol, exchange: lead.exchange, side: sideOf(lead.side, true), reduceOnly: true };
+  const follow = { symbol: other.symbol, exchange: other.exchange, side: sideOf(other.side, true), reduceOnly: true };
+  const boros = input.boros.filter((row) => row.closeSize > 0);
+  const qty = lead.closeAll === true ? lead.before : lead.closeQty;
+  const borosStep = { ...pendingStep(BOROS_STEP, { from: pool, to: pool, round: null, planned: null, arrives: null, borrowLeft: null }), phase: 'realize' as const };
+  const leg: RealizeJobLeg = {
+    symbol: lead.symbol,
+    base: lead.base,
+    exchange: lead.exchange,
+    pool,
+    side: lead.side,
+    positionQty: lead.before,
+    qty,
+    filledQty: 0,
+    realizedUsd: 0,
+    hedge: other.exchange,
+  };
+  return {
+    leg,
+    steps: [sliceStep(pool, qty, perp, follow), ...(boros.length > 0 ? [borosStep] : [])],
+    delever: {
+      pct: qty / lead.before,
+      legs: input.legs.map(({ symbol, exchange, base, side, before, after, closeAll }) => ({ symbol, exchange, base, side, before, after, closeAll: closeAll === true })),
+      boros: input.boros.map(({ marketId, before, after }) => ({ marketId, before, after, closed: 0 })),
+    },
+  };
+}
+
+export const hedgesOf = (leg: Pick<RealizeLeg, 'symbol' | 'side' | 'base'>, perps: JobPerp[]): JobPerp[] =>
+  perps.filter((perp) => perp.symbol !== leg.symbol && perp.side !== leg.side && parseSymbol(perp.symbol).base === leg.base);
+
+export const hedgeBeforeOf = (job: Pick<Job, 'before'>, leg: Pick<RealizeJobLeg, 'symbol' | 'side' | 'base' | 'hedge'>): JobPerp | undefined =>
+  hedgesOf(leg, job.before?.perps ?? [])
+    .filter((perp) => leg.hedge === null || perp.exchange === leg.hedge)
+    .sort((x, y) => y.qty - x.qty)[0];
+
+function hedgeOf(leg: RealizeLeg, perps: JobPerp[]): string | null {
+  return hedgesOf(leg, perps).sort((a, b) => b.qty - a.qty)[0]?.exchange ?? null;
+}
+
+const realizeJobLeg = (leg: RealizeLeg, perps: JobPerp[]): RealizeJobLeg => ({
+  symbol: leg.symbol,
+  base: leg.base,
+  exchange: leg.exchange,
+  pool: leg.pool,
+  side: leg.side,
+  positionQty: leg.positionQty,
+  qty: leg.qty,
+  filledQty: 0,
+  realizedUsd: 0,
+  hedge: hedgeOf(leg, perps),
+  closeFeeUsd: leg.closeFeeUsd,
+  reopenFeeUsd: leg.reopenFeeUsd,
+  closeImpactUsd: leg.closeImpactUsd,
+  reopenImpactUsd: leg.reopenImpactUsd,
+  convert: leg.convert ? { amount: leg.convert.amount, feeUsd: leg.convert.feeUsd } : null,
+  ...(leg.takerRate === undefined ? {} : { takerRate: leg.takerRate }),
+  ...(leg.makerRate === undefined ? {} : { makerRate: leg.makerRate }),
+  ...(leg.margin ? { margin: leg.margin } : {}),
+  ...(leg.hedgedFirstQty === undefined ? {} : { hedgedFirstQty: leg.hedgedFirstQty }),
+});
+
 export function newJob(
   input: {
     goal?: GoalKind;
@@ -225,10 +754,64 @@ export function newJob(
     costUsd: number;
     target: WalletAfter[];
     userId: string | null;
+    realize?: RealizePlan | null;
+    realizeCostUsd?: number;
+    before?: JobBefore;
+    routeImpactUsd?: number;
+    openGaps?: OpenGap[];
+    kind?: JobKind;
+    exec?: RealizeExec;
+    sliceUsd?: number;
+    sliceCount?: number;
+    capsUsd?: Record<string, number>;
+    estimate?: RealizeEstimate | null;
+    delever?: DeleverJobInput | null;
+    imUsedStart?: ImUsedRow[] | null;
+    twap?: DeleverTwap | null;
+    maker?: MakerOpts | null;
   },
   now: number,
 ): Job {
+  const legs = input.realize?.legs ?? [];
+  const kind: JobKind = input.kind ?? (legs.length > 0 ? 'realize' : 'move');
+  const sliced = kind === 'realize' || kind === 'delever';
+  const delever = kind === 'delever' && input.delever ? deleverParts(input.delever) : null;
+  const perpSteps = delever ? delever.steps : legs.flatMap(slicedRealizeSteps);
+  const jobLegs = delever ? [delever.leg] : legs.map((leg) => realizeJobLeg(leg, input.before?.perps ?? []));
+  const fields = {
+    kind,
+    exec: input.exec ?? (sliced ? 'maker' : 'market'),
+    slice: sliced
+      ? {
+          index: 1,
+          count: Math.max(1, input.sliceCount ?? 1),
+          sizeUsd: Math.max(0, input.sliceUsd ?? 0),
+          ...(input.capsUsd && Object.keys(input.capsUsd).length > 0 ? { capsUsd: input.capsUsd } : {}),
+        }
+      : null,
+    notHedgedQty: 0,
+    followMisses: 0,
+    follow: null,
+    borosGapYu: 0,
+    borosLeftYu: 0,
+    feeSoFarUsd: 0,
+    estimate: input.estimate ?? null,
+    pauseRequested: false,
+    paused: false,
+    delever: delever?.delever ?? null,
+    imUsedNow: null,
+    imUsedEnd: null,
+    imUsedStart: kind === 'delever' ? (input.imUsedStart ?? null) : null,
+    totalCostUsd: null,
+    retryConverts: 0,
+    fallbackConverts: 0,
+    haltKind: null,
+    deleverTwap: delever || kind === 'realize' ? (input.twap ?? null) : null,
+    profitStops: [],
+    maker: sliced && input.exec === 'maker' ? (input.maker ?? null) : null,
+  } satisfies Partial<Job>;
   return {
+    ...fields,
     id: now.toString(36),
     userId: input.userId,
     goal: input.goal ?? 'even',
@@ -238,12 +821,16 @@ export function newJob(
     target: input.target,
     status: 'running',
     stepIndex: 0,
-    steps: input.steps.flatMap(stepsFor),
-    fundsAt: input.steps[0]?.from ?? 'CROSSEX',
+    steps: [...perpSteps, ...input.steps.flatMap(stepsFor)],
+    fundsAt: jobLegs[0]?.pool ?? input.steps[0]?.from ?? 'CROSSEX',
     haltReason: null,
     tagCount: 0,
     createdAt: now,
     updatedAt: now,
+    realize: jobLegs.length > 0 ? { legs: jobLegs, costUsd: input.realizeCostUsd ?? 0 } : null,
+    ...(input.before ? { before: input.before } : {}),
+    ...(input.routeImpactUsd === undefined ? {} : { routeImpactUsd: input.routeImpactUsd }),
+    ...(input.openGaps?.length ? { openGaps: input.openGaps } : {}),
   };
 }
 
@@ -316,9 +903,47 @@ export function inTransitOf(job: Job): { coin: 'USDC'; qty: number; at: 'SPOT' |
 export const formatMoney = (value: number): string =>
   value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+export function requestPause(job: Job): Job {
+  job.pauseRequested = true;
+  return job;
+}
+
+function openLegsOf(job: Job): { leg: RealizeJobLeg; open: number }[] {
+  return (job.realize?.legs ?? []).flatMap((leg) => {
+    const follows = job.steps.filter((step) => step.name === SLICE_STEP && step.perp?.symbol === leg.symbol);
+    if (follows.length === 0 || follows.every((step) => step.status === 'done')) return [];
+    const open = leg.filledQty - follows.reduce((total, step) => total + (step.qty ?? 0), 0);
+    return open > 0 ? [{ leg, open }] : [];
+  });
+}
+
+const openLegOf = (job: Job): { leg: RealizeJobLeg; open: number } | null => openLegsOf(job)[0] ?? null;
+
+const sizeOf = (perps: JobPerp[]): number => perps.reduce((total, perp) => total + perp.qty, 0);
+
+function isGapOpen(gap: OpenGap, live: JobPerp[]): boolean {
+  const { leg } = gap;
+  const legShrink = leg.positionQty - sizeOf(live.filter((perp) => perp.symbol === leg.symbol && perp.side === leg.side));
+  const stored = live.filter((perp) => gap.hedges.some((hedge) => hedge.symbol === perp.symbol && hedge.side === perp.side));
+  const hedgeShrink = sizeOf(gap.hedges) - sizeOf(stored);
+  return Math.min(gap.qty, legShrink - hedgeShrink) > leg.positionQty * 1e-9;
+}
+
+export function gapsLeftBy(job: Job | null, live: JobPerp[]): OpenGap[] {
+  if (job === null || (job.status !== 'abandoned' && job.status !== 'done')) return [];
+  const own = job.status === 'abandoned' ? openLegsOf(job) : [];
+  const left = own.map(({ leg, open }): OpenGap => {
+    const { symbol, base, exchange, side, positionQty, hedge = null } = leg;
+    return { leg: { symbol, base, exchange, side, positionQty, hedge }, qty: open, hedges: hedgesOf(leg, job.before?.perps ?? []) };
+  });
+  return [...left, ...(job.openGaps ?? [])].filter((gap) => isGapOpen(gap, live));
+}
+
 export function bannerFor(job: Job): string {
   const step = job.steps[job.stepIndex];
   if (!step) return 'Rebalance stopped.';
+  const openLeg = openLegOf(job);
+  if (openLeg) return `Rebalance stopped. ${legGapText(openLeg.leg, openLeg.open)}`;
   const { round } = step;
   if (round === null) return `Rebalance stopped at ${step.name}.`;
   const stopped = `Rebalance stopped in round ${round}.`;
@@ -329,7 +954,13 @@ export function bannerFor(job: Job): string {
   return `${stopped} ${amount} is on the way to ${MOVES_TO[step.name]}.`;
 }
 
-export function transferLockFor(input: { rebalance: Job | null; dealWorking: boolean }): TransferLock | null {
+const TWAP_ERROR_KINDS: readonly (HaltKind | null | undefined)[] = ['error', 'hedge-margin'];
+
+export function transferLockFor(input: { rebalance: Job | null; dealWorking: boolean; childLive?: boolean }): TransferLock | null {
+  const job = input.rebalance;
+  if (job?.kind === 'twap' && job.status === 'running') return 'twapRunning';
+  if (job?.kind === 'twap' && job.status === 'halted' && (input.childLive ?? input.dealWorking)) return 'twapError';
+  if (job?.kind === 'twap') return input.dealWorking ? 'deal' : null;
   if (input.rebalance?.status === 'halted') return 'halted';
   if (input.rebalance?.status === 'running') return 'rebalance';
   return input.dealWorking ? 'deal' : null;
@@ -341,12 +972,174 @@ export function moneyLockFor(input: {
   rebalance: Job | null;
   transfer: TransferJob | null;
   dealId: string | null;
+  childLive?: boolean;
 }): MoneyLock | null {
-  const { rebalance, transfer, dealId } = input;
-  const lock = transferLockFor({ rebalance, dealWorking: dealId !== null });
+  const { rebalance, transfer, dealId, childLive } = input;
+  const lock = transferLockFor({ rebalance, dealWorking: dealId !== null, childLive });
   if (lock === 'deal' && dealId !== null) return { kind: lock, id: dealId };
   if (lock !== null && rebalance !== null) return { kind: lock, id: rebalance.id };
   return transfer?.status === 'moving' ? { kind: 'moving' } : null;
+}
+
+export function twapLockText(job: Job | null, childLive = true): string | null {
+  if (job?.kind !== 'twap' || (job.status !== 'running' && job.status !== 'halted')) return null;
+  if (job.status === 'running') return LOCK_TEXT.twapRunning;
+  if (!TWAP_ERROR_KINDS.includes(job.haltKind)) return LOCK_TEXT.twapPaused;
+  return childLive ? LOCK_TEXT.twapError : LOCK_TEXT.twapErrorOrders;
+}
+
+export function dealLockFor(input: { rebalance: Job | null; dealId: string; childLive?: boolean }): string | null {
+  const job = input.rebalance;
+  if (job === null || isChildOf(job.id, input.dealId)) return null;
+  return twapLockText(job, input.childLive);
+}
+
+export function newTwapJob(
+  input: {
+    userId: string | null;
+    deal: TwapDealTemplate;
+    plan: TwapPlan;
+    makerLeg: 'a' | 'b';
+    repegBehindBp: JobTwap['repegBehindBp'];
+    takerAfterSec: number | null;
+    clientId: string;
+  },
+  now: number,
+): Job {
+  const { plan } = input;
+  return {
+    id: now.toString(36),
+    userId: input.userId,
+    goal: 'even',
+    route: 'mix',
+    amount: Number(input.deal.totalQty),
+    costUsd: null,
+    target: null,
+    status: 'running',
+    stepIndex: 0,
+    steps: [],
+    fundsAt: 'CROSSEX',
+    haltReason: null,
+    tagCount: 0,
+    createdAt: now,
+    updatedAt: now,
+    realize: null,
+    kind: 'twap',
+    exec: 'maker',
+    slice: null,
+    notHedgedQty: 0,
+    followMisses: 0,
+    follow: null,
+    borosGapYu: 0,
+    borosLeftYu: 0,
+    feeSoFarUsd: 0,
+    estimate: null,
+    pauseRequested: false,
+    paused: false,
+    delever: null,
+    imUsedNow: null,
+    imUsedEnd: null,
+    imUsedStart: null,
+    totalCostUsd: null,
+    retryConverts: 0,
+    haltKind: null,
+    sleptFrom: null,
+    sleptTo: null,
+    twap: {
+      deal: input.deal,
+      durationSec: plan.durationSec,
+      intervalSec: plan.intervalSec,
+      slices: plan.slices,
+      sliceQty: plan.sliceQty,
+      sliceIndex: 0,
+      nextAt: now,
+      carryQty: '0',
+      behindQty: '0',
+      replan: false,
+      makerLeg: input.makerLeg,
+      repegBehindBp: input.repegBehindBp,
+      takerAfterSec: input.takerAfterSec,
+      clientId: input.clientId,
+      startedAt: now,
+    },
+  };
+}
+
+const JOB_KINDS: readonly string[] = ['move', 'realize', 'delever', 'twap'];
+const EXECS: readonly string[] = ['maker', 'market'];
+const finiteOr = (value: unknown, fallback: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : fallback);
+
+function applyDefaults(job: Partial<Job>): void {
+  const realizeLegs = job.realize?.legs.length ?? 0;
+  if (!JOB_KINDS.includes(String(job.kind))) job.kind = job.delever ? 'delever' : realizeLegs > 0 ? 'realize' : 'move';
+  if (!EXECS.includes(String(job.exec))) job.exec = 'market';
+  if (typeof job.slice !== 'object') job.slice = null;
+  job.notHedgedQty = finiteOr(job.notHedgedQty, 0);
+  job.followMisses = finiteOr(job.followMisses, 0);
+  if (typeof job.follow !== 'object') job.follow = null;
+  job.borosGapYu = finiteOr(job.borosGapYu, 0);
+  job.borosLeftYu = finiteOr(job.borosLeftYu, 0);
+  job.feeSoFarUsd = finiteOr(job.feeSoFarUsd, 0);
+  if (typeof job.estimate !== 'object') job.estimate = null;
+  job.pauseRequested = job.pauseRequested === true;
+  job.paused = job.paused === true;
+  if (typeof job.delever !== 'object') job.delever = null;
+  if (!Array.isArray(job.imUsedNow)) job.imUsedNow = null;
+  if (!Array.isArray(job.imUsedEnd)) job.imUsedEnd = null;
+  if (!Array.isArray(job.imUsedStart)) job.imUsedStart = null;
+  if (typeof job.totalCostUsd !== 'number' || !Number.isFinite(job.totalCostUsd)) job.totalCostUsd = null;
+  job.retryConverts = finiteOr(job.retryConverts, 0);
+  if (!(HALT_KINDS as readonly unknown[]).includes(job.haltKind)) job.haltKind = null;
+  if (typeof job.twap !== 'object' || job.kind !== 'twap') job.twap = null;
+  if (typeof job.sizeRefusal !== 'object' || job.kind !== 'twap') job.sizeRefusal = null;
+  if ((job.kind !== 'delever' && job.kind !== 'realize') || !isDeleverTwap(job.deleverTwap)) job.deleverTwap = null;
+  if (!Array.isArray(job.profitStops)) job.profitStops = [];
+  if (typeof job.unwindTarget !== 'object') job.unwindTarget = null;
+  job.topUps = finiteOr(job.topUps, 0);
+  job.topUpPending = job.topUpPending === true;
+  job.fallbackConverts = finiteOr(job.fallbackConverts, 0);
+  job.fallbackPending = job.fallbackPending === true;
+  if (!isMakerOpts(job.maker)) job.maker = null;
+  job.sleptFrom = typeof job.sleptFrom === 'number' && Number.isFinite(job.sleptFrom) ? job.sleptFrom : null;
+  job.sleptTo = typeof job.sleptTo === 'number' && Number.isFinite(job.sleptTo) ? job.sleptTo : null;
+}
+
+function isMakerOpts(value: unknown): value is MakerOpts {
+  const maker = value as Partial<MakerOpts> | null | undefined;
+  return (
+    typeof maker === 'object' &&
+    maker !== null &&
+    (maker.takerAfterSec === null || (typeof maker.takerAfterSec === 'number' && Number.isFinite(maker.takerAfterSec) && maker.takerAfterSec > 0)) &&
+    (maker.repegBehindBp === null || [2, 5, 10].includes(maker.repegBehindBp as number))
+  );
+}
+
+function isDeleverTwap(value: unknown): value is DeleverTwap {
+  const twap = value as Partial<DeleverTwap> | null | undefined;
+  return (
+    typeof twap === 'object' &&
+    twap !== null &&
+    [twap.durationSec, twap.intervalSec, twap.slices].every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0) &&
+    (twap.takerAfterSec === undefined || twap.takerAfterSec === null || (Number.isFinite(twap.takerAfterSec) && twap.takerAfterSec > 0)) &&
+    [undefined, null, 2, 5, 10].includes(twap.repegBehindBp) &&
+    (twap.legs === undefined ||
+      (Array.isArray(twap.legs) && twap.legs.every((leg) => typeof leg?.symbol === 'string' && Number.isInteger(leg.slices) && leg.slices > 0)))
+  );
+}
+
+function isTwapJob(job: Partial<Job>): boolean {
+  const twap = job.twap;
+  return (
+    job.kind === 'twap' &&
+    twap !== null &&
+    twap !== undefined &&
+    Array.isArray(job.steps) &&
+    job.steps.length === 0 &&
+    Number.isInteger(twap.slices) &&
+    Number.isInteger(twap.sliceIndex) &&
+    typeof twap.deal?.totalQty === 'string' &&
+    Array.isArray(twap.deal.rules)
+  );
 }
 
 function parseJob(value: unknown): Job | null {
@@ -359,7 +1152,14 @@ function parseJob(value: unknown): Job | null {
   if (job.goal === undefined) job.goal = 'even';
   if (job.costUsd === undefined) job.costUsd = null;
   if (job.target === undefined) job.target = null;
+  if (job.realize === undefined) job.realize = null;
+  if (job.realize !== null && (typeof job.realize !== 'object' || !Array.isArray(job.realize.legs))) return null;
+  if (job.realize !== null && job.realize.costUsd === undefined) job.realize.costUsd = 0;
+  if (job.routeImpactUsd !== undefined && !Number.isFinite(job.routeImpactUsd)) delete job.routeImpactUsd;
+  if (job.openGaps !== undefined && !Array.isArray(job.openGaps)) delete job.openGaps;
   if (!JOB_STATUSES.includes(String(job.status))) return null;
+  applyDefaults(job);
+  if (job.kind === 'twap') return isTwapJob(job) ? (job as Job) : null;
   if (!Array.isArray(job.steps) || job.steps.length === 0) return null;
   for (const step of job.steps as (Partial<Step> | null)[]) {
     if (typeof step !== 'object' || step === null) return null;
@@ -370,8 +1170,17 @@ function parseJob(value: unknown): Job | null {
     if (step.borrowLeft === undefined) step.borrowLeft = null;
     if (step.cashBefore !== undefined && !Number.isFinite(step.cashBefore)) delete step.cashBefore;
     if (step.sentAt !== undefined && !Number.isFinite(step.sentAt)) delete step.sentAt;
+    if (step.perp === undefined) step.perp = null;
+    if (step.nextTryAt === undefined) step.nextTryAt = null;
+    if (step.retry === undefined) step.retry = null;
+    if (step.phase !== undefined && !STEP_PHASES.includes(step.phase)) delete step.phase;
     if (step.from === undefined && step.to === undefined && legacy) Object.assign(step, legacy);
-    if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool) || step.from === step.to) return null;
+    if (!POOLS.includes(step.from as Pool) || !POOLS.includes(step.to as Pool)) return null;
+    const isPerp = step.name === SLICE_STEP;
+    if (step.name === BOROS_STEP) {
+      if (job.delever === null) return null;
+    } else if (isPerp ? step.perp === null || job.realize === null : step.from === step.to) return null;
+    if (step.name === SLICE_STEP && !step.follow) return null;
   }
   const index = job.stepIndex;
   if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= job.steps.length) return null;
@@ -423,9 +1232,69 @@ class RecordFile<T extends { updatedAt: number }> {
   }
 }
 
+export const CONVERT_QUOTES_PER_DAY = 100;
+export const DAY_MS = 86_400_000;
+
 export class JobFile extends RecordFile<Job> {
+  private readonly quotesFile: string;
+
   constructor(dataDir: string, now: () => number = Date.now) {
     super(path.join(dataDir, 'rebalance.json'), parseJob, now);
+    this.quotesFile = path.join(dataDir, 'convert-quotes.json');
+  }
+
+  quotesSince(since: number): number {
+    return this.quoteTimes().filter((at) => at >= since).length;
+  }
+
+  noteQuote(at: number): void {
+    const kept = [...this.quoteTimes().filter((time) => time > at - DAY_MS), at];
+    fs.mkdirSync(path.dirname(this.quotesFile), { recursive: true, mode: 0o700 });
+    const tmp = `${this.quotesFile}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(kept), { mode: 0o600 });
+    fs.renameSync(tmp, this.quotesFile);
+    restrictToOwner(this.quotesFile);
+  }
+
+  blockQuotesUntil(at: number): void {
+    fs.mkdirSync(path.dirname(this.quotesFile), { recursive: true, mode: 0o700 });
+    const file = `${this.quotesFile}.blocked`;
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(at), { mode: 0o600 });
+    fs.renameSync(tmp, file);
+    restrictToOwner(file);
+  }
+
+  quotesBlockedUntil(): number {
+    const file = `${this.quotesFile}.blocked`;
+    if (!fs.existsSync(file)) return 0;
+    try {
+      const at: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return typeof at === 'number' && Number.isFinite(at) ? at : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  dropQuote(at: number): void {
+    const times = this.quoteTimes();
+    const index = times.lastIndexOf(at);
+    if (index < 0) return;
+    times.splice(index, 1);
+    const tmp = `${this.quotesFile}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(times), { mode: 0o600 });
+    fs.renameSync(tmp, this.quotesFile);
+    restrictToOwner(this.quotesFile);
+  }
+
+  private quoteTimes(): number[] {
+    if (!fs.existsSync(this.quotesFile)) return [];
+    try {
+      const raw: unknown = JSON.parse(fs.readFileSync(this.quotesFile, 'utf8'));
+      return Array.isArray(raw) ? raw.filter((time): time is number => typeof time === 'number' && Number.isFinite(time)) : [];
+    } catch {
+      return [];
+    }
   }
 
   haltIfRunning(): boolean {
@@ -433,6 +1302,7 @@ export class JobFile extends RecordFile<Job> {
     if (job?.status !== 'running') return false;
     job.status = 'halted';
     job.haltReason = HALT_TEXT.restart;
+    job.haltKind = 'restart';
     this.write(job);
     return true;
   }

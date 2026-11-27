@@ -308,6 +308,26 @@ describe('SetupPage · Telegram alerts', () => {
     expect(within(telegram).getByText('Started paying interest')).toBeInTheDocument();
   });
 
+  it('viewing a wallet other than the logged-in one asks to log in before setting up', async () => {
+    // The server would link the logged-in wallet while the bot page signs in
+    // with the viewed one.
+    (window as unknown as { ethereum?: unknown }).ethereum = {
+      request: vi.fn(async ({ method }: { method: string }) => (method === 'eth_accounts' ? [WALLET] : null)),
+    };
+    localStorage.setItem('crossex.strategy.v1', JSON.stringify({ address: WALLET }));
+    mockWorld({ keyConfigured: true, agent: agentStatus({ configured: true, root: OTHER }) });
+    const user = userEvent.setup();
+    renderSetup();
+    const telegram = row('Telegram alerts');
+    const [logIn] = await within(telegram).findAllByRole('button', { name: 'Log in to set up' });
+    expect(within(telegram).queryByRole('button', { name: 'Set up' })).toBeNull();
+    expect(within(telegram).getByText('Log in first')).toBeInTheDocument();
+
+    expect(within(row('Boros wallet')).queryByRole('button', { name: 'Log in to trade 0xab18…ed9d' })).toBeNull();
+    await user.click(logIn);
+    expect(await within(row('Boros wallet')).findByRole('button', { name: 'Log in to trade 0xab18…ed9d' })).toBeInTheDocument();
+  });
+
   it('interest hover', async () => {
     const user = userEvent.setup();
     openTelegramStep();

@@ -1,7 +1,17 @@
 import { CrossexOrderRequest, type CrossexOrder, type CrossexTransferRecord } from 'gate-api';
+import { prettyVenue } from '../../web/src/lib/fmt';
 import type { Clients } from '../core/clients';
-import { classifyGateError, refusalReason, type ClassifiedError } from '../core/errors';
-import { floorDecimalString, floorToStep, roundToStep, stripZeros } from '../core/numbers';
+import { classifyGateError, CoreError, refusalReason, type ClassifiedError } from '../core/errors';
+import { DEFAULT_STEP, floorDecimalString, floorToStep, parseSymbol, roundToStep, stripZeros } from '../core/numbers';
+import { fetchDeepBook, touchOf, type NormalizedBook } from '../core/estimate/books';
+import { impactOf, sliceQtys, twapSliceQty } from '../core/rebalance/slices';
+import { takerAfterCapSec } from '../core/twap';
+import { REPEG_DEFAULT_BP, TIMEOUT_MIN_S, type DealRequest } from '../engine/create';
+import type { Store } from '../engine/db';
+import { hasMarginRefusalLabel, project } from '../engine/decide';
+import { commands, decodeStatus } from '../engine/loop';
+import { type PairMode, type PairRow } from '../engine/types';
+import { BOROS_CLOSE_FALLBACK_SLIPPAGE_PCT, closeBorosLegs, type BorosCloseDeps } from './borosClose';
 import {
   arrivesFor,
   bookLevels,
@@ -10,11 +20,13 @@ import {
   buyCostUsdt,
   ceilCents,
   CONVERT_MAX,
+  CONVERT_RATE,
   DUST_USDC,
   fit,
   floorCents,
   GATE_WALLET,
   HYPERLIQUID_MIN_USDC,
+  imUsedOf,
   MIN_TRANSFER,
   nearestCents,
   pathRule,
@@ -27,26 +39,59 @@ import {
   SPOT_SYMBOL,
   spotOrderMax,
   USDT_WALLET,
+  CONVERT_TO,
   type GateAccount,
+  type Pool,
   type SpotDepth,
   type TransferCoin,
 } from '../core/rebalance/plan';
-import { decodeStatus } from '../engine/loop';
+import { borrowImRateOf, closeSecondsOf, type CloseTime, convertMinOf, convertToLift, exposureUsdOf, GAP_CONVERT_SEC, gapLotsFor, type GapSizing, imRatioOf, liftPerConvert, MIN_CONVERT_RATIO, minQtyOf, PLAN_CASH_HEADROOM, PLAN_CONVERT_RATIO, positiveOf, nakedSecondsOf, realizeFeePerCoin, sliceReserveUsd, type PerpRule } from '../core/rebalance/realize';
 import { TTL, type TtlCache } from './cache';
+import { haltWalled, isWalledStop } from './walledStop';
+import { borosShareOf, MAKER_FEE_BP, markOpenGap, runTwap, sliceStepBehind, TAKER_FEE_BP, twapHedgeOf, type TwapRunDeps, unwindTargetOf } from './twapRun';
 import {
+  ADD_BACK_FIRST,
+  addBackPartText,
+  addBackRowsOf,
+  restGapOf,
+  asRealize,
+  BOROS_STEP,
+  borosPartText,
+  borosWaitText,
+  childIdFor,
+  CONVERT_QUOTES_PER_DAY,
+  DAY_MS,
+  FIX_UNCONFIRMED,
+  MAKER_REST_MS,
+  RETRY_CONVERT_CAP,
+  SLICE_STEP,
+  type AddBack,
+  type FixAction,
+  type PerpOrder,
   convertSteps,
   HALT_TEXT,
   haltReasonFor,
+  hedgeBeforeOf,
+  isChildOf,
   pendingStep,
+  REOPEN_HALT,
   roundStepNames,
   spotShortfallFailText,
   TO_VENUE_STEP,
   transferFailText,
   type FundsAt,
+  type HaltKind,
+  type ImUsedRow,
   type Job,
   type JobFile,
+  type RealizeJobLeg,
+  type JobFollow,
+  type SliceCut,
+  type StepRetry,
+  type JobTwap,
   type Step,
   type StepName,
+  type StepPerp,
   type TransferFile,
 } from './rebalanceJob';
 
@@ -59,6 +104,23 @@ export interface RunnerDeps {
   onHalt: (job: Job) => void;
   onDone?: () => void;
   pollOnly?: boolean;
+  book?: (symbol: string) => Promise<NormalizedBook | null>;
+  boros?: BorosRunnerDeps;
+  takeFix?: () => QueuedFix | null;
+  twap?: TwapRunDeps;
+}
+
+export interface QueuedFix {
+  action: FixAction;
+  done: (job: Job) => void;
+  fail: (err: unknown) => void;
+}
+
+export interface BorosRunnerDeps {
+  deps: BorosCloseDeps;
+  address: string;
+  slippagePct?: (marketId: number) => Promise<number | null>;
+  collateralUsd?: (marketId: number) => Promise<number | null>;
 }
 
 export interface TransferRunnerDeps {
@@ -91,6 +153,18 @@ const LIGHTER_ACCOUNT: GateAccount = 'CROSSEX_LIGHTER';
 const MOVES_OUT: readonly string[] = ['To spot', 'From Hyperliquid', 'From Lighter'];
 const ROUND_ARRIVALS: readonly string[] = ['To Gate', 'Sell USDC'];
 const INTO_VENUE: readonly string[] = Object.values(TO_VENUE_STEP);
+const RETRY_CONVERT_HEADROOM = 1.05;
+export const FALLBACK_CONVERT_CAP = 5;
+export const FALLBACK_SLICES = 5;
+export const GAP_EXTRA_CLOSES = 3;
+export const GAP_GROWTH_CAP = 2;
+export const GAP_QUOTE_RETRIES = 2;
+export const GAP_NET_WAITS_SEC = [2, 4, 8, 16];
+export const GAP_NET_MS = 120_000;
+export const gapQuotesNeeded = (steps: number): number => steps * (1 + RETRY_CONVERT_CAP) + GAP_QUOTE_RETRIES;
+
+const lotsOf = (qty: number, lot: string): number => Math.round(qty / Number(lot));
+export const lotsDownOf = (qty: number, lot: string): number => Math.round(Number(roundToStep(qty, lot, 'down')) / Number(lot));
 
 const NOT_FOUND = /NOT_FOUND/i;
 const TRANSFER_DEAD = /FAIL|CANCEL|REJECT|EXPIRE/i;
@@ -104,7 +178,11 @@ type AskDepth = Pick<SpotDepth, 'ask' | 'asks'>;
 type StepSpec =
   | { kind: 'order'; side: CrossexOrderRequest.Side; dest: FundsAt }
   | { kind: 'transfer'; coin: TransferCoin; from: GateAccount; to: GateAccount; dest: FundsAt }
-  | { kind: 'convert'; dest: FundsAt };
+  | { kind: 'convert'; dest: FundsAt }
+  | { kind: 'perp' }
+  | { kind: 'boros' };
+
+type MoneySpec = Exclude<StepSpec, { kind: 'perp' } | { kind: 'boros' }>;
 
 export interface SpotTicker {
   ask: number;
@@ -131,6 +209,8 @@ export const STEPS: Record<StepName, StepSpec> = {
   'From Lighter': { kind: 'transfer', coin: 'USDC', from: LIGHTER_ACCOUNT, to: 'SPOT', dest: 'SPOT' },
   'To Gate': { kind: 'transfer', coin: 'USDC', from: 'SPOT', to: 'CROSSEX_GATE', dest: 'GATE' },
   'Sell USDC': { kind: 'order', side: CrossexOrderRequest.Side.SELL, dest: 'CROSSEX' },
+  [SLICE_STEP]: { kind: 'perp' },
+  [BOROS_STEP]: { kind: 'boros' },
 };
 
 const SLOW_ACCOUNTS: readonly GateAccount[] = [HYPERLIQUID_ACCOUNT, LIGHTER_ACCOUNT];
@@ -154,14 +234,27 @@ const capToBalance = (wanted: number, balance: number): number =>
 const isRefusal = (c: ClassifiedError): boolean =>
   Boolean(c.label) && c.httpStatus !== undefined && c.httpStatus >= 400 && c.httpStatus < 500;
 
+const NEVER_SENT = /ECONNREFUSED|ENOTFOUND|EAI_AGAIN/;
+
+const quoteMayExist = (err: unknown, c: ClassifiedError): boolean =>
+  c.httpStatus !== undefined ? c.httpStatus >= 500 : !NEVER_SENT.test(`${(err as { code?: string }).code ?? ''} ${c.message}`);
+
 const isSpotShortfall = (from: string, c: ClassifiedError): boolean =>
   from === 'SPOT' && c.label === 'TRANSFER_AMOUNT_INSUFFICIENT';
 
 async function readAccount(
   crossEx: CrossEx,
-): Promise<{ margins: Margins; cash: (wallet: WalletRef) => number; equity: (wallet: WalletRef) => number }> {
+): Promise<{
+  margins: Margins;
+  available: number;
+  cash: (wallet: WalletRef) => number;
+  equity: (wallet: WalletRef) => number;
+  borrow: (wallet: WalletRef) => number;
+  imRate: (wallet: WalletRef) => number;
+}> {
   const { body } = await crossEx.getCrossexAccount();
   const margins = { marginBalance: Number(body.marginBalance), initialMargin: Number(body.initialMargin) };
+  const available = Number(body.availableMargin);
   if (!Number.isFinite(margins.marginBalance) || !Number.isFinite(margins.initialMargin)) {
     throw new Error('account read has no margin balance');
   }
@@ -173,7 +266,701 @@ async function readAccount(
     const floored = Number(floorDecimalString(raw ?? '', TRANSFER_STEP));
     return Number.isFinite(floored) ? floored : 0;
   };
-  return { margins, cash, equity: (wallet) => bucketOf(wallet)?.equity ?? 0 };
+  return {
+    margins,
+    available: Number.isFinite(available) ? available : 0,
+    cash,
+    equity: (wallet) => bucketOf(wallet)?.equity ?? 0,
+    imRate: (wallet) => borrowImRateOf(bucketOf(wallet)?.imHeldUsd ?? 0, bucketOf(wallet)?.borrow ?? 0),
+    borrow: (wallet) => {
+      const raw = body.assets?.find((asset) => asset.coin === wallet.coin && asset.exchangeType === wallet.venue)?.liability;
+      const liability = Math.abs(Number(raw ?? 0));
+      return Number.isFinite(liability) ? liability : 0;
+    },
+  };
+}
+
+type AccountRead = Awaited<ReturnType<typeof readAccount>>;
+
+const isRatioLow = (account: AccountRead): boolean => imRatioOf(account.margins.marginBalance, account.margins.initialMargin) < MIN_CONVERT_RATIO;
+
+function convertCapOf(account: AccountRead, from: Pool, to: Pool): number {
+  const owed = account.borrow(poolWallet(to));
+  const sender = poolWallet(from);
+  return Math.min(Math.max(0, account.cash(sender)), account.equity(sender), owed / (1 - CONVERT_RATE));
+}
+
+type SliceRule = { lot: string; tick: string; limits: PerpRule & { maxMarketSize?: string; maxLimitSize?: string } };
+type Engine = NonNullable<RunnerDeps['twap']>;
+type ChildLeg = Pick<StepPerp, 'symbol' | 'side' | 'reduceOnly'>;
+
+const QTY_SCALE = 1e8;
+const addQty = (a: number, b: number): number => Math.round((a + b) * QTY_SCALE) / QTY_SCALE;
+const qtyText = (lots: number, lot: string): string => stripZeros(roundToStep(lots * Number(lot), lot, 'nearest'));
+const ENDED: readonly PairMode[] = ['DONE', 'HALTED'];
+const ENGINE_MISSING = 'The order engine is not running. Restart the app, then resume.';
+const BOROS_MIN_USD = 10;
+
+function engineOf(deps: RunnerDeps): Engine {
+  if (!deps.twap) throw new CoreError(ENGINE_MISSING, 'validation');
+  return deps.twap;
+}
+
+const isLive = (pair: PairRow | null): boolean => pair !== null && !ENDED.includes(pair.mode);
+
+function filledOf(store: Store, pair: PairRow): { a: number; b: number } {
+  const projection = project(pair, store.listOrders(pair.id));
+  return { a: positiveOf(projection.aFilled), b: positiveOf(projection.bFilled) };
+}
+
+const childLeg = (leg: ChildLeg): DealRequest['a'] => ({ symbol: leg.symbol, side: leg.side, ...(leg.reduceOnly ? { reduceOnly: true } : {}) });
+
+const oneLegChild = (id: string, leg: ChildLeg, qty: string): DealRequest => ({ id, a: childLeg(leg), b: null, qty, execution: 'taker' });
+
+const isBelowMinimum = (err: unknown): boolean =>
+  classifyGateError(err).category === 'size-too-small' || (err instanceof CoreError && /minimum (size|order value)/.test(err.message));
+
+const refusedAsTooSmall = (store: Store, child: PairRow): boolean =>
+  child.b === null &&
+  store
+    .listOrders(child.id)
+    .some((order) => order.leg === 'A' && order.closeReason?.startsWith('rejected:') && isBelowMinimum({ response: { data: { label: order.closeReason.slice('rejected:'.length) } } }));
+
+function nextChildId(store: Store, jobId: string, slice: number): string {
+  let k = 1;
+  while (store.getPair(childIdFor(jobId, slice, k))) k += 1;
+  return childIdFor(jobId, slice, k);
+}
+
+const opposite = (side: 'BUY' | 'SELL'): 'BUY' | 'SELL' => (side === 'BUY' ? 'SELL' : 'BUY');
+
+async function sliceRule(deps: RunnerDeps, symbol: string): Promise<SliceRule> {
+  const { value: rules } = await deps.cache.get('rules:all', TTL.static, async () => (await deps.clients().crossEx.listCrossexRuleSymbols()).body);
+  const rule = rules?.find((candidate) => candidate.symbol === symbol);
+  if (!rule || !(positiveOf(rule.lotSize) > 0)) throw new Error(`Gate has no order rules for ${symbol}`);
+  return { lot: rule.lotSize, tick: positiveOf(rule.tickSize) > 0 ? rule.tickSize : DEFAULT_STEP, limits: rule };
+}
+
+async function bookOf(deps: RunnerDeps, symbol: string): Promise<NormalizedBook | null> {
+  if (deps.book) return deps.book(symbol);
+  const { exchange, base, quote } = parseSymbol(symbol);
+  return fetchDeepBook(exchange, base, quote);
+}
+
+async function midOf(deps: RunnerDeps, symbol: string): Promise<number | null> {
+  const touch = touchOf(await bookOf(deps, symbol).catch(() => null));
+  return touch && touch.mid > 0 ? touch.mid : null;
+}
+
+async function readImUsed(deps: RunnerDeps): Promise<ImUsedRow[] | null> {
+  const read = async () => (await deps.clients().crossEx.getCrossexAccount()).body;
+  const { value } = await deps.cache.get('account', TTL.live, read, { fresh: true }).catch(() => ({ value: null }));
+  return value ? imUsedOf(value) : null;
+}
+
+async function endJob(deps: RunnerDeps, job: Job): Promise<void> {
+  job.status = 'done';
+  job.haltReason = null;
+  job.haltKind = null;
+  if (job.kind === 'delever') job.imUsedEnd = (await readImUsed(deps)) ?? job.imUsedEnd;
+}
+
+const legFor = (job: Job, step: Step | undefined): RealizeJobLeg | undefined =>
+  job.realize?.legs.find((leg) => leg.symbol === step?.perp?.symbol);
+
+const wholeLegOf = (job: Job, symbol: string): NonNullable<Job['delever']>['legs'][number] | null =>
+  job.delever?.legs.find((row) => row.symbol === symbol && row.closeAll === true) ?? null;
+
+function followPlannedOf(job: Job, step: Step, leg: RealizeJobLeg): number {
+  const whole = job.kind === 'delever' && step.follow ? wholeLegOf(job, step.follow.symbol) : null;
+  return whole ? whole.before : leg.qty;
+}
+
+function borosTargets(job: Job): { row: NonNullable<Job['delever']>['boros'][number]; target: number }[] {
+  const leg = job.realize?.legs[0];
+  const step = job.steps.find((candidate) => candidate.name === SLICE_STEP);
+  if (!job.delever || !leg || !step) return [];
+  const legFilled: [number, number] = [leg.filledQty, step.qty ?? 0];
+  const legPlanned: [number, number] = [leg.qty, followPlannedOf(job, step, leg)];
+  return job.delever.boros.map((row) => {
+    const closeSize = Math.abs(row.before - row.after);
+    return { row, target: Math.min(closeSize, borosShareOf({ closeSize, legFilled, legPlanned })) };
+  });
+}
+
+function setBorosGap(job: Job): void {
+  if (!job.delever) return;
+  job.borosGapYu = borosTargets(job).reduce((total, { row, target }) => total + Math.max(0, target - row.closed), 0);
+}
+
+const BOROS_MISSING_TEXT = 'The app has no Boros wallet to close the Boros share with.';
+const BOROS_DUST_YU = 1e-9;
+export const BOROS_LATE_SEND_MS = 10 * 60_000;
+
+class BorosWaitError extends CoreError {}
+
+async function closeBorosRest(deps: RunnerDeps, job: Job, usdPerYu: Map<number, number> | null = null): Promise<number> {
+  let short = 0;
+  try {
+    for (const { row, target } of borosTargets(job)) {
+      const rest = target - row.closed;
+      if (!(rest > BOROS_DUST_YU)) continue;
+      if (usdPerYu !== null && rest * (usdPerYu.get(row.marketId) ?? Number.POSITIVE_INFINITY) <= BOROS_MIN_USD) continue;
+      const boros = deps.boros;
+      if (!boros) throw new Error(BOROS_MISSING_TEXT);
+      const waitMs = row.sent ? row.sent.sentAt + BOROS_LATE_SEND_MS - deps.now() : 0;
+      if (waitMs > 0) throw new BorosWaitError(borosWaitText(waitMs), 'validation');
+      row.sent = null;
+      job.tagCount += 1;
+      const clientOrderId = tagFor(job.id, job.tagCount);
+      deps.jobs.write(job);
+      const slippagePct = (await boros.slippagePct?.(row.marketId).catch(() => null)) ?? BOROS_CLOSE_FALLBACK_SLIPPAGE_PCT;
+      const keep = Math.max(0, Math.abs(row.before) - target);
+      const onSend = (): void => {
+        row.sent = { tag: clientOrderId, size: rest, sentAt: deps.now() };
+        deps.jobs.write(job);
+      };
+      const result = await closeBorosLegs(boros.deps, { address: boros.address, legs: [{ marketId: row.marketId, size: rest, keep }], slippagePct, clientOrderId, onSend });
+      row.sent = null;
+      const held = result.held.find((leg) => leg.marketId === row.marketId)?.size;
+      const goneBefore = held === undefined ? row.closed : Math.max(row.closed, Math.abs(row.before) - held);
+      const filled = result.filled.find((leg) => leg.marketId === row.marketId)?.size ?? 0;
+      row.closed = Math.min(target, goneBefore + filled);
+      short += Math.max(0, target - row.closed);
+      deps.jobs.write(job);
+    }
+  } finally {
+    job.borosLeftYu = borosTargets(job).reduce((total, { row, target }) => total + Math.max(0, target - row.closed), 0);
+    if (job.borosLeftYu <= BOROS_DUST_YU) job.borosLeftYu = 0;
+    setBorosGap(job);
+    deps.jobs.write(job);
+  }
+  if (usdPerYu !== null) return short > BOROS_DUST_YU ? short : 0;
+  return job.borosLeftYu;
+}
+
+export async function cancelRestingLead(deps: RunnerDeps, job: Job): Promise<void> {
+  const id = sliceStepBehind(job)?.lead?.text ?? null;
+  const child = id !== null && deps.twap ? deps.twap.store.getPair(id) : null;
+  if (deps.twap && child && isLive(child) && child.mode !== 'HALTED') {
+    commands.stop(deps.twap.store, child.id);
+    deps.twap.engineWake();
+  }
+  const sliceDone = !isLive(child);
+  job.status = 'halted';
+  job.paused = job.pauseRequested && sliceDone;
+  if (job.paused) job.pauseRequested = false;
+  job.haltReason = job.paused ? null : HALT_TEXT.restart;
+  job.haltKind = job.paused ? null : 'restart';
+  if (deps.twap) markOpenGap(deps.twap.store, job);
+  if (!job.paused && job.notHedgedQty > 0) job.haltReason = HALT_TEXT.restartGap;
+  setBorosGap(job);
+  deps.jobs.write(job);
+}
+
+const FIX_WAIT_MS = STEP_TIMEOUT_MS;
+const HEDGE_HELD = Number.MAX_SAFE_INTEGER;
+
+async function waitEnded(deps: RunnerDeps, store: Store, id: string): Promise<PairRow> {
+  const start = deps.now();
+  for (;;) {
+    const pair = store.getPair(id);
+    if (!pair) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    if (!isLive(pair)) return pair;
+    if (isWalledStop(store, pair)) {
+      haltWalled(store, pair);
+      return store.getPair(id) ?? pair;
+    }
+    if (deps.now() - start > FIX_WAIT_MS) {
+      if (pair.mode === 'STOPPING' && pair.b !== null && pair.b.reduceOnly !== true) haltWalled(store, pair);
+      throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    }
+    await deps.sleep(POLL_MS);
+  }
+}
+
+const LIMIT_FIX_BAND_PCT = 0.25;
+
+const LIMIT_FIX_REST_SEC = MAKER_REST_MS / 1000;
+
+function limitFixOf(job: Job): Pick<DealRequest, 'execution' | 'pricePolicy' | 'timeoutSec' | 'repegBehindBp' | 'clipBandPct'> {
+  const twap = job.deleverTwap;
+  const timing = twap
+    ? { timeoutSec: twap.takerAfterSec === undefined ? takerAfterCapSec(twap.intervalSec) : twap.takerAfterSec, repegBehindBp: twap.repegBehindBp === undefined ? REPEG_DEFAULT_BP : twap.repegBehindBp }
+    : job.maker
+      ? { timeoutSec: job.maker.takerAfterSec, repegBehindBp: job.maker.repegBehindBp }
+      : { timeoutSec: LIMIT_FIX_REST_SEC, repegBehindBp: REPEG_DEFAULT_BP };
+  const timeoutSec = Math.min(timing.timeoutSec ?? LIMIT_FIX_REST_SEC, LIMIT_FIX_REST_SEC);
+  return { execution: 'maker', pricePolicy: 'touch', clipBandPct: LIMIT_FIX_BAND_PCT, ...timing, timeoutSec };
+}
+
+async function sendOneLeg(deps: RunnerDeps, id: string, leg: ChildLeg, qty: string, limit: Job | null = null): Promise<PairRow> {
+  const engine = engineOf(deps);
+  if (!engine.store.getPair(id)) {
+    await engine.createChild({ ...oneLegChild(id, leg, qty), ...(limit ? limitFixOf(limit) : {}) });
+    engine.engineWake();
+  }
+  return waitEnded(deps, engine.store, id);
+}
+
+async function addBackLeg(
+  deps: RunnerDeps,
+  job: Job,
+  perp: NonNullable<Job['delever']>['legs'][number],
+  row: AddBack['legs'][number],
+  qty: number,
+): Promise<void> {
+  const rule = await sliceRule(deps, perp.symbol);
+  if (!row.order) {
+    const lots = lotsDownOf(qty, rule.lot) - lotsOf(row.filled, rule.lot);
+    if (lots <= 0) return;
+    job.tagCount += 1;
+    row.order = { text: `${job.id}-f${job.tagCount}`, venueId: null, sentAt: deps.now(), credited: 0, poc: false, price: null };
+    deps.jobs.write(job);
+  }
+  const order = row.order;
+  const side = perp.side === 'SHORT' ? 'SELL' : 'BUY';
+  let ended: PairRow;
+  try {
+    const lots = Math.max(1, lotsDownOf(qty, rule.lot) - lotsOf(row.filled, rule.lot));
+    ended = await sendOneLeg(deps, order.text, { symbol: perp.symbol, side, reduceOnly: false }, qtyText(lots, rule.lot));
+  } catch (err) {
+    if (!engineOf(deps).store.getPair(order.text)) row.order = null;
+    deps.jobs.write(job);
+    throw err;
+  }
+  row.filled = addQty(row.filled, filledOf(engineOf(deps).store, ended).a);
+  row.order = null;
+  deps.jobs.write(job);
+  if (filledOf(engineOf(deps).store, ended).a === 0) throw new Error(`Gate filled none of the ${perp.base} order. Try again.`);
+}
+
+async function holdLiveChild(deps: RunnerDeps, id: string): Promise<void> {
+  const engine = engineOf(deps);
+  const start = deps.now();
+  for (;;) {
+    const pair = engine.store.getPair(id);
+    if (!pair || !isLive(pair)) return;
+    if (pair.hedgeNotBefore !== HEDGE_HELD) engine.store.updatePair(id, { hedgeNotBefore: HEDGE_HELD });
+    if (!project(pair, engine.store.listOrders(id)).anyPending) {
+      engine.store.updatePair(id, { mode: 'HALTED' });
+      return;
+    }
+    if (deps.now() - start > FIX_WAIT_MS) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    engine.engineWake();
+    await deps.sleep(POLL_MS);
+  }
+}
+
+export async function endHaltedChildren(deps: RunnerDeps, job: Job): Promise<void> {
+  if (!deps.twap) return;
+  const { store } = deps.twap;
+  const addBack = new Set((job.steps[job.stepIndex]?.addBack?.legs ?? []).map((row) => row.order?.text));
+  const live = store.listPairs({ activeOnly: true }).filter((pair) => pair.mode === 'STOPPING' && isChildOf(job.id, pair.id) && !addBack.has(pair.id));
+  for (const pair of live) {
+    if (pair.b === null) {
+      await holdLiveChild(deps, pair.id);
+      continue;
+    }
+    const ended = await waitEnded(deps, store, pair.id);
+    if (isLive(ended)) continue;
+    creditSliceChild(job, store, ended);
+    if (job.kind !== 'twap') markOpenGap(store, job);
+  }
+  const halted = store.listPairs({ activeOnly: true }).filter((pair) => pair.mode === 'HALTED' && isChildOf(job.id, pair.id));
+  for (const pair of halted) {
+    creditSliceChild(job, store, await heldSettled(deps, pair));
+    if (job.kind !== 'twap') markOpenGap(store, job);
+    store.updatePair(pair.id, { mode: 'DONE' });
+  }
+}
+
+export async function settleAddBack(deps: RunnerDeps, job: Job): Promise<string[]> {
+  const unread: string[] = [];
+  for (const row of job.steps[job.stepIndex]?.addBack?.legs ?? []) {
+    const order = row.order;
+    if (!order) continue;
+    const pair = deps.twap?.store.getPair(order.text) ?? null;
+    if (!pair) {
+      if (deps.now() - order.sentAt < LOOKUP_WINDOW_MS) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+      unread.push(row.symbol);
+    } else {
+      if (isLive(pair)) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+      row.filled = addQty(row.filled, filledOf(engineOf(deps).store, pair).a);
+    }
+    row.order = null;
+    deps.jobs.write(job);
+  }
+  return unread;
+}
+
+function haltedChildOf(deps: RunnerDeps, job: Job): PairRow | null {
+  if (!deps.twap) return null;
+  const step = sliceStepBehind(job);
+  const id = job.kind === 'twap' && job.twap ? childIdFor(job.id, job.twap.sliceIndex, 1) : (step?.lead?.text ?? null);
+  const pair = id !== null ? deps.twap.store.getPair(id) : null;
+  return pair?.mode === 'HALTED' ? pair : null;
+}
+
+function holdHaltedHedge(deps: RunnerDeps, job: Job): void {
+  const child = haltedChildOf(deps, job);
+  if (child && child.hedgeNotBefore !== HEDGE_HELD) deps.twap?.store.updatePair(child.id, { hedgeNotBefore: HEDGE_HELD });
+}
+
+function feePerCoinOf(job: Job, step: Step, leg: RealizeJobLeg, mark: number): number {
+  const rate = leg.takerRate;
+  if (typeof rate === 'number' && Number.isFinite(rate) && rate >= 0) return realizeFeePerCoin(mark, rate);
+  const bp = job.exec === 'market' || step.cut?.taker === true ? 2 * TAKER_FEE_BP : MAKER_FEE_BP + TAKER_FEE_BP;
+  return (mark * bp) / 10_000;
+}
+
+function skipRetryConverts(deps: RunnerDeps, job: Job): void {
+  const step = sliceStepBehind(job);
+  if (!step || step === job.steps[job.stepIndex]) return;
+  const between = job.steps.slice(job.stepIndex, job.steps.indexOf(step));
+  if (between.some((convert) => convert.quoteId !== null || convert.venueId !== null)) return;
+  for (const convert of between) {
+    convert.status = 'done';
+    convert.qty ??= 0;
+    convert.doneAt = deps.now();
+    delete convert.sentAt;
+  }
+  job.stepIndex = job.steps.indexOf(step);
+}
+
+
+function creditSliceChild(job: Job, store: Store, pair: PairRow): void {
+  const step = job.steps[job.stepIndex];
+  const leg = legFor(job, step);
+  const perp = step?.perp;
+  if (!step || !leg || !perp || step.lead?.text !== pair.id) return;
+  const filled = filledOf(store, pair);
+  const onLead = pair.a.contract === perp.symbol && pair.a.side === perp.side;
+  const leadNow = onLead ? filled.a : 0;
+  const followNow = onLead ? filled.b : filled.a;
+  leg.filledQty = addQty(leg.filledQty, leadNow - step.lead.credited);
+  step.lead.credited = leadNow;
+  const hedge = step.hedge ?? { ...step.lead, credited: 0 };
+  step.hedge = hedge;
+  step.qty = addQty(step.qty ?? 0, followNow - hedge.credited);
+  hedge.credited = followNow;
+}
+
+function resumeRun(job: Job): void {
+  job.status = 'running';
+  job.paused = false;
+  job.haltReason = null;
+  job.haltKind = null;
+  job.notHedgedQty = 0;
+  job.follow = null;
+  job.unwindTarget = null;
+}
+
+async function heldSettled(deps: RunnerDeps, halted: PairRow): Promise<PairRow> {
+  const engine = engineOf(deps);
+  const start = deps.now();
+  for (;;) {
+    const pair = engine.store.getPair(halted.id);
+    if (!pair) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    if (pair.hedgeNotBefore !== HEDGE_HELD) engine.store.updatePair(halted.id, { hedgeNotBefore: HEDGE_HELD });
+    if (project(pair, engine.store.listOrders(halted.id)).allSettled) return pair;
+    if (deps.now() - start > FIX_WAIT_MS) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    engine.engineWake();
+    await deps.sleep(POLL_MS);
+  }
+}
+
+const sizeCapOf = (size: string | undefined): number => (positiveOf(size) > 0 ? positiveOf(size) : Infinity);
+
+function legCapOf(job: Job, rule: SliceRule, symbol: string, mid: number, maker: boolean): number {
+  const capUsd = job.slice?.capsUsd?.[symbol] ?? 0;
+  return Math.min(sizeCapOf(rule.limits.maxMarketSize), maker ? sizeCapOf(rule.limits.maxLimitSize) : Infinity, capUsd > 0 && mid > 0 ? capUsd / mid : Infinity);
+}
+
+async function closeGap(deps: RunnerDeps, job: Job, target: JobFollow, qty: number, limit = false, onPart?: (filled: number, part: PairRow) => Promise<void> | void): Promise<{ done: number; lot: number }> {
+  const rule = await sliceRule(deps, target.symbol);
+  const lot = Number(rule.lot);
+  const mid = (job.slice?.capsUsd?.[target.symbol] ?? 0) > 0 ? ((await midOf(deps, target.symbol)) ?? 0) : 0;
+  const capLots = Math.max(1, Math.floor(legCapOf(job, rule, target.symbol, mid, limit) / lot + 1e-9));
+  let left = lotsDownOf(qty, rule.lot);
+  const partLots = Math.ceil(left / Math.max(1, Math.ceil(left / capLots)));
+  let done = 0;
+  while (left > 0) {
+    const lots = Math.min(left, partLots);
+    const ended = await sendOneLeg(deps, `${job.id}-g${job.tagCount}`, { symbol: target.symbol, side: target.side, reduceOnly: target.reduceOnly }, qtyText(lots, rule.lot), limit ? job : null);
+    const filled = filledOf(engineOf(deps).store, ended).a;
+    job.tagCount += 1;
+    await onPart?.(filled, ended);
+    done = addQty(done, filled);
+    if (lotsOf(filled, rule.lot) < lots) break;
+    left -= lots;
+  }
+  return { done, lot };
+}
+
+function settleGap(job: Job, gap: number, done: number, lot: number): boolean {
+  const rest = Math.max(0, addQty(gap, -done));
+  if (rest >= lot) {
+    job.status = 'halted';
+    job.notHedgedQty = rest;
+    if (job.follow) job.follow = { ...job.follow, qty: rest };
+    if (job.unwindTarget) job.unwindTarget = { ...job.unwindTarget, qty: rest };
+    return false;
+  }
+  job.notHedgedQty = 0;
+  job.follow = null;
+  job.unwindTarget = null;
+  return true;
+}
+
+async function chargeChildCost(deps: RunnerDeps, job: Job, pair: PairRow, mid: number): Promise<void> {
+  const engine = engineOf(deps);
+  const fees = await engine.readFees([pair.id]).catch(() => ({}) as Record<string, number>);
+  const fee = Number.isFinite(fees[pair.id]) ? Math.abs(fees[pair.id]) : 0;
+  const filled = filledOf(engine.store, pair);
+  const worse = (leg: 'A' | 'B', side: 'BUY' | 'SELL', qty: number): number => {
+    const avg = positiveOf(engine.store.avgFillPrice(pair.id, leg) ?? '');
+    if (!(avg > 0) || !(mid > 0)) return 0;
+    return qty * Math.max(0, side === 'BUY' ? avg - mid : mid - avg);
+  };
+  const impact = worse('A', pair.a.side, filled.a) + (pair.b ? worse('B', pair.b.side, filled.b) : 0);
+  job.feeSoFarUsd = nearestCents(job.feeSoFarUsd + fee);
+  job.totalCostUsd = nearestCents((job.totalCostUsd ?? 0) + fee + impact);
+}
+
+export async function creditGapChild(deps: RunnerDeps, job: Job): Promise<void> {
+  const store = engineOf(deps).store;
+  const step = sliceStepBehind(job);
+  if (!step?.follow) return;
+  const mid = store.getPair(`${job.id}-g${job.tagCount}`) ? ((await midOf(deps, step.follow.symbol)) ?? 0) : 0;
+  const credits = job.tagCount;
+  for (let sent = store.getPair(`${job.id}-g${job.tagCount}`); sent; sent = store.getPair(`${job.id}-g${job.tagCount}`)) {
+    const ended = await waitEnded(deps, store, sent.id);
+    const done = filledOf(store, ended).a;
+    step.qty = addQty(step.qty ?? 0, done);
+    const leg = legFor(job, step);
+    if (leg && (ended.a.contract !== step.follow.symbol || ended.a.side !== step.follow.side)) leg.shrunkQty = addQty(leg.shrunkQty ?? 0, done);
+    await chargeChildCost(deps, job, ended, mid);
+    job.tagCount += 1;
+  }
+  if (job.status === 'halted' && job.tagCount > credits) markOpenGap(store, job);
+}
+
+async function unwindGap(deps: RunnerDeps, job: Job, halted: PairRow | null): Promise<Job> {
+  const engine = engineOf(deps);
+  const step = job.steps[job.stepIndex];
+  const leg = legFor(job, step);
+  if (!step || !leg) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+  let gap = job.notHedgedQty;
+  let target = job.unwindTarget ?? null;
+  const alone = job.kind === 'realize' && leg.hedge === null;
+  if (halted) {
+    if (!alone && !unwindTargetOf(job, step, halted, gap)) throw new CoreError(REOPEN_HALT.noHedgePerp, 'validation');
+    const settled = await heldSettled(deps, halted);
+    creditSliceChild(job, engine.store, settled);
+    const filled = filledOf(engine.store, settled);
+    gap = Math.max(0, addQty(filled.a, -filled.b));
+    target = unwindTargetOf(job, step, settled, gap);
+    engine.store.updatePair(halted.id, { mode: 'DONE' });
+    job.notHedgedQty = gap;
+    job.unwindTarget = target;
+    deps.jobs.write(job);
+  }
+  if (alone) {
+    step.qty = addQty(step.qty ?? 0, gap);
+    leg.shrunkQty = addQty(leg.shrunkQty ?? 0, gap);
+    return holdOrPause(deps, job, gap, gap, Number((await sliceRule(deps, leg.symbol)).lot));
+  }
+  if (!target) throw new CoreError(REOPEN_HALT.noHedgePerp, 'validation');
+  const { done, lot } = await closeGap(deps, job, target, gap);
+  if (job.kind === 'realize') {
+    step.qty = addQty(step.qty ?? 0, done);
+    leg.shrunkQty = addQty(leg.shrunkQty ?? 0, done);
+  } else leg.filledQty = Math.max(0, addQty(leg.filledQty, -done));
+  return holdOrPause(deps, job, gap, done, lot);
+}
+
+function holdOrPause(deps: RunnerDeps, job: Job, gap: number, done: number, lot: number): Job {
+  if (settleGap(job, gap, done, lot)) {
+    job.paused = true;
+    job.pauseRequested = false;
+    job.haltReason = null;
+    job.haltKind = null;
+  }
+  deps.jobs.write(job);
+  return job;
+}
+
+async function followGap(deps: RunnerDeps, job: Job, limit = false): Promise<Job> {
+  const step = job.steps[job.stepIndex];
+  const follow = job.follow;
+  if (!step || !follow) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+  const gap = job.notHedgedQty;
+  const { done, lot } = await closeGap(deps, job, follow, gap, limit);
+  step.qty = addQty(step.qty ?? 0, done);
+  if (settleGap(job, gap, done, lot)) resumeRun(job);
+  deps.jobs.write(job);
+  return job;
+}
+
+async function unwindChild(deps: RunnerDeps, job: Job, halted: PairRow): Promise<Job> {
+  const engine = engineOf(deps);
+  const start = deps.now();
+  let settled = halted;
+  for (;;) {
+    const pair = engine.store.getPair(halted.id);
+    if (!pair) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    if (pair.hedgeNotBefore !== HEDGE_HELD) engine.store.updatePair(halted.id, { hedgeNotBefore: HEDGE_HELD });
+    settled = pair;
+    if (project(pair, engine.store.listOrders(halted.id)).allSettled) break;
+    if (deps.now() - start > FIX_WAIT_MS) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    engine.engineWake();
+    await deps.sleep(POLL_MS);
+  }
+  const filled = filledOf(engine.store, settled);
+  const rule = await sliceRule(deps, halted.a.contract);
+  const gap = Math.max(0, addQty(filled.a, -filled.b));
+  const lots = lotsDownOf(gap, rule.lot);
+  const target: JobFollow = { symbol: halted.a.contract, exchange: parseSymbol(halted.a.contract).exchange, side: opposite(halted.a.side), qty: gap, reduceOnly: halted.a.reduceOnly !== true };
+  let done = 0;
+  if (lots > 0) {
+    const step = job.steps[job.stepIndex];
+    const id = job.kind === 'twap' && job.twap ? `${job.id}-f${job.twap.sliceIndex}` : nextChildId(engine.store, job.id, job.slice?.index ?? 1);
+    const ended = await sendOneLeg(deps, id, target, qtyText(lots, rule.lot));
+    done = filledOf(engine.store, ended).a;
+    const leg = legFor(job, step);
+    if (step?.name === SLICE_STEP && leg) leg.filledQty = Math.max(0, addQty(leg.filledQty, -done));
+  }
+  engine.store.updatePair(halted.id, { mode: 'DONE' });
+  creditSliceChild(job, engine.store, engine.store.getPair(halted.id) ?? settled);
+  job.unwindTarget = target;
+  return holdOrPause(deps, job, gap, done, Number(rule.lot));
+}
+
+async function unwindRest(deps: RunnerDeps, job: Job, twap: JobTwap, target: JobFollow): Promise<Job> {
+  const engine = engineOf(deps);
+  const rule = await sliceRule(deps, target.symbol);
+  const lots = lotsDownOf(job.notHedgedQty, rule.lot);
+  const base = `${job.id}-f${twap.sliceIndex}`;
+  let k = 2;
+  for (let pair = engine.store.getPair(`${base}-${k}`); pair && !isLive(pair); pair = engine.store.getPair(`${base}-${k}`)) k += 1;
+  const done = lots > 0 ? filledOf(engine.store, await sendOneLeg(deps, `${base}-${k}`, target, qtyText(lots, rule.lot))).a : 0;
+  return holdOrPause(deps, job, job.notHedgedQty, done, Number(rule.lot));
+}
+
+export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction | 'unwind'): Promise<Job> {
+  const step = job.steps[job.stepIndex];
+  if (action === 'boros-retry') {
+    if (step?.addBack && job.status === 'halted') throw new CoreError(ADD_BACK_FIRST, 'validation');
+    if (job.delever && (job.status === 'abandoned' || step?.name === SLICE_STEP)) {
+      const left = await closeBorosRest(deps, job);
+      const shareDone = borosTargets(job).every(({ row, target }) => target - row.closed <= BOROS_DUST_YU || row.sent);
+      if (job.status === 'halted' && job.haltKind === 'boros' && step?.name === SLICE_STEP && (left === 0 || shareDone)) resumeRun(job);
+      deps.jobs.write(job);
+      return job;
+    }
+    if (step?.name !== BOROS_STEP) return job;
+    const left = await closeBorosRest(deps, job);
+    if (left > 0) {
+      job.haltReason = borosPartText(left);
+      job.haltKind = 'boros';
+    } else {
+      step.status = 'done';
+      step.doneAt = deps.now();
+      if (job.stepIndex === job.steps.length - 1) await endJob(deps, job);
+      else {
+        job.stepIndex += 1;
+        job.status = 'running';
+        job.haltReason = null;
+        job.haltKind = null;
+      }
+    }
+    deps.jobs.write(job);
+    return job;
+  }
+  if (action === 'add-back') {
+    const lead = job.realize?.legs[0];
+    const total = borosTargets(job).reduce((sum, { target }) => sum + target, 0);
+    const perps = job.delever?.legs ?? [];
+    if (step?.name !== BOROS_STEP || !lead || !(total > 0) || perps.length < 2) return job;
+    if (!step.addBack && !(job.borosLeftYu > 0)) return job;
+    const plan = (step.addBack ??= { qty: (lead.filledQty * job.borosLeftYu) / total, legs: perps.map((perp) => ({ symbol: perp.symbol, filled: 0, order: null })) });
+    try {
+      for (const perp of perps) {
+        const row = plan.legs.find((candidate) => candidate.symbol === perp.symbol);
+        if (row) await addBackLeg(deps, job, perp, row, plan.qty);
+      }
+    } catch (err) {
+      const rows = addBackRowsOf(job);
+      if (rows.some((row) => row.filled > 0)) {
+        job.haltReason = addBackPartText(rows);
+        deps.jobs.write(job);
+      } else if (plan.legs.every((row) => row.filled === 0 && row.order === null)) {
+        step.addBack = null;
+        deps.jobs.write(job);
+      }
+      throw err;
+    }
+    job.borosLeftYu = 0;
+    job.borosGapYu = 0;
+    step.status = 'done';
+    step.doneAt = deps.now();
+    await endJob(deps, job);
+    deps.jobs.write(job);
+    return job;
+  }
+  const halted = haltedChildOf(deps, job);
+  if (job.kind !== 'twap') {
+    if (!halted && job.kind === 'realize' && deps.twap) {
+      await creditGapChild(deps, job);
+      markOpenGap(deps.twap.store, job);
+      deps.jobs.write(job);
+    }
+    if (!halted && !(job.notHedgedQty > 0)) return job;
+    const liveId = sliceStepBehind(job)?.lead?.text;
+    const lead = liveId ? engineOf(deps).store.getPair(liveId) : null;
+    if (!halted && lead && isLive(lead)) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    const leadFills = lead ? filledOf(engineOf(deps).store, lead) : null;
+    if (!halted && job.kind !== 'realize' && lead?.b && leadFills && !(addQty(leadFills.a, -leadFills.b) > 0)) {
+      creditSliceChild(job, engineOf(deps).store, lead);
+      markOpenGap(engineOf(deps).store, job);
+      deps.jobs.write(job);
+      return job;
+    }
+    skipRetryConverts(deps, job);
+    if (job.steps[job.stepIndex]?.name !== SLICE_STEP) throw new CoreError(FIX_UNCONFIRMED, 'validation');
+    if (action === 'unwind') return unwindGap(deps, job, halted);
+    if (!halted) return followGap(deps, job, action === 'limit');
+    if (action === 'limit' && job.follow && job.notHedgedQty > 0) {
+      const store = engineOf(deps).store;
+      const settled = await heldSettled(deps, halted);
+      creditSliceChild(job, store, settled);
+      const filled = filledOf(store, settled);
+      job.notHedgedQty = Math.max(0, addQty(filled.a, -filled.b));
+      job.follow = { ...job.follow, qty: job.notHedgedQty };
+      store.updatePair(halted.id, { mode: 'DONE' });
+      deps.jobs.write(job);
+      return followGap(deps, job, true);
+    }
+  } else if (!halted) {
+    const rest = action === 'unwind' ? job.unwindTarget : action === 'market' ? twapHedgeOf(engineOf(deps).store, job) : null;
+    return job.twap && rest && job.notHedgedQty > 0 ? unwindRest(deps, job, job.twap, rest) : job;
+  }
+  const engine = engineOf(deps);
+  if (action === 'unwind') return unwindChild(deps, job, halted);
+  commands.resumeAfterHalt(engine.store, halted.id);
+  engine.engineWake();
+  const ended = await waitEnded(deps, engine.store, halted.id);
+  creditSliceChild(job, engine.store, ended);
+  if (ended.mode === 'HALTED') {
+    if (job.kind !== 'twap') markOpenGap(engine.store, job);
+    deps.jobs.write(job);
+    const refused = job.kind === 'twap' ? REOPEN_HALT.hedgeRefusedAgain : REOPEN_HALT.noCash(legFor(job, job.steps[job.stepIndex])?.pool ?? 'CROSSEX');
+    throw new CoreError(ended.haltKind === 'hedge-margin' ? refused : FIX_UNCONFIRMED, 'validation');
+  }
+  resumeRun(job);
+  deps.jobs.write(job);
+  return job;
 }
 
 export async function transferRow(
@@ -216,14 +1003,103 @@ async function lookUpInWindow(
   }
 }
 
+async function runTwapJob(deps: RunnerDeps, job: Job): Promise<void> {
+  if (!deps.twap) {
+    job.status = 'halted';
+    job.haltKind = 'error';
+    job.haltReason = ENGINE_MISSING;
+    deps.jobs.write(job);
+    deps.onDone?.();
+    return;
+  }
+  for (;;) {
+    await runTwap(deps.twap, job);
+    const fresh = deps.jobs.read();
+    if (fresh?.id !== job.id || fresh.status !== 'running') break;
+    await deps.sleep(POLL_MS);
+  }
+  deps.onDone?.();
+}
+
 export async function runJob(deps: RunnerDeps): Promise<void> {
   const job = deps.jobs.read();
   if (!job) return;
+  if (job.kind === 'twap') return runTwapJob(deps, job);
   const crossEx = () => deps.clients().crossEx;
 
-  const halt = (reason: string): void => {
+  const reopenOf = (index: number): Step | null => {
+    if (!job.steps[index]?.name.startsWith('Convert')) return null;
+    const next = job.steps.slice(index + 1).find((later) => !later.name.startsWith('Convert'));
+    return next?.name === SLICE_STEP && job.steps[index].retry ? next : null;
+  };
+
+  const legOf = (step: Step): RealizeJobLeg | undefined =>
+    job.realize?.legs.find((leg) => leg.symbol === step.perp?.symbol);
+
+  const openOf = (leg: RealizeJobLeg, reopen: Step): number => leg.filledQty - (reopen.qty ?? 0);
+
+  const isSent = (step: Step): boolean => step.quoteId !== null || step.venueId !== null;
+
+  const skipToReopen = (reopen: Step): void => {
+    const current = job.steps[job.stepIndex];
+    if (isSent(current)) {
+      current.status = 'pending';
+      current.startedAt = null;
+      job.steps.splice(job.stepIndex, 1);
+      job.steps.splice(job.steps.indexOf(reopen) + 1, 0, current);
+    }
+    const at = job.steps.indexOf(reopen);
+    for (const step of job.steps.slice(job.stepIndex, at)) {
+      step.status = 'done';
+      step.qty ??= 0;
+      step.doneAt = deps.now();
+      delete step.sentAt;
+    }
+    job.stepIndex = at;
+    deps.jobs.write(job);
+  };
+
+  const reopenAhead = (reason: string): Step | null => {
+    const reopen = reopenOf(job.stepIndex);
+    if (!reopen || !legOf(reopen)) return null;
+    if (reopen.cut?.gap === 'convert' && !reopen.cut.failed) {
+      reopen.cut.failed = reason;
+      return reopen;
+    }
+    if (reason !== HALT_TEXT.quotesUsed && reason !== HALT_TEXT.poorQuote) return reopen;
+    return reopen.retry ? null : reopen;
+  };
+
+  const hedgeOpen = (): boolean => {
+    const reopen = reopenOf(job.stepIndex);
+    const leg = reopen ? legOf(reopen) : undefined;
+    return (reopen !== null && leg !== undefined && openOf(leg, reopen) > 0);
+  };
+
+  const halt = (reason: string, kind?: HaltKind): void => {
+    const ahead = reopenAhead(reason);
+    if (ahead) {
+      skipToReopen(ahead);
+      return;
+    }
+    setBorosGap(job);
+    const current = job.steps[job.stepIndex];
+    const reopen = reopenOf(job.stepIndex) ?? (current?.name === SLICE_STEP ? current : null);
+    const leg = reopen ? legOf(reopen) : undefined;
+    const open = reopen && leg ? openOf(leg, reopen) : 0;
     job.status = 'halted';
-    job.haltReason = reason;
+    job.haltKind = kind ?? (hedgeOpen() ? 'not-hedged' : 'other');
+    const legOpen = leg && open > 0 ? leg : null;
+    job.haltReason =
+      legOpen && reason === HALT_TEXT.quotesUsed
+        ? REOPEN_HALT.quotesUsedLegOpen(legOpen, open)
+        : legOpen && reason === HALT_TEXT.poorQuote
+          ? REOPEN_HALT.poorQuoteLegOpen(legOpen, open)
+          : legOpen && job.haltKind === 'margin'
+            ? REOPEN_HALT.marginLegOpen(reason === REOPEN_HALT.marginLow || reason === REOPEN_HALT.gapNoFit(legOpen) ? REOPEN_HALT.marginShort : reason, legOpen, open)
+            : reason;
+    if (deps.twap) markOpenGap(deps.twap.store, job);
+    holdHaltedHedge(deps, job);
     deps.jobs.write(job);
     deps.onHalt(job);
     deps.onDone?.();
@@ -483,10 +1359,26 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     return await sizeRound(step, step.planned ?? 0, sending, account.margins);
   };
 
+  const beforeToGap = (step: Step, account: AccountRead, target: number, sending: number): boolean => {
+    const leg = job.realize?.legs.find((row) => row.symbol === step.leg);
+    if (step.phase !== 'realize' || step.retry || !leg?.margin || leg.margin.at !== 'before') return false;
+    const slice = job.steps.slice(job.stepIndex).find((later) => !later.name.startsWith('Convert'));
+    if (!slice || slice.name !== SLICE_STEP || slice.cut || slice.perp?.symbol !== leg.symbol) return false;
+    const amount = Math.min(capToBalance(target, sending), floorCents(Math.max(0, convertCapOf(account, step.from, step.to))));
+    if (!isRatioLow(account) && amount >= target) return false;
+    const before = job.steps.slice(job.stepIndex, job.steps.indexOf(slice)).filter((convert) => convert.leg === leg.symbol && convert.phase === 'realize' && !convert.retry && !isSent(convert));
+    job.steps = job.steps.filter((convert) => !before.includes(convert));
+    job.steps.splice(job.steps.indexOf(slice) + 1, 0, ...before.map((convert) => ({ ...convert, status: 'pending' as const, startedAt: null })));
+    leg.margin = { ...leg.margin, at: 'gap' };
+    leg.gapSwitched = isRatioLow(account) ? 'ratio' : 'cash';
+    deps.jobs.write(job);
+    return true;
+  };
+
   const prepareConvert = async (step: Step): Promise<number | null> => {
     const account = await readAccount(crossEx());
     const gateCash = account.cash(GATE_WALLET);
-    if (step.name === 'Convert' && gateCash >= DUST_USDC) {
+    if (step.name === 'Convert' && step.phase !== 'realize' && gateCash >= DUST_USDC && !reopenOf(job.stepIndex)) {
       const { bid } = await spotTicker();
       if (gateCash * bid >= SPOT_MIN_QUOTE_USDT) {
         const planned = floorCents(gateCash);
@@ -508,7 +1400,19 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const half = job.steps[job.stepIndex - 1];
     const converted = step.name === 'Convert to USDC' && half?.name === 'Convert to USDT' && half.status === 'done';
     const target = floorCents(converted ? (half.qty ?? 0) : (step.planned ?? 0));
-    const amount = capToBalance(target, sending);
+    if (!converted && beforeToGap(step, account, target, sending)) return null;
+    if (step.phase === 'realize' && !converted && isRatioLow(account)) {
+      halt(REOPEN_HALT.ratioLow, 'margin');
+      return null;
+    }
+    const realizeCap = Math.min(floorCents(Math.max(0, sending)), floorCents(Math.max(0, convertCapOf(account, step.from, step.to))));
+    const amount = step.phase === 'realize' && !converted ? Math.min(capToBalance(target, sending), realizeCap) : capToBalance(target, sending);
+    const minimum = convertMinOf(step.from);
+    if (step.phase === 'realize' && !converted && amount < minimum) {
+      if (target > 0 && realizeCap >= minimum && account.borrow(poolWallet(step.to)) >= minimum) return minimum;
+      finish(step, 0, spec.dest);
+      return null;
+    }
     if (converted && amount <= 0 && target > 0) {
       halt(HALT_TEXT.usdtBelowZero);
       return null;
@@ -591,7 +1495,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
   };
 
-  const poll = async (step: Step, spec: StepSpec, venueId: string): Promise<void> => {
+  const poll = async (step: Step, spec: MoneySpec, venueId: string): Promise<void> => {
     if (spec.kind !== 'transfer') {
       const { body } = await crossEx().getCrossexOrder(venueId);
       const state = String(body.state ?? '');
@@ -607,10 +1511,13 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       }
       const sell = spec.kind === 'order' && spec.side === CrossexOrderRequest.Side.SELL;
       if (filled > 0) {
+        if (spec.kind === 'convert' && job.slice) job.totalCostUsd = nearestCents((job.totalCostUsd ?? 0) + Math.max(0, positiveOf(String(body.executedQty ?? '')) - filled));
+        if (spec.kind === 'convert') await trimAfterRetry(step, Number(body.executedQty) || (step.planned ?? 0));
         const stuck = sell && (await sellRest(step, Number(body.executedQty)));
         finish(step, filled, spec.kind === 'convert' ? convertSpec(step).dest : spec.dest);
         if (stuck) halt(HALT_TEXT.sellStuck);
-      } else if (sell && sellChain(step).length > 1) haltDead(step, HALT_TEXT.sellStuck);
+      } else if (spec.kind === 'convert' && retryPastReopen(step)) finish(step, 0, job.fundsAt);
+      else if (sell && sellChain(step).length > 1) haltDead(step, HALT_TEXT.sellStuck);
       else haltDead(step, HALT_TEXT.nothingFilled);
       return;
     }
@@ -647,7 +1554,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   const sweep = async (step: Step, spec: StepSpec, tag: string): Promise<string | null | undefined> => {
     if (spec.kind === 'transfer') return null;
-    const symbol = spec.kind === 'convert' ? convertSpec(step).symbol : SPOT_SYMBOL;
+    const symbol = spec.kind === 'convert' ? convertSpec(step).symbol : (step.perp?.symbol ?? SPOT_SYMBOL);
     const idOf = (rows: CrossexOrder[]): string | null | undefined => {
       const hit = rows.find((row) => String(row.text ?? '') === tag);
       if (!hit) return null;
@@ -678,6 +1585,32 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   let lastQuoteAt = Number.NEGATIVE_INFINITY;
   let quoting = false;
+  let quoteNotedAt = 0;
+
+  const gapNetWait = async (): Promise<boolean> => {
+    const cut = reopenOf(job.stepIndex)?.cut;
+    if (cut?.gap !== 'convert') return false;
+    const tries = (cut.netTries ?? 0) + 1;
+    cut.netTries = tries;
+    cut.netSince ??= deps.now();
+    deps.jobs.write(job);
+    const waitMs = (GAP_NET_WAITS_SEC[tries - 1] ?? 0) * 1000;
+    const until = deps.now() + waitMs;
+    if (!(waitMs > 0) || job.pauseRequested || until - cut.netSince > GAP_NET_MS) return false;
+    while (deps.now() < until) {
+      await deps.sleep(Math.min(POLL_MS, until - deps.now()));
+      if (job.pauseRequested) return false;
+    }
+    return true;
+  };
+
+  const gapQuoteRetry = (): boolean => {
+    const cut = reopenOf(job.stepIndex)?.cut;
+    if (cut?.gap !== 'convert' || (cut.quoteTries ?? 0) >= GAP_QUOTE_RETRIES) return false;
+    cut.quoteTries = (cut.quoteTries ?? 0) + 1;
+    deps.jobs.write(job);
+    return true;
+  };
 
   const sendConvert = async (step: Step, amount: number): Promise<void> => {
     if (amount > CONVERT_MAX) {
@@ -699,6 +1632,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     }
     lastQuoteAt = deps.now();
     quoting = true;
+    quoteNotedAt = deps.now();
+    deps.jobs.noteQuote(quoteNotedAt);
     const { body: quote } = await crossEx().createCrossexConvertQuote({
       crossexConvertQuoteRequest: {
         exchangeType: spec.venue,
@@ -708,9 +1643,14 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       },
     });
     quoting = false;
+    const netCut = reopenOf(job.stepIndex)?.cut;
+    if (netCut?.netTries !== undefined || netCut?.netSince !== undefined) {
+      delete netCut.netTries;
+      delete netCut.netSince;
+    }
     const toAmount = Number(quote.toAmount);
     if (!(toAmount >= quoteFloor(amount, gives, ticker))) {
-      halt(HALT_TEXT.poorQuote);
+      if (!gapQuoteRetry()) halt(HALT_TEXT.poorQuote);
       return;
     }
     // On disk before the send: if the response is lost, the quote id is the
@@ -724,10 +1664,12 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     });
     if (!body.orderId) throw new Error('convert order response has no orderId');
     step.venueId = String(body.orderId);
+    if (job.slice) job.totalCostUsd = nearestCents((job.totalCostUsd ?? 0) + Math.max(0, amount - toAmount));
+    await trimAfterRetry(step, amount);
     finish(step, toAmount, spec.dest);
   };
 
-  const send = async (step: Step, spec: StepSpec, tag: string, amount: number): Promise<void> => {
+  const send = async (step: Step, spec: MoneySpec, tag: string, amount: number): Promise<void> => {
     if (spec.kind === 'convert') return sendConvert(step, amount);
     step.sentAt = deps.now();
     deps.jobs.write(job);
@@ -753,22 +1695,916 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     deps.jobs.write(job);
   };
 
+  const trimRoute = async (missing: number, paid?: Pick<Step, 'from' | 'to'>): Promise<void> => {
+    const start = job.steps.reduce((last, step, index) => (step.name === SLICE_STEP ? index : last), -1) + 1;
+    const groups: Step[][] = [];
+    for (const step of job.steps.slice(start).filter((later) => !isSent(later) && (!paid || (later.from === paid.from && later.to === paid.to)))) {
+      const last = groups.at(-1);
+      const joins = last !== undefined && (step.name === 'Convert to USDC' || (step.round !== null && step.round === last[0].round));
+      if (last && joins) last.push(step);
+      else groups.push([step]);
+    }
+    let left = missing;
+    for (const group of groups.reverse()) {
+      if (left < DUST_USDC) break;
+      const head = group[0];
+      const move = group.find((step) => MOVES_OUT.includes(step.name) || step.round === null)?.planned ?? 0;
+      const size = floorCents(move - Math.min(left, move));
+      const minimum = head.round === null ? DUST_USDC : roundMinimum(head.from, head.to, await usdcMinimum());
+      if (size < minimum) {
+        job.steps = job.steps.filter((step) => !group.includes(step));
+        left = nearestCents(left - move);
+        continue;
+      }
+      left = nearestCents(left - (move - size));
+      if (head.round !== null) {
+        for (const step of group) setRoundFigures(step, size);
+        continue;
+      }
+      head.planned = size;
+      if (group[1]) group[1].planned = floorCents(size * (1 - CONVERT_RATE));
+    }
+    renumberRounds();
+  };
+
+  const ownConvertsOf = (slice: Step): Step[] => {
+    const from = job.steps.indexOf(slice) + 1;
+    const end = job.steps.findIndex((later, at) => at >= from && !later.name.startsWith('Convert'));
+    const symbol = slice.perp?.symbol;
+    return job.steps
+      .slice(from, end < 0 ? job.steps.length : end)
+      .filter((convert) => convert.phase === 'realize' && !convert.retry && !isSent(convert) && convert.status !== 'done' && (convert.leg === undefined || convert.leg === symbol));
+  };
+
+  const replaceOwn = (own: Step[], amount: number, symbol: string | undefined): void => {
+    const at = job.steps.indexOf(own[0]);
+    job.steps = job.steps.filter((convert) => !own.includes(convert));
+    const steps = asRealize(convertSteps(own[0].from, own[0].to, amount)).map((convert) => (symbol ? { ...convert, leg: symbol } : convert));
+    if (amount >= convertMinOf(own[0].from)) job.steps.splice(at, 0, ...steps);
+  };
+
+  const isLegRoute = (convert: Step, leg: RealizeJobLeg): boolean => convert.from === leg.pool && convert.to === CONVERT_TO[leg.pool];
+
+  const convertedFor = (leg: RealizeJobLeg, since: number, retried: boolean): number =>
+    job.steps
+      .filter((convert) => convert.leg === leg.symbol && isLegRoute(convert, leg) && convert.status === 'done' && convert.name.startsWith('Convert') && convert.name !== 'Convert to USDC')
+      .filter((convert) => (convert.doneAt ?? 0) >= since && (!retried || Boolean(convert.retry)))
+      .reduce((total, convert) => total + (convert.qty ?? 0) / (1 - CONVERT_RATE), 0);
+
+  const plannedOf = (steps: Step[]): number => steps.filter((convert) => convert.name !== 'Convert to USDC').reduce((total, convert) => total + (convert.planned ?? 0), 0);
+
+  const trimAfterRetry = async (step: Step, given: number): Promise<void> => {
+    if (!step.retry) return;
+    const slice = job.steps.slice(job.steps.indexOf(step) + 1).find((later) => !later.name.startsWith('Convert'));
+    const own = slice?.name === SLICE_STEP ? ownConvertsOf(slice).filter((convert) => convert.from === step.from && convert.to === step.to) : [];
+    const planned = plannedOf(own);
+    const left = nearestCents(Math.max(0, given - planned));
+    if (own.length > 0) replaceOwn(own, floorCents(Math.max(0, planned - given)), slice?.perp?.symbol);
+    if (left > 0) await trimRoute(left, step);
+  };
+
+  const retryPastReopen = (step: Step): boolean => Boolean(step.retry) && !reopenOf(job.stepIndex);
+
+  const heldOf = async (leg: RealizeJobLeg, step: Step): Promise<{ qty: number; entry: number; perCoin: number; mark: number }> => {
+    const held = ((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === leg.symbol);
+    const qty = Math.abs(Number(held?.positionQty)) || 0;
+    const live = { qty, entry: positiveOf(held?.entryPrice), perCoin: qty > 0 ? Math.abs(Number(held?.initialMargin) || 0) / qty : 0, mark: positiveOf(held?.markPrice) };
+    const closed = step.cut ? addQty(leg.filledQty, -step.cut.from) : 0;
+    const stored = leg.preClose;
+    if (!stored || (qty > 0 && qty >= closed)) return live;
+    const price = live.mark || ((await midOf(deps, leg.symbol)) ?? 0);
+    return { ...live, entry: stored.entry, perCoin: stored.imRate * price, mark: price };
+  };
+
+  const storePreClose = async (leg: RealizeJobLeg): Promise<void> => {
+    const held = ((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === leg.symbol);
+    const qty = Math.abs(Number(held?.positionQty)) || 0;
+    const mark = positiveOf(held?.markPrice) || ((await midOf(deps, leg.symbol)) ?? 0);
+    const margin = Math.abs(Number(held?.initialMargin)) || 0;
+    if (qty > 0 && mark > 0 && margin > 0) leg.preClose = { imRate: margin / (qty * mark), entry: positiveOf(held?.entryPrice) };
+  };
+
+  const marginPerCoin = async (leg: RealizeJobLeg, step: Step): Promise<number> => (await heldOf(leg, step)).perCoin;
+
+  const closeTime = (): CloseTime => ({ exec: job.exec, takerAfterSec: twap ? twap.takerAfterSec : job.maker?.takerAfterSec, ...(twap ? { twapIntervalSec: twap.intervalSec } : {}) });
+  const sliceSeconds = (): number => closeSecondsOf(closeTime());
+  const nakedSeconds = (): number => nakedSecondsOf(closeTime());
+
+  const exposureOf = async (leg: RealizeJobLeg, account: AccountRead, mid: number): Promise<number> => {
+    const held = (await crossEx().listCrossexPositions()).body ?? [];
+    const lead = held.find((position) => position.symbol === leg.symbol);
+    const signed = Number(lead?.positionQty) || 0;
+    const sign = Math.sign(signed) || (leg.side === 'SHORT' ? -1 : 1);
+    const imOf = (position: { initialMargin?: string } | undefined): number => Math.abs(Number(position?.initialMargin)) || 0;
+    const hedgeImUsd = held
+      .filter((position) => position.symbol !== leg.symbol && parseSymbol(position.symbol ?? '').base === leg.base && Math.sign(Number(position.positionQty)) === -sign)
+      .reduce((total, position) => total + imOf(position), 0);
+    const to = poolWallet(CONVERT_TO[leg.pool]);
+    const debtRate = account.borrow(to) > 0 ? account.imRate(to) : 0;
+    return exposureUsdOf({ legImUsd: imOf(lead), hedgeImUsd, notionalUsd: Math.abs(signed * (positiveOf(lead?.markPrice) || mid)), debtRate });
+  };
+
+  const reserveOf = async (leg: RealizeJobLeg, follow: StepPerp, qty: number, mid: number, perCoin: number, account: AccountRead, naked = false): Promise<number> => {
+    const book = await bookOf(deps, leg.symbol);
+    const touch = touchOf(book);
+    const impactUsd = book && touch ? (impactOf(book, follow.side, touch.mid, qty)?.usd ?? 0) : 0;
+    return sliceReserveUsd({ qty, price: mid, marginPerCoin: perCoin, impactUsd, seconds: sliceSeconds(), exposureUsd: await exposureOf(leg, account, mid), nakedUsd: naked ? qty * mid : 0, nakedSec: GAP_CONVERT_SEC });
+  };
+
+  const closeLeftSec = (firstAt: number): number => {
+    if (job.exec !== 'maker') return 0;
+    const left = Math.floor(sliceSeconds() - (deps.now() - firstAt) / 1000);
+    return left >= TIMEOUT_MIN_S ? left : 0;
+  };
+
+  const gapSizingOf = async (step: Step, perp: StepPerp, leg: RealizeJobLeg, account: AccountRead, open: number, wholeLots: number, topLots: number, ratio: number, headroom: number, nakedSecOf: (extra: number) => number): Promise<GapSizing | null> => {
+    const rule = await sliceRule(deps, leg.symbol);
+    const { entry, perCoin, mark } = await heldOf(leg, step);
+    const mid = (await midOf(deps, leg.symbol)) ?? mark;
+    if (!(entry > 0) || !(mid > 0)) return null;
+    const profitPerCoin = leg.side === 'SHORT' ? entry - mid : mid - entry;
+    const follow = step.follow as StepPerp;
+    const book = await bookOf(deps, leg.symbol);
+    const touch = touchOf(book);
+    const walk = (side: StepPerp['side'], size: number): number => (book && touch && size > 0 ? Math.max(0, impactOf(book, side, touch.mid, size)?.usd ?? 0) : 0);
+    const exposureUsd = await exposureOf(leg, account, mid);
+    const to = CONVERT_TO[leg.pool];
+    const lift = liftPerConvert(account.imRate(poolWallet(to)));
+    const minimum = convertMinOf(leg.pool);
+    const feeRate = feePerCoinOf(job, step, leg, mid) / 2;
+    const makerClose = job.exec === 'maker' && step.cut?.taker !== true && typeof leg.makerRate === 'number' ? leg.makerRate : null;
+    const sender = poolWallet(leg.pool);
+    const owed = account.borrow(poolWallet(to));
+    const cash = account.cash(sender);
+    const equity = account.equity(sender);
+    const seconds = sliceSeconds();
+    return {
+      lot: rule.lot,
+      wholeLots,
+      topLots,
+      minLots: Math.ceil(minQtyOf(rule.limits, rule.lot, mid) / Number(rule.lot) - 1e-9),
+      ratio,
+      headroom,
+      marginBalance: account.margins.marginBalance,
+      initialMargin: account.margins.initialMargin,
+      marginPerCoin: perCoin,
+      costOf: (extra) => {
+        const closeUsd = makerClose === null ? extra * feeRate + walk(perp.side, extra) : extra * mid * makerClose;
+        const reopen = open + extra;
+        const reserve = sliceReserveUsd({ qty: reopen, price: mid, marginPerCoin: perCoin, impactUsd: walk(follow.side, reopen), seconds, exposureUsd, nakedUsd: reopen * mid, nakedSec: nakedSecOf(extra) });
+        const shortUsd = open * perCoin + reserve + closeUsd - account.available;
+        return { closeUsd, shortUsd, convert: convertToLift(shortUsd, lift, minimum) };
+      },
+      capOf: (extra, closeUsd) => Math.min(cash + extra * profitPerCoin - closeUsd, equity - closeUsd, owed / (1 - CONVERT_RATE)),
+    };
+  };
+
+  const spliceConverts = (step: Step, route: { from: Pool; to: Pool }, retry: StepRetry, symbol: string): void => {
+    step.retry = retry;
+    const converts = asRealize(convertSteps(route.from, route.to, retry.convertAmount)).map((convert) => ({ ...convert, retry, leg: symbol }));
+    job.steps.splice(job.steps.indexOf(step), 0, ...converts);
+    deps.jobs.write(job);
+  };
+
+  const reopenShortOf = async (step: Step, leg: RealizeJobLeg, account: AccountRead): Promise<number> => {
+    const open = openOf(leg, step);
+    const perCoin = await marginPerCoin(leg, step);
+    const mid = (await midOf(deps, leg.symbol)) ?? 0;
+    return open * perCoin + (await reserveOf(leg, step.follow as StepPerp, open, mid, perCoin, account, open > 0)) - account.available;
+  };
+
+  const reopenBareShortOf = async (step: Step, leg: RealizeJobLeg): Promise<number> => {
+    const account = await readAccount(crossEx());
+    return openOf(leg, step) * (await marginPerCoin(leg, step)) - account.available;
+  };
+
+  const retryConvert = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
+    const account = await readAccount(crossEx());
+    if (isRatioLow(account)) return halt(REOPEN_HALT.ratioLow, 'margin');
+    const to = CONVERT_TO[leg.pool];
+    const minimum = convertMinOf(leg.pool);
+    const cap = floorCents(Math.max(0, convertCapOf(account, leg.pool, to)));
+    if (cap < minimum) return halt(REOPEN_HALT.noCash(leg.pool), 'margin');
+    const short = await reopenShortOf(step, leg, account);
+    const lift = liftPerConvert(account.imRate(poolWallet(to)));
+    if (!(lift > 0)) return halt(REOPEN_HALT.noBorrow(leg.pool), 'margin');
+    const wanted = convertToLift(short, lift, minimum);
+    const convertAmount = Math.min(cap, Math.max(minimum, ceilCents(wanted * RETRY_CONVERT_HEADROOM)));
+    spliceConverts(step, { from: leg.pool, to }, { reason: 'margin', convertAmount }, leg.symbol);
+  };
+
+  const retryConvertCapped = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
+    if (job.retryConverts >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.convertCap, 'margin');
+    const account = await readAccount(crossEx());
+    if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noBorrow(leg.pool), 'margin');
+    job.retryConverts += 1;
+    return retryConvert(step, leg);
+  };
+
+  let triedQty: number | null = null;
+
+  const topUp = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
+    if (job.topUpPending) return halt(REOPEN_HALT.marginLow, 'margin');
+    if ((job.topUps ?? 0) >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.convertCap, 'margin');
+    if (triedQty === null) return halt(REOPEN_HALT.noCash(leg.pool), 'margin');
+    const account = await readAccount(crossEx());
+    if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noBorrow(leg.pool), 'margin');
+    if (isRatioLow(account)) return halt(REOPEN_HALT.ratioLow, 'margin');
+    const to = CONVERT_TO[leg.pool];
+    const minimum = convertMinOf(leg.pool);
+    const cash = floorCents(Math.max(0, convertCapOf(account, leg.pool, to)));
+    if (cash < minimum) return halt(REOPEN_HALT.noCash(leg.pool), 'margin');
+    const mid = (await midOf(deps, leg.symbol)) ?? 0;
+    const need = await reserveOf(leg, step.follow as StepPerp, triedQty, mid, await marginPerCoin(leg, step), account);
+    const drain = Math.max(0, addQty(leg.qty, -leg.filledQty)) * feePerCoinOf(job, step, leg, mid);
+    const lift = liftPerConvert(account.imRate(poolWallet(to)));
+    if (!(lift > 0)) return halt(REOPEN_HALT.noBorrow(leg.pool), 'margin');
+    const whole = ceilCents(((Math.max(0, need - account.available) + drain) / lift) * RETRY_CONVERT_HEADROOM);
+    job.topUpPending = true;
+    job.topUps = (job.topUps ?? 0) + 1;
+    spliceConverts(step, { from: leg.pool, to }, { reason: 'margin', convertAmount: Math.min(cash, Math.max(minimum, whole)) }, leg.symbol);
+  };
+
+  const fallbackRoutesOf = (account: AccountRead, pool: Pool): { from: Pool; to: Pool }[] => {
+    const other = CONVERT_TO[pool];
+    const routes: { from: Pool; to: Pool }[] = [{ from: pool, to: other }, { from: other, to: pool }];
+    return routes.filter(({ from, to }) => floorCents(Math.max(0, convertCapOf(account, from, to))) >= convertMinOf(from));
+  };
+
+  const fundsNextSlice = async (step: Step, leg: RealizeJobLeg, follow: StepPerp, qty: number, pairLeft: number, mid: number): Promise<boolean> => {
+    if (!(qty > 0)) return true;
+    const account = await readAccount(crossEx());
+    const perSlice = (await reserveOf(leg, follow, qty, mid, await marginPerCoin(leg, step), account)) + (qty * feePerCoinOf(job, step, leg, mid)) / 2;
+    const short = perSlice - account.available;
+    if (short <= 0) return true;
+    const stop = (reason: string = REOPEN_HALT.marginLow): false => {
+      job.fallbackPending = false;
+      halt(reason, 'margin');
+      return false;
+    };
+    if (job.fallbackPending) return stop();
+    if ((job.fallbackConverts ?? 0) >= FALLBACK_CONVERT_CAP) return stop(REOPEN_HALT.fallbackCap);
+    if (isRatioLow(account)) return stop(REOPEN_HALT.ratioLow);
+    const ahead = Math.min(FALLBACK_SLICES, Math.max(1, Math.ceil(pairLeft / qty - 1e-9)));
+    const picked = fallbackRoutesOf(account, leg.pool)
+      .map((route) => {
+        const lift = liftPerConvert(account.imRate(poolWallet(route.to)));
+        const minimum = convertMinOf(route.from);
+        const amount = Math.min(floorCents(Math.max(0, convertCapOf(account, route.from, route.to))), convertToLift(ahead * perSlice - account.available, lift, minimum));
+        return { route, lift, minimum, amount };
+      })
+      .find(({ lift, minimum, amount }) => lift > 0 && amount >= minimum && amount * lift >= short);
+    if (!picked) return stop();
+    const { route, amount } = picked;
+    job.fallbackPending = true;
+    job.fallbackConverts = (job.fallbackConverts ?? 0) + 1;
+    spliceConverts(step, route, { reason: 'fallback', convertAmount: amount }, leg.symbol);
+    return false;
+  };
+
+  const quotesLeft = (): number => (deps.now() < deps.jobs.quotesBlockedUntil() ? 0 : CONVERT_QUOTES_PER_DAY - deps.jobs.quotesSince(deps.now() - DAY_MS));
+
+  const isCloseOnly = async (symbol: string): Promise<boolean> => {
+    try {
+      const { body } = await crossEx().listCrossexRuleSymbols({ symbols: symbol });
+      const rule = (body ?? []).find((candidate) => candidate.symbol === symbol);
+      return rule !== undefined && (rule.state !== 'live' || positiveOf(rule.delistTime) > 0);
+    } catch {
+      return false;
+    }
+  };
+
+  const mayStartSlice = async (step: Step, leg: RealizeJobLeg): Promise<boolean> => {
+    if (await isCloseOnly(leg.symbol)) {
+      halt(REOPEN_HALT.closeOnly(leg, openOf(leg, step)));
+      return false;
+    }
+    return true;
+  };
+
+  const pauseNow = (): void => {
+    job.status = 'halted';
+    job.paused = true;
+    job.pauseRequested = false;
+    job.haltReason = null;
+    job.haltKind = null;
+    setBorosGap(job);
+    deps.jobs.write(job);
+    deps.onDone?.();
+  };
+
+  const liveQtyOf = async (symbol: string, side: RealizeJobLeg['side']): Promise<number> => {
+    const signed = Number(((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === symbol)?.positionQty ?? 0);
+    if (!Number.isFinite(signed)) throw new Error(`Gate sent no position size for ${symbol}`);
+    return Math.max(0, side === 'SHORT' ? -signed : signed);
+  };
+
+  const wholeLotsOf = async (leg: RealizeJobLeg, lot: string, planned: number): Promise<number> => {
+    const live = lotsDownOf(await liveQtyOf(leg.symbol, leg.side), lot);
+    if (live >= planned) return planned;
+    leg.positionQty = addQty(leg.filledQty, Number(qtyText(live, lot)));
+    leg.qty = leg.positionQty;
+    deps.jobs.write(job);
+    return live;
+  };
+
+  const entryOf = async (symbol: string): Promise<number | null> => {
+    const held = ((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === symbol);
+    return positiveOf(held?.entryPrice) || null;
+  };
+
+  const twap = job.kind === 'delever' || job.kind === 'realize' ? (job.deleverTwap ?? null) : null;
+  const longWait = !!job.maker && (job.maker.takerAfterSec === null || job.maker.takerAfterSec > MAKER_REST_MS / 1000);
+
+  const sliceRequest = (id: string, perp: StepPerp, follow: StepPerp | null, qty: string): DealRequest => {
+    const base = { id, a: childLeg(perp), b: follow ? childLeg(follow) : null, qty };
+    if (job.exec === 'market') return { ...base, execution: 'taker' };
+    return {
+      ...base,
+      execution: 'maker',
+      pricePolicy: 'touch',
+      timeoutSec: twap ? (twap.takerAfterSec === undefined ? takerAfterCapSec(twap.intervalSec) : twap.takerAfterSec) : job.maker ? job.maker.takerAfterSec : MAKER_REST_MS / 1000,
+      ...(twap ? { deadlineCapSec: takerAfterCapSec(twap.intervalSec) } : {}),
+      ...(twap ? (twap.repegBehindBp === undefined ? {} : { repegBehindBp: twap.repegBehindBp }) : job.maker ? { repegBehindBp: job.maker.repegBehindBp } : {}),
+    };
+  };
+
+  const sendChild = async (step: Step, perp: StepPerp, req: DealRequest, mid: number, entry: number | null): Promise<void> => {
+    const engine = engineOf(deps);
+    const sentAt = deps.now();
+    step.lead = { text: req.id, venueId: null, sentAt, credited: 0, poc: req.execution === 'maker', price: null, side: perp.side, mid, entry };
+    step.hedge = { text: req.id, venueId: null, sentAt, credited: 0, poc: false, price: null, side: step.follow?.side, mid };
+    deps.jobs.write(job);
+    try {
+      await engine.createChild(req);
+    } catch (err) {
+      if (!engine.store.getPair(req.id)) {
+        step.lead = null;
+        step.hedge = null;
+        deps.jobs.write(job);
+      }
+      throw err;
+    }
+    engine.engineWake();
+  };
+
+  const chargeChild = (pair: PairRow, mid: number): Promise<void> => chargeChildCost(deps, job, pair, mid);
+
+  const costChild = async (step: Step, leg: RealizeJobLeg, pair: PairRow): Promise<void> => {
+    const engine = engineOf(deps);
+    const lead = step.lead as PerpOrder;
+    await chargeChild(pair, lead.mid ?? 0);
+    const avgA = positiveOf(engine.store.avgFillPrice(pair.id, 'A') ?? '');
+    const entry = lead.entry ?? 0;
+    if (avgA > 0 && entry > 0 && pair.a.contract === leg.symbol) {
+      leg.realizedUsd = nearestCents(leg.realizedUsd + filledOf(engine.store, pair).a * (leg.side === 'SHORT' ? entry - avgA : avgA - entry));
+    }
+    step.lead = null;
+    step.hedge = null;
+    deps.jobs.write(job);
+  };
+
+  let resumeHalted = job.status === 'running' && Boolean(job.haltKind);
+
+  const unsavedHalt = (): boolean => job.status === 'halted' && !job.haltReason;
+
+  const haltRefused = (leg: RealizeJobLeg): void => {
+    job.haltReason = REOPEN_HALT.refused(leg, job.notHedgedQty, '');
+    job.haltKind = 'not-hedged';
+    deps.jobs.write(job);
+    deps.onHalt(job);
+    deps.onDone?.();
+  };
+
+  const reopenOnResume = async (step: Step, leg: RealizeJobLeg, child: PairRow | null, onRefused: (step: Step, leg: RealizeJobLeg) => Promise<void> | void = (_step, refused) => haltRefused(refused)): Promise<void> => {
+    resumeHalted = false;
+    step.retry = null;
+    const engine = engineOf(deps);
+    const follow = step.follow as StepPerp;
+    if (child) creditSliceChild(job, engine.store, await heldSettled(deps, child));
+    if (!child) {
+      await creditGapChild(deps, job);
+      deps.jobs.write(job);
+    }
+    const open = Math.max(0, openOf(leg, step));
+    const shrunk = leg.shrunkQty ?? 0;
+    const lot = Number((await sliceRule(deps, leg.symbol)).lot);
+    const liveLeg = await liveQtyOf(leg.symbol, leg.side);
+    const expectedLeg = Math.max(0, addQty(addQty(leg.positionQty, -open), -shrunk));
+    if (Math.abs(addQty(liveLeg, -expectedLeg)) >= lot / 2) return halt(REOPEN_HALT.sizeChanged(leg, liveLeg, expectedLeg));
+    const hedge = hedgeBeforeOf(job, leg);
+    let byHand = 0;
+    if (hedge) {
+      const hedgeLot = Number((await sliceRule(deps, hedge.symbol)).lot);
+      const liveHedge = await liveQtyOf(hedge.symbol, hedge.side);
+      const expectedHedge = Math.max(0, addQty(hedge.qty, -shrunk));
+      byHand = addQty(expectedHedge, -liveHedge);
+      if (byHand <= -hedgeLot / 2 || byHand >= open + hedgeLot / 2) return halt(REOPEN_HALT.hedgeChanged(leg, hedge, liveHedge, expectedHedge));
+      if (byHand < hedgeLot / 2) byHand = 0;
+    }
+    if (child && byHand === 0) {
+      commands.resumeAfterHalt(engine.store, child.id);
+      engine.engineWake();
+      deps.jobs.write(job);
+      return;
+    }
+    if (child) engine.store.updatePair(child.id, { mode: 'DONE' });
+    if (byHand > 0) {
+      step.qty = addQty(step.qty ?? 0, byHand);
+      leg.shrunkQty = addQty(shrunk, byHand);
+    }
+    const reopen = Math.max(0, addQty(open, -byHand));
+    const target: JobFollow = { symbol: follow.symbol, exchange: follow.exchange, side: follow.side, qty: reopen, reduceOnly: follow.reduceOnly };
+    deps.jobs.write(job);
+    const mid = (await midOf(deps, follow.symbol)) ?? 0;
+    const { done, lot: followLot } = await closeGap(deps, job, target, reopen, false, async (filled, part) => {
+      step.qty = addQty(step.qty ?? 0, filled);
+      await chargeChild(part, mid);
+      deps.jobs.write(job);
+    });
+    job.follow = target;
+    job.unwindTarget = hedge ? { symbol: hedge.symbol, exchange: hedge.exchange, side: hedge.side === 'LONG' ? 'SELL' : 'BUY', qty: reopen, reduceOnly: true } : null;
+    if (!settleGap(job, reopen, done, followLot)) return onRefused(step, leg);
+    deps.jobs.write(job);
+  };
+
+  const gapRefused = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
+    const store = engineOf(deps).store;
+    const child = store.getPair(`${job.id}-g${job.tagCount - 1}`);
+    const labelled = child !== null && store.listOrders(child.id).some((order) => order.leg === 'A' && hasMarginRefusalLabel(order));
+    let forMargin = labelled;
+    try {
+      forMargin ||= (await reopenBareShortOf(step, leg)) > 0;
+    } catch {
+      return haltRefused(leg);
+    }
+    if (!forMargin) return haltRefused(leg);
+    if (step.cut?.failed) return halt(step.cut.failed, 'margin');
+    resumeRun(job);
+    return retryConvertCapped(step, leg);
+  };
+
+  const reopenGap = async (step: Step, leg: RealizeJobLeg, cut: SliceCut): Promise<void> => {
+    let refused = false;
+    if (cut.failed === HALT_TEXT.convertUnreachable && (await reopenBareShortOf(step, leg)) > 0) return halt(cut.failed, 'margin');
+    try {
+      await reopenOnResume(step, leg, null, (refusedStep, refusedLeg) => {
+        refused = true;
+        return gapRefused(refusedStep, refusedLeg);
+      });
+    } catch (err) {
+      if (unsavedHalt()) return haltRefused(leg);
+      const c = classifyGateError(err);
+      if (c.retryable) throw err;
+      if (c.category !== 'insufficient-margin') return halt(REOPEN_HALT.marginLegOpen(haltReasonFor(err), leg, openOf(leg, step)), 'not-hedged');
+      if (cut.failed) return halt(cut.failed, 'margin');
+      return retryConvertCapped(step, leg);
+    }
+    if (job.status === 'running' && !refused) {
+      delete cut.gap;
+      delete cut.failed;
+      deps.jobs.write(job);
+    }
+  };
+
+  const gapStep = async (step: Step, perp: StepPerp, leg: RealizeJobLeg, cut: SliceCut): Promise<void> => {
+    const rule = await sliceRule(deps, leg.symbol);
+    const lot = Number(rule.lot);
+    const open = Math.max(0, openOf(leg, step));
+    if (open < lot) {
+      resumeHalted = false;
+      if (cut.gap === 'close' && !(leg.filledQty > cut.from)) {
+        step.cut = null;
+        if (job.pauseRequested) return pauseNow();
+        return halt(HALT_TEXT.nothingFilled);
+      }
+      delete cut.gap;
+      deps.jobs.write(job);
+      return;
+    }
+    if (resumeHalted) delete cut.reopenOnly;
+    if (cut.gap === 'convert' && resumeHalted && cut.moreOnResume) {
+      cut.gap = 'close';
+      delete cut.moreOnResume;
+      delete cut.failed;
+    }
+    if (cut.gap === 'convert') {
+      if (resumeHalted) {
+        delete cut.failed;
+        delete cut.netTries;
+        delete cut.netSince;
+      }
+      return reopenGap(step, leg, cut);
+    }
+    resumeHalted = false;
+    const account = await readAccount(crossEx());
+    const closed = addQty(leg.filledQty, -cut.from);
+    const follow = step.follow as StepPerp;
+    const capLots = Math.floor(capQtyOf(perp, follow, rule, follow.symbol === perp.symbol ? rule : await sliceRule(deps, follow.symbol), (await midOf(deps, leg.symbol)) ?? 0) / lot + 1e-9);
+    const wholeLots = lotsDownOf(Math.max(0, Math.min(addQty(leg.qty, -leg.filledQty), addQty(leg.positionQty, -leg.filledQty))), rule.lot);
+    const sizing = await gapSizingOf(step, perp, leg, account, open, wholeLots, Math.min(wholeLots, capLots), MIN_CONVERT_RATIO, 1, (extra) => (extra > 0 ? closeLeftSec(cut.at) : 0) + GAP_CONVERT_SEC);
+    const now = sizing?.costOf(0) ?? null;
+    const cap = sizing ? floorCents(Math.max(0, sizing.capOf(0, 0))) : 0;
+    const ratioOk = !isRatioLow(account);
+    const fits = now !== null && ratioOk && now.convert <= cap;
+    let more: string | null = null;
+    if (!fits && sizing && !job.pauseRequested && !deps.pollOnly && !cut.reopenOnly && cut.closedBefore !== closed && (cut.extras ?? 0) < GAP_EXTRA_CLOSES) {
+      const extra = gapLotsFor(sizing, sizing.minLots);
+      const total = extra === null ? 0 : addQty(closed, Number(qtyText(extra, rule.lot)));
+      if (extra !== null && cut.capQty !== undefined && total > cut.capQty) {
+        more = REOPEN_HALT.gapMore(leg, cut.capQty, total, closed);
+        cut.capQty = total;
+        cut.moreOnResume = true;
+      } else if (extra !== null) {
+        const before = { closedBefore: cut.closedBefore, extras: cut.extras, qty: cut.qty };
+        cut.closedBefore = closed;
+        cut.extras = (cut.extras ?? 0) + 1;
+        cut.qty = addQty(closed, Number(qtyText(extra, rule.lot)));
+        const base = sliceRequest(nextChildId(engineOf(deps).store, job.id, job.slice?.index ?? 1), perp, null, qtyText(extra, rule.lot));
+        const left = closeLeftSec(cut.at);
+        const req: DealRequest = base.execution !== 'maker' || typeof base.timeoutSec !== 'number' ? base : left > 0 ? { ...base, timeoutSec: left } : { id: base.id, a: base.a, b: null, qty: base.qty, execution: 'taker' };
+        try {
+          return await sendChild(step, perp, req, (await midOf(deps, leg.symbol)) ?? 0, await entryOf(leg.symbol));
+        } catch (err) {
+          if (!engineOf(deps).store.getPair(req.id)) {
+            Object.assign(cut, before);
+            deps.jobs.write(job);
+          }
+          throw err;
+        }
+      }
+    }
+    cut.gap = 'convert';
+    if (leg.margin) leg.margin = { ...leg.margin, firstQty: closed };
+    const noLift = now !== null && !Number.isFinite(now.convert);
+    if (more !== null) cut.failed = more;
+    else if (!fits) cut.failed = !ratioOk ? REOPEN_HALT.ratioLow : account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0 || noLift ? REOPEN_HALT.noBorrow(leg.pool) : REOPEN_HALT.noCash(leg.pool);
+    const amount = now === null || !ratioOk || noLift || more !== null ? 0 : Math.min(cap, now.convert);
+    if (!(amount >= convertMinOf(leg.pool))) {
+      deps.jobs.write(job);
+      return;
+    }
+    spliceConverts(step, { from: leg.pool, to: CONVERT_TO[leg.pool] }, { reason: 'margin', convertAmount: amount }, leg.symbol);
+  };
+
+  const onHalted = async (step: Step, leg: RealizeJobLeg, child: PairRow): Promise<void> => {
+    const engine = engineOf(deps);
+    if (resumeHalted && job.kind === 'realize') return reopenOnResume(step, leg, child);
+    if (resumeHalted ||(step.retry && job.kind === 'realize' && child.haltKind === 'hedge-margin')) {
+      resumeHalted = false;
+      step.retry = null;
+      commands.resumeAfterHalt(engine.store, child.id);
+      engine.engineWake();
+      deps.jobs.write(job);
+      return;
+    }
+    if (child.haltKind === 'hedge-margin' && job.kind === 'realize') return retryConvertCapped(step, leg);
+    const slice = job.slice?.index ?? 1;
+    if (child.haltKind === 'hedge-margin') {
+      const hedge = prettyVenue(parseSymbol((child.b ?? child.a).contract).exchange);
+      return halt(`${hedge} refused the hedge in slice ${slice}`, 'hedge-margin');
+    }
+    const reason = child.haltReason ?? `Slice ${slice} stopped on an error. Check the orders, then resume or stop.`;
+    engine.store.alert('error', child.id, reason, deps.now());
+    halt(reason, 'error');
+  };
+
+  const borosAfterSlice = async (): Promise<boolean> => {
+    try {
+      const usdPerYu = new Map<number, number>();
+      for (const row of job.delever?.boros ?? []) {
+        const price = await deps.boros?.collateralUsd?.(row.marketId).catch(() => null);
+        usdPerYu.set(row.marketId, price && price > 0 ? price : Number.POSITIVE_INFINITY);
+      }
+      const short = await closeBorosRest(deps, job, usdPerYu);
+      if (short > 0) {
+        halt(borosPartText(short), 'boros');
+        return false;
+      }
+      return true;
+    } catch (err) {
+      halt(err instanceof BorosWaitError || (err instanceof Error && err.message === BOROS_MISSING_TEXT) ? (err as Error).message : haltReasonFor(err), 'boros');
+      return false;
+    }
+  };
+
+  const hedgedFirstOf = async (step: Step, leg: RealizeJobLeg, qty: number, account: AccountRead): Promise<number | null> => {
+    const mid = (await midOf(deps, leg.symbol)) ?? 0;
+    if (isRatioLow(account) || !(mid > 0) || !(qty > 0)) return null;
+    const short = (await reserveOf(leg, step.follow as StepPerp, qty, mid, await marginPerCoin(leg, step), account)) + (qty * feePerCoinOf(job, step, leg, mid)) / 2 - account.available;
+    if (!(short > 0)) return 0;
+    const to = CONVERT_TO[leg.pool];
+    const amount = convertToLift(short, liftPerConvert(account.imRate(poolWallet(to))), convertMinOf(leg.pool));
+    return Number.isFinite(amount) && PLAN_CASH_HEADROOM * amount <= floorCents(Math.max(0, convertCapOf(account, leg.pool, to))) ? amount : null;
+  };
+
+  const sizeGapFirst = async (step: Step, perp: StepPerp, leg: RealizeJobLeg, pairLeft: number, capQty: number): Promise<boolean> => {
+    const margin = leg.margin;
+    if (!margin) return true;
+    const rule = await sliceRule(deps, leg.symbol);
+    const account = await readAccount(crossEx());
+    const wholeLots = lotsDownOf(pairLeft, rule.lot);
+    const topLots = Math.min(wholeLots, Math.floor(capQty / Number(rule.lot) + 1e-9));
+    const sizing = await gapSizingOf(step, perp, leg, account, 0, wholeLots, topLots, PLAN_CONVERT_RATIO, PLAN_CASH_HEADROOM, nakedSeconds);
+    const plannedLots = lotsDownOf(margin.firstQty, rule.lot);
+    const plannedShort = sizing ? sizing.costOf(Number(qtyText(Math.min(plannedLots, topLots), rule.lot))).shortUsd : Infinity;
+    if (plannedShort <= 0) {
+      leg.margin = null;
+      leg.gapSwitched = null;
+      leg.gapPaused = false;
+      deps.jobs.write(job);
+      return true;
+    }
+    const plannedQty = Number(qtyText(Math.min(plannedLots, topLots), rule.lot));
+    const hedged = await hedgedFirstOf(step, leg, plannedQty, account);
+    if (hedged !== null) {
+      leg.gapSwitched = null;
+      leg.gapPaused = false;
+      if (hedged === 0) {
+        leg.margin = null;
+        leg.hedgedFirstQty = plannedQty;
+        deps.jobs.write(job);
+        return true;
+      }
+      leg.margin = { ...margin, at: 'before', amount: hedged, firstQty: plannedQty };
+      job.fallbackPending = true;
+      spliceConverts(step, { from: leg.pool, to: CONVERT_TO[leg.pool] }, { reason: 'fallback', convertAmount: hedged }, leg.symbol);
+      return false;
+    }
+    const lots = sizing ? (gapLotsFor(sizing, plannedLots) ?? gapLotsFor(sizing, sizing.minLots)) : null;
+    if (!sizing || lots === null) {
+      halt(REOPEN_HALT.gapNoFit(leg), 'margin');
+      return false;
+    }
+    const firstQty = Number(qtyText(lots, rule.lot));
+    if (leg.gapSwitched) {
+      leg.margin = { ...margin, firstQty };
+      halt(REOPEN_HALT.gapSwitched(leg, firstQty, leg.gapSwitched), 'margin');
+      leg.gapSwitched = null;
+      leg.gapPaused = true;
+      deps.jobs.write(job);
+      return false;
+    }
+    if (lots > (leg.gapPaused ? 1 : GAP_GROWTH_CAP) * plannedLots) {
+      leg.margin = { ...margin, firstQty };
+      leg.gapPaused = true;
+      halt(REOPEN_HALT.gapGrew(leg, margin.firstQty, firstQty), 'margin');
+      return false;
+    }
+    const amount = sizing.costOf(firstQty).convert;
+    if (quotesLeft() < gapQuotesNeeded(convertSteps(leg.pool, CONVERT_TO[leg.pool], amount).length)) {
+      halt(REOPEN_HALT.quotesLow(leg));
+      return false;
+    }
+    leg.margin = { ...margin, firstQty, amount };
+    deps.jobs.write(job);
+    return true;
+  };
+
+  const capQtyOf = (perp: StepPerp, follow: StepPerp, rule: SliceRule, followRule: SliceRule, mid: number): number =>
+    Math.min(legCapOf(job, rule, perp.symbol, mid, job.exec === 'maker'), legCapOf(job, followRule, follow.symbol, mid, false));
+
+  const sliceQtyOf = (step: Step, pairLeft: number, lot: string, rule: SliceRule, mid: number, capQty: number): { n: number; k: number; qty: number } => {
+    const slice = job.slice ?? { index: 1, count: 1, sizeUsd: 0 };
+    const firstEver = !step.cut && job.steps.findIndex((candidate) => candidate.name === SLICE_STEP) === job.steps.indexOf(step);
+    const n = firstEver ? slice.index : slice.index + 1;
+    const k = step.cut ? (step.cut.n ?? slice.index) + 1 : 1;
+    const minQty = minQtyOf(rule.limits, lot, mid);
+    const first = job.kind === 'realize' && k === 1 ? (legOf(step)?.margin?.firstQty ?? legOf(step)?.hedgedFirstQty ?? 0) : 0;
+    if (twap) {
+      const total = twap.legs?.find((row) => row.symbol === step.perp?.symbol)?.slices ?? twap.slices;
+      slice.count = Math.max(twap.slices, n);
+      return { n, k, qty: first > 0 ? Math.min(first, pairLeft, capQty) : twapSliceQty(pairLeft, k, total, lot, minQty, capQty) };
+    }
+    if (first > 0) return { n, k, qty: Math.min(first, pairLeft, capQty) };
+    const askedQty = Math.min(slice.sizeUsd > 0 ? slice.sizeUsd / mid : Infinity, capQty);
+    const qtys = sliceQtys(pairLeft, Number.isFinite(askedQty) ? askedQty : 0, minQty, lot, capQty);
+    slice.count = Math.max(slice.count, n - 1 + qtys.length);
+    return { n, k, qty: qtys[0] ?? 0 };
+  };
+
+  const twapWaits = (step: Step): boolean => {
+    if (!twap) return false;
+    const last = step.cut ?? job.steps.slice(0, job.steps.indexOf(step)).filter((earlier) => earlier.name === SLICE_STEP && earlier.cut).at(-1)?.cut ?? null;
+    return last !== null && deps.now() < last.at + twap.intervalSec * 1000;
+  };
+
+  const startSlice = async (step: Step, perp: StepPerp, follow: StepPerp, leg: RealizeJobLeg, pairLeft: number, lot: string, rule: SliceRule, mid: number, capQty: number): Promise<void> => {
+    const { n, k, qty } = sliceQtyOf(step, pairLeft, lot, rule, mid, capQty);
+    const lots = lotsDownOf(qty, lot) > 0 ? lotsDownOf(qty, lot) : lotsDownOf(pairLeft, lot);
+    const slice = job.slice ?? { index: n, count: 1, sizeUsd: 0 };
+    const before = { cut: step.cut ?? null, index: slice.index, qty: slice.qty };
+    slice.index = n;
+    if (!step.cut || slice.qty === undefined) slice.qty = qty;
+    job.slice = slice;
+    const inGap = job.kind === 'realize' && k === 1 && leg.margin?.at === 'gap';
+    step.cut = { qty, from: leg.filledQty, at: deps.now(), ioc: job.exec === 'market', n: k, ...(inGap ? { gap: 'close' as const } : {}), ...(inGap ? { capQty: (leg.gapPaused ? 1 : GAP_GROWTH_CAP) * (leg.margin?.firstQty ?? Number(qty)) } : {}) };
+    const entry = job.kind === 'realize' ? await entryOf(leg.symbol) : null;
+    const id = nextChildId(engineOf(deps).store, job.id, n);
+    const req = sliceRequest(id, perp, inGap ? null : follow, qtyText(lots, lot));
+    triedQty = Number(qtyText(lots, lot));
+    if (job.kind === 'realize') await storePreClose(leg);
+    try {
+      await sendChild(step, perp, req, mid, entry);
+    } catch (err) {
+      if (!step.lead) {
+        step.cut = before.cut;
+        slice.index = before.index;
+        if (before.qty === undefined) delete slice.qty;
+        else slice.qty = before.qty;
+        deps.jobs.write(job);
+      }
+      throw err;
+    }
+    job.topUpPending = false;
+    job.fallbackPending = false;
+    if (inGap && leg.gapPaused) {
+      leg.gapPaused = false;
+      deps.jobs.write(job);
+    }
+    if (step.retry) {
+      step.retry = null;
+      deps.jobs.write(job);
+    }
+  };
+
+  const noProfitLeft = async (step: Step, leg: RealizeJobLeg, follow: StepPerp, mid: number): Promise<boolean> => {
+    const held = ((await crossEx().listCrossexPositions()).body ?? []).find((position) => position.symbol === leg.symbol);
+    const entry = positiveOf(held?.entryPrice);
+    const mark = positiveOf(held?.markPrice) || mid;
+    if (!(entry > 0) || !(mark > 0)) return false;
+    const perCoin = leg.side === 'SHORT' ? entry - mark : mark - entry;
+    if (perCoin > feePerCoinOf(job, step, leg, mark)) return false;
+    const stop = { symbol: leg.symbol, exchange: leg.exchange, base: leg.base, side: leg.side, entry, mark, closedQty: leg.filledQty, plannedQty: leg.qty, at: deps.now() };
+    job.profitStops = [...(job.profitStops ?? []), stop];
+    trimLegConverts(step, leg);
+    finishSlices(step, leg, follow);
+    return true;
+  };
+
+  const trimLegConverts = (step: Step, leg: RealizeJobLeg): void => {
+    const own = ownConvertsOf(step).filter((convert) => isLegRoute(convert, leg));
+    if (own.length === 0) return;
+    const share = leg.qty > 0 ? Math.min(1, leg.filledQty / leg.qty) : 0;
+    const total = leg.convert?.amount ?? plannedOf(own);
+    const converted = convertedFor(leg, 0, false);
+    replaceOwn(own, floorCents(Math.max(0, total * share - converted)), leg.symbol);
+  };
+
+  const finishSlices = (step: Step, leg: RealizeJobLeg, follow: StepPerp): void => {
+    const skew = Math.max(0, addQty(wholeLegOf(job, leg.symbol)?.before ?? leg.qty, -followPlannedOf(job, step, leg)));
+    const rest = Math.max(0, addQty(addQty(leg.filledQty, -(step.qty ?? 0)), -skew));
+    const gap = rest > 0 ? restGapOf(job, leg, follow.symbol, rest) : null;
+    if (gap) job.openGaps = [...(job.openGaps ?? []), gap];
+    finish(step, step.qty ?? 0, step.from);
+  };
+
+  const runSlices = async (step: Step, perp: StepPerp, leg: RealizeJobLeg): Promise<void> => {
+    const follow = step.follow;
+    if (!follow) return halt(`unknown step ${step.name}`);
+    try {
+      const engine = engineOf(deps);
+      const child = step.lead ? engine.store.getPair(step.lead.text) : null;
+      if (step.lead && !child) {
+        step.lead = null;
+        step.hedge = null;
+        deps.jobs.write(job);
+      }
+      if (child) {
+        creditSliceChild(job, engine.store, child);
+        deps.jobs.write(job);
+        if (isLive(child)) {
+          if (isWalledStop(engine.store, child)) return haltWalled(engine.store, child);
+          if ((twap || longWait) && job.pauseRequested) {
+            commands.stop(engine.store, child.id);
+            engine.engineWake();
+          }
+          return deps.sleep(POLL_MS);
+        }
+        if (child.mode === 'HALTED') return await onHalted(step, leg, child);
+        if (step.cut) step.cut.taker = engine.store.listOrders(child.id).some((row) => row.leg === 'A' && row.kind === 'taker' && Number(row.cumQty) > 0);
+        await costChild(step, leg, child);
+        if (job.kind === 'delever') job.imUsedNow = (await readImUsed(deps)) ?? job.imUsedNow;
+        if (twap && job.delever && !(await borosAfterSlice())) return;
+        deps.jobs.write(job);
+        if (step.cut?.gap === 'close' && !(leg.filledQty > step.cut.from) && refusedAsTooSmall(engine.store, child)) {
+          step.cut = null;
+          return finishSlices(step, leg, follow);
+        }
+        if (job.kind === 'realize' && step.cut?.gap && job.status === 'running') return await gapStep(step, perp, leg, step.cut);
+        if (refusedAsTooSmall(engine.store, child)) return finishSlices(step, leg, follow);
+      }
+      if (job.status !== 'running') return;
+      if (job.kind === 'realize' && step.cut?.gap) return await gapStep(step, perp, leg, step.cut);
+      if (resumeHalted && job.kind === 'realize' && openOf(leg, step) > 0) return await reopenOnResume(step, leg, null);
+      const queued = deps.takeFix?.();
+      if (queued) return await applyFix(deps, job, queued.action).then(queued.done, queued.fail);
+      if (job.pauseRequested) return pauseNow();
+      if (deps.pollOnly) return halt(HALT_TEXT.restart, 'restart');
+      const rule = await sliceRule(deps, perp.symbol);
+      const followRule = follow.symbol === perp.symbol ? rule : await sliceRule(deps, follow.symbol);
+      const lot = Number(followRule.lot) > Number(rule.lot) ? followRule.lot : rule.lot;
+      const leadLots = Math.min(lotsOf(addQty(leg.qty, -leg.filledQty), rule.lot), lotsOf(addQty(leg.positionQty, -leg.filledQty), rule.lot));
+      const leadLive = leadLots > 0 && wholeLegOf(job, leg.symbol) ? await wholeLotsOf(leg, rule.lot, leadLots) : Math.max(0, leadLots);
+      const leadLeft = Number(qtyText(leadLive, rule.lot));
+      const followWhole = job.kind === 'delever' ? wholeLegOf(job, follow.symbol) : null;
+      const followPlanned = addQty(followPlannedOf(job, step, leg), -(step.qty ?? 0));
+      const followLeft = followWhole ? Math.min(followPlanned, await liveQtyOf(follow.symbol, followWhole.side)) : followPlanned;
+      const pairLeft = job.kind === 'delever' ? Math.min(leadLeft, followLeft) : leadLeft;
+      if (lotsDownOf(pairLeft, lot) > 0) {
+        if (twapWaits(step)) return deps.sleep(POLL_MS);
+        const mid = await midOf(deps, perp.symbol);
+        if (mid === null) return deps.sleep(POLL_MS);
+        if (job.kind === 'realize' && (await noProfitLeft(step, leg, follow, mid))) return;
+        if (job.kind === 'realize' && !(await mayStartSlice(step, leg))) return;
+        const capQty = capQtyOf(perp, follow, rule, followRule, mid);
+        const inGapFirst = job.kind === 'realize' && !step.cut && leg.margin?.at === 'gap';
+        if (inGapFirst && !(await sizeGapFirst(step, perp, leg, pairLeft, capQty))) return;
+        if (job.kind === 'realize' && !(inGapFirst && leg.margin?.at === 'gap') && !(await fundsNextSlice(step, leg, follow, sliceQtyOf(step, pairLeft, lot, rule, mid, capQty).qty, pairLeft, mid))) return;
+        return await startSlice(step, perp, follow, leg, pairLeft, lot, rule, mid, capQty);
+      }
+      const excessLead = followWhole !== null && wholeLegOf(job, leg.symbol) !== null && leadLive > 0;
+      const excessFollow = followWhole !== null && lotsDownOf(followLeft, followRule.lot) > 0;
+      if (excessLead || excessFollow) {
+        const on = excessLead ? perp : follow;
+        const onRule = excessLead ? rule : followRule;
+        const lots = lotsDownOf(excessLead ? leadLeft : followLeft, onRule.lot);
+        const mid = (await midOf(deps, on.symbol)) ?? 0;
+        const id = nextChildId(engine.store, job.id, job.slice?.index ?? 1);
+        const req = oneLegChild(id, on, qtyText(lots, onRule.lot));
+        try {
+          return await sendChild(step, perp, req, mid, null);
+        } catch (err) {
+          if (!isBelowMinimum(err)) throw err;
+        }
+      }
+      finishSlices(step, leg, follow);
+    } catch (err) {
+      if (unsavedHalt()) return haltRefused(leg);
+      const c = classifyGateError(err);
+      if (c.retryable) return deps.sleep(POLL_MS);
+      if (c.category === 'auth') return halt(REOPEN_HALT.tradePermission);
+      if (c.category === 'insufficient-margin' && job.kind === 'realize') return topUp(step, leg);
+      halt(haltReasonFor(err));
+    }
+  };
+
+  const runBoros = async (step: Step): Promise<void> => {
+    try {
+      const left = await closeBorosRest(deps, job);
+      if (left > 0) return halt(borosPartText(left), 'boros');
+      finish(step, 0, step.from);
+    } catch (err) {
+      halt(err instanceof BorosWaitError || (err instanceof Error && err.message === BOROS_MISSING_TEXT) ? (err as Error).message : haltReasonFor(err), 'boros');
+    }
+  };
+
+  if (job.status === 'running' && (job.paused || job.haltKind || job.notHedgedQty > 0)) {
+    job.paused = false;
+    job.haltKind = null;
+    job.notHedgedQty = 0;
+    job.follow = null;
+    deps.jobs.write(job);
+  }
+
+  const syncOpenGap = (): void => {
+    if (job.kind !== 'realize' || job.status === 'halted') return;
+    const slice = sliceStepBehind(job);
+    const leg = slice ? legFor(job, slice) : null;
+    const open = slice?.cut?.gap && leg ? Math.max(0, openOf(leg, slice)) : 0;
+    if (open === job.notHedgedQty) return;
+    job.notHedgedQty = open;
+    deps.jobs.write(job);
+  };
+
   try {
     while (job.status === 'running') {
+      syncOpenGap();
       const step = job.steps[job.stepIndex];
       const spec: StepSpec | undefined = STEPS[step.name as StepName];
       if (!spec) {
         halt(`unknown step ${step.name}`);
-        return;
+        continue;
       }
       if (step.startedAt === null) {
         step.startedAt = deps.now();
         step.status = 'running';
         deps.jobs.write(job);
       }
-      if (deps.now() - step.startedAt > timeoutFor(spec)) {
+      const longRunning = step.name === SLICE_STEP || spec.kind === 'boros';
+      if (!longRunning && deps.now() - step.startedAt > timeoutFor(spec)) {
         halt(HALT_TEXT.timeout);
-        return;
+        continue;
+      }
+      if (spec.kind === 'boros') {
+        await runBoros(step);
+        continue;
+      }
+      if (spec.kind === 'perp') {
+        const leg = legOf(step);
+        if (!step.perp || !leg || step.name !== SLICE_STEP) halt(`unknown step ${step.name}`);
+        else await runSlices(step, step.perp, leg);
+        continue;
       }
       let phase: 'poll' | 'lookup' | 'read' | 'send' = 'poll';
       let amount: number | null = null;
@@ -785,29 +2621,33 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
           const found = (await lookUpInWindow(deps, () => lookup(spec, key))) ?? (await sweep(step, spec, key));
           if (found === undefined) {
             halt(HALT_TEXT.unconfirmed);
-            return;
+            continue;
           }
           if (found !== null) {
             step.venueId = found;
             deps.jobs.write(job);
             continue;
           }
+          if (retryPastReopen(step)) {
+            finish(step, 0, job.fundsAt);
+            continue;
+          }
           if (step.sentAt !== undefined) {
-            delete step.sentAt;
+            if (!reopenAhead(HALT_TEXT.notListed)) delete step.sentAt;
             halt(HALT_TEXT.notListed);
-            return;
+            continue;
           }
         }
-        if (deps.pollOnly) {
-          halt(HALT_TEXT.restart);
-          return;
+        if (deps.pollOnly && !reopenOf(job.stepIndex)) {
+          halt(HALT_TEXT.restart, 'restart');
+          continue;
         }
         phase = 'read';
         amount = await prepare(step);
         if (amount === null) continue;
         if (spec.kind === 'transfer' && !isSendable(amount)) {
           halt(HALT_TEXT.cashTooLow);
-          return;
+          continue;
         }
         if (step.text === null) {
           job.tagCount += 1;
@@ -819,6 +2659,8 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
       } catch (err) {
         const c = classifyGateError(err);
         const notFound = c.httpStatus === 404 || NOT_FOUND.test(c.label ?? '');
+        if (phase === 'send' && quoting && !quoteMayExist(err, c)) deps.jobs.dropQuote(quoteNotedAt);
+        const serverDown = phase === 'send' && c.httpStatus !== undefined && c.httpStatus >= 500;
         if (phase === 'send' && (isRefusal(c) || c.category === 'rate-limited')) {
           delete step.sentAt;
           // Gate refused the Convert, so the quoted amount never landed.
@@ -830,9 +2672,16 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         // looks the send up before it sends again. A refused quote means the
         // day's 100 Convert quotes are used up.
         if (phase === 'send' && c.category === 'rate-limited') {
+          if (quoting) deps.jobs.blockQuotesUntil(Math.floor(deps.now() / DAY_MS + 1) * DAY_MS);
           halt(quoting ? HALT_TEXT.quotesUsed : HALT_TEXT.rateLimited);
-        } else if (c.retryable || (phase === 'poll' && notFound)) {
+        } else if (phase === 'send' && quoting && (c.retryable || serverDown) && reopenOf(job.stepIndex)?.cut?.gap === 'convert') {
+          if (!(await gapNetWait())) halt(HALT_TEXT.convertUnreachable);
+        } else if (c.retryable || serverDown || (phase === 'poll' && notFound)) {
           await deps.sleep(POLL_MS);
+        } else if (phase === 'send' && quoting && !isRefusal(c) && reopenOf(job.stepIndex)?.cut?.gap === 'convert' && !gapQuoteRetry()) {
+          const cut = reopenOf(job.stepIndex)?.cut;
+          if (cut) cut.failed ??= haltReasonFor(err);
+          halt(haltReasonFor(err));
         } else if (phase !== 'send' || isRefusal(c)) {
           if (phase === 'send') step.quoteId = null;
           halt(
@@ -848,11 +2697,18 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   } catch (err) {
     job.status = 'halted';
     job.haltReason = haltReasonFor(err);
+    job.haltKind = hedgeOpen() ? 'not-hedged' : 'other';
     try {
+      holdHaltedHedge(deps, job);
       deps.jobs.write(job);
     } catch {}
     deps.onHalt(job);
     deps.onDone?.();
+  }
+  syncOpenGap();
+  if (job.status === 'done' && job.kind === 'delever') {
+    job.imUsedEnd = (await readImUsed(deps)) ?? job.imUsedEnd;
+    deps.jobs.write(job);
   }
 }
 

@@ -50,7 +50,7 @@ export function SegmentedToggle<T extends string>({
         >
           <span>{opt.label}</span>
           {opt.sub && (
-            <span className="ml-1 text-[10px] text-ink-400" title={opt.subTitle}>
+            <span className="ml-1 text-[11px] text-ink-400" title={opt.subTitle}>
               {opt.sub}
             </span>
           )}

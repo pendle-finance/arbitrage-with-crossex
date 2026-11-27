@@ -4,11 +4,19 @@
  */
 import { resolveActions, type ActionInput, type PreviewResult } from './actions';
 import type { Clients } from './clients';
-import { fetchVenueBook as realFetchVenueBook, touchOf, type fetchVenueBook } from './estimate/books';
+import {
+  fetchVenueBook as realFetchVenueBook,
+  touchOf,
+  type fetchVenueBook,
+  type NormalizedBook,
+} from './estimate/books';
 import { estimateFill } from './estimate/fill';
 import { estimateFees, resolveFeeRates, type VenueFeeRow } from './estimate/fees';
+import { pickMakerLeg, type MakerLegPick } from './estimate/makerLeg';
 import { DEFAULT_STEP, parseSymbol } from './numbers';
 import { marketableClosePrice } from './orders';
+import { impactOf, pairTwapDefaultOf, type TwapDefault } from './rebalance/slices';
+import { planSlices, type TwapInput, type TwapLegRule, type TwapPlan, type TwapRefusal } from './twap';
 
 interface PreviewDeps {
   clients: Clients;
@@ -18,8 +26,11 @@ interface PreviewDeps {
   fetchBook?: typeof fetchVenueBook;
 }
 
-export async function previewActions(deps: PreviewDeps, actions: ActionInput[]): Promise<PreviewResult[]> {
-  const resolved = await resolveActions(deps.clients, actions, { mode: 'preview' });
+const TOUCH_KEEP_MS = 10_000;
+const lastTouch = new Map<string, { touch: NonNullable<ReturnType<typeof touchOf>>; at: number }>();
+
+export async function previewActions(deps: PreviewDeps, actions: ActionInput[], sliced = false): Promise<PreviewResult[]> {
+  const resolved = await resolveActions(deps.clients, actions, { mode: 'preview', sliced });
   return Promise.all(
     resolved.map(async (r): Promise<PreviewResult> => {
       const preview: PreviewResult = { ...r, warnings: [...r.warnings] };
@@ -56,7 +67,10 @@ export async function previewActions(deps: PreviewDeps, actions: ActionInput[]):
       if (r.type === 'LIMIT' && r.tif === 'POC') {
         const { exchange, base, quote } = parseSymbol(r.symbol);
         const book = await (deps.fetchBook ?? realFetchVenueBook)(exchange, base, quote).catch(() => null);
-        const touch = touchOf(book);
+        const fresh = touchOf(book);
+        if (fresh) lastTouch.set(r.symbol, { touch: fresh, at: Date.now() });
+        const kept = lastTouch.get(r.symbol);
+        const touch = fresh ?? (kept && Date.now() - kept.at <= TOUCH_KEEP_MS ? kept.touch : null);
         if (touch) preview.restEstimate = touch;
         else preview.warnings.push("No order book, so the maker price can't follow the market");
       }
@@ -75,4 +89,148 @@ export async function previewActions(deps: PreviewDeps, actions: ActionInput[]):
       return preview;
     }),
   );
+}
+
+export const TWAP_DEFAULT_INPUT: TwapInput = { durationSec: 3_600, slices: 12 };
+
+export interface MakerLegPreview {
+  auto: MakerLegPick['leg'];
+  why: MakerLegPick['why'];
+}
+
+export interface PriceImpactPreview {
+  whole: number | null;
+  sliced: number;
+  slicedLegs: number[];
+}
+
+export interface TwapPlanPreview {
+  plan: TwapPlan | null;
+  refusal: TwapRefusal | null;
+}
+
+export interface TwapPreview {
+  makerLeg: MakerLegPreview | null;
+  priceImpact: PriceImpactPreview | null;
+  twap: TwapPlanPreview | null;
+  twapDefault?: TwapDefault | null;
+}
+
+interface TwapPreviewDeps {
+  feeRows: VenueFeeRow[];
+  book: (symbol: string) => Promise<NormalizedBook | null>;
+}
+
+export interface TwapLegBook {
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  book: NormalizedBook | null;
+  mid: number | null;
+}
+
+type SizedLegBook = TwapLegBook & { qty: number };
+
+export type TwapRuleRow = Partial<Record<'lotSize' | 'minSize' | 'minNotional' | 'maxMarketSize' | 'maxLimitSize', string>>;
+
+const DECIMAL = /^\d*\.?\d+(?:[eE][+-]?\d+)?$/;
+
+function decimalOf(raw: string | undefined): string | null {
+  const text = raw?.trim();
+  return text !== undefined && DECIMAL.test(text) ? text : null;
+}
+
+export function twapRuleOf(row: TwapRuleRow, symbol: string): TwapLegRule {
+  const { exchange, base } = parseSymbol(symbol);
+  return {
+    venue: exchange,
+    coin: base,
+    lot: decimalOf(row.lotSize) ?? '0',
+    minSize: decimalOf(row.minSize) ?? '0',
+    minNotional: decimalOf(row.minNotional) ?? '0',
+    maxMarketSize: decimalOf(row.maxMarketSize),
+    maxLimitSize: decimalOf(row.maxLimitSize),
+  };
+}
+
+function impactAt(leg: TwapLegBook, qty: number): ReturnType<typeof impactOf> {
+  return leg.book && leg.mid ? impactOf(leg.book, leg.side, leg.mid, qty) : null;
+}
+
+export function depthOf(leg: TwapLegBook): number | null {
+  if (!leg.book) return null;
+  const levels = leg.side === 'BUY' ? leg.book.asks : leg.book.bids;
+  return levels.reduce((total, [, size]) => (size > 0 ? total + size : total), 0);
+}
+
+export function makerLegOf(feeRows: VenueFeeRow[], a: SizedLegBook, b: SizedLegBook): MakerLegPreview {
+  const impactA = impactAt(a, a.qty);
+  const impactB = impactAt(b, b.qty);
+  const inputOf = (leg: SizedLegBook, impact: ReturnType<typeof impactAt>) => {
+    const rates = resolveFeeRates(feeRows, leg.symbol);
+    return {
+      makerRate: rates?.makerRate ?? null,
+      takerRate: rates?.takerRate ?? null,
+      slippagePct: impact ? impact.bp / 100 : null,
+      pastBookDepth: impact?.pastBook ? (depthOf(leg) ?? 0) : null,
+    };
+  };
+  const pick = pickMakerLeg(inputOf(a, impactA), inputOf(b, impactB));
+  return { auto: pick.leg, why: pick.why };
+}
+
+function twapPlanOf(previews: PreviewResult[], legs: TwapLegBook[], qty: string, input: TwapInput): TwapPlanPreview | null {
+  const rules = previews.flatMap((preview) => (preview.rule ? [twapRuleOf(preview.rule, preview.symbol)] : []));
+  if (rules.length !== previews.length) return null;
+  const first = previews[0];
+  const mark = first.refPrice?.value ?? first.closing?.mark ?? legs[0].mid ?? 0;
+  if (!(mark > 0)) return null;
+  const depths = legs.map(depthOf).filter((depth): depth is number => depth !== null);
+  const bookMaxQty = depths.length ? String(Math.min(...depths)) : null;
+  const result = planSlices(qty, input, rules, mark, bookMaxQty);
+  return result.ok ? { plan: result.plan, refusal: null } : { plan: result.plan, refusal: result.refusal };
+}
+
+export function priceImpactOf(legs: TwapLegBook[], qty: number, plan: TwapPlan): PriceImpactPreview | null {
+  if (legs.some((leg) => !leg.book || !leg.mid)) return null;
+  const wholes = legs.map((leg) => impactAt(leg, qty));
+  const whole = wholes.every((impact) => impact && !impact.pastBook)
+    ? wholes.reduce((total, impact) => total + (impact?.usd ?? 0), 0)
+    : null;
+  const sliceQty = Number(plan.sliceQty);
+  const lastQty = Number(plan.lastQty);
+  const slicedLegs = legs.map((leg) => (impactAt(leg, sliceQty)?.usd ?? 0) * (plan.slices - 1) + (impactAt(leg, lastQty)?.usd ?? 0));
+  return { whole, sliced: slicedLegs.reduce((total, usd) => total + usd, 0), slicedLegs };
+}
+
+export function legsTwapDefaultOf(legs: TwapLegBook[], qty: number): TwapDefault | null | undefined {
+  if (!(qty > 0) || legs.length === 0) return null;
+  if (legs.some((leg) => !leg.book || !leg.mid)) return undefined;
+  return pairTwapDefaultOf(legs.map((leg) => ({ book: leg.book, side: leg.side, mid: leg.mid, qty })));
+}
+
+export async function previewTwap(
+  deps: TwapPreviewDeps,
+  previews: PreviewResult[],
+  input: TwapInput,
+): Promise<TwapPreview> {
+  const none: TwapPreview = { makerLeg: null, priceImpact: null, twap: null, twapDefault: null };
+  if (previews.length === 0 || previews.length > 2) return none;
+  const coins = new Set(previews.map((preview) => parseSymbol(preview.symbol).base));
+  const isPair = previews.length === 2;
+  if (coins.size > 1 || (isPair && previews[0].side === previews[1].side)) return none;
+  const legs = await Promise.all(
+    previews.map(async ({ symbol, side }): Promise<TwapLegBook> => {
+      const book = await deps.book(symbol).catch(() => null);
+      return { symbol, side, book, mid: touchOf(book)?.mid ?? null };
+    }),
+  );
+  const qty = previews[0].qty;
+  const sameQty = previews.every((preview) => Number(preview.qty) === Number(qty));
+  const underLot = !(Number(qty) > 0) && previews.every(({ input: typed }) => Number(typed.qty ?? ('notional' in typed ? typed.notional : undefined)) > 0);
+  const twap = sameQty && (Number(qty) > 0 || underLot) ? twapPlanOf(previews, legs, underLot ? '0' : qty, input) : null;
+  const priceImpact = twap?.plan ? priceImpactOf(legs, Number(qty), twap.plan) : null;
+  const makerLeg = isPair
+    ? makerLegOf(deps.feeRows, { ...legs[0], qty: Number(previews[0].qty) }, { ...legs[1], qty: Number(previews[1].qty) })
+    : null;
+  return { makerLeg, priceImpact, twap, twapDefault: sameQty ? legsTwapDefaultOf(legs, Number(qty)) : null };
 }

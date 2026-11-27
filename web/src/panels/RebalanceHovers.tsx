@@ -1,7 +1,7 @@
 import { ChevronRight } from 'lucide-react';
 import { Fragment, useId, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { EvenPlan, GateAccount, GoalKind, PlannedStep, Pool, RebalanceBucket, RebalanceJob } from '../api/types';
+import type { EvenPlan, GateAccount, PlannedStep, Pool, RealizeLeg, RebalanceBucket, RebalanceJob } from '../api/types';
 import type { RebalanceView, RouteName, RoutePlan, TransferCoin, TransferView, WalletAfter } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
@@ -11,20 +11,20 @@ import { t } from '../i18n';
 import { borrowingBuckets, borrowTotalUsd, MIN_BORROW } from '../lib/borrow';
 import { fmtAbout, fmtUsd, num, WALLET_SHORT } from '../lib/fmt';
 import { floorCents } from '../lib/ticks';
-import { ALWAYS_SHOWN, ROUTE_ORDER, WALLET_TONE, type BarRow } from './RebalanceBits';
+import { ROUTE_ORDER } from './RebalanceBits';
 import {
   factBorrowing,
   factInterestNow,
   factInterestPaid,
   gateSpot,
   HOVER,
-  MODAL_FEE,
-  MODAL_IMPACT,
   MOVE_TEXT,
   PAYS_BACK,
   poolKey,
   RATE_PER_YEAR,
   INTEREST_PER_HOUR,
+  INTEREST_PER_DAY,
+  legFeeUsd,
   rateUnknown,
   verdictNoBorrow,
   verdictNoInterest,
@@ -38,9 +38,16 @@ import {
 import { findPath } from './TransferBits';
 import { localizeServerText } from '../i18n/serverMessages';
 
-const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
+export const HYPERLIQUID_INTEREST_FREE_USDC = 10_000;
 export const DUST = 1;
-const TRANSIT_WALLET = 'USDC/GATE';
+
+const sliceHover = (key: string): string => t(`accounts.rebalance.hover.${key}` as 'accounts.rebalance.hover.walletUsdt');
+
+export const SLICE_HOVER = {
+  get priceImpact() { return sliceHover('slicePriceImpact'); },
+  get tradingFeePerps() { return sliceHover('tradingFeePerps'); },
+  get imUsed() { return sliceHover('imUsed'); },
+};
 
 export const ROUTE_LABEL: Readonly<Record<RouteName, string>> = {
   get mix() { return t('accounts.rebalanceHovers.routeMix'); },
@@ -58,6 +65,7 @@ const WALLET_HOVER: Readonly<Record<string, string>> = {
 export interface FactRow {
   name: string;
   value: string;
+  sub?: string;
 }
 
 export interface Fact {
@@ -214,6 +222,13 @@ function perHourText(usd: number): string {
 const walletPerHour = (b: RebalanceBucket) =>
   isRateUnknown(b) ? rateUnknown() : INTEREST_PER_HOUR(perHourText(b.interestPerDayUsd / 24));
 
+const interestRows = (wallets: RebalanceBucket[]): FactRow[] =>
+  wallets.map((b) => ({
+    name: WALLET_SHORT[keyOf(b)],
+    value: walletPerHour(b),
+    sub: isRateUnknown(b) || b.interestPerDayUsd <= 0 ? undefined : INTEREST_PER_DAY(b.interestPerDayUsd >= 0.01 ? fmtUsd(b.interestPerDayUsd) : perHourText(b.interestPerDayUsd)),
+  }));
+
 const walletRows = (wallets: RebalanceBucket[], valueOf: (b: RebalanceBucket) => string): FactRow[] =>
   wallets.map((b) => ({ name: WALLET_SHORT[keyOf(b)], value: valueOf(b) }));
 
@@ -231,14 +246,21 @@ export interface Repay {
   charged: { bucket: RebalanceBucket; before: number; after: number }[];
 }
 
+export const borrowLeftOf = (bucket: RebalanceBucket, wallet: WalletAfter): number =>
+  Math.max(0, bucket.borrow - Math.max(0, wallet.equity - bucket.equity));
+
+export function interestAfterOf(bucket: RebalanceBucket, left: number): number {
+  const chargedBefore = chargedBorrow(bucket, bucket.borrow);
+  return chargedBefore > 0 ? (bucket.interestPerDayUsd * chargedBorrow(bucket, left)) / chargedBefore : 0;
+}
+
 export function repayOf(buckets: RebalanceBucket[], route: RoutePlan): Repay {
   const parts = borrowingBuckets(buckets).flatMap((bucket) => {
     const after = route.after.find((w) => keyOf(w) === keyOf(bucket));
     // Gate's borrow follows cash, not equity: a wallet in profit can owe more
     // than minus its equity. So, like the server, count what the move sends in
     // against the borrow, not the equity after it.
-    const received = after ? Math.max(0, after.equity - bucket.equity) : 0;
-    const left = Math.max(0, bucket.borrow - received);
+    const left = after ? borrowLeftOf(bucket, after) : bucket.borrow;
     const amount = Math.max(0, bucket.borrow - left);
     return floorCents(amount) > 0 ? [{ bucket, amount, left }] : [];
   });
@@ -279,13 +301,20 @@ export function borrowingFact(buckets: RebalanceBucket[]): Fact & { value: strin
 function RowsHover({ factKey, value, rows, warn }: { factKey: string; value: string; rows: FactRow[]; warn?: boolean }) {
   // The trigger's own grey would hide the figure's colour, so the figure keeps it.
   const label = <span className={warn ? 'text-amber-300' : 'text-ink-100'}>{value}</span>;
+  const align = rows.some((row) => row.sub) ? '' : 'text-right';
   return (
-    <HoverCard icon={false} widthPx={320} label={label}>
+    <HoverCard icon={false} label={label}>
       <div data-fact-rows={factKey} className="grid w-fit grid-cols-[auto_auto] gap-x-4 gap-y-1 text-xs">
         {rows.map((row) => (
           <Fragment key={row.name}>
             <span>{row.name}</span>
-            <span className="num whitespace-nowrap text-right">{row.value}</span>
+            <span className={`num whitespace-nowrap ${align}`}>{row.value}</span>
+            {row.sub && (
+              <>
+                <span />
+                <span className="num -mt-1 whitespace-nowrap text-ink-400">{row.sub}</span>
+              </>
+            )}
           </Fragment>
         ))}
       </div>
@@ -310,7 +339,7 @@ export function borrowFacts(buckets: RebalanceBucket[]): Fact[] {
       key: 'interest',
       label: <InterestInfo buckets={buckets} />,
       value: INTEREST_PER_HOUR(perHourText(perHour)),
-      rows: walletRows(borrowing, walletPerHour),
+      rows: interestRows(borrowing),
       warn: perHour > 0,
     }),
     rowsOnHover({
@@ -334,6 +363,23 @@ const cents = (usd: number): number => Math.round(usd * 100);
 export const routeImpactUsd = (route: RoutePlan): number => Math.max(0, route.priceImpactUsd ?? 0);
 export const routeFeeUsd = (route: RoutePlan): number => Math.max(0, route.costUsd - routeImpactUsd(route));
 
+const realizeLegs = (plan: EvenPlan): RealizeLeg[] => plan.realize?.legs ?? [];
+
+export const realizeFeeUsd = (plan: EvenPlan): number => realizeLegs(plan).reduce((total, leg) => total + legFeeUsd(leg), 0);
+
+export const realizeImpactUsd = (plan: EvenPlan): number =>
+  Math.max(0, realizeLegs(plan).reduce((total, leg) => total + leg.closeImpactUsd + leg.reopenImpactUsd, 0));
+
+export const totalCostUsd = (plan: EvenPlan, route: RoutePlan): number => realizeFeeUsd(plan) + realizeImpactUsd(plan) + route.costUsd;
+
+export const costPartsUsd = (plan: EvenPlan, route: RoutePlan): { feeUsd: number; impactUsd: number; totalUsd: number } => ({
+  feeUsd: realizeFeeUsd(plan) + routeFeeUsd(route),
+  impactUsd: realizeImpactUsd(plan) + routeImpactUsd(route),
+  totalUsd: totalCostUsd(plan, route),
+});
+
+export const ROUTE_NAME_CELL = 'w-56 shrink-0';
+
 export const hasUnknownRate = (buckets: RebalanceBucket[]): boolean => borrowingBuckets(buckets).some(isRateUnknown);
 
 /** The interest a day the route stops, from the wallets it repays. The
@@ -343,25 +389,25 @@ export const stopsPerDayOf = (route: RoutePlan, buckets: RebalanceBucket[]): num
 
 /** The fee as days of stopped interest, before rounding up. Null when the
  * route stops no interest. */
-function paybackDays(route: RoutePlan, buckets: RebalanceBucket[]): number | null {
+export function paybackDays(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): number | null {
   const stops = stopsPerDayOf(route, buckets);
-  return stops > 0 ? Number((route.costUsd / stops).toFixed(6)) : null;
+  return stops > 0 ? Math.round((totalCostUsd(plan, route) / stops) * 1e6) / 1e6 : null;
 }
 
 /** Worth it when the fee is at most 30 whole days of the interest it stops,
  * rounded up, the same figure the line shows. A free route is always worth it. */
-export function isWorthIt(route: RoutePlan, buckets: RebalanceBucket[]): boolean {
-  if (cents(route.costUsd) <= 0) return true;
-  const days = paybackDays(route, buckets);
+export function isWorthIt(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): boolean {
+  if (cents(totalCostUsd(plan, route)) <= 0) return true;
+  const days = paybackDays(plan, route, buckets);
   return days !== null && Math.ceil(days) <= WORTH_IT_DAYS;
 }
 
 /** A borrow whose interest is known, and a route whose fee is more than 30
  * days of the interest it stops. */
-export const isNotWorthIt = (route: RoutePlan, buckets: RebalanceBucket[]): boolean =>
-  borrowingBuckets(buckets).length > 0 && !hasUnknownRate(buckets) && !isWorthIt(route, buckets);
+export const isNotWorthIt = (plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): boolean =>
+  borrowingBuckets(buckets).length > 0 && !hasUnknownRate(buckets) && !isWorthIt(plan, route, buckets);
 
-const daysText = (days: number): string => {
+export const daysText = (days: number): string => {
   if (days < 1) return t('accounts.rebalanceHovers.lessThanDay');
   const whole = Math.ceil(days);
   return t('accounts.rebalanceHovers.days', { count: whole, n: num(whole, 0) });
@@ -398,9 +444,9 @@ export interface Verdict {
  * and that is as true of a custom move that clears the borrow as of the
  * preset. With legs the fee-versus-interest arithmetic applies to all three.
  */
-export function worthLine(route: RoutePlan, buckets: RebalanceBucket[], goal: GoalKind = 'even', noLegs = false): Verdict | null {
+export function worthLine(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): Verdict | null {
   if (borrowingBuckets(buckets).length === 0) return { text: verdictNoBorrow(), tone: 'info' };
-  if (noLegs) return { text: verdictRepayWorthIt(), tone: 'act', sub: verdictRepayNoLegsSub() };
+  if (plan.noLegs) return { text: verdictRepayWorthIt(), tone: 'act', sub: verdictRepayNoLegsSub() };
   // Before any fee-vs-interest test: with no interest there is nothing to weigh,
   // and weighing against zero is what made this print "not worth it" beside a
   // "$0.00 an hour" reading.
@@ -408,10 +454,15 @@ export function worthLine(route: RoutePlan, buckets: RebalanceBucket[], goal: Go
   // A rate we could not read is an ERROR, not a quiet "nothing to do": the
   // dialog still prices a fee, so a silent card contradicted it.
   if (hasUnknownRate(buckets)) return { text: verdictRateUnknown(), tone: 'warn' };
-  if (isNotWorthIt(route, buckets)) return { text: verdictNotWorthIt(), tone: 'warn' };
-  const days = paybackDays(route, buckets);
-  if (cents(route.costUsd) <= 0 || days === null) return null;
-  return { text: goal === 'repay' ? verdictRepayWorthIt() : verdictWorthIt(), tone: 'act', sub: PAYS_BACK(daysText(days)) };
+  if (isNotWorthIt(plan, route, buckets)) return { text: verdictNotWorthIt(), tone: 'warn' };
+  const days = paybackDays(plan, route, buckets);
+  if (cents(totalCostUsd(plan, route)) <= 0 || days === null) return null;
+  return { text: plan.goal.kind === 'repay' ? verdictRepayWorthIt() : verdictWorthIt(), tone: 'act', sub: PAYS_BACK(daysText(days)) };
+}
+
+export function worthChip(plan: EvenPlan, route: RoutePlan, buckets: RebalanceBucket[]): 'worth' | 'notYet' | null {
+  if (borrowingBuckets(buckets).length === 0 || isFreeBorrow(buckets) || hasUnknownRate(buckets)) return null;
+  return plan.noLegs || isWorthIt(plan, route, buckets) ? 'worth' : 'notYet';
 }
 
 export const isCashLimitedEven = (plan: EvenPlan) => plan.balanced && plan.shortOfEven >= DUST;
@@ -433,52 +484,13 @@ export function defaultGoal(view: RebalanceView): 'even' | 'repay' {
   // worth its fee never leads over one that is.
   const verdictOf = (goal: 'even' | 'repay') => {
     const { name, route } = pickedRoute(view.plans[goal], null);
-    return name === null ? null : worthLine(route, view.buckets, goal, view.plans[goal].noLegs);
+    return name === null ? null : worthLine(view.plans[goal], route, view.buckets);
   };
   return verdictOf('even')?.tone === 'act' || verdictOf('repay')?.tone !== 'act' ? 'even' : 'repay';
 }
 
 /** The equity each wallet is heading for. The even goal re-derives it from
  * the live equity (money in transit counts), the others aim at fixed figures. */
-export function targetsOf(view: RebalanceView, plan: EvenPlan = view.plans.even): Map<string, number> {
-  if (plan.goal.kind !== 'even') return new Map(plan.targets.map((target) => [keyOf(target), target.equity]));
-  if (plan.noLegs) return new Map();
-  const job = view.job;
-  const transit = job && (job.status === 'running' || job.status === 'halted') ? (job.inTransit?.qty ?? 0) : 0;
-  const equity = view.buckets.reduce((total, b) => total + b.equity, transit);
-  return new Map(plan.split.map((share) => [keyOf(share), share.share * equity]));
-}
-
-export function barRowsOf(wallets: (WalletAfter | RebalanceBucket)[], keys: string[], target: Map<string, number>): BarRow[] {
-  return keys.flatMap((key): BarRow[] => {
-    const wallet = wallets.find((w) => keyOf(w) === key);
-    if (!wallet) return [];
-    return [
-      {
-        key,
-        label: <WalletTerm wallet={key} />,
-        name: WALLET_LABEL[key],
-        cash: wallet.cash,
-        upnl: 'upnl' in wallet ? wallet.upnl : wallet.equity - wallet.cash,
-        target: target.size === 0 ? null : (target.get(key) ?? 0),
-        tone: WALLET_TONE[key],
-      },
-    ];
-  });
-}
-
-export function shownKeys(view: RebalanceView, steps: readonly Move[], plan: EvenPlan = view.plans.even): string[] {
-  const touched = new Set(steps.flatMap((step) => [poolKey(step.from), poolKey(step.to)]));
-  const target = targetsOf(view, plan);
-  return Object.keys(WALLET_TONE).filter((key) => {
-    const bucket = view.buckets.find((b) => keyOf(b) === key);
-    if (!bucket) return false;
-    if (key === TRANSIT_WALLET) return Math.abs(bucket.cash) >= DUST;
-    if (ALWAYS_SHOWN.includes(key) || touched.has(key) || target.has(key)) return true;
-    return Math.abs(bucket.cash) >= DUST || Math.abs(bucket.equity) >= DUST;
-  });
-}
-
 export function pickedRoute(plan: EvenPlan, pick: RouteName | null): { name: RouteName | null; route: RoutePlan } {
   const isOpen = (name: RouteName | null): name is RouteName => name !== null && plan.routes[name]?.available === true;
   const name = [pick, plan.recommended, ...ROUTE_ORDER].find(isOpen) ?? null;
@@ -504,21 +516,22 @@ export function RouteRow({ route, plan, checked, onPick }: { route: RouteName; p
   const convert = across ? `${HOVER.convert} ${HOVER.convertAcross}` : HOVER.convert;
   const nameText = route === 'mix' ? HOVER.mix(plan.roundCap) : route === 'loop' ? loop : convert;
   const time = routeTime(route, routePlan);
+  const { feeUsd, impactUsd, totalUsd } = costPartsUsd(plan, routePlan);
   return (
     <RadioRow name="rebalance-route" labelledBy={id} checked={checked} disabled={blocked} onPick={onPick}>
-      <span id={id} className="w-44 shrink-0">
-        <Term label={<span className="font-semibold text-ink-100">{ROUTE_LABEL[route]}</span>} text={nameText} />
-      </span>
-      <span className="flex h-4 w-28 shrink-0 items-center">
+      <span className={`flex items-center gap-2 ${ROUTE_NAME_CELL}`}>
+        <span id={id}>
+          <Term label={<span className="font-semibold text-ink-100">{ROUTE_LABEL[route]}</span>} text={nameText} />
+        </span>
         {plan.recommended === route && <Term label={<Chip tone="green" sm>{t('common.recommended')}</Chip>} text={HOVER.recommended} />}
       </span>
       <span className={`flex-1 ${blocked ? 'text-amber-300' : 'num text-ink-400'}`}>{blocked ? routePlan.reason && localizeServerText(routePlan.reason) : time}</span>
       {!blocked && (
         <span className="num text-right text-ink-100">
-          {MODAL_FEE(fmtUsd(routeFeeUsd(routePlan)))}
-          {routeImpactUsd(routePlan) > 0 && (
-            <span className="block text-[11px] text-ink-400">{MODAL_IMPACT(fmtUsd(routeImpactUsd(routePlan)))}</span>
-          )}
+          {fmtUsd(totalUsd)}
+          <span className="block text-[11px] text-ink-400">
+            {t('accounts.moveCash.feeImpact', { fee: fmtUsd(feeUsd), impact: fmtUsd(impactUsd) })}
+          </span>
         </span>
       )}
     </RadioRow>
@@ -585,59 +598,12 @@ export function SpotLines({ transfer, job, onTransfer }: { transfer?: TransferVi
 
 export function RebalanceInfo() {
   const { t } = useTranslation();
-  const card = HOVER.rebalanceTitle;
-  const cell = 'whitespace-nowrap px-2 py-1';
   return (
-    <HoverCard widthPx={600} underline={false} label={t('accounts.rebalanceModal.title')}>
+    <HoverCard widthPx={360} underline={false} label={t('accounts.borrowCard.title')}>
       <div className="flex flex-col gap-2 text-xs leading-snug">
-        <p>{card.equity}</p>
-        <table className="w-full border border-ink-700">
-          <thead>
-            <tr>
-              <Th className="text-left">{card.walletHead.wallet}</Th>
-              <Th className="text-left">{card.walletHead.legs}</Th>
-              <Th className="text-left">{card.walletHead.interest}</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {card.wallets.map((row) => (
-              <tr key={row.wallet} className="border-t border-ink-700">
-                <td className={cell}>{row.wallet}</td>
-                <td className={cell}>{row.legs}</td>
-                <td className={cell}>{row.interest}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <p>{card.borrow}</p>
-        <p>{card.rounds}</p>
-        <table className="w-full border border-ink-700">
-          <thead>
-            <tr>
-              <Th className="text-left">{card.routeHead.route}</Th>
-              <Th className="text-left">{card.routeHead.path}</Th>
-              <Th className="text-right">{card.routeHead.time}</Th>
-              <Th className="text-right">{card.routeHead.cost}</Th>
-            </tr>
-          </thead>
-          <tbody>
-            {card.routes.flatMap((group) =>
-              group.paths.map((row, index) => (
-                <tr key={`${group.route} ${row.path}`} className={index === 0 ? 'border-t border-ink-700' : undefined}>
-                  {index === 0 && (
-                    <td rowSpan={group.paths.length} className={`${cell} align-top`}>
-                      {group.route}
-                    </td>
-                  )}
-                  <td className={cell}>{row.path}</td>
-                  <td className={`${cell} text-right`}>{row.time}</td>
-                  <td className={`${cell} text-right`}>{row.cost}</td>
-                </tr>
-              )),
-            )}
-          </tbody>
-        </table>
-        <p>{card.recommended}</p>
+        <p>{t('accounts.borrowCard.infoBorrow')}</p>
+        <p>{t('accounts.borrowCard.infoReduce')}</p>
+        <p>{t('accounts.borrowCard.infoRealize')}</p>
       </div>
     </HoverCard>
   );
