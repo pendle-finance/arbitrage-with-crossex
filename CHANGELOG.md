@@ -227,6 +227,15 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Every running rebalance keeps the Mac awake,** not only TWAP runs.
 - **Stop reasons name the right wallet,** and a missing borrow or a poor Convert quote gets its
   own line.
+- **Pair context keeps the 29 Jan 2027 Hyperliquid ETH and BTC singles** whose only same-date
+  partner is an HL-GATE spread.
+- **Single mode opens a Boros single that has no same-date single partner,** as one order.
+- **Switching Single back to Pair re-settles leg B,** from the ticket toggle or the trade rail. A
+  spread-only date keeps its spread and chip.
+- **Complete and Retry on a part-filled pair act only while the ticket still shows that trade.** A
+  mode or wallet switch, Leave it, Dismiss or a card's Open ends an armed completion.
+- **Settings → About has a Check for updates button.** It reads GitHub now instead of waiting up to
+  6 hours, at most once in 5 minutes. A failed read keeps the last good answer.
 
 ## 1.7.9 — 2026-11-10
 
