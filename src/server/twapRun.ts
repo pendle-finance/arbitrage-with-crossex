@@ -272,8 +272,9 @@ export function sliceStepBehind(job: Job): Step | null {
   return next?.name === SLICE_STEP ? next : null;
 }
 
-export function unwindTargetOf(job: Job, step: Step, child: PairRow, qty: number): JobFollow | null {
+export function unwindTargetOf(job: Job, step: Step, child: PairRow | null, qty: number): JobFollow | null {
   if (job.kind !== 'realize') {
+    if (!child) return null;
     return { symbol: child.a.contract, exchange: parseSymbol(child.a.contract).exchange, side: child.a.side === 'BUY' ? 'SELL' : 'BUY', qty, reduceOnly: child.a.reduceOnly !== true };
   }
   const leg = job.realize?.legs.find((row) => row.symbol === step.perp?.symbol);
@@ -284,8 +285,8 @@ export function unwindTargetOf(job: Job, step: Step, child: PairRow, qty: number
 export function openGapOf(store: Store, job: Job): { qty: number; follow: JobFollow; unwind: JobFollow | null } | null {
   const step = sliceStepBehind(job);
   const child = step?.lead ? store.getPair(step.lead.text) : null;
-  if (!step?.follow || child?.mode !== 'HALTED' || !child.b) return null;
-  if (job.kind !== 'realize' && child.haltKind !== 'hedge-margin') return null;
+  if (!step?.follow || (child?.mode !== 'HALTED' && child?.mode !== 'STOPPING') || !child.b) return null;
+  if (job.kind !== 'realize' && child.mode === 'HALTED' && child.haltKind !== 'hedge-margin') return null;
   const proj = project(child, store.listOrders(child.id));
   const qty = Number(fxStr(fxMax(FX_ZERO, fx(proj.aFilled) - fx(proj.bFilled))));
   if (!(qty > 0)) return null;
@@ -293,8 +294,31 @@ export function openGapOf(store: Store, job: Job): { qty: number; follow: JobFol
   return { qty, follow: { symbol, exchange, side, qty, reduceOnly }, unwind: unwindTargetOf(job, step, child, qty) };
 }
 
+function realizeGapOf(store: Store, job: Job): { qty: number; follow: JobFollow; unwind: JobFollow | null } | null {
+  if (job.kind !== 'realize') return null;
+  const step = sliceStepBehind(job);
+  const leg = job.realize?.legs.find((row) => row.symbol === step?.perp?.symbol);
+  if (!step?.follow || !step.perp || !leg) return null;
+  const child = step.lead ? store.getPair(step.lead.text) : null;
+  let open = leg.filledQty - (step.qty ?? 0);
+  if (child && step.lead) {
+    const proj = project(child, store.listOrders(child.id));
+    const onLead = child.a.contract === step.perp.symbol && child.a.side === step.perp.side;
+    const lead = onLead ? Number(proj.aFilled) : 0;
+    const follow = Number(onLead ? proj.bFilled : proj.aFilled);
+    open += lead - step.lead.credited - (follow - (step.hedge?.credited ?? 0));
+  }
+  for (let tag = job.tagCount, part = store.getPair(`${job.id}-g${tag}`); part; tag += 1, part = store.getPair(`${job.id}-g${tag}`)) {
+    open -= Number(project(part, store.listOrders(part.id)).aFilled);
+  }
+  const qty = Math.max(0, Math.round(open * 1e8) / 1e8);
+  if (!(qty > 0)) return null;
+  const { symbol, exchange, side, reduceOnly } = step.follow;
+  return { qty, follow: { symbol, exchange, side, qty, reduceOnly }, unwind: unwindTargetOf(job, step, child, qty) };
+}
+
 export function markOpenGap(store: Store, job: Job): void {
-  const gap = openGapOf(store, job);
+  const gap = openGapOf(store, job) ?? realizeGapOf(store, job);
   job.notHedgedQty = gap?.qty ?? 0;
   job.follow = gap?.follow ?? null;
   job.unwindTarget = gap?.unwind ?? null;
@@ -323,6 +347,13 @@ export const isSlicedTwap = (job: Job): boolean => (job.kind === 'delever' || jo
 const isLiveDeleverTwap = (job: Job): boolean => isSlicedTwap(job) && job.status === 'running';
 
 export function sleepHaltTwap(deps: TwapRunDeps, job: Job, gap: { fromMs: number; toMs: number }): Job {
+  const gapCut = job.kind === 'realize' && job.status === 'running' ? sliceStepBehind(job)?.cut : null;
+  if (gapCut?.gap) {
+    void stopLiveChild(deps, job, true);
+    gapCut.reopenOnly = true;
+    deps.jobs.write(job);
+    return job;
+  }
   if (!isLiveJob(job) && !isLiveDeleverTwap(job)) return job;
   const sliced = isSlicedTwap(job);
   void stopLiveChild(deps, job, sliced);

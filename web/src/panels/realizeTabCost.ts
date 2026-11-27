@@ -57,9 +57,17 @@ export function costOf(plan: RealizePlan, exec: RealizeExec, slice: Slice | null
   const lead = plan.legs[0];
   const impactUsd =
     slice?.impactUsd != null && slice.reopenImpactUsd != null && lead
-      ? Math.max(0, estimate.impactUsd - leadWalkUsd(lead, exec) + (exec === 'market' ? slice.impactUsd : 0) + slice.reopenImpactUsd)
+      ? Math.max(0, estimate.impactUsd - leadWalkUsd(lead, exec) + slicesWalkUsd(lead, exec, slice, (exec === 'market' ? slice.impactUsd : 0) + slice.reopenImpactUsd))
       : estimate.impactUsd;
   return { feeUsd: estimate.feeUsd - convertUsd, convertUsd, impactUsd, totalUsd: estimate.feeUsd + impactUsd };
+}
+
+function slicesWalkUsd(lead: RealizeLeg, exec: RealizeExec, slice: Slice, evenUsd: number): number {
+  const margin = lead.margin;
+  if (margin?.at !== 'gap' || margin.reopenWalkUsd === undefined || !(slice.count > 0) || !(slice.qty > 0)) return evenUsd;
+  const first = Math.min(margin.firstQty, lead.qty);
+  const firstUsd = (exec === 'market' ? (margin.closeWalkUsd ?? 0) : 0) + margin.reopenWalkUsd;
+  return firstUsd + (evenUsd / slice.count) * (Math.max(0, lead.qty - first) / slice.qty);
 }
 
 export const netOf = (plan: RealizePlan, cost: Cost): number => sum(plan.legs.map((leg) => leg.realizedUsd)) - cost.totalUsd;

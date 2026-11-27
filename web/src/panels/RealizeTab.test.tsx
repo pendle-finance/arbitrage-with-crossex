@@ -3,9 +3,11 @@ import { fireEvent, render as rtlRender, screen, waitFor, within } from '@testin
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { describe, expect, it, vi } from 'vitest';
-import type { RealizeLeg, RealizePlan, RealizeTwap, RebalanceView, TwapPlanView } from '../api/types';
+import type { RealizeLeg, RealizeMargin, RealizePlan, RealizeTwap, RebalanceView, TwapPlanView } from '../api/types';
 import { ToastProvider } from '../components/Toast';
-import { num } from '../lib/fmt';
+import { fmtUsd, num, sigGrouped } from '../lib/fmt';
+import { CONVERT_TO, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
+import { keyOf } from './RebalanceHovers';
 import { accountBodies, accountHandler, realizeCustomPlan, rebalanceViews, transferHandler, transferViews, whaleRebalanceViews } from '../test/fixtures';
 import { env, server } from '../test/server';
 import { renderWithClient } from '../test/utils';
@@ -13,7 +15,7 @@ import { RealizeTab } from './RealizeTab';
 import { twapQueryOf } from './realizeTabCost';
 import { TrackedAddressProvider } from './trackedAddress';
 
-type Body = { kind?: string; costUsd?: number; maker?: unknown; twap?: Record<string, unknown> };
+type Body = { kind?: string; costUsd?: number; maker?: unknown; twap?: Record<string, unknown>; realizeShown?: unknown };
 
 const planOf = (slices: number, sliceQty: string, lastQty: string): TwapPlanView => ({
   slices,
@@ -78,7 +80,23 @@ describe('RealizeTab TWAP', () => {
     expect(sent[0]!.maker).toBeUndefined();
     expect(sent[0]!.costUsd).toBeCloseTo(41.5, 6);
     expect(sent[0]!.twap).toMatchObject({ durationSec: 3600, slices: 12 });
-    expect(sent[0]!.twap).toHaveProperty('takerAfterSec');
+    expect(sent[0]!.twap).not.toHaveProperty('takerAfterSec');
+    expect(sent[0]!.realizeShown).toEqual(owner.realize!.clearDebt!.legs.map((leg) => ({ symbol: leg.symbol, at: leg.margin?.at ?? null, firstQty: leg.margin?.firstQty ?? null })));
+  });
+
+  it('the plan is asked again with the order setting and taker-after, and again when the trader picks Market', async () => {
+    const owner = rebalanceViews.ownerAccount;
+    const { asked } = render(owner, () => twapOf([owner.realize!.clearDebt!.legs[0]!], [12], 41.5));
+    await waitFor(() => expect(asked.some((q) => q.get('realizeExec') === 'maker' && Number(q.get('realizeTakerAfterSec')) > 0)).toBe(true));
+    await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Orders' })).getAllByRole('radio')[1]!);
+    await waitFor(() => expect(asked.some((q) => q.get('realizeExec') === 'market' && !q.has('realizeTakerAfterSec'))).toBe(true));
+  });
+
+  it('with Limit + hedge, TWAP on and Taker after not picked, the plan is still asked with the order setting, so the close is priced as maker', async () => {
+    const owner = rebalanceViews.ownerAccount;
+    const { asked } = render(owner, () => twapOf([owner.realize!.clearDebt!.legs[0]!], [12], 41.5));
+    await userEvent.click(screen.getByRole('switch', { name: 'TWAP' }));
+    await waitFor(() => expect(asked.some((q) => q.has('twapSlices') && q.get('realizeExec') === 'maker' && !q.has('realizeTakerAfterSec'))).toBe(true));
   });
 
   it('Market sends twap at the Market span, with no maker settings and the market estimate', async () => {
@@ -317,6 +335,143 @@ describe('RealizeTab steps', () => {
     const close = screen.getByText(new RegExp(`^${lead.base} (Long|Short) .* of `));
     const convert = screen.getAllByText(/^Convert [\d,]+ /)[0]!;
     expect(close.compareDocumentPosition(convert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  const owner = rebalanceViews.ownerAccount;
+  const lead = owner.realize!.clearDebt!.legs[0]!;
+  const sideText = lead.side === 'LONG' ? 'Long' : 'Short';
+  const withMargin = (margin: RealizeMargin | null, convert = lead.convert): RebalanceView =>
+    withLegs(owner, owner.realize!.clearDebt!.legs.map((leg, i) => (i === 0 ? { ...leg, margin, convert } : leg)));
+  const leadRows = (): string[] => {
+    const list = screen.getByText('Close and reopen').parentElement!.parentElement!.querySelector('ol')!;
+    return within(list)
+      .getAllByRole('listitem')
+      .map((row) => row.textContent ?? '')
+      .filter((text) => text.includes(lead.base) || /Convert/.test(text))
+      .slice(0, 4);
+  };
+
+  it('with no margin Convert, lists the close and reopen, then the Convert', () => {
+    render(withMargin(null), () => twapOf([lead], [12], 41.5));
+    const rows = leadRows();
+    expect(rows[0]).toContain(`${lead.base} ${sideText} ${sizeText(lead.qty)} of ${sizeText(lead.positionQty)}`);
+    expect(rows[1]).toMatch(/Convert [\d,]+ /);
+    expect(screen.queryByText(/slice 1/)).toBeNull();
+  });
+
+  it('with the margin Convert before slice 1, lists the Convert first', () => {
+    render(withMargin({ at: 'before', amount: lead.convert!.amount, firstQty: lead.qty / 4 }), () => twapOf([lead], [12], 41.5));
+    const rows = leadRows();
+    expect(rows[0]).toContain(`Convert ${num(lead.convert!.amount, 0)} `);
+    expect(rows[1]).toContain(`${lead.base} ${sideText} ${sizeText(lead.qty)} of ${sizeText(lead.positionQty)}`);
+    expect(screen.queryByText(/slice 1/)).toBeNull();
+  });
+
+  it('with the margin Convert in slice 1, lists close slice 1, Convert, reopen slice 1 at its own size, then the other slices', () => {
+    const first = lead.qty / 3;
+    render(withMargin({ at: 'gap', amount: lead.convert!.amount, firstQty: first }), () => twapOf([lead], [12], 41.5));
+    const rows = leadRows();
+    expect(rows[0]).toContain(`Close slice 1 · ${lead.base} ${sideText} ${sizeText(first)} · unhedged until it reopens`);
+    expect(rows[0]).not.toContain('no time limit');
+    expect(rows[1]).toContain(`Convert ${num(lead.convert!.amount, 0)} `);
+    expect(rows[2]).toContain(`Reopen slice 1 · ${lead.base} ${sideText} ${sizeText(first)}`);
+    expect(rows[3]).toContain(`Other slices · ${lead.base} ${sideText} ${sizeText(lead.qty - first)}`);
+  });
+
+  it('when slice 1 is the whole leg, lists no other slices', () => {
+    render(withMargin({ at: 'gap', amount: lead.convert!.amount, firstQty: lead.qty }), () => twapOf([lead], [12], 41.5));
+    const rows = leadRows();
+    expect(rows[2]).toContain(`Reopen slice 1 · ${lead.base} ${sideText} ${sizeText(lead.qty)}`);
+    expect(screen.queryByText(/^Other slices/)).toBeNull();
+  });
+
+  const allLeadRows = (): string[] =>
+    within(screen.getByText('Close and reopen').parentElement!.parentElement!.querySelector('ol')!)
+      .getAllByRole('listitem')
+      .map((row) => row.textContent ?? '')
+      .filter((text) => text.includes(lead.base) || /Convert/.test(text));
+
+  it('in slice 1, lists only the margin Convert between close and reopen, and the rest of the Convert after the other slices', () => {
+    const first = lead.qty / 3;
+    const total = 9_500;
+    render(withMargin({ at: 'gap', amount: 1_500, firstQty: first }, { amount: total, count: 1, feeUsd: total * 0.002 }), () => twapOf([lead], [12], 41.5));
+    const rows = allLeadRows();
+    expect(rows[0]).toContain(`Close slice 1 · ${lead.base} ${sideText} ${sizeText(first)}`);
+    expect(rows[1]).toContain(`Convert ${num(1_500, 0)} `);
+    expect(rows[2]).toContain(`Reopen slice 1 · ${lead.base} ${sideText} ${sizeText(first)}`);
+    expect(rows[3]).toContain(`Other slices · ${lead.base} ${sideText} ${sizeText(lead.qty - first)}`);
+    expect(rows[4]).toContain(`Convert ${num(8_000, 0)} `);
+  });
+
+  it('before slice 1, lists only the margin Convert first, and the rest of the Convert after the slices', () => {
+    const total = 4_450;
+    render(withMargin({ at: 'before', amount: 300, firstQty: lead.qty / 4 }, { amount: total, count: 1, feeUsd: total * 0.002 }), () => twapOf([lead], [12], 41.5));
+    const rows = allLeadRows();
+    expect(rows[0]).toContain(`Convert ${num(300, 0)} `);
+    expect(rows[1]).toContain(`${lead.base} ${sideText} ${sizeText(lead.qty)} of ${sizeText(lead.positionQty)}`);
+    expect(rows[2]).toContain(`Convert ${num(4_150, 0)} `);
+  });
+
+  const twapOn = async () => {
+    const toggle = screen.getByRole('switch', { name: 'TWAP' });
+    if (toggle.getAttribute('aria-checked') !== 'true') await userEvent.click(toggle);
+    expect(await screen.findByRole('button', { name: 'Hold to realize · TWAP 1h' })).toBeInTheDocument();
+  };
+
+  it('warns when slice 1 is larger than a TWAP slice, with both sizes and its price impact', async () => {
+    const first = lead.qty / 3;
+    render(withMargin({ at: 'gap', amount: lead.convert!.amount, firstQty: first, impactUsd: 1234.5, impactBp: 7.25 }), () => twapOf([lead], [12], 41.5));
+    await twapOn();
+    expect(await screen.findByText(`${lead.base} slice 1 is larger than a TWAP slice. It is unhedged from its first close fill until it reopens.`)).toBeInTheDocument();
+    expect(screen.getByText('Slice 1').parentElement!.parentElement).toHaveTextContent(`${sizeText(first)} ${lead.base}`);
+    expect(screen.getByText('TWAP slice').parentElement!.parentElement).toHaveTextContent(`${sizeText(lead.qty / 12)} ${lead.base}`);
+    expect(screen.getByText('Slice 1 price impact').parentElement!.parentElement).toHaveTextContent(`${fmtUsd(1234.5)} · 7.3 bp`);
+  });
+
+  it('warns that a one-TWAP-slice slice 1 is unhedged from its first close fill until it reopens, without the larger wording', async () => {
+    render(withMargin({ at: 'gap', amount: lead.convert!.amount, firstQty: lead.qty / 12, impactUsd: 5, impactBp: 1 }), () => twapOf([lead], [12], 41.5));
+    await twapOn();
+    expect(await screen.findByText(`${lead.base} slice 1 closes alone. It is unhedged from its first close fill until it reopens.`)).toBeInTheDocument();
+    expect(screen.queryByText(/larger than a TWAP slice/)).toBeNull();
+    expect(screen.getByText('TWAP slice').parentElement!.parentElement).toHaveTextContent(`${sizeText(lead.qty / 12)} ${lead.base}`);
+    expect(screen.getByText('Slice 1 price impact').parentElement!.parentElement).toHaveTextContent(`${fmtUsd(5)} · 1.0 bp`);
+  });
+
+  it('with taker-after Never, the warning and the slice 1 close row say it is unhedged until it reopens and the close has no time limit, and the plan is asked with never', async () => {
+    const first = lead.qty / 3;
+    const { asked } = render(withMargin({ at: 'gap', amount: lead.convert!.amount, firstQty: first, impactUsd: 5, impactBp: 1 }), () => twapOf([lead], [12], 41.5));
+    fireEvent.click(screen.getByRole('button', { name: /Maker settings/ }));
+    fireEvent.click(await screen.findByRole('radio', { name: 'Never' }));
+    await waitFor(() => expect(asked.some((q) => q.get('realizeExec') === 'maker' && q.get('realizeTakerAfterSec') === 'never')).toBe(true));
+    expect(await screen.findByText(`${lead.base} slice 1 closes alone. It is unhedged from its first close fill until it reopens. With Taker after "Never", the close has no time limit.`)).toBeInTheDocument();
+    expect(leadRows()[0]).toContain(`Close slice 1 · ${lead.base} ${sideText} ${sizeText(first)} · unhedged until it reopens · no time limit`);
+    await twapOn();
+    expect(await screen.findByText(`${lead.base} slice 1 is larger than a TWAP slice. It is unhedged from its first close fill until it reopens. With Taker after "Never", the close has no time limit.`)).toBeInTheDocument();
+  });
+
+  it('shows no slice 1 warning when the Convert runs before slice 1', async () => {
+    render(withMargin({ at: 'before', amount: lead.convert!.amount, firstQty: lead.qty }), () => twapOf([lead], [12], 41.5));
+    await twapOn();
+    expect(screen.queryByText(/larger than a TWAP slice/)).toBeNull();
+    expect(screen.queryByText(/unhedged from its first close fill/)).toBeNull();
+  });
+
+  it('the Cost and After cards count the whole margin Convert when it is more than the old Convert', () => {
+    const targetKey = poolKey(CONVERT_TO[lead.pool]);
+    const amount = Math.round(lead.convert!.amount * 2);
+    const borrow = amount * 3;
+    const convert = { amount, count: 1, feeUsd: amount * 0.002 };
+    const others = owner.realize!.clearDebt!.legs.slice(1).reduce((sum, leg) => sum + (leg.convert ? leg.convert.amount - leg.convert.feeUsd : 0), 0);
+    const otherFees = owner.realize!.clearDebt!.legs.slice(1).reduce((sum, leg) => sum + (leg.convert?.feeUsd ?? 0), 0);
+    const view = withMargin({ at: 'gap', amount, firstQty: lead.qty / 3 }, convert);
+    const target = view.buckets.find((b) => keyOf(b) === targetKey && b.borrow > 0)!;
+    expect(target).toBeDefined();
+    render({ ...view, buckets: view.buckets.map((b) => (b === target ? { ...b, borrow } : b)) }, () => twapOf([lead], [12], 41.5));
+    expect(leadRows()[1]).toContain(`Convert ${num(amount, 0)} `);
+    const feeRow = screen.getByText('Convert fee').parentElement!;
+    expect(feeRow).toHaveTextContent(fmtUsd(convert.feeUsd + otherFees));
+    const group = screen.getByRole('rowgroup', { name: WALLET_LABEL[keyOf(target)] });
+    expect(group).toHaveTextContent(sigGrouped(borrow - (amount - convert.feeUsd) - others));
   });
 });
 

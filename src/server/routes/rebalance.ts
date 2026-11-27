@@ -12,6 +12,7 @@ import { computeExposure } from '../../core/positions';
 import {
   capsUsdOf,
   isInProfit,
+  type CloseTime,
   positiveOf,
   type PerpRule,
   type PerpSide,
@@ -69,6 +70,7 @@ import {
   FIX_UNCONFIRMED,
   FOLLOW_MISSES_RED,
   gapsLeftBy,
+  HALT_TEXT,
   inTransitOf,
   isChildOf,
   LOCK_TEXT,
@@ -88,7 +90,7 @@ import {
   type StepName,
   twapLockText,
 } from '../rebalanceJob';
-import { applyFix, cancelRestingLead, endHaltedChildren, receivedOf, runJob, settleAddBack, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
+import { applyFix, cancelRestingLead, creditGapChild, endHaltedChildren, receivedOf, runJob, settleAddBack, STEPS, transferRow, type QueuedFix, type RunnerDeps } from '../rebalanceRunner';
 import { configuredRoot, createBorosCloseDeps, createPairPricer } from './borosPair';
 
 const ROUTE_NAMES: readonly string[] = ['mix', 'loop', 'convert'];
@@ -226,6 +228,18 @@ function twapInputOf(value: unknown): TwapInput | null {
   };
   if (Object.values(input).some((field) => field === undefined)) throw new CoreError('twap needs numbers for durationSec, intervalSec and slices');
   return input;
+}
+
+function twapSliceSecOf(twap: TwapInput): number | undefined {
+  const sec = twap.intervalSec ?? (twap.durationSec !== undefined && twap.slices ? twap.durationSec / twap.slices : undefined);
+  return sec !== undefined && sec > 0 ? sec : undefined;
+}
+
+function realizeCloseQueryOf(exec: unknown, takerAfterSec: unknown): CloseTime {
+  if (exec !== undefined && !isExec(exec)) throw new CoreError(`unknown order mode ${String(exec)}`);
+  const sec = takerAfterSec === undefined ? undefined : takerAfterSec === 'never' ? null : Number(takerAfterSec);
+  if (typeof sec === 'number' && !(Number.isInteger(sec) && sec > 0)) throw new CoreError('realizeTakerAfterSec must be a whole number of seconds or never');
+  return { ...(exec === undefined ? {} : { exec }), ...(sec === undefined ? {} : { takerAfterSec: sec }) };
 }
 
 function realizeTwapQueryOf(durationSec: unknown, slices: unknown): TwapInput | null {
@@ -405,6 +419,23 @@ export function isShownRealize(fresh: RealizeLeg[], shown: ShownLeg[], rules: Re
   });
 }
 
+interface ShownMargin {
+  symbol: string;
+  at: 'before' | 'gap' | null;
+  firstQty: number | null;
+}
+
+export function marginGrew(fresh: RealizeLeg[], shown: unknown, rules: Record<string, PerpRule>): boolean {
+  const rows = Array.isArray(shown) ? (shown as Partial<ShownMargin>[]) : [];
+  return fresh.some((leg) => {
+    if (leg.margin?.at !== 'gap') return false;
+    const seen = rows.find((row) => row?.symbol === leg.symbol);
+    if (seen?.at !== 'gap' || typeof seen.firstQty !== 'number') return true;
+    const lot = Number(rules[leg.symbol]?.lotSize) || Number(DEFAULT_STEP);
+    return leg.margin.firstQty - seen.firstQty > Math.max(lot, seen.firstQty * SHOWN_SIZE_GAP) + 1e-9;
+  });
+}
+
 export function rebalanceRoutes(deps: AppDeps) {
   return async function plugin(app: FastifyInstance): Promise<void> {
     app.setErrorHandler((err, req, reply) => sendError(err, req, reply, classifyPlain));
@@ -568,11 +599,17 @@ export function rebalanceRoutes(deps: AppDeps) {
       bootJob !== null &&
       bootStep !== undefined &&
       (bootStep.venueId !== null || bootStep.text !== null);
-    if (jobs && deps.engine && bootJob && isSlicedTwap(bootJob) && bootJob.status === 'running') {
+    if (jobs && deps.engine && bootJob && bootStep && bootJob.kind === 'realize' && sliceStepBehind(bootJob)?.cut?.gap) {
+      void stopLiveChild(twapDeps(jobs), bootJob, true);
+      bootStep.startedAt = now();
+      jobs.write(bootJob);
+      start(jobs, true);
+    } else if (jobs && deps.engine && bootJob && isSlicedTwap(bootJob) && bootJob.status === 'running') {
       void stopLiveChild(twapDeps(jobs), bootJob, true);
       if (jobs.haltIfRunning()) {
         const halted = jobs.read() ?? bootJob;
         markOpenGap(deps.engine.store, halted);
+        if (halted.notHedgedQty > 0) halted.haltReason = HALT_TEXT.restartGap;
         jobs.write(halted);
         onHalt(halted);
       }
@@ -632,7 +669,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         ),
       );
 
-    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, realizePool?: Pool, twapSlices?: number) => {
+    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, realizePool?: Pool, twap?: TwapInput | null, close: CloseTime = {}) => {
       const account = await readAccount(fresh);
       const userId = account.value.userId ? String(account.value.userId) : null;
       const [positions, rates, paid, coins, rules, fees, tickers, depth] = await Promise.all([
@@ -684,7 +721,8 @@ export function rebalanceRoutes(deps: AppDeps) {
         repay: planFor(buckets, account.value, inputs, REPAY_GOAL),
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
-      const realize = realizeTabOf(buckets, account.value, twapSlices === undefined ? inputs : { ...inputs, twapSlices }, realizeUsd, realizePool);
+      const closeInputs = { ...inputs, realizeExec: close.exec, realizeTakerAfterSec: close.takerAfterSec };
+      const realize = realizeTabOf(buckets, account.value, twap?.slices === undefined ? closeInputs : { ...closeInputs, twapSlices: twap.slices, twapSliceSec: twapSliceSecOf(twap) }, realizeUsd, realizePool);
       const fullPlan = fullPlanOf(buckets, account.value, inputs);
       const imUsed = imUsedOf(account.value);
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
@@ -807,12 +845,13 @@ export function rebalanceRoutes(deps: AppDeps) {
     };
 
     app.get('/rebalance', async (req, reply) => {
-      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; realizePool?: unknown; twapDurationSec?: unknown; twapSlices?: unknown };
+      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; realizePool?: unknown; twapDurationSec?: unknown; twapSlices?: unknown; realizeExec?: unknown; realizeTakerAfterSec?: unknown };
       const custom = customGoalOf(query);
       const realizeUsd = positiveQueryOf(query.realizeUsd, 'realizeUsd') ?? null;
       const realizePool = poolQueryOf(query.realizePool);
       const twapInput = realizeTwapQueryOf(query.twapDurationSec, query.twapSlices);
-      const { buckets, plans, realize, fullPlan, imUsed, stale, perps, books } = await loadView(false, custom, realizeUsd, realizePool, twapInput?.slices);
+      const close = realizeCloseQueryOf(query.realizeExec, query.realizeTakerAfterSec);
+      const { buckets, plans, realize, fullPlan, imUsed, stale, perps, books } = await loadView(false, custom, realizeUsd, realizePool, twapInput, close);
       const twapOf = (plan: RealizePlan | null) => (twapInput ? realizeTwapOf(plan, perps, books, twapInput, false).catch(() => null) : null);
       const realizeTwap = twapInput && realize ? { clearDebt: await twapOf(realize.clearDebt), all: await twapOf(realize.all), custom: await twapOf(realize.custom) } : null;
       const job = jobs?.read() ?? null;
@@ -915,6 +954,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       realizeUsd?: unknown;
       realizeTarget?: unknown;
       realizePool?: unknown;
+      realizeShown?: unknown;
       delever?: unknown;
       clientId?: unknown;
       deal?: unknown;
@@ -1028,7 +1068,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
-      const view = await catchRateLimit(loadView(true, null, realizeUsd, realizePool, twapInput?.slices));
+      const view = await catchRateLimit(loadView(true, null, realizeUsd, realizePool, twapInput, { exec, takerAfterSec: twapInput ? askedTwap?.takerAfterSec : maker?.takerAfterSec }));
       if (!view) return conflict(reply, STALE_TEXT);
       const tab = view.realize;
       if (tab && realizePool !== undefined && tab.pool !== realizePool) return conflict(reply, WALLET_HAS_NO_UPNL, PLAN_CHANGED_LABEL);
@@ -1036,6 +1076,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       if (!tab || !plan) return conflict(reply, NOTHING_TO_REALIZE);
       if (plan.refused) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       if (plan.legs.length === 0) return conflict(reply, NOTHING_TO_REALIZE);
+      if (marginGrew(plan.legs, body.realizeShown, view.perpRules)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const twap = twapInput ? await realizeTwapOf(plan, view.perps, view.books, twapInput, true) : null;
       if (twap?.refusal) return refuse400(reply, twap.refusal.text);
       if (twapInput && !twap?.plan) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
@@ -1311,6 +1352,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       }
       current.steps[current.stepIndex].startedAt = now();
       current.retryConverts = 0;
+      current.fallbackConverts = 0;
       current.topUps = 0;
       current.topUpPending = false;
       store.write(current);
@@ -1334,7 +1376,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const job = haltedOr409(store, id, reply);
       if (!job) return reply;
       if (fixing) return conflict(reply, FIX_RUNNING);
-      const settle = endHaltedChildren(runnerDeps(store), job).then(() => settleAddBack(runnerDeps(store), job)).then((unread) => {
+      const settle = endHaltedChildren(runnerDeps(store), job).then(() => (job.kind === 'realize' ? creditGapChild(runnerDeps(store), job) : undefined)).then(() => settleAddBack(runnerDeps(store), job)).then((unread) => {
         job.status = 'abandoned';
         job.haltReason = addBackAbandonText(job, unread) ?? job.haltReason;
         const gaps = addBackGapsOf(job, unread);

@@ -636,20 +636,28 @@ export function useCustomPlan(custom: CustomMove | null) {
   });
 }
 
+export interface RealizeClose {
+  exec: RealizeExec;
+  takerAfterSec?: number | null;
+}
+
 export function useRealizeCustom(
   usd: number | null,
   pool: Pool | null = null,
   twap: { durationSec: number; slices: number } | null = null,
+  close: RealizeClose | null = null,
 ) {
   const query = [
     usd !== null && usd > 0 ? `realizeUsd=${usd}` : null,
     pool !== null ? `realizePool=${pool}` : null,
     twap !== null ? `twapDurationSec=${twap.durationSec}&twapSlices=${twap.slices}` : null,
+    close !== null ? `realizeExec=${close.exec}` : null,
+    close?.takerAfterSec !== undefined ? `realizeTakerAfterSec=${close.takerAfterSec ?? 'never'}` : null,
   ]
     .filter((part) => part !== null)
     .join('&');
   return useQuery({
-    queryKey: [...qk.rebalance, 'realize', usd ?? 0, pool ?? '', twap?.durationSec ?? 0, twap?.slices ?? 0] as const,
+    queryKey: [...qk.rebalance, 'realize', usd ?? 0, pool ?? '', twap?.durationSec ?? 0, twap?.slices ?? 0, close?.exec ?? '', close?.takerAfterSec === null ? 'never' : (close?.takerAfterSec ?? 0)] as const,
     queryFn: () => fetchJson<RebalanceView>(`/rebalance?${query}`),
     enabled: query !== '',
     placeholderData: keepPreviousData,
@@ -675,6 +683,7 @@ export interface StartRebalanceBody extends Partial<CustomMove> {
   realizeUsd?: number;
   realizeTarget?: 'clear-debt' | 'all' | 'custom';
   realizePool?: Pool;
+  realizeShown?: { symbol: string; at: 'before' | 'gap' | null; firstQty: number | null }[];
   delever?: DeleverRequest;
   maker?: { takerAfterSec: number | null; repegBehindBp: number | null };
   twap?: { durationSec: number; slices: number; takerAfterSec?: number | null; repegBehindBp?: number | null };

@@ -233,6 +233,16 @@ export interface RealizeConvert {
   feeUsd: number;
 }
 
+export interface RealizeMargin {
+  at: 'before' | 'gap';
+  amount: number;
+  firstQty: number;
+  impactUsd?: number;
+  impactBp?: number;
+  closeWalkUsd?: number;
+  reopenWalkUsd?: number;
+}
+
 export interface RealizeLeg {
   pool: Pool;
   symbol: string;
@@ -243,6 +253,7 @@ export interface RealizeLeg {
   qty: number;
   realizedUsd: number;
   convert: RealizeConvert | null;
+  margin?: RealizeMargin | null;
   closeFeeUsd: number;
   closeMakerFeeUsd?: number;
   reopenFeeUsd: number;
@@ -555,6 +566,7 @@ export interface RealizeJobLeg {
   reopenImpactUsd?: number;
   convert?: { amount: number; feeUsd: number } | null;
   hedge?: string | null;
+  margin?: RealizeMargin | null;
 }
 
 export interface RebalanceJob {

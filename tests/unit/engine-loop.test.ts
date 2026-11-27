@@ -1985,3 +1985,56 @@ describe('a hedge hold that commits mid-tick', () => {
     expect(w.store.getPair(w.pairId)!.mode).toBe('HALTED');
   });
 });
+
+describe('a one-leg reduce-only maker close, as the Realize gap slice 1 sends it', () => {
+  const gapClose = (over?: Partial<DealRequest>): DealRequest => ({
+    id: 'rz-gap-close-1',
+    a: { symbol: HL_ETH, side: 'BUY', reduceOnly: true },
+    b: null,
+    qty: '0.152',
+    execution: 'maker',
+    pricePolicy: 'touch',
+    timeoutSec: 300,
+    ...over,
+  });
+
+  it('the engine accepts the request with the best price the route adds: no hedge leg, reduce-only, touch price, the taker-after as its deadline', async () => {
+    const short = { crossEx: { ...dealClients.crossEx, listCrossexPositions: async () => ({ body: [{ symbol: HL_ETH, positionQty: '-0.5' }] }) } } as unknown as Clients;
+    const row = await resolveDeal(short, gapClose({ price: '2500' }), NOW, dealOpts);
+    expect(row).toMatchObject({ b: null, pricePolicy: 'touch', deadlineAt: NOW + 300_000, targetQty: '0.152' });
+    expect(row.a.reduceOnly).toBe(true);
+  });
+
+  it('rests post-only, part fills, then at the taker-after closes the rest with reduce-only taker clips and ends DONE with the whole size', async () => {
+    const w = mkWorld({ b: null, a: { reduceOnly: true }, pricePolicy: 'touch', deadlineInMs: 300_000 });
+    await stepChecked(w, 5);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    expect(maker).toMatchObject({ tif: 'poc', reduceOnly: true });
+    w.venue.fill(maker.clientText, '0.05');
+    await stepChecked(w, 5);
+    expect(w.store.getPair(w.pairId)!.mode).toBe('OPENING');
+    await stepChecked(w, 300);
+    const orders = [...w.venue.orders.values()];
+    const clips = orders.filter((o) => o.tif === 'ioc');
+    expect(clips.length).toBeGreaterThan(0);
+    expect(orders.every((o) => o.reduceOnly && o.contract === A_CONTRACT)).toBe(true);
+    expect(fxStr(clips.reduce((s, o) => s + o.cum, 0n))).toBe('0.102');
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.mode).toBe('DONE');
+    expect(JSON.parse(pair.reportJson!).aFilled).toBe('0.152');
+  });
+
+  it('a Stop while it rests cancels the maker, keeps the part that filled, and places nothing else', async () => {
+    const w = mkWorld({ b: null, a: { reduceOnly: true }, pricePolicy: 'touch', deadlineInMs: 300_000 });
+    await stepChecked(w, 5);
+    const maker = w.venue.liveOrder(A_CONTRACT)!;
+    w.venue.fill(maker.clientText, '0.05');
+    commands.stop(w.store, w.pairId);
+    await stepChecked(w, 6);
+    expect(w.venue.liveOrder(A_CONTRACT)).toBeUndefined();
+    const pair = w.store.getPair(w.pairId)!;
+    expect(pair.mode).toBe('DONE');
+    expect(JSON.parse(pair.reportJson!).aFilled).toBe('0.05');
+    expect([...w.venue.orders.values()]).toHaveLength(1);
+  });
+});

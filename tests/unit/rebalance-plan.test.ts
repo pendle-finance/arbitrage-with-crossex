@@ -53,6 +53,7 @@ import {
   type PlanInputs,
   type Pool,
   REPAY_GOAL,
+  realizeInput,
   type RateLike,
   type RoutePlan,
   type WalletAfter,
@@ -1909,7 +1910,7 @@ describe('fullPlanOf with three wallets', () => {
     hourInterestRate: String(0.05 / 8760),
   }));
 
-  function threeWallets(cash: Record<Pool, number>, payer: 'HYPERLIQUID' | 'CROSSEX') {
+  function threeWallets(cash: Record<Pool, number>, payer: 'HYPERLIQUID' | 'CROSSEX', ratio: number) {
     const profit = 10_000;
     const perps =
       payer === 'HYPERLIQUID'
@@ -1932,9 +1933,9 @@ describe('fullPlanOf with three wallets', () => {
     };
     const marginBalance = POOL_LIST.reduce((total, pool) => total + cash[pool] + upnl(pool), 0);
     const account: AccountLike = {
-      availableMargin: '0',
+      availableMargin: String(marginBalance - marginBalance / ratio),
       marginBalance: String(marginBalance),
-      initialMargin: String(marginBalance),
+      initialMargin: String(marginBalance / ratio),
       assets: [
         ...POOL_LIST.map((pool) => walletAsset(WALLETS[pool].coin, WALLETS[pool].venue, cash[pool], upnl(pool))),
         walletAsset('USDC', 'GATE', 0, 0),
@@ -1951,22 +1952,78 @@ describe('fullPlanOf with three wallets', () => {
       books: { HYPERLIQUID_FUTURE_BTC_USDC: HL_BTC, GATE_FUTURE_BTC_USDT: GATE_BTC },
       feeRows: FEE_ROWS,
       perpRules: PERP_RULES,
-      availableMargin: 0,
+      availableMargin: marginBalance - marginBalance / ratio,
     };
     return { account, buckets: bucketsFrom(account, RATES, {}), inputs };
   }
 
-  it.each([
-    ['HYPERLIQUID', { CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: -5_000 }],
-    ['CROSSEX', { CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: -5_000 }],
-  ] as const)('clear borrow with %s paying clears both borrowing wallets', (payer, cash) => {
-    const book = threeWallets(cash, payer);
+  it.each(
+    (['HYPERLIQUID', 'CROSSEX'] as const).flatMap((payer) =>
+      [1, 1.05, 1.1, 1.12, 1.15, 1.25].map(
+        (ratio) => [payer, payer === 'HYPERLIQUID' ? { CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: -5_000 } : { CROSSEX: 100, HYPERLIQUID: -3_000, LIGHTER: -5_000 }, ratio] as const,
+      ),
+    ),
+  )('clear borrow with %s paying clears both borrowing wallets (margin ratio %s)', (payer, cash, ratio) => {
+    const book = threeWallets(cash, payer, ratio);
     const full = fullPlanOf(book.buckets, book.account, book.inputs);
-    expect(full).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
+
+    expect(full, `${payer} at ${ratio}`).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
     const tab = realizeTabOf(book.buckets, book.account, book.inputs, null);
     expect(tab?.pool).toBe(payer);
-    const converted = (tab?.clearDebt?.legs ?? []).reduce((total, leg) => total + (leg.convert?.amount ?? 0), 0);
-    expect(converted).toBeGreaterThan(1_500);
+    expect(tab?.clearDebt?.refused).toBeNull();
+  });
+
+  it.each([1, 1.05, 1.1, 1.12, 1.15, 1.25])('at a %s ratio with Hyperliquid paying, a gap slice 1 always carries a Convert of at least 11 USDC, and a slice 1 that fits hedged has no gap', (ratio) => {
+    const book = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: -5_000 }, 'HYPERLIQUID', ratio);
+    const leg = realizeTabOf(book.buckets, book.account, book.inputs, null)?.clearDebt?.legs[0];
+    const margin = leg?.margin ?? null;
+    if (margin?.at === 'gap') expect(margin.amount).toBeGreaterThanOrEqual(11);
+    if (ratio === 1.15) {
+      expect(margin).toBeNull();
+      expect(leg?.hedgedFirstQty).toBe(0.1181);
+      expect(fullPlanOf(book.buckets, book.account, book.inputs)?.clearsBorrow).toBe(true);
+    }
+  });
+
+  it.each([
+    [1, 'gap', null, 0.1687],
+    [1.12, null, 0.18154, null],
+    [1.15, null, 0.1181, null],
+    [1.25, 'before', null, 0.79597],
+  ] as const)('at a %s ratio the plan takes hedged slices whenever a hedged plan clears the debt, and the gap only when none does', (ratio, at, hedgedFirst, firstQty) => {
+    const book = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: -5_000 }, 'HYPERLIQUID', ratio);
+    const leg = realizeTabOf(book.buckets, book.account, book.inputs, null)?.clearDebt?.legs[0];
+    expect(leg?.margin?.at ?? null).toBe(at);
+    expect(leg?.hedgedFirstQty ?? null).toBe(hedgedFirst);
+    if (firstQty !== null) expect(leg?.margin?.firstQty).toBe(firstQty);
+    expect(fullPlanOf(book.buckets, book.account, book.inputs)?.clearsBorrow).toBe(true);
+  });
+
+  it('at a 100%% ratio with Hyperliquid paying, the Convert after the slices repays all the USDT debt so the Lighter route can run, and the gap Convert stays slice-1 sized', () => {
+    const book = threeWallets({ CROSSEX: -3_000, HYPERLIQUID: 100, LIGHTER: -5_000 }, 'HYPERLIQUID', 1);
+    const leg = realizeTabOf(book.buckets, book.account, book.inputs, null)?.clearDebt?.legs[0];
+    const amount = leg?.convert?.amount ?? 0;
+    expect(amount * (1 - CONVERT_RATE)).toBeGreaterThanOrEqual(3_000 - 0.01);
+    expect(amount * (1 - CONVERT_RATE)).toBeLessThanOrEqual(3_000 + 0.02);
+    expect(leg?.margin).toMatchObject({ at: 'gap' });
+    expect(leg?.margin?.amount ?? 0).toBeLessThan(amount);
+    expect(leg?.margin?.firstQty ?? Infinity).toBeLessThan(leg?.qty ?? 0);
+    expect(fullPlanOf(book.buckets, book.account, book.inputs)?.clearsBorrow).toBe(true);
+  });
+
+  it.each([['$50', 50], ['$6M', 6_000_000]])('at %s the Convert in or before slice 1 is sized from the payer wallet cash, not from the cash the route can send', (_label, usd) => {
+    const book = threeWallets({ CROSSEX: usd / 100, HYPERLIQUID: -3_000, LIGHTER: -5_000 }, 'CROSSEX', 1.05);
+    const gate = { ...book.account.assets!.at(-1)!, balance: String(usd), availableBalance: String(usd), equity: String(usd) };
+    const account = { ...book.account, assets: [...book.account.assets!.slice(0, -1), gate] };
+    const input = realizeInput(bucketsFrom(account, RATES, {}), account, book.inputs, { from: 'CROSSEX', moveUsd: 8_000, cashUsd: usd + usd / 100 });
+    expect(input.convertCashUsd).toBe(usd / 100);
+    expect(input.cashUsd).toBe(usd + usd / 100);
+  });
+
+  it('a payer wallet at -2,000 USD gives the Convert -2,000 of cash, not 0', () => {
+    const book = threeWallets({ CROSSEX: -2_000, HYPERLIQUID: -3_000, LIGHTER: -5_000 }, 'CROSSEX', 1.05);
+    const input = realizeInput(book.buckets, book.account, book.inputs, { from: 'CROSSEX', moveUsd: 8_000, cashUsd: 0 });
+    expect(input.convertCashUsd).toBe(-2_000);
   });
 });
 
