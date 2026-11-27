@@ -102,8 +102,8 @@ export function compareVersions(a: string, b: string): number | null {
 }
 
 /** Fetch the latest published version.json. NEVER throws — any failure returns
- * null, which the TtlCache then holds for the full TTL (one quiet retry per
- * window, not a retry storm). */
+ * null. A plain read caches that null for the full TTL (one quiet retry per
+ * window, not a retry storm); a Check for updates press does not cache it. */
 export async function fetchLatestVersion(fetchImpl: FetchLike): Promise<RemoteVersion | null> {
   try {
     const res = await fetchImpl(VERSION_URL, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
