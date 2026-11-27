@@ -92,11 +92,13 @@ describe('GET /api/version', () => {
       latestCommit: MAIN_SHA,
       updateAvailable: true,
       highlights: ['a', 'b'],
+      checkOn: true,
+      freshRead: null,
     });
     expect(calls).toEqual([VERSION_URL, COMMIT_URL]);
   });
 
-  it('?fresh=1 skips the cached read, at most once a minute', async () => {
+  it('?fresh=1 skips the cached read, at most once in 5 minutes', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       const calls: string[] = [];
@@ -114,10 +116,12 @@ describe('GET /api/version', () => {
       const found = (await fresh()).json().data;
       expect(found.updateAvailable).toBe(true);
       expect(found.latest).toBe('1.1.0');
+      expect(found.freshRead).toBe('ok');
       expect(calls).toHaveLength(4);
 
-      // A second press inside the minute answers from the new cache.
-      await fresh();
+      // A second press inside 5 minutes answers from the new cache.
+      vi.setSystemTime(Date.now() + 4 * 60_000);
+      expect((await fresh()).json().data.freshRead).toBe('skipped');
       expect(calls).toHaveLength(4);
       vi.setSystemTime(Date.now() + 61_000);
       await fresh();
@@ -125,6 +129,22 @@ describe('GET /api/version', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('a failed ?fresh=1 read keeps the last good answer', async () => {
+    let down = false;
+    const fetchImpl: FetchLike = async (url) =>
+      stub({ version: '1.1.0', highlights: ['a'] }, { reject: down })(url);
+    app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: fetchImpl });
+
+    expect((await get()).json().data.updateAvailable).toBe(true);
+    down = true;
+    const failed = (await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data;
+    expect(failed.freshRead).toBe('failed');
+    expect(failed.updateAvailable).toBe(true);
+    expect(failed.latest).toBe('1.1.0');
+    // The next plain read still has it.
+    expect((await get()).json().data.updateAvailable).toBe(true);
   });
 
   it('equal versions: no update, no highlights', async () => {
@@ -159,6 +179,8 @@ describe('GET /api/version', () => {
       latestCommit: null,
       updateAvailable: false,
       highlights: [],
+      checkOn: true,
+      freshRead: null,
     });
   });
 
@@ -204,6 +226,7 @@ describe('GET /api/version', () => {
       versionFetch: stub({ version: '9.9.9', highlights: [] }, { calls }),
     });
     const { data } = (await get()).json();
+    const pressed = (await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data;
     expect(calls).toHaveLength(0);
     expect(data).toEqual({
       current: '1.0.0',
@@ -212,7 +235,10 @@ describe('GET /api/version', () => {
       latestCommit: null,
       updateAvailable: false,
       highlights: [],
+      checkOn: false,
+      freshRead: null,
     });
+    expect(pressed).toEqual(data);
   });
 
   it('an unknown local version (the makeTestApp default) is network-free too', async () => {

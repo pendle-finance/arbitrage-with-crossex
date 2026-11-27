@@ -17,22 +17,46 @@ import { borosExecutionsPending } from './borosPair';
  * mode) makes this route provably network-free. Failures are cached as null
  * for the full TTL: silent by design.
  */
+const FORCED_GAP_MS = 5 * 60_000;
+
 export function versionRoutes(deps: AppDeps) {
   const fetchImpl: FetchLike = deps.versionFetch ?? (globalThis.fetch as unknown as FetchLike);
-  /** When `?fresh=1` last skipped the cache. GitHub allows 60 unauthenticated
-   * API reads an hour per IP, so a forced read runs at most once a minute. */
+  /** When `?fresh=1` last read GitHub. GitHub allows 60 unauthenticated API
+   * reads an hour per IP, and its raw file server caches version.json for 5
+   * minutes, so a forced read sooner than that would spend reads for nothing. */
   let forcedAt = 0;
   return async function plugin(app: FastifyInstance): Promise<void> {
     app.get('/version', async (req, reply) => {
       const current = deps.updateCheck?.current ?? null;
+      const checkOn = current !== null && !deps.updateCheck?.disabled;
       let remote: RemoteVersion | null = null;
-      if (current !== null && !deps.updateCheck?.disabled) {
+      let freshRead: 'ok' | 'failed' | 'skipped' | null = null;
+      if (checkOn) {
         const fresh = (req.query as { fresh?: string } | undefined)?.fresh === '1';
-        if (fresh && Date.now() - forcedAt >= 60_000) {
+        if (fresh && Date.now() - forcedAt < FORCED_GAP_MS) freshRead = 'skipped';
+        else if (fresh) {
           forcedAt = Date.now();
-          deps.cache.bust('version:latest');
+          // A failed read throws, so the cache keeps its last good answer.
+          // Caching the null would hide an available update for 6 hours.
+          try {
+            remote = (
+              await deps.cache.get(
+                'version:latest',
+                TTL.version,
+                async () => {
+                  const read = await fetchLatestVersion(fetchImpl);
+                  if (read === null) throw new Error('GitHub version read failed');
+                  return read;
+                },
+                { fresh: true },
+              )
+            ).value;
+            freshRead = 'ok';
+          } catch {
+            freshRead = 'failed';
+          }
         }
-        remote = (
+        remote ??= (
           await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl))
         ).value;
       }
@@ -46,6 +70,8 @@ export function versionRoutes(deps: AppDeps) {
         updateAvailable,
         // Highlights only when they describe a version the user doesn't have.
         highlights: updateAvailable && remote ? remote.highlights : [],
+        checkOn,
+        freshRead,
       });
     });
 

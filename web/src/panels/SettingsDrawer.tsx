@@ -1,5 +1,5 @@
 import { RefreshCw } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useCheckForUpdate, useVersion } from '../api/queries';
 import { Drawer } from '../components/Drawer';
@@ -25,6 +25,12 @@ export function SettingsDrawer({
   const version = useVersion(); // same query key as the header pill — deduped
   const install = version.data?.install ?? null;
   const check = useCheckForUpdate();
+  // The drawer stays mounted while closed, so an old result would greet the
+  // next open as if it were new.
+  const resetCheck = check.reset;
+  useEffect(() => {
+    if (!open) resetCheck();
+  }, [open, resetCheck]);
   const [openStep, setOpenStep] = useState<SetupStep | null>(open ? focusStep : null);
   const [committed, setCommitted] = useState({ open, focusStep });
   if (committed.open !== open || committed.focusStep !== focusStep) {
@@ -73,14 +79,20 @@ export function SettingsDrawer({
                   <span className="text-gold">{t('app.settingsDrawer.available', { version: version.data.latest })}</span>
                 ) : check.isSuccess ? (
                   <span className="text-ink-300">
-                    {t(check.data.latest === null ? 'app.settingsDrawer.checkFailed' : 'app.settingsDrawer.upToDate')}
+                    {t(
+                      check.data.freshRead === 'failed'
+                        ? 'app.settingsDrawer.checkFailed'
+                        : check.data.freshRead === 'skipped'
+                          ? 'app.settingsDrawer.checkedRecently'
+                          : 'app.settingsDrawer.upToDate',
+                    )}
                   </span>
                 ) : null}
               </div>
               <div className="flex shrink-0 items-center gap-3">
-                {/* The server re-reads GitHub at most once a minute; the
+                {/* The server re-reads GitHub at most once in 5 minutes; the
                     header's update pill picks up what it finds. */}
-                {version.data?.current ? (
+                {version.data?.checkOn ? (
                   <button
                     type="button"
                     aria-label={t('app.settingsDrawer.checkUpdates')}

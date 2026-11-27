@@ -75,14 +75,16 @@ describe('SettingsDrawer', () => {
   it('check for updates re-reads now and shows what it found', async () => {
     mockAllDone();
     const fresh: boolean[] = [];
-    const answer = (latest: string) =>
-      HttpResponse.json(env({ current: '1.6.3', install: null, latest, latestCommit: null, updateAvailable: latest !== '1.6.3', highlights: [] }));
     let remote = '1.6.3';
+    let read: 'ok' | 'failed' = 'ok';
     server.use(
       http.get('/api/version', ({ request }) => {
         const isFresh = new URL(request.url).searchParams.get('fresh') === '1';
         fresh.push(isFresh);
-        return answer(isFresh ? remote : '1.6.3');
+        const latest = isFresh && read === 'ok' ? remote : '1.6.3';
+        return HttpResponse.json(
+          env({ current: '1.6.3', install: null, latest, latestCommit: null, updateAvailable: latest !== '1.6.3', highlights: [], checkOn: true, freshRead: isFresh ? read : null }),
+        );
       }),
     );
     const user = userEvent.setup();
@@ -92,10 +94,23 @@ describe('SettingsDrawer', () => {
     await user.click(screen.getByRole('button', { name: 'Check for updates' }));
     expect(await screen.findByText(/up to date/)).toBeInTheDocument();
 
+    read = 'failed';
+    await user.click(screen.getByRole('button', { name: 'Check for updates' }));
+    expect(await screen.findByText(/could not reach GitHub/)).toBeInTheDocument();
+
+    read = 'ok';
     remote = '1.6.4';
     await user.click(screen.getByRole('button', { name: 'Check for updates' }));
     expect(await screen.findByText(/v1\.6\.4 available/)).toBeInTheDocument();
-    expect(fresh.filter(Boolean)).toHaveLength(2);
+    expect(fresh.filter(Boolean)).toHaveLength(3);
+  });
+
+  it('no Check for updates button when this copy never reads GitHub', async () => {
+    mockAllDone();
+    server.use(versionHandler({ current: '1.6.3', latest: null, checkOn: false }));
+    renderDrawer();
+    await screen.findByText('Version 1.6.3');
+    expect(screen.queryByRole('button', { name: 'Check for updates' })).not.toBeInTheDocument();
   });
 
   it('language picker switches the terminal and saves the choice', async () => {
