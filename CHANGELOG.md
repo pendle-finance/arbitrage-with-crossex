@@ -14,6 +14,9 @@ TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets in Single 
 - **Single mode opens them.** Single mode now sends one Boros order on its own when no other
   market shares its collateral and date. Before, it could only quote a market that had such a
   partner, so a Jan Hyperliquid leg showed no quote and could not be sent.
+- **A Gate + Hyperliquid pair offers 29 Jan 2027.** The pair ticket shows a date chip where Boros
+  lists the HL-GATE spread but no Gate market. Picking it sends one order on that spread. Before,
+  the ticket only offered dates where both venues list a market.
 
 ## 1.7.9 — 2026-11-10
 
