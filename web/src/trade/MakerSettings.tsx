@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import type { MakerLegPreview } from '../api/types';
+import { useFees } from '../api/queries';
+import type { MakerLegPreview, VenueFees } from '../api/types';
 import { Chip } from '../components/Chip';
 import { HoverCard } from '../components/HoverCard';
 import { SegmentedToggle } from '../components/SegmentedToggle';
-import { num, sigGrouped } from '../lib/fmt';
+import { num, parseSymbol, sigGrouped } from '../lib/fmt';
 import { parseSpan, spanText } from '../lib/span';
 import { stripZeros } from '../lib/ticks';
 import { FoldRow } from './FoldRow';
@@ -17,8 +18,6 @@ type LegPick = 'a' | 'b';
 const PRESET_SEC = { '5m': 300, '10m': 600 } as const;
 const CUSTOM_MIN_SEC = 30;
 const CUSTOM_MAX_SEC = 86_400;
-const MAKER_FEE_BP = 2;
-const TAKER_FEE_BP = 5;
 export const REPEG_DEFAULT_BP = 5;
 const REPEG_BP = [2, 5, 10] as const;
 const MARKET_SLIPPAGE_PCT = [0.2, 0.5, 1, 2] as const;
@@ -30,6 +29,43 @@ export function takerAfterSec(v: TakerAfter): number | null {
 }
 
 const pct = (p: number) => `${stripZeros(num(p, 2))}%`;
+
+type FeeSide = 'maker' | 'taker';
+
+function feeRateOf(rows: readonly VenueFees[] | undefined, symbol: string, side: FeeSide): number | null {
+  const sym = symbol.toUpperCase();
+  const row = rows?.find((r) => (r.exchangeType ?? '').toUpperCase() === parseSymbol(sym).exchange);
+  if (!row) return null;
+  const special = (row.specialFeeList ?? []).find((s) => s.symbol.toUpperCase() === sym);
+  const rate = Number(side === 'maker' ? (special?.makerFeeRate ?? row.futureMakerFee) : (special?.takerFeeRate ?? row.futureTakerFee));
+  return Number.isFinite(rate) ? rate : null;
+}
+
+function feeValues(rates: (number | null)[]): { bp: string; pct: string } | null {
+  if (!rates.length || rates.some((r) => r === null)) return null;
+  const known = rates as number[];
+  const lo = Math.min(...known);
+  const hi = Math.max(...known);
+  const text = (scale: number, dp: number) => {
+    const one = (r: number) => stripZeros(num(r * scale, dp));
+    return lo === hi ? one(lo) : `${one(lo)}–${one(hi)}`;
+  };
+  return { bp: text(10_000, 2), pct: text(100, 4) };
+}
+
+const FEE_KEYS = {
+  rests: { side: 'maker', rate: 'pairTicket.makerSettings.hoverRests', plain: 'pairTicket.makerSettings.hoverRestsPlain' },
+  hedges: { side: 'taker', rate: 'pairTicket.makerSettings.hoverHedges', plain: 'pairTicket.makerSettings.hoverHedgesPlain' },
+  taker: { side: 'taker', rate: 'pairTicket.makerSettings.takerHover', plain: 'pairTicket.makerSettings.takerHoverPlain' },
+} as const;
+
+function FeeLine({ kind, symbols }: { kind: keyof typeof FEE_KEYS; symbols: readonly string[] }) {
+  const { t } = useTranslation();
+  const rows = useFees().data;
+  const keys = FEE_KEYS[kind];
+  const values = feeValues(symbols.map((s) => feeRateOf(rows, s, keys.side)));
+  return <>{values ? t(keys.rate, values) : t(keys.plain)}</>;
+}
 
 function SettingLabel({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -61,20 +97,24 @@ function CustomTakerBox({
   const parsed = parseSpan(text);
   const inRange = parsed !== null && parsed >= CUSTOM_MIN_SEC && parsed <= CUSTOM_MAX_SEC;
   const overCap = parsed !== null && capSec !== null && parsed > capSec;
+  const reads = parsed !== null && spanText(parsed) !== text.trim().toLowerCase() ? spanText(parsed) : null;
   return (
     <div className="flex flex-col gap-1">
-      <input
-        className={`input num ${text !== '' && (!inRange || overCap) ? '!border-rose-500/60' : ''}`}
-        aria-label={t('pairTicket.makerSettings.customAria')}
-        placeholder={t('pairTicket.makerSettings.customRange')}
-        value={text}
-        onChange={(e) => {
-          const next = e.target.value;
-          const s = parseSpan(next);
-          setText(next);
-          onSec(s !== null && s >= CUSTOM_MIN_SEC && s <= CUSTOM_MAX_SEC && (capSec === null || s <= capSec) ? s : null);
-        }}
-      />
+      <div className="flex items-center gap-2">
+        <input
+          className={`input num min-w-0 flex-1 ${text !== '' && (!inRange || overCap) ? '!border-rose-500/60' : ''}`}
+          aria-label={t('pairTicket.makerSettings.customAria')}
+          placeholder={t('pairTicket.makerSettings.customRange')}
+          value={text}
+          onChange={(e) => {
+            const next = e.target.value;
+            const s = parseSpan(next);
+            setText(next);
+            onSec(s !== null && s >= CUSTOM_MIN_SEC && s <= CUSTOM_MAX_SEC && (capSec === null || s <= capSec) ? s : null);
+          }}
+        />
+        {reads !== null && <span className="num shrink-0 text-[11px] text-ink-400">{t('pairTicket.makerSettings.customReads', { span: reads })}</span>}
+      </div>
       {text !== '' && overCap && capSec !== null && (
         <span className="text-[11px] text-rose-300">{t('pairTicket.makerSettings.takerOver', { max: spanText(capSec) })}</span>
       )}
@@ -99,8 +139,10 @@ export function MakerSettings({
   repegLocked,
   onRepeg,
   marketSlippage,
+  symbols = [],
 }: {
   legs: { name: string; side: Side }[] | null;
+  symbols?: readonly string[];
   makerLeg: 'auto' | LegPick;
   autoPick: MakerLegPreview | null;
   saving?: number | null;
@@ -118,6 +160,8 @@ export function MakerSettings({
   const [open, setOpen] = useState(false);
   const picked: LegPick | null = makerLeg !== 'auto' ? makerLeg : autoPick?.auto ?? null;
   const pickedLeg = legs && picked ? legs[picked === 'a' ? 0 : 1] ?? null : null;
+  const pickedSymbol = legs && picked ? symbols[picked === 'a' ? 0 : 1] : undefined;
+  const takerSymbols = pickedSymbol !== undefined ? [pickedSymbol] : symbols;
   const autoWhy = autoPick ? t(autoPick.why === 'fees' ? 'pairTicket.makerSettings.autoFees' : 'pairTicket.makerSettings.autoBook') : undefined;
   const takerSec = takerAfterSec(takerAfter);
   const takerText =
@@ -150,9 +194,7 @@ export function MakerSettings({
                     <span className="text-ink-50">{leg.name}</span>
                     {picked && (
                       <span className="text-ink-300">
-                        {rests
-                          ? t('pairTicket.makerSettings.hoverRests', { bp: MAKER_FEE_BP, pct: num(MAKER_FEE_BP / 100, 2) })
-                          : t('pairTicket.makerSettings.hoverHedges', { bp: TAKER_FEE_BP, pct: num(TAKER_FEE_BP / 100, 2) })}
+                        <FeeLine kind={rests ? 'rests' : 'hedges'} symbols={symbols[i] !== undefined ? [symbols[i]] : []} />
                       </span>
                     )}
                   </div>
@@ -201,7 +243,9 @@ export function MakerSettings({
 
       <div className="flex flex-col gap-1.5">
         <SettingLabel label={t('pairTicket.makerSettings.takerAfter')}>
-          <span>{t('pairTicket.makerSettings.takerHover', { bp: TAKER_FEE_BP, pct: num(TAKER_FEE_BP / 100, 2) })}</span>
+          <span>
+            <FeeLine kind="taker" symbols={takerSymbols} />
+          </span>
           <span className="text-ink-400">{t('pairTicket.makerSettings.takerNeverHover')}</span>
         </SettingLabel>
         <SegmentedToggle<TakerAfter['kind']>

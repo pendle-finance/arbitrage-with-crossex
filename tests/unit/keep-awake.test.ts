@@ -1,7 +1,9 @@
 import { EventEmitter } from 'node:events';
 import type { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { startKeepAwake } from '../../src/server/keepAwake';
+import type { LegSpec, PairRow } from '../../src/engine/types';
+import { needsAwake, startKeepAwake } from '../../src/server/keepAwake';
+import type { Job } from '../../src/server/rebalanceJob';
 
 class FakeChild extends EventEmitter {
   killed = false;
@@ -104,5 +106,56 @@ describe('caffeinate while live', () => {
       t.keep.stop();
       expect(t.calls).toHaveLength(0);
     }
+  });
+});
+
+describe('what keeps the Mac awake', () => {
+  const leg = (contract: string, side: 'BUY' | 'SELL'): LegSpec => ({ contract, side, lot: '0.001', minSize: '0.001', minNotional: '0', tick: '0.01' });
+  const deal = (over: Partial<PairRow>): PairRow => ({
+    id: 'd1',
+    mode: 'OPENING',
+    a: leg('GATE_FUTURE_ETH_USDT', 'BUY'),
+    b: null,
+    targetQty: '1',
+    limitPrice: '3000',
+    pricePolicy: 'fixed',
+    deadlineAt: null,
+    makerNotBefore: 0,
+    hedgeNotBefore: 0,
+    pocRejects: 0,
+    hedgeRejectStreak: 0,
+    maxClip: null,
+    clipBandBp: null,
+    repegBehindBp: null,
+    repegAutoBp: null,
+    repegNotBefore: 0,
+    haltKind: null,
+    haltReason: null,
+    reportJson: null,
+    createdAt: 0,
+    ...over,
+  });
+  const job = (kind: Job['kind'], status: Job['status']): Job => ({ kind, status, deleverTwap: null }) as unknown as Job;
+
+  it('a resting single limit with no deadline does not keep it awake', () => {
+    expect(needsAwake([deal({})], null)).toBe(false);
+  });
+
+  it('a halted deal does not keep it awake', () => {
+    expect(needsAwake([deal({ mode: 'HALTED', b: leg('HYPERLIQUID_FUTURE_ETH_USDC', 'SELL') })], null)).toBe(false);
+  });
+
+  it('a deal with a hedge leg, a deadline or at market keeps it awake', () => {
+    expect(needsAwake([deal({ b: leg('HYPERLIQUID_FUTURE_ETH_USDC', 'SELL') })], null)).toBe(true);
+    expect(needsAwake([deal({ deadlineAt: 60_000 })], null)).toBe(true);
+    expect(needsAwake([deal({ mode: 'CONVERTING' })], null)).toBe(true);
+  });
+
+  it('a running job keeps it awake, a halted or finished one does not', () => {
+    expect(needsAwake([], job('twap', 'running'))).toBe(true);
+    expect(needsAwake([], job('move', 'running'))).toBe(true);
+    expect(needsAwake([], job('realize', 'running'))).toBe(true);
+    expect(needsAwake([], job('twap', 'halted'))).toBe(false);
+    expect(needsAwake([], job('realize', 'done'))).toBe(false);
   });
 });

@@ -52,6 +52,18 @@ function reportSleep(deps: LoopDeps, gap: SleepGap): void {
 export const isOrderAllowanceRefusal = (label: string): boolean =>
   classifyGateError({ response: { data: { label } } }).category === 'order-allowance';
 
+export const ORDER_ALLOWANCE_STOP = 10;
+
+function allowanceRefusalsOf(orders: OrderRow[]): number {
+  let n = 0;
+  for (const o of orders.filter((x) => x.leg === 'A').sort((x, y) => y.seq - x.seq)) {
+    const label = o.state === 'DEAD' && o.kind === 'maker' && o.closeReason?.startsWith('rejected:') ? o.closeReason.slice('rejected:'.length) : null;
+    if (label === null || !isOrderAllowanceRefusal(label)) break;
+    n++;
+  }
+  return n;
+}
+
 // Open-world status decoder: known strings map; anything else is quarantined,
 // never guessed terminal or non-terminal (hazard 11).
 // Live-verified CrossEx states (2026-07-23 smoke): OPEN, CANCELLED, REJECT —
@@ -397,11 +409,21 @@ async function performPlace(
     });
     if (a.leg === 'A' && a.kind === 'maker' && isOrderAllowanceRefusal(out.label)) {
       const refusedAt = deps.clock.now();
-      deps.store.updatePair(pair.id, {
-        limitPrice: pair.limitPrice,
-        repegNotBefore: refusedAt + tuning(deps).REPEG_REFUSED_WAIT_MS,
-        makerNotBefore: refusedAt + tuning(deps).POC_BACKOFF_MS,
-      });
+      const wait = refusedAt + tuning(deps).REPEG_REFUSED_WAIT_MS;
+      deps.store.updatePair(pair.id, { limitPrice: pair.limitPrice, repegNotBefore: wait, makerNotBefore: wait });
+      const refusals = allowanceRefusalsOf(deps.store.listOrders(pair.id));
+      if (refusals >= ORDER_ALLOWANCE_STOP) {
+        deps.store.updatePair(pair.id, {
+          mode: 'STOPPING',
+          haltReason: `Gate refused the maker order ${refusals} times in a row: the venue has no order allowance left`,
+        });
+        deps.store.alert(
+          'error',
+          pair.id,
+          `Gate refused the maker order on ${leg.contract} ${refusals} times in a row: the venue has no order allowance left. The deal is stopping with what filled.`,
+          refusedAt,
+        );
+      }
       return;
     }
     if (a.leg === 'A') {
@@ -647,7 +669,9 @@ export const commands = {
   },
   stop(store: Store, pairId: string): void {
     const p = store.getPair(pairId);
-    if (p && p.mode !== 'DONE') store.updatePair(pairId, { mode: 'STOPPING' });
+    if (!p || p.mode === 'DONE') return;
+    const pressed = p.mode === 'OPENING' || p.mode === 'CONVERTING';
+    store.updatePair(pairId, { mode: 'STOPPING', ...(pressed ? { haltReason: null } : {}) });
   },
   /**
    * Re-peg the maker remainder. `pricePolicy` must be set to match WHAT the

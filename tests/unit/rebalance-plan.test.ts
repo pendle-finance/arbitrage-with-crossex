@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { ONE_ORDER_USD } from '../../src/core/rebalance/slices';
+import type { NormalizedBook } from '../../src/core/estimate/books';
 import { roundToStep } from '../../src/core/numbers';
 import { type RealizeLeg, realizedNetUsd } from '../../src/core/rebalance/realize';
 import {
@@ -1829,7 +1829,7 @@ describe('fullPlanOf', () => {
 
   it.each([50, 5_000, 100_000, 1_000_000, 6_000_000])('full plan at every rung of the size ladder (%d USD borrow)', (borrow) => {
     const book = ownerShapeAt(borrow);
-    const full = fullPlanOf(book.buckets, book.account, { ...book.inputs, sliceUsd: ONE_ORDER_USD });
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
     const perDay = usdtPerDay(book.buckets);
     expect(full).toMatchObject({ needsRealize: true, clearsBorrow: true, refused: null });
     expect(full?.costUsd).toBe(Math.round(((full?.moveCostUsd ?? 0) + (full?.realizeCostUsd ?? 0)) * 100) / 100);
@@ -1842,6 +1842,39 @@ describe('fullPlanOf', () => {
     const book = ownerShapeAt(borrow, 100);
     const full = fullPlanOf(book.buckets, book.account, book.inputs);
     expect(full).toMatchObject({ costUsd: 0, days: 0, clearsBorrow: true, needsRealize: false, refused: null });
+  });
+
+  const thinBook = (depthUsd: number): NormalizedBook => {
+    const levels = 20;
+    const qty = depthUsd / levels / ETH_MARK;
+    return {
+      asks: Array.from({ length: levels }, (_, k): [number, number] => [ETH_MARK + 0.1 * (k + 1), qty]),
+      bids: Array.from({ length: levels }, (_, k): [number, number] => [ETH_MARK - 0.1 * (k + 1), qty]),
+      ts: 0,
+    };
+  };
+
+  it.each([3_000_000, 6_000_000])('a %d USD borrow on a 1M USD book is priced as the TWAP the Realize tab offers, not blocked', (borrow) => {
+    const qty = Number(roundToStep((borrow * 1.1) / ETH_MARK, '0.0001', 'down'));
+    const book = realizeBook({
+      usdt: { cash: -borrow, upnl: 0 },
+      usdc: { cash: 100_000, upnl: qty * ETH_MARK },
+      availableMargin: borrow * 2,
+      perps: [perp('HYPERLIQUID_FUTURE_ETH_USDC', -qty, ETH_MARK * 2, ETH_MARK), perp('GATE_FUTURE_ETH_USDT', qty, ETH_MARK, ETH_MARK)],
+      books: { HYPERLIQUID_FUTURE_ETH_USDC: thinBook(1_000_000), GATE_FUTURE_ETH_USDT: GATE_ETH },
+      notionalUsd: qty * ETH_MARK,
+    });
+    const oneOrder = realizeTabOf(book.buckets, book.account, book.inputs, null);
+    expect(oneOrder?.clearDebt?.refused?.reason).toBe('past-book');
+    const twap = oneOrder?.twapDefault.clearDebt;
+    expect(twap?.on).toBe(true);
+    const slices = Math.round((twap?.maker.durationSec ?? 0) / (twap?.maker.intervalSec ?? 1));
+    const tab = realizeTabOf(book.buckets, book.account, { ...book.inputs, twapSlices: slices }, null);
+    expect(tab?.clearDebt?.refused).toBeNull();
+    const full = fullPlanOf(book.buckets, book.account, book.inputs);
+    expect(full).toMatchObject({ needsRealize: true, refused: null });
+    expect(full?.realizeCostUsd ?? 0).toBeGreaterThan(0);
+    expect(full?.realizeCostUsd ?? Infinity).toBeLessThan(tab?.clearDebt?.estimates.maker.totalUsd ?? 0);
   });
 
   it('a refused realize leaves the borrow open and names the refusal', () => {
@@ -1992,7 +2025,7 @@ describe('realizeTabOf', () => {
     });
 
     it('a picked wallet realizes only its own perps, and Clear debt stays with the debt plan wallet', () => {
-      const tab = realizeTabOf(book.buckets, book.account, book.inputs, 1_000, undefined, 'CROSSEX');
+      const tab = realizeTabOf(book.buckets, book.account, book.inputs, 1_000, 'CROSSEX');
       expect(tab?.pool).toBe('CROSSEX');
       expect(tab?.clearDebt).toBeNull();
       for (const plan of [tab?.all, tab?.custom]) {
@@ -2003,7 +2036,7 @@ describe('realizeTabOf', () => {
     });
 
     it('a picked wallet with no perp in profit falls back to the first wallet', () => {
-      expect(realizeTabOf(book.buckets, book.account, book.inputs, null, undefined, 'LIGHTER')?.pool).toBe('HYPERLIQUID');
+      expect(realizeTabOf(book.buckets, book.account, book.inputs, null, 'LIGHTER')?.pool).toBe('HYPERLIQUID');
     });
   });
 });

@@ -1,4 +1,11 @@
 import type { ChildProcess, spawn as nodeSpawn } from 'node:child_process';
+import type { PairRow } from '../engine/types';
+import type { Job } from './rebalanceJob';
+
+export function needsAwake(pairs: PairRow[], job: Job | null): boolean {
+  if (job?.status === 'running') return true;
+  return pairs.some((pair) => pair.mode !== 'HALTED' && pair.mode !== 'DONE' && (pair.b !== null || pair.deadlineAt !== null || pair.mode !== 'OPENING'));
+}
 
 export interface KeepAwakeDeps {
   platform: NodeJS.Platform;

@@ -4,7 +4,7 @@ import type { AssetGroup } from '../../api/types';
 import { t } from '../../i18n';
 import type { PairPickerRow } from '../../components/PairPicker';
 import { daysToMaturity } from '../../lib/boros';
-import { fmtDateLocal, fmtUsdCompact, parseSymbol, sigGrouped } from '../../lib/fmt';
+import { fmtDateLocal, fmtUsdCompact, parseSymbol, qtyGrouped } from '../../lib/fmt';
 import { bookKey, useBookId } from '../bookId';
 import { useTrackedAddress } from '../trackedAddress';
 import { deriveAsset, type Exclusions, type PairEstimate } from './assetModel';
@@ -86,7 +86,7 @@ export function pairPickerRowOf(pair: OpenPair, nowSec: number): PairPickerRow {
     base: pair.base,
     maturityText: t('assetCard.maturesDot', { date: fmtDateLocal(pair.maturitySec), left: daysLeftText(pair.maturitySec, nowSec) }),
     sizeText:
-      pair.unit === 'usd' ? fmtUsdCompact(pair.size) : t('accounts.deleverTab.pairSize', { qty: sigGrouped(pair.size), coin: pair.base }),
+      pair.unit === 'usd' ? fmtUsdCompact(pair.size) : t('accounts.deleverTab.pairSize', { qty: qtyGrouped(pair.size), coin: pair.base }),
     imText: fmtUsdCompact(pair.imUsd),
   };
 }

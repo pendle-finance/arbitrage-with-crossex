@@ -1,10 +1,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { prettyVenue } from '../../web/src/lib/fmt';
+import { prettyVenue, WALLET_SHORT } from '../../web/src/lib/fmt';
 import { fmtSize } from '../core/boros/pair';
 import { classifyGateError, plainErrorFor } from '../core/errors';
 import { parseSymbol } from '../core/numbers';
-import { CONVERT_MAX, CONVERT_RATE, CONVERT_TO, floorCents, PAIR_CONVERT_MAX, POOLS, spotArrivalFor } from '../core/rebalance/plan';
+import { CONVERT_MAX, CONVERT_RATE, CONVERT_TO, floorCents, PAIR_CONVERT_MAX, POOLS, poolWallet, spotArrivalFor, walletKey } from '../core/rebalance/plan';
 import type { Bucket, GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
 import type { PerpSide, RealizeEstimate, RealizeExec, RealizeLeg, RealizePlan } from '../core/rebalance/realize';
 import type { TwapLegRule, TwapPlan } from '../core/twap';
@@ -21,7 +21,6 @@ export type FixAction = 'market' | 'limit' | 'boros-retry' | 'add-back' | 'unwin
 
 export const RETRY_CONVERT_CAP = 3;
 export const FOLLOW_MISSES_RED = 3;
-export const SLIPPAGE_BAND_BP = 25;
 export const MAKER_REST_MS = 300_000;
 export const MAKER_REPEG_MS = 5_000;
 
@@ -54,6 +53,8 @@ export interface RealizeJobLeg {
   closeImpactUsd?: number;
   reopenImpactUsd?: number;
   convert?: { amount: number; feeUsd: number } | null;
+  takerRate?: number;
+  shrunkQty?: number;
 }
 
 export interface JobPerp {
@@ -396,9 +397,17 @@ const otherLegName = (leg: OpenLeg): string =>
   `${prettyVenue(leg.hedge ?? (leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE'))} ${leg.side === 'SHORT' ? 'long' : 'short'}`;
 const closeOtherText = (leg: OpenLeg, open: number): string =>
   `close ${fmtSize(open)} ${leg.base} of the ${otherLegName(leg)} in Positions`;
+const orCloseOther = (leg: OpenLeg, open: number): string => (leg.hedge === null ? '' : `, or ${closeOtherText(leg, open)}`);
 
 const legGapText = (leg: OpenLeg, open: number): string =>
-  `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than the ${otherLegName(leg)}.`;
+  leg.hedge === null
+    ? `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than before.`
+    : `${legName(leg)} is ${fmtSize(open)} ${leg.base} smaller than the ${otherLegName(leg)}.`;
+
+const walletName = (pool: Pool): string => {
+  const { coin, venue } = poolWallet(pool);
+  return `${coin} · ${WALLET_SHORT[walletKey(coin, venue)] ?? prettyVenue(venue)}`;
+};
 
 export const borosPartText = (leftYu: number): string =>
   `Boros did not close ${fmtSize(leftYu)} YU of its share. It has no perp behind it.`;
@@ -490,19 +499,24 @@ export const REOPEN_HALT = {
   tradePermission: 'The API key cannot trade. Fix it in Settings, then Resume.',
   closeOnly: (leg: OpenLeg, open: number): string =>
     open > 0
-      ? `Gate CrossEx takes no new orders on this contract. Resume when it does, or ${closeOtherText(leg, open)}.`
+      ? `Gate CrossEx takes no new orders on this contract. Resume when it does${orCloseOther(leg, open)}.`
       : 'Gate CrossEx takes no new orders on this contract. Resume when it does.',
-  noCash: 'Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.',
+  noCash: (pool: Pool): string =>
+    `Not enough margin, and no cash left to convert. Move ${poolWallet(pool).coin} into ${walletName(pool)}, then Resume.`,
+  noBorrow: (pool: Pool): string =>
+    `Not enough margin. ${walletName(CONVERT_TO[pool])} has no borrow for a Convert to repay. Add margin, then Resume.`,
+  poorQuoteLegOpen: (leg: OpenLeg, open: number): string =>
+    `${HALT_TEXT.poorQuote} The ${legGapText(leg, open)} Resume to try again${orCloseOther(leg, open)}.`,
   marginLow: 'Not enough free margin for the next slice. Nothing is open. Add margin, then Resume.',
   convertCap: `Gate still wants more margin after ${RETRY_CONVERT_CAP} Converts in this run. Add margin, then Resume.`,
   noHedgePerp: 'Could not find the other perp of this pair. Close the gap in Positions.',
   hedgeRefusedAgain: 'Gate refused the hedge again. Nothing else changed.',
   quotesUsedLegOpen: (leg: OpenLeg, open: number): string =>
-    `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours, or ${closeOtherText(leg, open)}.`,
+    `Gate's 100 Convert quotes for today are used up. The ${legGapText(leg, open)} Resume after Gate's count clears, within 24 hours${orCloseOther(leg, open)}.`,
   refused: (leg: OpenLeg, open: number, reason: string): string =>
-    `Gate refused the reopen. ${reason} The ${legGapText(leg, open)} Resume to try again, or ${closeOtherText(leg, open)}.`,
+    ['Gate refused the reopen.', reason, `The ${legGapText(leg, open)}`, `Resume to try again${orCloseOther(leg, open)}.`].filter(Boolean).join(' '),
   underMinimum: (leg: OpenLeg, open: number): string =>
-    `The rest is under Gate's smallest order. The ${legGapText(leg, open)} Abandon, then ${closeOtherText(leg, open)}.`,
+    `The rest is under Gate's smallest order. The ${legGapText(leg, open)} ${leg.hedge === null ? 'Abandon it and check Positions.' : `Abandon, then ${closeOtherText(leg, open)}.`}`,
   sizeChanged: (leg: OpenLeg, live: number, expected: number): string =>
     `The ${legName(leg)} is ${fmtSize(live)} ${leg.base} on Gate, not the ${fmtSize(expected)} ${leg.base} this rebalance left. Abandon it and check Positions.`,
   hedgeChanged: (leg: OpenLeg, hedge: Pick<JobPerp, 'exchange' | 'side'>, live: number, expected: number): string =>
@@ -660,6 +674,11 @@ function deleverParts(input: DeleverJobInput): { leg: RealizeJobLeg; steps: Step
 export const hedgesOf = (leg: Pick<RealizeLeg, 'symbol' | 'side' | 'base'>, perps: JobPerp[]): JobPerp[] =>
   perps.filter((perp) => perp.symbol !== leg.symbol && perp.side !== leg.side && parseSymbol(perp.symbol).base === leg.base);
 
+export const hedgeBeforeOf = (job: Pick<Job, 'before'>, leg: Pick<RealizeJobLeg, 'symbol' | 'side' | 'base' | 'hedge'>): JobPerp | undefined =>
+  hedgesOf(leg, job.before?.perps ?? [])
+    .filter((perp) => leg.hedge === null || perp.exchange === leg.hedge)
+    .sort((x, y) => y.qty - x.qty)[0];
+
 function hedgeOf(leg: RealizeLeg, perps: JobPerp[]): string | null {
   return hedgesOf(leg, perps).sort((a, b) => b.qty - a.qty)[0]?.exchange ?? null;
 }
@@ -680,6 +699,7 @@ const realizeJobLeg = (leg: RealizeLeg, perps: JobPerp[]): RealizeJobLeg => ({
   closeImpactUsd: leg.closeImpactUsd,
   reopenImpactUsd: leg.reopenImpactUsd,
   convert: leg.convert ? { amount: leg.convert.amount, feeUsd: leg.convert.feeUsd } : null,
+  ...(leg.takerRate === undefined ? {} : { takerRate: leg.takerRate }),
 });
 
 export function newJob(

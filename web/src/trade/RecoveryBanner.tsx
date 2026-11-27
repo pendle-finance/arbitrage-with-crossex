@@ -20,7 +20,7 @@ import { isTwapChildId, liveTwapJob } from './twapJob';
 import { localizeServerText } from '../i18n/serverMessages';
 import { prettyVenue } from '../lib/fmt';
 
-type StripKey = 'running' | 'pausing' | 'paused' | 'restart' | 'sleep' | 'refused' | 'hedge' | 'error' | 'capped' | 'boros';
+type StripKey = 'running' | 'pausing' | 'paused' | 'restart' | 'sleep' | 'refused' | 'hedge' | 'error' | 'capped' | 'boros' | 'notHedged' | 'margin';
 type StripTone = 'cyan' | 'amber' | 'rose';
 
 const STRIP_TONES: Record<StripTone, { box: string; text: string; button: string }> = {
@@ -44,11 +44,15 @@ function stripKeyOf(job: RebalanceJob): StripKey {
       return 'capped';
     case 'boros':
       return 'boros';
+    case 'not-hedged':
+      return 'notHedged';
+    case 'margin':
+      return 'margin';
     case null:
     case undefined:
       return 'paused';
     default:
-      return 'error';
+      return (job.notHedgedQty ?? 0) > 0 ? 'notHedged' : 'error';
   }
 }
 

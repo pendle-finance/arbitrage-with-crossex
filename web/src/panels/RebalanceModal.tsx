@@ -56,7 +56,10 @@ export function RebalanceModal({
   const ended = job !== null && (job.status === 'done' || (twapRun && job.status === 'abandoned'));
   const [seenResult] = useState(() => readJson<string | null>(RESULT_SEEN_KEY, null, (v) => (typeof v === 'string' ? v : null)));
   const unseenResult = twapRun && ended && seenResult !== job.id;
-  const [tab, setTab] = useState<RebalanceTab>(() => (job !== null && (live || unseenResult) ? jobTab(job) : (openTab ?? initialTab(view))));
+  const ticket = job?.kind === 'twap';
+  const [tab, setTab] = useState<RebalanceTab>(() =>
+    job !== null && (live || (unseenResult && !ticket)) ? jobTab(job) : (openTab ?? initialTab(view)),
+  );
   const [sawRun, setSawRun] = useState(false);
   const [started, setStarted] = useState(false);
 
@@ -69,22 +72,25 @@ export function RebalanceModal({
   useEffect(() => {
     if (shown && twapRun && ended) writeJson(RESULT_SEEN_KEY, job.id);
   }, [shown, twapRun, ended, job?.id]);
-  const lock = job?.status === 'running' || job?.status === 'halted' ? t('accounts.rebalanceTabs.wait') : null;
+  const lock = live ? t('accounts.rebalanceTabs.wait') : null;
   const onStarted = () => setStarted(true);
+  const ticketRun = shown && ticket && !ended;
+  const ticketResult = shown && ticket && ended;
 
   const onError = (error: Error) => toast.push('error', apiErrorText(error));
 
+  const jobView = shown ? (
+    <RebalanceJobView
+      job={job} view={view} now={now} holdMs={holdMs} transfer={transfer} onClose={onClose} onTransfer={onTransfer} onTab={setTab}
+      busy={resume.isPending || abandon.isPending}
+      resuming={resume.isPending}
+      onResume={() => resume.mutate(job.id, { onError })}
+      onAbandon={() => abandon.mutate(job.id, { onError })}
+    />
+  ) : null;
   let body: ReactNode;
-  if (shown && (job.kind === 'twap' || jobTab(job) === tab)) {
-    body = (
-      <RebalanceJobView
-        job={job} view={view} now={now} holdMs={holdMs} transfer={transfer} onClose={onClose} onTransfer={onTransfer} onTab={setTab}
-        busy={resume.isPending || abandon.isPending}
-        resuming={resume.isPending}
-        onResume={() => resume.mutate(job.id, { onError })}
-        onAbandon={() => abandon.mutate(job.id, { onError })}
-      />
-    );
+  if (ticketRun || (shown && !ticket && jobTab(job) === tab)) {
+    body = jobView;
   } else if (tab === 'move') {
     body = <MoveCashTab view={view} holdMs={holdMs} lock={lock} onTab={setTab} onStarted={onStarted} onTransfer={onTransfer} />;
   } else if (tab === 'realize') {
@@ -96,10 +102,10 @@ export function RebalanceModal({
   return (
     <Modal
       widthClass="w-[680px]"
-      tabbed={!(shown && job.kind === 'twap')}
+      tabbed={!ticketRun}
       onClose={onClose}
       title={
-        shown && job.kind === 'twap' ? null : (
+        ticketRun ? null : (
         <span className="flex h-full items-stretch gap-3">
           <UnderlineTabs<RebalanceTab>
             ariaLabel={t('accounts.borrowCard.reduce')}
@@ -110,14 +116,17 @@ export function RebalanceModal({
             options={TABS.map((value) => ({
               value,
               label: t(`accounts.rebalanceTabs.${value}`),
-              badge: shown && jobTab(job) === value ? <JobChip job={job} /> : undefined,
+              badge: shown && !ticket && jobTab(job) === value ? <JobChip job={job} /> : undefined,
             }))}
           />
         </span>
         )
       }
     >
-      <div className="flex flex-col gap-4">{body}</div>
+      <div className="flex flex-col gap-4">
+        {ticketResult && jobView}
+        {body}
+      </div>
     </Modal>
   );
 }

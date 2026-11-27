@@ -17,6 +17,7 @@ import { server } from '../../test/server';
 import { renderWithClient } from '../../test/utils';
 import { OPPORTUNITIES_STORAGE_KEY } from '../../lib/storage';
 import { STRATEGY_STORAGE_KEY } from '../HomeControls';
+import { TradeFlowProvider, useTradeFlowOptional } from '../../trade/TradeFlow';
 import { RollOverModal } from './AssetCard';
 import { deriveAsset } from './assetModel';
 
@@ -1186,6 +1187,50 @@ describe('RollOverModal — open only (keep old legs)', () => {
     expect(await within(dialog).findByText(/the rest did not fill\. Open the rest from Fixed Rate Pairs\./)).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: /Retry/ })).not.toBeInTheDocument();
     expect(sends).toBe(1);
+  });
+
+  it('a part open keeps its result and arms Fixed Rate Pairs with the rest', async () => {
+    const user = userEvent.setup();
+    let closed = 0;
+    install();
+    server.use(
+      http.post('/api/boros/pair/execute', async ({ request }) => {
+        const body = (await request.json()) as PairExecBody;
+        const full = pairExecuteBody(body) as { data: { result: Record<string, unknown> } };
+        Object.assign(full.data.result, {
+          legs: [legFill(body.legs[0].marketId, body.legs[0].direction, 60), legFill(body.legs[1].marketId, body.legs[1].direction, 60)],
+          hedgedSize: 60,
+          unhedgedSize: 0,
+          unhedgedLeg: null,
+          partial: true,
+        });
+        return HttpResponse.json(full);
+      }),
+    );
+    let flow: ReturnType<typeof useTradeFlowOptional> = null;
+    function Probe() {
+      flow = useTradeFlowOptional();
+      return null;
+    }
+    renderWithClient(
+      <TradeFlowProvider>
+        <Probe />
+        <RollOverModal pair={pair} base="ETH" nowSec={NOW} onClose={() => (closed += 1)} />
+      </TradeFlowProvider>,
+    );
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('radio', { name: 'Open only (keep old positions)' }));
+    const confirm = await within(dialog).findByRole('button', { name: 'Open new maturity' });
+    await waitFor(() => expect(confirm).not.toBeDisabled(), { timeout: 4_000 });
+    await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+
+    expect(await within(dialog).findByText(/the rest did not fill/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Open the rest' }));
+    const armed = (flow as ReturnType<typeof useTradeFlowOptional>)?.borosOpenPrefill;
+    expect(armed).toMatchObject({ base: 'ETH', longVenue: pair.longVenue, shortVenue: pair.shortVenue, maturity: NEW });
+    expect(armed?.sizeBase).toBeCloseTo(pair.size - 60, 9);
+    expect((flow as ReturnType<typeof useTradeFlowOptional>)?.railOpen).toBe(true);
+    expect(closed).toBe(1);
   });
 });
 

@@ -1,15 +1,12 @@
-import { entryAprOf } from '../../../web/src/panels/assets/assetModel';
-import { fitAtBand, planBatch, suggestedRollSize } from '../../../web/src/panels/assets/rollSizing';
+import { ROLL_OPPORTUNITY_SHARE, fitAtBand, planBatch, suggestedRollSize } from '../../../web/src/panels/assets/rollSizing';
 import { sigFigsDirectional } from '../numbers';
 import type { BorosMarket } from './client';
 import type { BorosPairSimulation, SimulatedLeg } from './pair';
 import { findSpread, isSpreadMarket } from './spread';
 import { normalizeVenue } from './venue';
 
-const SECONDS_IN_YEAR = 365 * 24 * 3600;
 const EPS = 1e-9;
 
-export const ROLL_OPPORTUNITY_SHARE = 0.2;
 export const ROLL_MAX_SLIP_APR = 0.1;
 export const ROLL_FALLBACK_SLIP_APR = 0.01;
 export const MAX_ROLL_TARGETS = 8;
@@ -42,20 +39,6 @@ export interface RollPairFacts {
   legs: RollLegDetail[];
   perpFeesPaidUsd: number;
   borosFeesPaidUsd: number;
-}
-
-export interface RollProbeResult {
-  ok: boolean;
-  rate: number | null;
-  size: number;
-}
-
-export interface RollOpportunity {
-  maturity: number;
-  rate: number;
-  current: number;
-  currentMaturity: number;
-  size: number;
 }
 
 export function halfCapSeedPct(caps: ReadonlyArray<number>): number | null {
@@ -107,109 +90,6 @@ export function rollTargetsFor(
   return targets;
 }
 
-export function pairRollGeometry(pair: Pick<RollPairFacts, 'legs'>): {
-  yuLegs: RollLegDetail[];
-  heldSize: number;
-  pairPerpImUsd: number;
-} {
-  const yuLegs = pair.legs.filter((l) => l.kind === 'yu');
-  const perpLegs = pair.legs.filter((l) => l.kind === 'perp');
-  return {
-    yuLegs,
-    heldSize: yuLegs.length > 0 ? Math.min(...yuLegs.map((l) => l.sizeToken)) : 0,
-    pairPerpImUsd: perpLegs.reduce((total, l) => total + l.imUsd, 0),
-  };
-}
-
-export function addedMarginOf(sim: BorosPairSimulation | null | undefined): number | null {
-  if (!sim) return null;
-  let total = 0;
-  for (const leg of sim.legs) {
-    if (leg.marginRequired === null) return null;
-    const result = Math.abs(leg.sizing.resultingSize);
-    const delta = Math.abs(leg.sizing.deltaSize);
-    if (!(delta > 0)) continue;
-    total += result > 0 ? leg.marginRequired * Math.min(1, delta / result) : leg.marginRequired;
-  }
-  return total;
-}
-
-export function exitPnlOf(
-  sim: BorosPairSimulation | null | undefined,
-  heldLegs: ReadonlyArray<RollLegDetail | undefined>,
-  nowSec: number,
-): number | null {
-  const one = (s: SimulatedLeg | undefined, l: RollLegDetail | undefined): number | null | undefined => {
-    if (!s || !l || l.lockedApr === null) return undefined;
-    const locked = entryAprOf(l.side, l.lockedApr);
-    const years = Math.max(0, l.maturity - nowSec) / SECONDS_IN_YEAR;
-    const rate = s.execApr;
-    return rate !== null ? (l.side === 'LONG' ? rate - locked : locked - rate) * s.estFillSize * years : null;
-  };
-  const legs = (sim?.legs ?? []).map((s, i) => one(s, heldLegs[i])).filter(
-    (x): x is number | null => x !== undefined,
-  );
-  if (legs.length === 0 || legs.some((x) => x === null)) return null;
-  return legs.reduce((a: number, x) => a + (x ?? 0), 0);
-}
-
-export interface RollFigures {
-  netRate: number | null;
-  spreadApr: number | null;
-  totalCostUsd: number | null;
-  exitPnlUsd: number | null;
-  capitalUsd: number | null;
-  newBorosImUsd: number | null;
-}
-
-export function rollFigures({
-  entrySim,
-  exitSim,
-  size,
-  perpImUsd,
-  maturity,
-  heldLegs,
-  nowSec,
-}: {
-  entrySim: BorosPairSimulation | undefined;
-  exitSim: BorosPairSimulation | undefined;
-  size: number;
-  perpImUsd: number;
-  maturity: number;
-  heldLegs: ReadonlyArray<RollLegDetail | undefined>;
-  nowSec: number;
-}): RollFigures {
-  const termYears = Math.max(0, maturity - nowSec) / SECONDS_IN_YEAR;
-  const px = entrySim?.collateralPriceUsd ?? exitSim?.collateralPriceUsd ?? null;
-  const usdOf = (tokens: number | null | undefined): number | null =>
-    tokens === null || tokens === undefined || px === null || !(px > 0) ? null : tokens * px;
-
-  const newBorosImUsd = usdOf(addedMarginOf(entrySim));
-  const capitalUsd = newBorosImUsd !== null ? perpImUsd + newBorosImUsd : null;
-  const exitCostUsd = usdOf(exitSim?.costToCrossSize);
-  const entryCostUsd = usdOf(entrySim?.costToCrossSize);
-  const exitPnlUsd = usdOf(exitPnlOf(exitSim, heldLegs, nowSec));
-  const totalCostUsd = exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
-  const dragApr =
-    totalCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
-      ? totalCostUsd / capitalUsd / termYears
-      : null;
-  const rolledNotionalUsd = usdOf(size) ?? 0;
-  const spreadApr = entrySim?.estSpreadApr ?? null;
-  const carryPerYearUsd = spreadApr !== null && rolledNotionalUsd > 0 ? spreadApr * rolledNotionalUsd : null;
-  const rateOnCapital =
-    carryPerYearUsd !== null && capitalUsd !== null && capitalUsd > 0 ? carryPerYearUsd / capitalUsd : null;
-  const exitPnlApr =
-    exitPnlUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
-      ? exitPnlUsd / capitalUsd / termYears
-      : null;
-  const netRate =
-    rateOnCapital !== null && dragApr !== null && exitPnlApr !== null
-      ? rateOnCapital - dragApr + exitPnlApr
-      : rateOnCapital;
-  return { netRate, spreadApr, totalCostUsd, exitPnlUsd, capitalUsd, newBorosImUsd };
-}
-
 /**
  * The size the roll modal DEFAULTS to — what the books take at the widest
  * tolerance each batch may carry (`fitAtBand`), less the buffer, capped at the
@@ -243,26 +123,4 @@ export function rollQuoteIsFillable(
   return [...exitSim.legs, ...entrySim.legs].every(
     (l) => l.bookStatus === 'ok' && !l.slippageExceeded && !l.bandExceeded && !(l.shortfallSize > 0),
   );
-}
-
-/**
- * `current` is what holding still earns (`lockedAprFwd`: the locked rate on
- * capital, less the settlement fee). It must leave out fees already paid to
- * open the pair: rolling cannot get them back, and charging them to "keep"
- * made a lower later rate look better.
- */
-export function rollOpportunities(
-  probes: Record<number, RollProbeResult>,
-  targets: ReadonlyArray<RollTarget>,
-  current: number | null,
-  currentMaturity: number,
-): RollOpportunity[] {
-  if (current === null) return [];
-  const found: RollOpportunity[] = [];
-  for (const t of targets) {
-    const r = probes[t.maturity];
-    if (!r || !r.ok || r.rate === null || !(r.rate > current)) continue;
-    found.push({ maturity: t.maturity, rate: r.rate, current, currentMaturity, size: r.size });
-  }
-  return found.sort((a, b) => b.rate - a.rate);
 }

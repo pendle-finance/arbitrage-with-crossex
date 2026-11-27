@@ -243,7 +243,7 @@
       "priceImpactTitle": "整笔一次成交的冲击，与所有分片的冲击之和",
       "tooThin": "盘口太薄，无法估价",
       "readingBook": "正在读取订单簿… 打开或关闭 TWAP 即可继续。",
-      "wholeRun": "整个执行",
+      "wholeRun": "合计",
       "duration": "时长",
       "interval": "间隔",
       "sliceSize": "单片大小",
@@ -301,6 +301,8 @@
       "capped": "TWAP 已暂停：余量未平 · {{what}}",
       "cappedOpen": "TWAP 已暂停：余量未开 · {{what}}",
       "boros": "TWAP 已暂停：Boros 平仓被拒 · {{what}}",
+      "notHedged": "TWAP 已暂停：未对冲 · {{what}} · 第 {{i}}/{{n}} 片",
+      "margin": "TWAP 已暂停：保证金不足 · {{what}} · 第 {{i}}/{{n}} 片",
       "done": "TWAP 已完成 · {{what}}",
       "stopped": "TWAP 停在第 {{i}}/{{n}} 片 · {{what}}",
       "what": {

@@ -24,7 +24,7 @@ function previewHandler(bodies: Array<{ twap?: unknown }> = [], fees?: typeof FE
     return HttpResponse.json(
       env<PreviewResponse>({
         makerLeg: { auto: 'a', why: 'fees' },
-        priceImpact: { whole: 12, sliced: 3 }, twapDefault: TWAP_OFF,
+        priceImpact: { whole: 12, sliced: 3, slicedLegs: [3] }, twapDefault: TWAP_OFF,
         twap: { plan: PLAN, refusal: null },
         previews: body.actions.map((a) =>
           previewFor(a, {
@@ -84,7 +84,7 @@ function heldPreviewHandler(held: Record<string, string>, bodies: Array<{ action
       env<PreviewResponse>({
         previews,
         makerLeg: { auto: 'a', why: 'fees' },
-        priceImpact: { whole: 12, sliced: 3 }, twapDefault: TWAP_OFF,
+        priceImpact: { whole: 12, sliced: 3, slicedLegs: [3] }, twapDefault: TWAP_OFF,
         twap: body.twap !== undefined && sameQty ? { plan: PLAN, refusal: null } : null,
       }),
     );
@@ -415,7 +415,7 @@ describe('ClosePairForm, close perps with TWAP', () => {
         a: { symbol: 'GATE_FUTURE_ETH_USDT', reduceOnly: true },
         b: { symbol: 'HYPERLIQUID_FUTURE_ETH_USDT', reduceOnly: true },
         execution: 'maker',
-        makerLeg: 'auto',
+        makerLeg: 'a',
         timeoutSec: 240,
         clipBandPct: 0.5,
       },
@@ -449,5 +449,27 @@ describe('ClosePairForm, close perps with TWAP', () => {
     expect(screen.queryByText('Maker')).toBeNull();
     expect(screen.getAllByText('51.9')).toHaveLength(2);
     expect(screen.queryByRole('button', { name: 'Book' })).toBeNull();
+  });
+});
+
+describe('ClosePairForm, a lot size that does not load', () => {
+  it('says why the limit and hedge hold stays off', async () => {
+    server.use(
+      http.get('/api/symbols/HYPERLIQUID_FUTURE_ETH_USDT', () => HttpResponse.json({ error: 'down' }, { status: 500 })),
+      ...baseHandlers(),
+      ...symbolHandlers(RULES),
+      previewHandler(),
+    );
+    renderPlain();
+    expect(await screen.findByText('Lot size not loaded')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close both/ })).toBeDisabled();
+  });
+
+  it('says nothing when both lot sizes load', async () => {
+    server.use(...baseHandlers(), ...symbolHandlers(RULES), previewHandler());
+    renderPlain();
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await waitFor(() => expect(btn).toBeEnabled(), { timeout: 4000 });
+    expect(screen.queryByText('Lot size not loaded')).toBeNull();
   });
 });

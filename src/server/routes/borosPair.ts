@@ -85,6 +85,7 @@ import {
   gasTopUpMarketFor,
   lockBorosMarkets,
   pendingBorosExecutions,
+  restingCancelsOn,
   sendBorosPair,
   type BorosCloseDeps,
 } from '../borosClose';
@@ -891,7 +892,7 @@ export function borosPairRoutes(deps: AppDeps) {
 
     /** Price the pair. Called on a short interval while the panel is open. */
     app.post('/boros/pair/simulate', async (req, reply) => {
-      const { simulation, gate, eligibility, simulatedAtMs, gasBalanceUsd } = await priceRequest(
+      const { simulation, gate, eligibility, simulatedAtMs, gasBalanceUsd, intent, account } = await priceRequest(
         req.body as PairBody,
         false,
       );
@@ -901,6 +902,13 @@ export function borosPairRoutes(deps: AppDeps) {
         eligibility,
         simulatedAtMs,
         gasBalanceUsd: gasBalanceUsd ?? null,
+        cancelOrdersOn:
+          intent === 'close'
+            ? restingCancelsOn(
+                account,
+                simulation.legs.filter((l) => l.sizing.deltaSize !== 0 && l.execApr !== null).map((l) => l.marketId),
+              )
+            : [],
       });
     });
 
@@ -997,7 +1005,7 @@ export function borosPairRoutes(deps: AppDeps) {
       // the same batch: one left behind could re-open a leg the roll just moved.
       // The preview cancels the same ones, or an order in a close's path
       // (MarketSelfSwap) blocks a roll the send would pass.
-      const cancelOrdersOn = plan ? [...new Set(plan.closes.map((o) => o.marketId))].filter((id) => account.restingOrderMarkets.has(id)) : [];
+      const cancelOrdersOn = plan ? restingCancelsOn(account, plan.closes.map((o) => o.marketId)) : [];
       const preview = plan ? orders?.simulateRollOver?.(plan.closes, plan.opens, { cancelOrdersOn, fresh }) : undefined;
       const venue = preview
         ? await preview.catch((err: unknown) => {

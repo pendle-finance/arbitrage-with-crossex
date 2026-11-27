@@ -296,6 +296,7 @@ export function SingleTicket() {
       {twapOn && (
         <MakerSettings
           legs={null}
+          symbols={symbol ? [symbol] : undefined}
           makerLeg="auto"
           autoPick={null}
           onMakerLeg={() => undefined}

@@ -80,16 +80,25 @@ type CloseLeg = StrategyLeg & { spreadVenues?: [string, string] | null };
 /** Used until the market's own deviation cap is known, or if it is degenerate. */
 const FALLBACK_SLIPPAGE_PCT = 1;
 
+export function seedBorosSlipPct(caps: ReadonlyArray<number | null | undefined>): number {
+  const usable = caps.filter((c): c is number => typeof c === 'number' && c > 0);
+  if (usable.length === 0) return FALLBACK_SLIPPAGE_PCT;
+  const floored = sigFigsDirectional((Math.min(...usable) / 2) * 100, 1, 'down');
+  return floored > 0 ? floored : FALLBACK_SLIPPAGE_PCT;
+}
+
 export function CloseBorosForm({
   legs,
   perpsUnhedged = null,
   underPicker = false,
+  closed = false,
   onClosed,
   onSent,
 }: {
   legs: CloseLeg[];
   perpsUnhedged?: { qty: number; coin: string } | null;
   underPicker?: boolean;
+  closed?: boolean;
   onSent?: () => void;
   /**
    * What actually came off each market, so the caller can shrink a claim that
@@ -157,20 +166,7 @@ export function CloseBorosForm({
    * Per market, so a multi-leg close seeds from the tightest of them: one
    * tolerance drives the form, and the tighter cap is the binding one.
    */
-  const seededSlipPct = (() => {
-    const caps = closable
-      .map((l) => rowOf(l.marketId)?.maxRateDeviationApr)
-      .filter((v): v is number => typeof v === 'number' && v > 0);
-    if (caps.length === 0) return FALLBACK_SLIPPAGE_PCT;
-    const pct = (Math.min(...caps) / 2) * 100;
-    // Round DOWN to one significant figure: 0.8208% ⇒ 0.8%. Down rather than
-    // to-nearest so the seeded bound always stays strictly inside the venue's
-    // cap — rounding up could seed a tolerance the venue will not accept.
-    // Flooring a positive number to 1 s.f. cannot reach zero, but a degenerate
-    // cap can, and a zero tolerance would block every close.
-    const floored = sigFigsDirectional(pct, 1, 'down');
-    return floored > 0 ? floored : FALLBACK_SLIPPAGE_PCT;
-  })();
+  const seededSlipPct = seedBorosSlipPct(closable.map((l) => rowOf(l.marketId)?.maxRateDeviationApr));
   const [slipEdited, setSlipEdited] = useState<string | null>(null);
   /** The tolerance popover — closed until asked for. */
   const [slipOpen, setSlipOpen] = useState(false);
@@ -518,16 +514,25 @@ export function CloseBorosForm({
   const estSlipCost = simulation ? slipCost((f) => f.q?.estSlippageApr ?? null) : null;
   const maxSlipCost = slipInvalid ? null : slipCost(() => slipPct / 100);
   const atMax = closesAll;
-  const sharedLeg = closable.some((l) => {
+  const legShared = (l: CloseLeg): boolean => {
     const open = Math.abs(rowOf(l.marketId)?.currentSize ?? 0);
     return open > 0 ? wholeOf(l) < open : (l.share ?? 1) < 0.9995;
-  });
+  };
+  const sharedLeg = closable.some(legShared);
   const flatAfter = atMax && !sharedLeg;
   const closedShare = anySizeInvalid ? 0 : closesAll ? 1 : maxCloseSize > 0 ? Math.min(1, typedSize / maxCloseSize) : 0;
   const perpsLeft = perpsUnhedged && closedShare > 0 ? perpsUnhedged.qty * closedShare : null;
   const leftOf = (l: CloseLeg): number => {
     const left = heldWei(l) - toWei(sizeOf(l));
     return left > 0n ? fromWei(left) : 0;
+  };
+  const cancelsOn = sim.data?.cancelOrdersOn ?? [];
+  const cancelFacts = pendingFacts.filter((f) => cancelsOn.includes(f.l.marketId as number));
+  const ordersLabel = (l: CloseLeg): string => {
+    const maturity = l.maturity ?? rowOf(l.marketId)?.maturity;
+    return t('assetCard.roll.openOrders', {
+      date: closable.length > 1 || maturity === undefined ? venueLabel(l) : fmtDateLocal(maturity),
+    });
   };
   const legName = (l: CloseLeg) => {
     const venues = spreadOf(l);
@@ -741,6 +746,13 @@ export function CloseBorosForm({
               <span className="num text-[12px] text-ink-300">{`${sigGrouped(heldOf(f.l))} ${f.l.collateral ?? ''} → ${sigGrouped(leftOf(f.l))} ${f.l.collateral ?? ''}`}</span>
             </div>
           ))}
+        {cancelFacts.map((f) => (
+          <EstimateRow
+            key={`orders-${f.l.marketId}`}
+            label={ordersLabel(f.l)}
+            value={t(leftOf(f.l) > 0 || legShared(f.l) ? 'assetCard.roll.cancelledPart' : 'assetCard.roll.cancelled')}
+          />
+        ))}
         {perpsUnhedged && perpsLeft !== null && (
           <EstimateRow
             label={t('accounts.closePair.after.perps')}
@@ -782,7 +794,8 @@ export function CloseBorosForm({
             ctx.isLoading ||
             (simReq !== null && !sim.data) ||
             anyBelowMin ||
-            batchBlockers.length > 0
+            batchBlockers.length > 0 ||
+            closed
           }
           onConfirm={run}
           className="w-full"

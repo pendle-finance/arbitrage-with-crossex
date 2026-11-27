@@ -11,7 +11,7 @@ import type { Clients } from '../../src/core/clients';
 import { REPEG_DEFAULT_BP, resolveDeal, type DealRequest } from '../../src/engine/create';
 import { OPEN_ORDER_CAP_REASON } from '../../src/engine/decide';
 import { fxStr, fx } from '../../src/engine/fx';
-import { commands, startLoop, tickPair } from '../../src/engine/loop';
+import { commands, ORDER_ALLOWANCE_STOP, startLoop, tickPair } from '../../src/engine/loop';
 import { Store } from '../../src/engine/db';
 import { TUNING } from '../../src/engine/types';
 import { gateVenue } from '../../src/engine/venueGate';
@@ -1212,19 +1212,35 @@ describe('maker + hedge close (both legs reduce-only)', () => {
     assertHonestReport(w);
   });
 
-  it('a venue cancel finishes the close at market, hedged, with a warning', async () => {
+  it('a venue cancel stops the close with the fill hedged and the rest open, with a warning', async () => {
     const w = closeWorld();
     await stepChecked(w);
     const maker = w.venue.liveOrder(A_CONTRACT)!;
     w.venue.fill(maker.clientText, '0.05');
-    w.venue.venueCancel(maker.clientText); // e.g. Gate cancels on low margin
+    w.venue.venueCancel(maker.clientText);
     await stepChecked(w, 8);
     const pair = w.store.getPair(w.pairId)!;
     expect(pair.mode).toBe('DONE');
     const report = JSON.parse(pair.reportJson!);
-    expect(report.aFilled).toBe('0.152');
-    expect(report.bFilled).toBe('0.152');
-    expect(w.store.listAlerts().some((a) => /cancelled on the venue/.test(a.message))).toBe(true);
+    expect(report.aFilled).toBe('0.05');
+    expect(report.bFilled).toBe('0.05');
+    expect(report.reason).toMatch(/^stopped/);
+    expect(w.store.listOrders(w.pairId).filter((o) => o.leg === 'A')).toHaveLength(1);
+    expect(w.store.listAlerts().some((a) => /cancelled on the venue\. The close stopped with the rest still open\./.test(a.message))).toBe(true);
+  });
+
+  it('a Stop pressed after a close turned to market reports stopped, not the open-order reason', async () => {
+    const w = closeWorld();
+    w.store.updatePair(w.pairId, { mode: 'CONVERTING', haltReason: OPEN_ORDER_CAP_REASON });
+    w.venue.refPrices.delete(A_CONTRACT);
+    await stepChecked(w);
+    commands.stop(w.store, w.pairId);
+    for (let i = 0; i < 20 && w.store.getPair(w.pairId)!.mode !== 'DONE'; i++) await stepChecked(w);
+    const done = w.store.getPair(w.pairId)!;
+    expect(done.mode).toBe('DONE');
+    const reason = JSON.parse(done.reportJson!).reason as string;
+    expect(reason.startsWith('stopped')).toBe(true);
+    expect(reason).not.toContain(OPEN_ORDER_CAP_REASON);
   });
 
   it('a maker refused after acceptance draws the failure budget, not a re-place every tick', async () => {
@@ -1430,6 +1446,42 @@ describe('refused re-peg', () => {
     expect(pair.mode).toBe('OPENING');
     expect(pair.repegNotBefore).toBe(t0 + TUNING.REPEG_REFUSED_WAIT_MS);
     expect([...w.venue.orders.values()].some((o) => o.tif === 'ioc')).toBe(false);
+  });
+
+  it('an order-allowance refusal waits a minute before the maker is sent again', async () => {
+    const w = mkWorld();
+    const t0 = w.clock.now();
+    w.venue.nextCreate = ['reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR'];
+    await stepChecked(w);
+    expect(w.store.getPair(w.pairId)!.makerNotBefore).toBe(t0 + TUNING.REPEG_REFUSED_WAIT_MS);
+    const sent = w.venue.createCalls.length;
+    await stepChecked(w, 58);
+    expect(w.venue.createCalls.length).toBe(sent);
+    await stepChecked(w, 3);
+    expect(w.venue.createCalls.length).toBe(sent + 1);
+  });
+
+  it.each([
+    ['$50', '0.02'],
+    ['$6M', '2400'],
+  ])('at %s, %s refused for order allowance 10 times in a row stops the deal with an alert', async (_size, target) => {
+    const w = mkWorld({ target, deadlineInMs: null });
+    w.venue.nextCreate = Array(ORDER_ALLOWANCE_STOP + 5).fill('reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR');
+    for (let i = 0; i < 20 * 61 && w.store.getPair(w.pairId)!.mode !== 'DONE'; i++) await stepChecked(w);
+    const done = w.store.getPair(w.pairId)!;
+    expect(done.mode).toBe('DONE');
+    expect(w.venue.createCalls.length).toBe(ORDER_ALLOWANCE_STOP);
+    expect(JSON.parse(done.reportJson!).reason).toMatch(/^Gate refused the maker order 10 times in a row: the venue has no order allowance left/);
+    const alerts = w.store.listAlerts().filter((a) => a.level === 'error' && /no order allowance left\. The deal is stopping with what filled\./.test(a.message));
+    expect(alerts).toHaveLength(1);
+  });
+
+  it('nine refusals then an accepted maker keep the deal going', async () => {
+    const w = mkWorld({ deadlineInMs: null });
+    w.venue.nextCreate = Array(ORDER_ALLOWANCE_STOP - 1).fill('reject:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR');
+    for (let i = 0; i < 12 * 61 && !w.venue.liveOrder(A_CONTRACT); i++) await stepChecked(w);
+    expect(w.venue.liveOrder(A_CONTRACT)).toBeDefined();
+    expect(w.store.getPair(w.pairId)!.mode).toBe('OPENING');
   });
 
   it('a margin refusal still draws the maker budget', async () => {
@@ -1768,16 +1820,13 @@ describe('an order-count refusal on a re-peg', () => {
       );
       for (const o of live) expect(known.has(o.clientText)).toBe(true);
     }
-    for (let i = 1; i < sendTimes.length; i++) {
-      expect(sendTimes[i] - sendTimes[i - 1]).toBeGreaterThanOrEqual(TUNING.POC_BACKOFF_MS);
-    }
     expect(sendTimes.length).toBeLessThanOrEqual(4);
     const refused = w.store
       .listOrders(w.pairId)
       .find((o) => o.closeReason === 'rejected:TRADE_HYPERLIQUID_ORDER_LIMIT_ERROR')!;
     expect(refused).toBeDefined();
-    const oldPriceRepost = w.store.listOrders(w.pairId).find((o) => o.seq > refused.seq && o.price === '2500');
-    expect(oldPriceRepost).toBeDefined();
+    const next = w.store.listOrders(w.pairId).find((o) => o.leg === 'A' && o.seq > refused.seq)!;
+    expect(next.createdAt - refused.createdAt).toBeGreaterThanOrEqual(TUNING.REPEG_REFUSED_WAIT_MS);
     expect(w.venue.liveOrder(A_CONTRACT)!.price).toBe('2501.5');
   });
 });
