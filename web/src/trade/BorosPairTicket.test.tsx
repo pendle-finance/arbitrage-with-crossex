@@ -452,6 +452,30 @@ describe('BorosPairTicket', () => {
     });
   });
 
+  it('Single mode sends the leg alone when no other single shares its collateral and date', async () => {
+    const user = userEvent.setup();
+    const bodies: Record<string, unknown>[] = [];
+    server.use(
+      ...handlers({
+        onSimulate: (b) => bodies.push(b),
+        ctx: {
+          markets: [
+            marketRow(),
+            marketRow({ marketId: BN, name: 'Binance ETHUSDT 31 Aug 2026', venue: 'Binance', maturity: MATURITY + 86_400 }),
+          ],
+        },
+      }),
+    );
+    renderWithClient(<BorosPairTicket />);
+    await fillTicket(user);
+    await user.click(screen.getByRole('radio', { name: 'Single' }));
+    await waitFor(() => {
+      const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { marketId: number }[] };
+      expect(last.legs.map((l) => l.marketId)).toEqual([HL]);
+      expect(last.onlyLeg).toBeUndefined();
+    });
+  });
+
   it('seeds the tolerance from half each market\'s max rate deviation', async () => {
     // The venue caps how far one trade may move the rate; a bound wider than
     // that can never fill, so half of it is the natural default. Across a
