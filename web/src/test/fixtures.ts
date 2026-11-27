@@ -263,6 +263,8 @@ export function versionHandler(over: Partial<UpdateStatus> = {}) {
         latestCommit: null,
         updateAvailable: false,
         highlights: [],
+        checkOn: true,
+        freshRead: null,
         ...over,
       }),
     ),

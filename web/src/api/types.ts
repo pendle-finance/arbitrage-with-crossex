@@ -106,6 +106,11 @@ export interface UpdateStatus {
   updateAvailable: boolean;
   /** The latest version's feature list — only when updateAvailable. */
   highlights: string[];
+  /** False when this copy never reads GitHub (UPDATE_CHECK=0 or no local version). */
+  checkOn: boolean;
+  /** Only on `?fresh=1`: the read ran, failed (the last good answer stands),
+   * or was skipped because one ran in the last 5 minutes. */
+  freshRead: 'ok' | 'failed' | 'skipped' | null;
 }
 
 // ---------------------------------------------------------------------------

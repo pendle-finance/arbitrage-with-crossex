@@ -202,6 +202,7 @@
     "checkUpdates": "检查更新",
     "upToDate": " · 已是最新",
     "checkFailed": " · 无法连接 GitHub",
+    "checkedRecently": " · 5 分钟内已检查",
     "sourceCheckout": "源码运行"
   },
   "permissions": {
