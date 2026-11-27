@@ -363,18 +363,6 @@ export function BorosPairTicket({
     [markets, spreadMarkets],
   );
   const isSpread = marketA !== null && Boolean(byId.get(marketA)?.spreadVenues);
-  const lastMode = useRef(modeProp);
-  useEffect(() => {
-    if (lastMode.current === modeProp) return;
-    lastMode.current = modeProp;
-    if (modeProp !== 'single') return;
-    if (isSpread) {
-      setMarketA(behind ? behind.a : null);
-      setMarketB(behind ? behind.b : null);
-      if (behind) setDirA(behind.dirA);
-    }
-    setBehind(null);
-  }, [modeProp, isSpread, behind]);
   const legName = (id: number): string | null => {
     const row = byId.get(id);
     return row ? marketName(row) : null;
@@ -621,10 +609,48 @@ export function BorosPairTicket({
    * it holds a position, held singles or not (owner 2026-10-16): one held
    * single left the spread with a max of 0. Singles close in Single mode. */
   const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
-  const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
+  /** The legs for a switch to `next`, from the ticket's toggle or the rail's. */
+  const settleLegsFor = (next: 'pair' | 'single') => {
+    if (next === 'single') {
+      // Single trades leg A alone, so a spread hands back its singles
+      // (leg A is the first); a spread with none behind it clears.
+      if (isSpread) {
+        setMarketA(behind ? behind.a : null);
+        setMarketB(behind ? behind.b : null);
+        if (behind) setDirA(behind.dirA);
+      }
+      setBehind(null);
+      return;
+    }
+    // A spread here came with the switch (a card's Open): it stays.
+    if (isSpread || !rowA || !rowB) return;
+    // Single moves leg A alone, so leg B may now be on A's venue
+    // (each picker then hides the other's venue) or at another date.
+    // Keep B only at A's date; where B has none there, take the
+    // spread over both at A's date (HL-GATE 29 Jan 2027).
+    const b = rowB.tokenId === rowA.tokenId && marketKey(rowB) !== marketKey(rowA) ? rowB : null;
+    const bAt = b ? marketAt(b, rowA.maturity) : null;
+    const spread = b && !bAt ? spreadsOver(rowA, b).find((m) => m.maturity === rowA.maturity && wantSpread(m)) : undefined;
+    if (b && spread) {
+      setBehind({ a: rowA.marketId, b: b.marketId, dirA });
+      setMarketA(spread.marketId);
+      setMarketB(null);
+      setDirA(sameCoin(rowA.venue, spread.spreadVenues?.[0] ?? '') ? dirA : dirA === 'short' ? 'long' : 'short');
+      return;
+    }
+    setMarketB(bAt?.marketId ?? null);
+  };
+  const lastMode = useRef(modeProp);
+  useEffect(() => {
+    if (lastMode.current === modeProp) return;
+    lastMode.current = modeProp;
+    if (modeProp) settleLegsFor(modeProp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeProp]);
+  const pairSpread =!isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
   const spreadOnly =
     mode === 'pair' && onlyLeg === null
-      ? spreadsOver(slotA, slotB).filter((m) => wantSpread(m) && !maturities.includes(m.maturity))
+      ? spreadsOver(slotA, slotB).filter((m) => (wantSpread(m) || m.marketId === marketA) && !maturities.includes(m.maturity))
       : [];
   const chipDates = [...maturities, ...spreadOnly.map((m) => m.maturity)].sort((x, y) => x - y);
   /** Slot A's side: on a spread, the side the singles had when it took over. */
@@ -644,7 +670,10 @@ export function BorosPairTicket({
   useEffect(() => {
     if (mode !== 'pair' || onlyLeg !== null) return;
     if (isSpread) {
-      if (behind && rowA && !wantSpread(rowA)) {
+      // Singles at another date (a spread-only date) would move the trade to
+      // that date unseen; the spread stays, and its close-only line blocks.
+      const backAt = behind && rowA && [behind.a, behind.b].every((id) => byId.get(id)?.maturity === rowA.maturity);
+      if (behind && rowA && backAt && !wantSpread(rowA)) {
         setMarketA(behind.a);
         setMarketB(behind.b);
         setDirA(behind.dirA);
@@ -1020,14 +1049,9 @@ export function BorosPairTicket({
           ariaLabel={t('pairTicket.boros.modeAria')}
           value={mode}
           onChange={(next) => {
-            // Single trades leg A alone, so a spread hands back its singles
-            // (leg A is the first); a spread with none behind it clears.
-            if (isSpread) {
-              setMarketA(behind ? behind.a : null);
-              setMarketB(behind ? behind.b : null);
-              if (behind) setDirA(behind.dirA);
-            }
-            setBehind(null);
+            // The toggle also fires on the option already on.
+            if (next === mode) return;
+            settleLegsFor(next);
             setMode(next);
           }}
           fill
