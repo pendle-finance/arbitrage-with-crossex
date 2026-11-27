@@ -5,13 +5,15 @@ in-app update check compares against).
 
 ## 1.7.10 — 2026-11-27
 
-TLDR: The Jan 2027 Hyperliquid ETH and BTC Boros markets show in the terminal.
+TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets in Single mode.
 
 - **Jan 2027 Hyperliquid markets show.** Boros lists Hyperliquid ETH and BTC for 29 Jan 2027,
   and the HL-GATE spreads for the same date, but no Gate market. Before, the terminal hid a Boros
   market that had no other market at its date, so both Hyperliquid markets were missing. Now a
-  spread over the market's venue counts as its partner. In Single mode you can pick 29 Jan 2027
-  for a Hyperliquid leg, and Roll over can target it.
+  spread over the market's venue counts as its partner.
+- **Single mode opens them.** Single mode now sends one Boros order on its own when no other
+  market shares its collateral and date. Before, it could only quote a market that had such a
+  partner, so a Jan Hyperliquid leg showed no quote and could not be sent.
 
 ## 1.7.9 — 2026-11-10
 
