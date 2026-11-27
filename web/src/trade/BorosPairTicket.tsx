@@ -828,7 +828,7 @@ export function BorosPairTicket({
   // intent makes it meaningless, so it must not survive into a normal ticket.
   useEffect(() => {
     setOnlyLeg(null);
-  }, [marketA, marketB, dirA, dirB, intent]);
+  }, [marketA, marketB, dirA, dirB, intent, mode]);
 
   const execute = useExecuteBorosPair();
 

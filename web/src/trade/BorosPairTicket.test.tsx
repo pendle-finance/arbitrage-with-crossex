@@ -1236,6 +1236,11 @@ describe('BorosPairTicket', () => {
       expect(last.onlyLeg).toBe(0);
       expect(last.legs[0].size).toBe(40_000);
     });
+
+    // Single picks its own partner leg, so an armed completion must not
+    // survive the switch and trade that partner instead of the short leg.
+    await user.click(screen.getByRole('radio', { name: 'Single' }));
+    await waitFor(() => expect(screen.queryByText(/Completing market A only/i)).not.toBeInTheDocument());
   });
 
   it('retries only the LEG that fell short — never on top of a finished fill', async () => {
