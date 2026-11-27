@@ -160,6 +160,33 @@ describe('GET /api/version', () => {
     expect((await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data.freshRead).toBe('failed');
   });
 
+  it('a failed press reads GitHub once and leaves nothing cached', async () => {
+    const calls: string[] = [];
+    let down = true;
+    const fetchImpl: FetchLike = async (url) =>
+      stub({ version: '1.1.0', highlights: [] }, { calls, reject: down })(url);
+    app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: fetchImpl });
+    const failed = (await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data;
+    expect(failed.freshRead).toBe('failed');
+    expect(failed.latest).toBeNull();
+    expect(calls).toHaveLength(1);
+    // GitHub is back: the next plain read reads it rather than a cached null.
+    down = false;
+    expect((await get()).json().data.updateAvailable).toBe(true);
+  });
+
+  it('two presses at once read GitHub once', async () => {
+    const calls: string[] = [];
+    app = makeTestApp({
+      updateCheck: { current: '1.0.0' },
+      versionFetch: stub({ version: '1.1.0', highlights: [] }, { calls }),
+    });
+    const press = () => app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST });
+    const [a, b] = await Promise.all([press(), press()]);
+    expect([a.json().data.freshRead, b.json().data.freshRead]).toEqual(['ok', 'ok']);
+    expect(calls.filter((u) => u === COMMIT_URL)).toHaveLength(1);
+  });
+
   it('equal versions: no update, no highlights', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.1.0' },
