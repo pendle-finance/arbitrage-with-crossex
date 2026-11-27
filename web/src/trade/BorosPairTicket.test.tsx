@@ -1295,17 +1295,37 @@ describe('BorosPairTicket', () => {
     it('dismissing the report after a completion sends both markets next time', async () => {
       const user = userEvent.setup();
       const bodies: Record<string, unknown>[] = [];
-      server.use(...handlers({ onSimulate: (b) => bodies.push(b), execute: legBShort }));
+      // The completion sends leg B alone, and its report has that one leg.
+      let sends = 0;
+      const execute = () =>
+        ++sends === 1
+          ? legBShort()
+          : HttpResponse.json(
+              env({
+                result: {
+                  legs: [{ marketId: BN, direction: 'long', filledSize: 30_000, shortfallSize: 10_000, execApr: 0.042, feeSize: 1, failure: null }],
+                  hedgedSize: 0,
+                  unhedgedSize: 0,
+                  unhedgedLeg: null,
+                  realisedSpreadApr: null,
+                  partial: true,
+                  allLegsSubmitted: true,
+                },
+                estimate: simulation(),
+                warnings: [],
+              }),
+            );
+      server.use(...handlers({ onSimulate: (b) => bodies.push(b), execute }));
       renderWithClient(<BorosPairTicket />);
       await sendPair(user);
       await user.click(screen.getByRole('button', { name: 'Complete now at market' }));
       expect(screen.getByText(/Completing market B only/i)).toBeInTheDocument();
 
-      // The completion part-fills again; the trader leaves it.
+      // The completion part-fills too; the trader dismisses it.
       const confirm = await screen.findByRole('button', { name: /complete market B/i });
       await waitFor(() => expect(confirm).not.toBeDisabled());
       await user.pointer({ keys: '[MouseLeft>]', target: confirm });
-      await user.click(await screen.findByRole('button', { name: 'Leave it' }, { timeout: 3_000 }));
+      await user.click(await screen.findByRole('button', { name: 'Dismiss' }, { timeout: 3_000 }));
 
       expect(screen.queryByText(/Completing market B only/i)).not.toBeInTheDocument();
       await user.type(screen.getByLabelText(/^Size per market/), '1000');

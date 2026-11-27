@@ -8,17 +8,18 @@ import { isUpdating, startUpdate, updateProgress } from '../updater';
 import { compareVersions, fetchLatestVersion, type RemoteVersion } from '../version';
 import { borosExecutionsPending } from './borosPair';
 
+const FORCED_GAP_MS = 5 * 60_000;
+
 /**
  * GET /api/version — is a newer release published on GitHub main?
  *
  * Always 200; never throws. The remote read happens lazily (first request),
  * only when the running copy KNOWS its own version and the check isn't
  * disabled — so an unconfigured `updateCheck` dep (every test app, public
- * mode) makes this route provably network-free. Failures are cached as null
- * for the full TTL: silent by design.
+ * mode) makes this route provably network-free. A plain read's failure is
+ * cached as null for the full TTL: silent by design. A `?fresh=1` read
+ * stores only a good answer.
  */
-const FORCED_GAP_MS = 5 * 60_000;
-
 export function versionRoutes(deps: AppDeps) {
   const fetchImpl: FetchLike = deps.versionFetch ?? (globalThis.fetch as unknown as FetchLike);
   /** When `?fresh=1` last read GitHub. GitHub allows 60 unauthenticated API
@@ -35,25 +36,15 @@ export function versionRoutes(deps: AppDeps) {
         const fresh = (req.query as { fresh?: string } | undefined)?.fresh === '1';
         if (fresh && Date.now() - forcedAt < FORCED_GAP_MS) freshRead = 'skipped';
         else if (fresh) {
-          forcedAt = Date.now();
-          // A failed read throws, so the cache keeps its last good answer.
-          // Caching the null would hide an available update for 6 hours.
-          try {
-            remote = (
-              await deps.cache.get(
-                'version:latest',
-                TTL.version,
-                async () => {
-                  const read = await fetchLatestVersion(fetchImpl);
-                  if (read === null) throw new Error('GitHub version read failed');
-                  return read;
-                },
-                { fresh: true },
-              )
-            ).value;
+          // Read outside the cache and store only a good answer. A null in the
+          // cache would hide an available update for 6 hours, and a throwing
+          // loader would fail every plain read that joined it.
+          const read = await fetchLatestVersion(fetchImpl);
+          if (read === null) freshRead = 'failed';
+          else {
+            forcedAt = Date.now();
             freshRead = 'ok';
-          } catch {
-            freshRead = 'failed';
+            remote = (await deps.cache.get('version:latest', TTL.version, async () => read, { fresh: true })).value;
           }
         }
         remote ??= (
