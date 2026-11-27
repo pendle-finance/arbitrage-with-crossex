@@ -197,7 +197,7 @@
     "staleQuote": "报价已过期，正在等待新报价。",
     "loginExpired": "Boros 登录已过期。",
     "completingLeg": "仅补齐市场 {{letter}}：一笔订单，规模为剩余部分。另一个市场不变。",
-    "reportOtherTrade": "订单表现在显示的是另一笔交易，因此重试和补齐不可用。请改回原市场和方向，或关闭此结果。",
+    "reportOtherTrade": "当前表单已不是这笔交易，因此这些按钮不可用。请改回原来的模式、市场和方向，或选择“保持现状”。",
     "tradeBoth": "改为交易两个市场",
     "loadFailed": "无法加载 Boros 市场",
     "modeAria": "Boros 下单模式",

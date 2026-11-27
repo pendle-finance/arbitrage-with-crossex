@@ -199,7 +199,7 @@
     "staleQuote": "The quote is out of date — waiting for a fresh one.",
     "loginExpired": "Boros login expired.",
     "completingLeg": "Completing market {{letter}} only — one order, sized to the residual. The other market is untouched.",
-    "reportOtherTrade": "The ticket now shows another trade, so Retry and Complete are off. Put the markets and sides back, or dismiss.",
+    "reportOtherTrade": "The ticket no longer shows this trade, so these buttons are off. Set the mode, markets and sides back, or choose Leave it.",
     "tradeBoth": "Trade both markets instead",
     "loadFailed": "Couldn’t load the Boros markets",
     "modeAria": "Boros ticket mode",
