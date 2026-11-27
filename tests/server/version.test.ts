@@ -147,6 +147,19 @@ describe('GET /api/version', () => {
     expect((await get()).json().data.updateAvailable).toBe(true);
   });
 
+  it('a plain read beside a failing ?fresh=1 read still answers 200', async () => {
+    app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: stub(null, { reject: true }) });
+    const [forced, plain] = await Promise.all([
+      app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST }),
+      get(),
+    ]);
+    expect(forced.statusCode).toBe(200);
+    expect(forced.json().data.freshRead).toBe('failed');
+    expect(plain.statusCode).toBe(200);
+    // A failed press does not start the 5-minute wait.
+    expect((await app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST })).json().data.freshRead).toBe('failed');
+  });
+
   it('equal versions: no update, no highlights', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.1.0' },
