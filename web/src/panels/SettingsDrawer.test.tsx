@@ -72,6 +72,32 @@ describe('SettingsDrawer', () => {
     );
   });
 
+  it('check for updates re-reads now and shows what it found', async () => {
+    mockAllDone();
+    const fresh: boolean[] = [];
+    const answer = (latest: string) =>
+      HttpResponse.json(env({ current: '1.6.3', install: null, latest, latestCommit: null, updateAvailable: latest !== '1.6.3', highlights: [] }));
+    let remote = '1.6.3';
+    server.use(
+      http.get('/api/version', ({ request }) => {
+        const isFresh = new URL(request.url).searchParams.get('fresh') === '1';
+        fresh.push(isFresh);
+        return answer(isFresh ? remote : '1.6.3');
+      }),
+    );
+    const user = userEvent.setup();
+    renderDrawer();
+    await screen.findByText('Version 1.6.3');
+
+    await user.click(screen.getByRole('button', { name: 'Check for updates' }));
+    expect(await screen.findByText(/up to date/)).toBeInTheDocument();
+
+    remote = '1.6.4';
+    await user.click(screen.getByRole('button', { name: 'Check for updates' }));
+    expect(await screen.findByText(/v1\.6\.4 available/)).toBeInTheDocument();
+    expect(fresh.filter(Boolean)).toHaveLength(2);
+  });
+
   it('language picker switches the terminal and saves the choice', async () => {
     const user = userEvent.setup();
     mockAllDone();

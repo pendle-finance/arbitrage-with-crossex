@@ -19,11 +19,19 @@ import { borosExecutionsPending } from './borosPair';
  */
 export function versionRoutes(deps: AppDeps) {
   const fetchImpl: FetchLike = deps.versionFetch ?? (globalThis.fetch as unknown as FetchLike);
+  /** When `?fresh=1` last skipped the cache. GitHub allows 60 unauthenticated
+   * API reads an hour per IP, so a forced read runs at most once a minute. */
+  let forcedAt = 0;
   return async function plugin(app: FastifyInstance): Promise<void> {
-    app.get('/version', async (_req, reply) => {
+    app.get('/version', async (req, reply) => {
       const current = deps.updateCheck?.current ?? null;
       let remote: RemoteVersion | null = null;
       if (current !== null && !deps.updateCheck?.disabled) {
+        const fresh = (req.query as { fresh?: string } | undefined)?.fresh === '1';
+        if (fresh && Date.now() - forcedAt >= 60_000) {
+          forcedAt = Date.now();
+          deps.cache.bust('version:latest');
+        }
         remote = (
           await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl))
         ).value;

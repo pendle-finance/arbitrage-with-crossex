@@ -199,6 +199,9 @@
     "available": " — v{{version}} 可更新",
     "commitUnknown": "提交未知",
     "installed": " · 安装于 {{date}}",
+    "checkUpdates": "检查更新",
+    "upToDate": " · 已是最新",
+    "checkFailed": " · 无法连接 GitHub",
     "sourceCheckout": "源码运行"
   },
   "permissions": {

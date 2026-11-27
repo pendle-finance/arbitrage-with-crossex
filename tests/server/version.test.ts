@@ -96,6 +96,37 @@ describe('GET /api/version', () => {
     expect(calls).toEqual([VERSION_URL, COMMIT_URL]);
   });
 
+  it('?fresh=1 skips the cached read, at most once a minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const calls: string[] = [];
+      let remote = '1.0.0';
+      const fetchImpl: FetchLike = async (url) => stub({ version: remote, highlights: [] }, { calls })(url);
+      app = makeTestApp({ updateCheck: { current: '1.0.0' }, versionFetch: fetchImpl });
+      const fresh = () => app.inject({ method: 'GET', url: '/api/version?fresh=1', headers: HOST });
+
+      expect((await get()).json().data.updateAvailable).toBe(false);
+      remote = '1.1.0';
+      // The plain read keeps the cached answer.
+      expect((await get()).json().data.updateAvailable).toBe(false);
+      expect(calls).toHaveLength(2);
+
+      const found = (await fresh()).json().data;
+      expect(found.updateAvailable).toBe(true);
+      expect(found.latest).toBe('1.1.0');
+      expect(calls).toHaveLength(4);
+
+      // A second press inside the minute answers from the new cache.
+      await fresh();
+      expect(calls).toHaveLength(4);
+      vi.setSystemTime(Date.now() + 61_000);
+      await fresh();
+      expect(calls).toHaveLength(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('equal versions: no update, no highlights', async () => {
     app = makeTestApp({
       updateCheck: { current: '1.1.0' },
