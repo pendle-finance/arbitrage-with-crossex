@@ -120,17 +120,16 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const takerSec = maker.taker.sec !== null && (!twap.on || maker.taker.picked) ? maker.taker.sec : null;
   const never = exec === 'maker' && maker.taker.takerAfter.kind === 'never';
   const close = exec === 'market' ? { exec } : never ? { exec, takerAfterSec: null } : takerSec !== null ? { exec, takerAfterSec: takerSec } : { exec };
-  const queried = (amount === 'custom' && debouncedUsd !== null) || twapQuery !== null || close !== null;
-  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, queried && tab ? tab.pool : null, twapQuery, close);
+  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, tab ? tab.pool : null, twapQuery, close);
   const customPlan = customQuery.data?.realize?.custom ?? null;
   useTwapDefault(twap, amount === 'custom' ? customQuery.data?.realize?.twapDefault.custom : tab?.twapDefault[TWAP_TARGET[amount]], exec);
   const customLeadNow = customPlan?.legs[0]?.qty ?? 0;
   useEffect(() => {
     if (customLeadNow > 0) setCustomLead(customLeadNow);
   }, [customLeadNow]);
-  const twapPricing = (twapQuery !== null || close !== null) && (customQuery.isPlaceholderData || customQuery.isPending);
+  const twapPricing = customQuery.isPlaceholderData || customQuery.isPending;
   const realizeTwap = twapQuery !== null && !twapPricing ? (customQuery.data?.realizeTwap ?? null) : null;
-  const liveTab = (twapQuery !== null || close !== null) && !twapPricing ? (customQuery.data?.realize ?? null) : null;
+  const liveTab = !twapPricing ? (customQuery.data?.realize ?? null) : null;
   const shownClear = liveTab ? (hasPlan(liveTab.clearDebt) ? liveTab.clearDebt : null) : clearDebt;
   const shownAll = liveTab ? (hasPlan(liveTab.all) ? liveTab.all : null) : all;
   const pricedPlan = shownClear && shownClear.legs.length > 0 ? shownClear : shownAll;
