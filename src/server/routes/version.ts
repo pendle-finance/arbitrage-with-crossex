@@ -26,6 +26,7 @@ export function versionRoutes(deps: AppDeps) {
    * reads an hour per IP, and its raw file server caches version.json for 5
    * minutes, so a forced read sooner than that would spend reads for nothing. */
   let forcedAt = 0;
+  let forcing: Promise<RemoteVersion | null> | null = null;
   return async function plugin(app: FastifyInstance): Promise<void> {
     app.get('/version', async (req, reply) => {
       const current = deps.updateCheck?.current ?? null;
@@ -34,22 +35,36 @@ export function versionRoutes(deps: AppDeps) {
       let freshRead: 'ok' | 'failed' | 'skipped' | null = null;
       if (checkOn) {
         const fresh = (req.query as { fresh?: string } | undefined)?.fresh === '1';
-        if (fresh && Date.now() - forcedAt < FORCED_GAP_MS) freshRead = 'skipped';
-        else if (fresh) {
-          // Read outside the cache and store only a good answer. A null in the
-          // cache would hide an available update for 6 hours, and a throwing
-          // loader would fail every plain read that joined it.
-          const read = await fetchLatestVersion(fetchImpl);
-          if (read === null) freshRead = 'failed';
-          else {
-            forcedAt = Date.now();
-            freshRead = 'ok';
-            remote = (await deps.cache.get('version:latest', TTL.version, async () => read, { fresh: true })).value;
-          }
+        // Read outside the cache and store only a good answer. A null in the
+        // cache would hide an available update for 6 hours, and a throwing
+        // loader would fail every plain read that joined it. A press during
+        // another press's read shares it; a failed read does not start the wait.
+        const mine = fresh && !forcing && Date.now() - forcedAt >= FORCED_GAP_MS;
+        if (mine) {
+          forcing = fetchLatestVersion(fetchImpl)
+            .then(async (read) => {
+              if (read === null) return null;
+              forcedAt = Date.now();
+              await deps.cache.get('version:latest', TTL.version, async () => read, { fresh: true });
+              return read;
+            })
+            .finally(() => {
+              forcing = null;
+            });
         }
-        remote ??= (
-          await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl))
-        ).value;
+        const pending = fresh ? forcing : null;
+        if (pending) {
+          const read = await pending;
+          freshRead = read === null ? 'failed' : 'ok';
+          // On a failure, the last good answer, without a second read that
+          // would fail too.
+          remote = read ?? deps.cache.peek<RemoteVersion | null>('version:latest') ?? null;
+        } else if (fresh) freshRead = 'skipped';
+        if (freshRead !== 'failed') {
+          remote ??= (
+            await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl))
+          ).value;
+        }
       }
       const updateAvailable =
         remote !== null && current !== null && (compareVersions(remote.version, current) ?? 0) > 0;
