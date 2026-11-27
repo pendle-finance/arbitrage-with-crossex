@@ -3,6 +3,16 @@
 Only substantial releases are listed here — each one bumps `version.json` (which is what the
 in-app update check compares against).
 
+## 1.7.10 — 2026-11-27
+
+TLDR: The Jan 2027 Hyperliquid ETH and BTC Boros markets show in the terminal.
+
+- **Jan 2027 Hyperliquid markets show.** Boros lists Hyperliquid ETH and BTC for 29 Jan 2027,
+  and the HL-GATE spreads for the same date, but no Gate market. Before, the terminal hid a Boros
+  market that had no other market at its date, so both Hyperliquid markets were missing. Now a
+  spread over the market's venue counts as its partner. In Single mode you can pick 29 Jan 2027
+  for a Hyperliquid leg, and Roll over can target it.
+
 ## 1.7.9 — 2026-11-10
 
 TLDR: The terminal suggests a Boros liquidation buffer and says how much margin to add. A Boros
