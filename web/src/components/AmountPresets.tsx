@@ -78,7 +78,7 @@ export function AmountPresets<T extends string>({
       />
       <div ref={segRef} className="flex flex-auto">
         <SegmentedToggle<T | typeof CUSTOM | ''>
-          className={`seg-info seg-lg max-sm:[&_.seg-btn]:px-3${editing ? ' [&_.seg-btn:last-child]:rounded-r-none' : ''}`}
+          className={`seg-info seg-lg [&_.seg-btn]:px-3${editing ? ' [&_.seg-btn:last-child]:rounded-r-none' : ''}`}
           fill
           ariaLabel={presetsLabel}
           value={preset ?? ''}

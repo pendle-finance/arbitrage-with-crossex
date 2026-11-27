@@ -109,20 +109,22 @@ export function pairPerpCloseLegs(pair: Pick<PairEstimate, 'legs'>): PerpCloseLe
 export function pairPerpBookedUsd(
   pair: Pick<PairEstimate, 'legs' | 'borosOpenedSec'>,
   group: Pick<AssetGroup, 'perpClosed'>,
-): { usd: number; sinceSec: number } | null {
+): { usd: number; sinceSec: number; shared: boolean } | null {
   const since = pair.borosOpenedSec;
   if (since === null) return null;
   let usd = 0;
+  let shared = false;
   for (const leg of pair.legs) {
     if (leg.kind !== 'perp' || leg.symbol === undefined) continue;
+    if (!sameSize(leg.share, 1)) shared = true;
     for (const closed of group.perpClosed) {
       if (closed.symbol !== leg.symbol) continue;
       for (const row of closed.rows) {
-        if (row.closedAt !== null && row.closedAt >= since) usd += row.priceUsd * leg.share;
+        if (row.closedAt !== null && row.closedAt >= since) usd += row.priceUsd;
       }
     }
   }
-  return { usd, sinceSec: since };
+  return { usd, sinceSec: since, shared };
 }
 
 /** The Boros legs of a pair as the close form's StrategyLeg rows: the

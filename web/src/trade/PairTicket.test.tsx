@@ -118,7 +118,7 @@ function previewHandler(opts: {
       env<PreviewResponse>({
         previews,
         makerLeg: opts.makerLeg ?? { auto: 'a', why: 'book' },
-        priceImpact: { whole: 12, sliced: 3 }, twapDefault: { ...TWAP_OFF, on: opts.twapOn === true },
+        priceImpact: { whole: 12, sliced: 3, slicedLegs: [3] }, twapDefault: { ...TWAP_OFF, on: opts.twapOn === true },
         twap: planFor(twap ?? {}),
       }),
     );
@@ -342,7 +342,7 @@ describe('PairTicket execution modes', () => {
       price: '2499',
       timeoutSec: 300,
       repegBehindBp: 5,
-      makerLeg: 'auto',
+      makerLeg: 'a',
       a: { side: 'BUY' },
       b: { side: 'SELL' },
     });
@@ -920,11 +920,11 @@ describe('PairTicket layout C', () => {
     expect(screen.queryByRole('switch', { name: 'TWAP' })).toBeNull();
   });
 
-  it('estimate card reads whole run only with twap on', async () => {
+  it('estimate card reads total only with twap on', async () => {
     await ready();
-    expect(screen.queryByText('whole run')).toBeNull();
+    expect(screen.queryByText('total')).toBeNull();
     await twapOn();
-    expect((await screen.findAllByText('whole run')).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText('total')).length).toBeGreaterThan(0);
   });
 
   it('never says it cannot send as one deal on a twap ticket', async () => {
@@ -946,8 +946,8 @@ describe('PairTicket layout C', () => {
     await ready();
     const orders = screen.getByRole('radiogroup', { name: 'Orders' });
     expect(within(orders).getAllByRole('radio').map((r) => r.textContent)).toEqual([
-      'Limit + hedge about $0.70 · 5 min',
-      'Market about $1.00 · 2s',
+      'Limit + hedge about $0.90 · 5 min',
+      'Market about $1.20 · 2s',
     ]);
     const trigger = screen.getByRole('button', { name: 'Orders' });
     await user.hover(trigger);
@@ -1129,6 +1129,16 @@ describe('PairTicket layout C', () => {
     await userEvent.click(screen.getByRole('radio', { name: /^Market/ }));
     await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
     await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'true'), { timeout: 4000 });
+  });
+
+  it('an empty size box drops the TWAP the book suggested', async () => {
+    server.use(...baseHandlers(), ...ethSymbolHandlers(), previewHandler({ calls: [], twapOn: true }));
+    await setupTwoVenuePair();
+    await waitForFirstPreview();
+    await userEvent.click(screen.getByRole('radio', { name: /^Limit \+ hedge/ }));
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'true'), { timeout: 4000 });
+    await userEvent.clear(screen.getByLabelText('Size per leg (USDT)'));
+    await waitFor(() => expect(twapSwitch()).toHaveAttribute('aria-checked', 'false'), { timeout: 4000 });
   });
 
   it('leverage is venue max with no control', async () => {

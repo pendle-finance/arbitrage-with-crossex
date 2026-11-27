@@ -180,7 +180,7 @@ export function ClosePairAfter({
   legPnl: ClosePairLegPnl[];
   rows: CloseAfterRow[];
   borosUnhedged: { qty: number; coin: string } | null;
-  bookedBefore: { usd: number; sinceSec: number } | null;
+  bookedBefore: { usd: number; sinceSec: number; shared?: boolean } | null;
 }) {
   const { t } = useTranslation();
   const before = bookedBefore !== null && Math.abs(bookedBefore.usd) >= 0.005 ? bookedBefore : null;
@@ -206,7 +206,7 @@ export function ClosePairAfter({
               ))}
               {before !== null && (
                 <span className="flex justify-between gap-4">
-                  <span>{t('accounts.closePair.bookedBefore')}</span>
+                  <span>{t(before.shared ? 'accounts.closePair.bookedBeforePerp' : 'accounts.closePair.bookedBefore')}</span>
                   <span className="num">
                     <SignedNumber value={before.usd} format={(n) => fmtUsd(n)} />
                   </span>

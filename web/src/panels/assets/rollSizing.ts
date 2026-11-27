@@ -12,7 +12,9 @@
  *   planBatch(...)     the tolerance a batch should carry for s, or why no
  *                      tolerance can carry it
  */
-import type { BorosSimulatedLeg } from '../../api/types';
+import type { BorosLegSizing, BorosPairLegBody, BorosPairSimulation, BorosSimulatedLeg, Rebate } from '../../api/types';
+import { rebatedSettleApr } from '../../lib/rebate';
+import { SECONDS_IN_YEAR, entryAprOf, type PairLegDetail } from './assetModel';
 
 /** `[adverse distance from mid, cumulative size]`, best-first. */
 export type DepthLadder = ReadonlyArray<readonly [number, number]>;
@@ -191,4 +193,263 @@ export function planBatch(
 export function maxRollSize(limits: ReadonlyArray<BatchLimit | null>): number | null {
   const sizes = limits.filter((l): l is BatchLimit => l !== null).map((l) => l.maxSize);
   return sizes.length > 0 ? Math.min(...sizes) : null;
+}
+
+export type HeldRollLeg = Pick<
+  PairLegDetail,
+  'kind' | 'venue' | 'side' | 'sizeToken' | 'lockedApr' | 'maturity' | 'marketId' | 'spreadVenues' | 'imUsd'
+>;
+
+interface RollPairShape<L extends HeldRollLeg> {
+  longVenue: string;
+  shortVenue: string;
+  legs: ReadonlyArray<L>;
+}
+
+const sameVenue = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
+
+export function pairExposure(pair: RollPairShape<HeldRollLeg>): { long: number; short: number } {
+  let long = 0;
+  let short = 0;
+  for (const l of pair.legs) {
+    if (l.kind !== 'yu') continue;
+    if (l.spreadVenues) {
+      long += l.sizeToken;
+      short += l.sizeToken;
+    } else if (sameVenue(l.venue, pair.longVenue)) long += l.sizeToken;
+    else if (sameVenue(l.venue, pair.shortVenue)) short += l.sizeToken;
+  }
+  return { long, short };
+}
+
+export function pairRollGeometry<L extends HeldRollLeg>(
+  pair: RollPairShape<L>,
+): { yuLegs: L[]; heldSize: number; exposure: { long: number; short: number }; pairPerpImUsd: number } {
+  const yuLegs = pair.legs.filter((l) => l.kind === 'yu');
+  const exposure = pairExposure(pair);
+  return {
+    yuLegs,
+    heldSize: Math.max(exposure.long, exposure.short),
+    exposure,
+    pairPerpImUsd: pair.legs.filter((l) => l.kind === 'perp').reduce((t, l) => t + l.imUsd, 0),
+  };
+}
+
+export const rollPart = (own: number, size: number, heldSize: number): number =>
+  size >= heldSize ? own : size * (own / heldSize);
+
+export function exitLegBodies({
+  pair,
+  slippageApr,
+  size,
+}: {
+  pair: RollPairShape<HeldRollLeg>;
+  slippageApr: number;
+  size: number;
+}): BorosPairLegBody[] | null {
+  const { yuLegs, heldSize } = pairRollGeometry(pair);
+  if (!(size > 0) || yuLegs.length === 0) return null;
+  const legs: BorosPairLegBody[] = [];
+  for (const l of yuLegs) {
+    if (l.marketId === undefined) return null;
+    legs.push({
+      marketId: l.marketId,
+      direction: l.side === 'LONG' ? 'short' : 'long',
+      slippageApr,
+      size: rollPart(l.sizeToken, size, heldSize),
+    });
+  }
+  return legs;
+}
+
+export function inRollUnits<L extends LadderLeg>(
+  legs: ReadonlyArray<L>,
+  bodies: ReadonlyArray<Pick<BorosPairLegBody, 'size'>> | null,
+  heldSize: number,
+): L[] {
+  return legs.map((l, i) => {
+    const ratio = bodies?.[i] && heldSize > 0 ? bodies[i].size / heldSize : 1;
+    if (!(ratio > 0) || ratio === 1 || !Array.isArray(l.depth)) return l;
+    return { ...l, depth: l.depth.map(([adverse, cum]): [number, number] => [adverse, cum / ratio]) };
+  });
+}
+
+export const ROLL_OPPORTUNITY_SHARE = 0.2;
+
+export interface RollProbeResult {
+  ok: boolean;
+  rate: number | null;
+  size: number;
+}
+
+export interface RollOpportunity {
+  maturity: number;
+  rate: number;
+  current: number;
+  currentMaturity: number;
+  size: number;
+}
+
+export function rollOpportunities(
+  probes: Record<number, RollProbeResult>,
+  targets: ReadonlyArray<{ maturity: number }>,
+  current: number | null,
+  currentMaturity: number,
+): RollOpportunity[] {
+  if (current === null) return [];
+  const found: RollOpportunity[] = [];
+  for (const t of targets) {
+    const r = probes[t.maturity];
+    if (!r || !r.ok || r.rate === null || !(r.rate > current)) continue;
+    found.push({ maturity: t.maturity, rate: r.rate, current, currentMaturity, size: r.size });
+  }
+  return found.sort((a, b) => b.rate - a.rate);
+}
+
+export interface RollRateInputs {
+  perpExitUsd: number | null;
+  shareOf: (size: number) => number;
+  rebateApr: (marketIds: number[]) => number;
+}
+
+export const NO_ROLL_RATE_INPUTS: RollRateInputs = { perpExitUsd: 0, shareOf: () => 0, rebateApr: () => 0 };
+
+export function rollRebateApr(
+  settleOf: (marketId: number) => number,
+  rebate: Rebate | null,
+  marketIds: ReadonlyArray<number>,
+): number {
+  if (!rebate) return 0;
+  return marketIds.reduce((sum, id) => sum + settleOf(id) - rebatedSettleApr(settleOf(id), rebate, id), 0);
+}
+
+type RollSimLeg = Pick<BorosSimulatedLeg, 'marketId' | 'marginRequired' | 'execApr' | 'worstApr' | 'estFillSize'> & {
+  sizing: Pick<BorosLegSizing, 'resultingSize' | 'deltaSize'>;
+};
+
+export type RollSim = Pick<BorosPairSimulation, 'collateralPriceUsd' | 'costToCrossSize' | 'estSpreadApr'> & {
+  legs: ReadonlyArray<RollSimLeg>;
+};
+
+export function addedMarginOf(sim: RollSim | null | undefined): number | null {
+  if (!sim) return null;
+  let total = 0;
+  for (const leg of sim.legs) {
+    if (leg.marginRequired === null) return null;
+    const result = Math.abs(leg.sizing.resultingSize);
+    const delta = Math.abs(leg.sizing.deltaSize);
+    if (!(delta > 0)) continue;
+    total += result > 0 ? leg.marginRequired * Math.min(1, delta / result) : leg.marginRequired;
+  }
+  return total;
+}
+
+export interface ExitPnlLeg {
+  venue: string;
+  side: 'LONG' | 'SHORT';
+  lockedApr: number;
+  execApr: number | null;
+  pnl: number | null;
+}
+
+export function exitPnlOf(
+  sim: RollSim | null | undefined,
+  heldLegs: ReadonlyArray<HeldRollLeg>,
+  nowSec: number,
+  at: 'exec' | 'worst' = 'exec',
+): { legs: ExitPnlLeg[]; total: number | null } {
+  const one = (s: RollSimLeg | undefined, l: HeldRollLeg | undefined): ExitPnlLeg | null => {
+    if (!s || !l || l.lockedApr === null) return null;
+    const locked = entryAprOf(l.side, l.lockedApr);
+    const years = Math.max(0, l.maturity - nowSec) / SECONDS_IN_YEAR;
+    const rate = at === 'worst' ? s.worstApr : s.execApr;
+    const pnl = rate !== null ? (l.side === 'LONG' ? rate - locked : locked - rate) * s.estFillSize * years : null;
+    return { venue: l.venue, side: l.side, lockedApr: locked, execApr: rate, pnl };
+  };
+  const legs = (sim?.legs ?? []).map((s, i) => one(s, heldLegs[i])).filter((x): x is ExitPnlLeg => x !== null);
+  const total = legs.length > 0 && legs.every((x) => x.pnl !== null) ? legs.reduce((a, x) => a + (x.pnl ?? 0), 0) : null;
+  return { legs, total };
+}
+
+export interface RollFigures {
+  netRate: number | null;
+  spreadApr: number | null;
+  netByMaturityUsd: number | null;
+  grossByMaturityUsd: number | null;
+  totalCostUsd: number | null;
+  exitCostUsd: number | null;
+  entryCostUsd: number | null;
+  exitPnlUsd: number | null;
+  capitalUsd: number | null;
+  newBorosImUsd: number | null;
+}
+
+export function rollFigures({
+  entrySim,
+  exitSim,
+  size,
+  perpImUsd,
+  maturity,
+  heldLegs,
+  nowSec,
+  keepOld = false,
+  rates = NO_ROLL_RATE_INPUTS,
+}: {
+  entrySim: RollSim | undefined;
+  exitSim: RollSim | undefined;
+  size: number;
+  perpImUsd: number;
+  maturity: number;
+  heldLegs: ReadonlyArray<HeldRollLeg>;
+  nowSec: number;
+  keepOld?: boolean;
+  rates?: RollRateInputs;
+}): RollFigures {
+  const termYears = Math.max(0, maturity - nowSec) / SECONDS_IN_YEAR;
+  const px = entrySim?.collateralPriceUsd ?? exitSim?.collateralPriceUsd ?? null;
+  const usdOf = (tokens: number | null | undefined): number | null =>
+    tokens === null || tokens === undefined || px === null || !(px > 0) ? null : tokens * px;
+
+  const newBorosImUsd = usdOf(addedMarginOf(entrySim));
+  const capitalUsd = newBorosImUsd !== null ? perpImUsd + newBorosImUsd : null;
+  const exitCostUsd = keepOld ? 0 : usdOf(exitSim?.costToCrossSize);
+  const entryCostUsd = usdOf(entrySim?.costToCrossSize);
+  const exitPnlUsd = keepOld ? 0 : usdOf(exitPnlOf(exitSim, heldLegs, nowSec).total);
+  const totalCostUsd = exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
+  const perpExitUsd = rates.perpExitUsd === null ? null : rates.perpExitUsd * rates.shareOf(size);
+  const allCostUsd = totalCostUsd !== null && perpExitUsd !== null ? totalCostUsd + perpExitUsd : null;
+  const dragApr =
+    allCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0 ? allCostUsd / capitalUsd / termYears : null;
+
+  const rolledNotionalUsd = usdOf(size) ?? 0;
+  const spreadApr =
+    entrySim?.estSpreadApr != null ? entrySim.estSpreadApr + rates.rebateApr(entrySim.legs.map((l) => l.marketId)) : null;
+  const carryPerYearUsd = spreadApr !== null && rolledNotionalUsd > 0 ? spreadApr * rolledNotionalUsd : null;
+  const rateOnCapital = carryPerYearUsd !== null && capitalUsd !== null && capitalUsd > 0 ? carryPerYearUsd / capitalUsd : null;
+  const exitPnlApr =
+    exitPnlUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0 ? exitPnlUsd / capitalUsd / termYears : null;
+  const netRate =
+    perpExitUsd === null
+      ? null
+      : rateOnCapital !== null && dragApr !== null && exitPnlApr !== null
+        ? rateOnCapital - dragApr + exitPnlApr
+        : rateOnCapital;
+  const grossByMaturityUsd = carryPerYearUsd !== null ? carryPerYearUsd * termYears : null;
+  const netByMaturityUsd =
+    grossByMaturityUsd !== null && allCostUsd !== null && exitPnlUsd !== null
+      ? grossByMaturityUsd - allCostUsd + exitPnlUsd
+      : null;
+
+  return {
+    netRate,
+    spreadApr,
+    netByMaturityUsd,
+    grossByMaturityUsd,
+    totalCostUsd,
+    exitCostUsd,
+    entryCostUsd,
+    exitPnlUsd,
+    capitalUsd,
+    newBorosImUsd,
+  };
 }

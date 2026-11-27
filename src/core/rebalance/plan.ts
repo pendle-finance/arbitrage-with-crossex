@@ -19,8 +19,20 @@ import {
   type RealizeRefusal,
   realizedNetUsd,
   slicedEstimateOf,
+  twapEstimateOf,
 } from './realize';
-import { needsTwap, oneOrderUsdOf, type SliceOption, sliceOptions, type TwapDefault, twapDefaultOf, twapSlicesOf, type WholeOrder } from './slices';
+import {
+  needsTwap,
+  oneOrderUsdOf,
+  type SliceOption,
+  sliceOptions,
+  twapCountOf,
+  type TwapDefault,
+  twapDefaultOf,
+  twapQtysFor,
+  twapSlicesOf,
+  type WholeOrder,
+} from './slices';
 
 export const USDC_WALLET = { coin: 'USDC', venue: 'HYPERLIQUID' } as const;
 export const LIGHTER_WALLET = { coin: 'USDC', venue: 'LIGHTER' } as const;
@@ -261,7 +273,6 @@ export interface PlanInputs {
   feeRows?: VenueFeeRow[];
   perpRules?: Record<string, PerpRule>;
   availableMargin?: number;
-  sliceUsd?: number;
   twapSlices?: number;
 }
 
@@ -1046,7 +1057,6 @@ function realizeInput(
     books: inputs.books ?? {},
     feeRows: inputs.feeRows ?? [],
     rules: inputs.perpRules ?? {},
-    sliceUsd: inputs.sliceUsd,
     twapSlices: inputs.twapSlices,
   };
 }
@@ -1244,16 +1254,16 @@ export interface ImUsedRow {
 
 export function fullPlanOf(buckets: Bucket[], account: AccountLike, inputs: PlanInputs): FullPlan | null {
   if (!hasChargedBorrow(buckets)) return null;
-  const plan = planMoves(buckets, account, inputs, REPAY_GOAL);
+  const whole = planMoves(buckets, account, inputs, REPAY_GOAL);
+  const twapSlices = whole.realize?.refused?.reason === 'past-book' ? twapCountOf(realizeTwapNeedOf(whole.realize, inputs).slices) : undefined;
+  const plan = twapSlices === undefined ? whole : planMoves(buckets, account, { ...inputs, twapSlices }, REPAY_GOAL);
   if (plan.balanced) return null;
   const route = plan.routes[plan.recommended ?? 'convert'] ?? plan.routes.convert;
   const refused = plan.realize?.refused ?? null;
   const realizeLegs = refused === null ? (plan.realize?.legs ?? []) : [];
   const moveCostUsd = nearestCents(route.costUsd);
   const realizePlan = realizePlanOf(realizeLegs, null);
-  const slices = leadSlicesOf(realizePlan, inputs);
-  const slice = slices.sliceOptions.find((option) => option.sizeUsd === slices.defaultSliceUsd) ?? null;
-  const realizeCostUsd = nearestCents(slicedEstimateOf(realizePlan, 'maker', slice).totalUsd);
+  const realizeCostUsd = nearestCents(realizeMakerCostOf(realizePlan, inputs, twapSlices).totalUsd);
   const costUsd = nearestCents(moveCostUsd + realizeCostUsd);
   const repaid = repaidBy(route, buckets);
   const perDayUsd = sum(buckets.filter(isPoolBucket).map((bucket) => bucket.interestPerDayUsd));
@@ -1276,7 +1286,7 @@ function profitPoolsOf(buckets: Bucket[], perps: RealizePerp[], folded: RealizeP
   return pools.sort((a, b) => (a === lead ? -1 : b === lead ? 1 : upnlOf(b) - upnlOf(a)));
 }
 
-function realizeTwapDefaultOf(plan: RealizePlan | null, inputs: PlanInputs): TwapDefault {
+function realizeTwapNeedOf(plan: RealizePlan | null, inputs: PlanInputs): { on: boolean; slices: number } {
   const ordersOf = (leg: RealizeLeg): WholeOrder[] => {
     const book = inputs.books?.[leg.symbol] ?? null;
     const mid = touchOf(book)?.mid ?? null;
@@ -1288,24 +1298,44 @@ function realizeTwapDefaultOf(plan: RealizePlan | null, inputs: PlanInputs): Twa
   };
   const legs = (plan?.legs ?? []).map(ordersOf);
   const on = plan?.refused?.reason === 'past-book' || legs.some((orders) => orders.some(needsTwap));
-  return twapDefaultOf(on, legs.reduce((total, orders) => total + Math.max(...orders.map(twapSlicesOf)), 0));
+  return { on, slices: legs.reduce((total, orders) => total + Math.max(...orders.map(twapSlicesOf)), 0) };
 }
 
-function leadSlicesOf(plan: RealizePlan | null, inputs: PlanInputs, customSliceUsd?: number): Pick<RealizeTab, 'sliceOptions' | 'defaultSliceUsd'> {
-  const leg = plan?.legs[0];
-  if (!leg) return { sliceOptions: [], defaultSliceUsd: 0 };
+function realizeTwapDefaultOf(plan: RealizePlan | null, inputs: PlanInputs): TwapDefault {
+  const need = realizeTwapNeedOf(plan, inputs);
+  return twapDefaultOf(need.on, need.slices);
+}
+
+function legMarketOf(leg: RealizeLeg, inputs: PlanInputs) {
   const book = inputs.books?.[leg.symbol] ?? null;
   const mid = touchOf(book)?.mid ?? 0;
-  const side = leg.side === 'SHORT' ? 'BUY' : 'SELL';
+  const side: 'BUY' | 'SELL' = leg.side === 'SHORT' ? 'BUY' : 'SELL';
   const rule = inputs.perpRules?.[leg.symbol] ?? {};
   const lot = lotOf(rule);
   const perp = (inputs.perps ?? []).find((row) => row.symbol === leg.symbol) ?? {};
   const mark = positiveOf(perp.markPrice) || mid;
-  const maxUsd = marketCapUsd(perp, rule, leg.exchange, mark);
+  return { book, mid, side, lot, mark, minQty: minQtyOf(rule, lot, mark), maxUsd: marketCapUsd(perp, rule, leg.exchange, mark) };
+}
+
+function leadSlicesOf(plan: RealizePlan | null, inputs: PlanInputs): Pick<RealizeTab, 'sliceOptions' | 'defaultSliceUsd'> {
+  const leg = plan?.legs[0];
+  if (!leg) return { sliceOptions: [], defaultSliceUsd: 0 };
+  const { book, mid, side, lot, minQty, maxUsd } = legMarketOf(leg, inputs);
   return {
-    sliceOptions: sliceOptions({ book, side, mid, totalQty: leg.qty, minQty: minQtyOf(rule, lot, mark), lot, customUsd: customSliceUsd, maxUsd, reopenSide: side === 'BUY' ? 'SELL' : 'BUY' }),
+    sliceOptions: sliceOptions({ book, side, mid, totalQty: leg.qty, minQty, lot, maxUsd, reopenSide: side === 'BUY' ? 'SELL' : 'BUY' }),
     defaultSliceUsd: oneOrderUsdOf(maxUsd),
   };
+}
+
+function realizeMakerCostOf(plan: RealizePlan, inputs: PlanInputs, twapSlices: number | undefined): RealizeEstimate {
+  if (twapSlices === undefined) return slicedEstimateOf(plan, 'maker', leadSlicesOf(plan, inputs).sliceOptions[0] ?? null);
+  const qtysBySymbol = Object.fromEntries(
+    plan.legs.map((leg) => {
+      const { lot, mark, minQty, maxUsd } = legMarketOf(leg, inputs);
+      return [leg.symbol, twapQtysFor(leg.qty, twapSlices, lot, minQty, mark > 0 ? maxUsd / mark : Infinity)];
+    }),
+  );
+  return twapEstimateOf(plan, 'maker', inputs.books ?? {}, qtysBySymbol);
 }
 
 export function realizeTabOf(
@@ -1313,11 +1343,9 @@ export function realizeTabOf(
   account: AccountLike,
   inputs: PlanInputs,
   customUsd: number | null,
-  customSliceUsd?: number,
   pickedPool?: Pool,
 ): RealizeTab | null {
-  const sliced = customSliceUsd !== undefined && customSliceUsd > 0 ? { ...inputs, sliceUsd: customSliceUsd } : inputs;
-  const folded = hasChargedBorrow(buckets) ? planMoves(buckets, account, sliced, REPAY_GOAL).realize : null;
+  const folded = hasChargedBorrow(buckets) ? planMoves(buckets, account, inputs, REPAY_GOAL).realize : null;
   const pools = profitPoolsOf(buckets, inputs.perps ?? [], folded);
   const pool = pickedPool !== undefined && pools.includes(pickedPool) ? pickedPool : pools[0];
   if (pool === undefined) return null;
@@ -1327,7 +1355,7 @@ export function realizeTabOf(
     folded && pool === foldedPool && (ownLegs.length > 0 || folded.refused !== null) ? realizePlanOf(ownLegs, folded.refused) : null;
   const cashUsd = cashOf(buckets, pool);
   const realizeUpTo = (moveUsd: number): RealizePlan | null =>
-    planRealize(realizeInput(buckets, account, sliced, { from: pool, moveUsd, cashUsd }));
+    planRealize(realizeInput(buckets, account, inputs, { from: pool, moveUsd, cashUsd }));
   const all = realizeUpTo(Infinity);
   const allUsd = sum((all?.legs ?? []).map((leg) => Math.max(0, realizedNetUsd(leg))));
   const customAmount = customUsd !== null && customUsd > 0 ? (all ? Math.min(customUsd, allUsd) : customUsd) : 0;
@@ -1338,7 +1366,7 @@ export function realizeTabOf(
     clearDebt,
     all,
     custom,
-    ...leadSlicesOf(clearDebt?.legs.length ? clearDebt : all, inputs, customSliceUsd),
+    ...leadSlicesOf(clearDebt?.legs.length ? clearDebt : all, inputs),
     twapDefault: { clearDebt: realizeTwapDefaultOf(clearDebt, inputs), all: realizeTwapDefaultOf(all, inputs), custom: realizeTwapDefaultOf(custom, inputs) },
   };
 }
@@ -1347,10 +1375,9 @@ export function realizeTabEstimateOf(
   tab: Pick<RealizeTab, 'clearDebt' | 'all' | 'sliceOptions'>,
   plan: RealizePlan,
   exec: RealizeExec,
-  sliceUsd: number,
 ): RealizeEstimate {
   const priced = tab.clearDebt?.legs.length ? tab.clearDebt : tab.all;
-  const slice = plan === priced ? (tab.sliceOptions.find((option) => option.sizeUsd === sliceUsd) ?? null) : null;
+  const slice = plan === priced ? (tab.sliceOptions[0] ?? null) : null;
   return slicedEstimateOf(plan, exec, slice);
 }
 

@@ -237,7 +237,7 @@ describe('RebalanceModal plan state', () => {
   it.each([
     [30, 'about 30s'],
     [900, 'about 15 min'],
-    [62520, 'about 17 h 22 m'],
+    [62520, 'about 17h 22m'],
   ])('the picked route row carries the fee and the %i second estimate', (seconds, time) => {
     show(withLoopTime(seconds));
     expect(pickedRow()).toHaveTextContent('Fee $3.41');
@@ -438,7 +438,7 @@ describe('RebalanceModal run states', () => {
     expect(
       within(dialog()).getByText('Started 4m 58s ago. You can close this. The move keeps going.'),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'close' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'close' })).toBeInTheDocument();
     expect(within(tabRadio('Move cash')).getByText('Running')).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
     await userEvent.keyboard('{Escape}');
@@ -1534,8 +1534,18 @@ describe('RebalanceModal tabs', () => {
     expect(screen.getByRole('button', { name: /^Hold to close [\d.,]+ YU on Boros/ })).toBeInTheDocument();
   });
 
-  it('an abandoned delever with a boros gap does not lock the other tabs', async () => {
+  it('an abandoned delever with a boros gap locks Move cash and Realize until the gap closes', async () => {
     showOn(extraRebalanceViews.deleverAbandonedGap);
+    await userEvent.click(tabRadio('Move cash'));
+    expect(await screen.findByText('New deals and transfers wait until it ends.')).toBeInTheDocument();
+    await userEvent.click(tabRadio('Realize uPnL'));
+    expect(await screen.findByText('New deals and transfers wait until it ends.')).toBeInTheDocument();
+  });
+
+  it('an abandoned delever with the boros gap closed locks nothing', async () => {
+    const view = extraRebalanceViews.deleverAbandonedGap;
+    showOn({ ...view, job: { ...view.job!, borosGapYu: 0 } });
+    expect(tabRadio('Delever')).toHaveAttribute('aria-checked', 'false');
     await userEvent.click(tabRadio('Move cash'));
     expect(screen.queryByText('New deals and transfers wait until it ends.')).toBeNull();
     await userEvent.click(tabRadio('Realize uPnL'));
@@ -1932,6 +1942,17 @@ describe('RebalanceModal TWAP run', () => {
     show(twapFixtures.normal.done.rebalance);
     expect(screen.getByText('Took')).toBeTruthy();
     expect(closeText()).toBeNull();
+  });
+
+  it('a done ticket TWAP shows its result on top of the tab content, and the tabs stay', async () => {
+    show(twapFixtures.normal.done.rebalance);
+    const took = screen.getByText('Took');
+    const tabs = screen.getByRole('radiogroup', { name: 'Reduce borrow' });
+    expect(within(tabs).getAllByRole('radio').map((radio) => radio.textContent)).toEqual(['Move cash', 'Realize uPnL', 'Delever']);
+    expect(within(tabs).queryByText('Done')).toBeNull();
+    await userEvent.click(tabRadio('Delever'));
+    expect(tabRadio('Delever')).toHaveAttribute('aria-checked', 'true');
+    expect(took).toBeInTheDocument();
   });
 
   it('a TWAP run has no tab row and one state chip', () => {

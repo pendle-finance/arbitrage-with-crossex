@@ -320,6 +320,32 @@ describe('twap rest wholly under a venue minimum', () => {
   });
 });
 
+describe('twap resume with a gap left after a part Close filled', () => {
+  const GAP_FIRST = 'A leg is not hedged. Close or reopen it with a hold first.';
+
+  beforeEach(() => {
+    w = makeWorld();
+  });
+
+  it.each([
+    ['$5k', '0.056', '0.028', 0.006],
+    ['$6M', '66.6', '33.3', 12],
+  ])('at %s, Resume is refused while the gap has no stopped slice to hedge it, and the gap stays', async (_size, total, sliceQty, gap) => {
+    const job = startJob(btcDeal(total), { durationSec: 3600, slices: 2 }, 90_000);
+    await advance(job, T0);
+    fill(childIdFor(job.id, 1, 1), sliceQty, '90000');
+    const read = w.jobs.read() as Job;
+    const halted: Job = { ...read, userId: null, status: 'halted', haltReason: 'not hedged', notHedgedQty: gap };
+    const a = bootApp([]);
+    a.jobs.write(halted);
+    a.store.createPair({ ...w.store.getPair(childIdFor(job.id, 1, 1))!, mode: 'DONE' });
+    const res = await a.app.inject({ method: 'POST', url: `/api/rebalance/${halted.id}/resume`, headers: HOST });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error.message).toBe(GAP_FIRST);
+    expect(appJob(a)).toMatchObject({ status: 'halted', notHedgedQty: gap });
+  });
+});
+
 describe('twap slice sizes', () => {
   beforeEach(() => {
     w = makeWorld();

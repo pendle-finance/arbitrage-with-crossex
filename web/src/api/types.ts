@@ -337,7 +337,6 @@ export interface DeleverRequest {
   perps: { symbol: string; qty: number }[];
   boros: { marketId: number; size: number }[];
   exec: RealizeExec;
-  sliceUsd?: number;
   twap?: {
     durationSec?: number;
     intervalSec?: number;
@@ -352,12 +351,13 @@ export interface DeleverEstimate {
   feePerpsUsd: number;
   feeBorosUsd: number;
   impactUsd: number;
+  impactBorosUsd?: number;
   totalUsd: number;
 }
 
 export interface DeleverPlan {
   legs: { symbol: string; exchange: string; base: string; side: PerpSide; before: number; after: number; closeQty: number; closeAll?: boolean }[];
-  boros: { marketId: number; before: number; after: number; closeSize: number }[];
+  boros: { marketId: number; before: number; after: number; closeSize: number; name?: string | null }[];
   imUsed: { account: Pool; before: number; after: number }[];
   makerLeg: 0 | 1;
   sliceOptions: SliceOption[];
@@ -482,6 +482,7 @@ export interface TwapDefault {
 export interface PriceImpactPreview {
   whole: number | null;
   sliced: number;
+  slicedLegs: number[];
 }
 
 export interface TwapPlanPreview {
@@ -548,6 +549,7 @@ export interface RealizeJobLeg {
   closeImpactUsd?: number;
   reopenImpactUsd?: number;
   convert?: { amount: number; feeUsd: number } | null;
+  hedge?: string | null;
 }
 
 export interface RebalanceJob {
@@ -1631,6 +1633,7 @@ export interface BorosPairSimulateResponse {
   /** Prepaid relayer gas in USD — a DIFFERENT pot from trading collateral.
    * null when the install cannot read it. */
   gasBalanceUsd: number | null;
+  cancelOrdersOn?: number[];
 }
 
 export type BorosLegFailureCode =

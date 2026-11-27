@@ -9,7 +9,6 @@ import {
   ONE_ORDER_USD,
   pairTwapDefaultOf,
   SLICE_IMPACT_BP,
-  SLICE_SIZES_USD,
   sliceOptions,
   sliceQtys,
   twapDefaultOf,
@@ -32,7 +31,6 @@ const flat = (bp: number): NormalizedBook =>
 
 describe('slice constants', () => {
   it('match the decided rows and figures', () => {
-    expect(SLICE_SIZES_USD).toEqual([25_000, 50_000, 100_000, 250_000]);
     expect(DEFAULT_SLICE_CHOICES_USD).toEqual([25_000, 50_000, 100_000]);
     expect(SLICE_IMPACT_BP).toBe(5);
     expect(MAKER_SLICE_SECONDS).toBe(300);
@@ -104,10 +102,7 @@ describe('sliceQtys', () => {
     expect(sliceQtys(2.00005, 1, 0.0001, '0.00001')).toEqual([1, 1.00005]);
     expect(sliceQtys(2.5, 1, 0.0001, '0.00001')).toEqual([1, 1, 0.5]);
     expect(sliceQtys(3, 1, 0.0001, '0.00001')).toEqual([1, 1, 1]);
-    const options = sliceOptions({ book: flat(4), side: 'BUY', mid: MID, totalQty: 50.005, minQty: 0.01, lot: '0.001' });
-    const row = options.find((option) => option.sizeUsd === 25_000);
-    expect(row?.count).toBe(2);
-    expect(row?.notHedgedMaxQty).toBe(25.005);
+    expect(sliceQtys(50.005, 25, 0.01, '0.001')).toEqual([25, 25.005]);
   });
 
   it('sends a total below the minimum as one slice, and nothing for zero', () => {
@@ -132,7 +127,7 @@ describe('sliceQtys', () => {
         const baseLots = Math.round(Number(floorToStep(rung / mid, lot)) / step);
         const totalQty = (baseLots + 0.99) * step;
         const minLots = Math.ceil(minQty / step - 1e-9);
-        for (const sizeUsd of SLICE_SIZES_USD) {
+        for (const sizeUsd of [25_000, 50_000, 100_000, 250_000]) {
           const qtys = sliceQtys(totalQty, sizeUsd / mid, minQty, lot);
           const lots = qtys.map((qty) => Math.round(qty / step));
           for (const qty of qtys) expect(Number(qty.toFixed(decimals))).toBe(qty);
@@ -149,24 +144,16 @@ describe('sliceQtys', () => {
 });
 
 describe('sliceOptions', () => {
-  it('returns the four rows and one order, with count, impact, not hedged and seconds', () => {
+  it('returns only the one order row, with count, impact, not hedged and seconds', () => {
     const options = sliceOptions({ book: flat(4), side: 'SELL', mid: MID, totalQty: 1000, minQty: 0.01, lot: '0.001' });
-    expect(options.map((option) => option.sizeUsd)).toEqual([25_000, 50_000, 100_000, 250_000, ONE_ORDER_USD]);
-    expect(options.map((option) => option.whole)).toEqual([false, false, false, false, true]);
-    expect(options.every((option) => !option.custom)).toBe(true);
-    expect(options[4]).toMatchObject({ count: 1, notHedgedMaxQty: 1000, notHedgedMaxUsd: 1_000_000 });
-    const [small, , , large] = options;
-    expect(small.count).toBe(40);
-    expect(small.impactBp).toBeCloseTo(4, 9);
-    expect(small.impactUsd).toBeCloseTo(400, 6);
-    expect(small.notHedgedMaxQty).toBe(25);
-    expect(small.notHedgedMaxUsd).toBe(25_000);
-    expect(small.seconds).toEqual({ maker: 40 * MAKER_SLICE_SECONDS, market: 40 * MARKET_SLICE_SECONDS });
-    expect(large.count).toBe(4);
-    expect(large.seconds).toEqual({ maker: 1200, market: 8 });
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({ sizeUsd: ONE_ORDER_USD, whole: true, custom: false, count: 1, notHedgedMaxQty: 1000, notHedgedMaxUsd: 1_000_000 });
+    expect(options[0].impactBp).toBeCloseTo(4, 9);
+    expect(options[0].impactUsd).toBeCloseTo(400, 6);
+    expect(options[0].seconds).toEqual({ maker: MAKER_SLICE_SECONDS, market: MARKET_SLICE_SECONDS });
   });
 
-  it('prices impact per slice on a fresh book, and the job impact over every slice', () => {
+  it('prices the one order by walking the book', () => {
     const stepped = book(
       [
         [1000.3, 25],
@@ -174,16 +161,12 @@ describe('sliceOptions', () => {
       ],
       [[999.7, DEEP]],
     );
-    const options = sliceOptions({ book: stepped, side: 'BUY', mid: MID, totalQty: 100, minQty: 0.01, lot: '0.001' });
-    const [small, mid50, full] = options;
-    expect(small.impactBp).toBeCloseTo(3, 9);
-    expect(small.impactUsd).toBeCloseTo(30, 6);
-    expect(mid50.impactBp).toBeCloseTo(11.5, 9);
+    const [full] = sliceOptions({ book: stepped, side: 'BUY', mid: MID, totalQty: 100, minQty: 0.01, lot: '0.001' });
     expect(full.count).toBe(1);
     expect(full.impactUsd).toBeCloseTo(25 * 0.3 + 75 * 2, 6);
   });
 
-  it('walks the reopen side per slice and marks a row past the book on either side', () => {
+  it('walks the reopen side and marks the row past the book on either side', () => {
     const lopsided = book(
       [
         [1000.3, 25],
@@ -192,54 +175,18 @@ describe('sliceOptions', () => {
       [[999.9, 60]],
     );
     const both = sliceOptions({ book: lopsided, side: 'BUY', mid: MID, totalQty: 100, minQty: 0.01, lot: '0.001', reopenSide: 'SELL' });
-    const [small, half, full] = both;
-    expect(small.reopenImpactUsd).toBeCloseTo(4 * 25 * 0.1, 6);
-    expect(half.reopenImpactUsd).toBeCloseTo(2 * 50 * 0.1, 6);
-    expect(both.map((option) => option.pastBook)).toEqual([false, false, true, true, true]);
-    expect(full.impactUsd).toBeCloseTo(25 * 0.3 + 75 * 2, 6);
-    const closeOnly = sliceOptions({ book: lopsided, side: 'BUY', mid: MID, totalQty: 100, minQty: 0.01, lot: '0.001' });
-    expect(closeOnly.map((option) => option.reopenImpactUsd)).toEqual([0, 0, 0, 0, 0]);
-    expect(closeOnly.map((option) => option.pastBook)).toEqual([false, false, false, false, false]);
+    expect(both).toHaveLength(1);
+    expect(both[0].pastBook).toBe(true);
+    expect(both[0].impactUsd).toBeCloseTo(25 * 0.3 + 75 * 2, 6);
+    const [closeOnly] = sliceOptions({ book: lopsided, side: 'BUY', mid: MID, totalQty: 100, minQty: 0.01, lot: '0.001' });
+    expect(closeOnly.reopenImpactUsd).toBe(0);
+    expect(closeOnly.pastBook).toBe(false);
   });
 
-  it('caps every row at the total', () => {
-    const options = sliceOptions({ book: flat(4), side: 'BUY', mid: MID, totalQty: 30, minQty: 0.01, lot: '0.001' });
-    expect(options.map((option) => option.count)).toEqual([2, 1, 1, 1, 1]);
-    expect(options[3].notHedgedMaxQty).toBe(30);
-    expect(options[3].notHedgedMaxUsd).toBe(30_000);
-  });
-
-  it('custom slice clamps to min and total', () => {
-    const input = { book: flat(4), side: 'BUY' as const, mid: MID, totalQty: 300, minQty: 0.011, lot: '0.001' };
-    const low = sliceOptions({ ...input, customUsd: 1 });
-    expect(low).toHaveLength(6);
-    const lowRow = low[4];
-    expect(lowRow.custom).toBe(true);
-    expect(lowRow.sizeUsd).toBeCloseTo(11, 9);
-    expect(lowRow.notHedgedMaxQty).toBeGreaterThanOrEqual(0.011);
-    expect(lowRow.count).toBe(27_272);
-    const high = sliceOptions({ ...input, customUsd: 1e9 })[4];
-    expect(high.sizeUsd).toBe(300_000);
-    expect(high.count).toBe(1);
-    expect(high.notHedgedMaxQty).toBe(300);
-    const inside = sliceOptions({ ...input, customUsd: 75_000 })[4];
-    expect(inside.sizeUsd).toBe(75_000);
-    expect(inside.count).toBe(4);
-    expect(inside.notHedgedMaxQty).toBe(75);
-    expect(sliceOptions(input)).toHaveLength(5);
-    expect(sliceOptions({ ...input, customUsd: Number.NaN })).toHaveLength(5);
-  });
-
-  it('no slice is bigger than the venue max order size', () => {
+  it('splits the one order at the venue max order size', () => {
     const input = { book: flat(4), side: 'BUY' as const, mid: MID, totalQty: 6_000, minQty: 0.011, lot: '0.001', maxUsd: 40_000 };
-    const options = sliceOptions({ ...input, customUsd: 6_000_000 });
-    expect(options.map((option) => option.sizeUsd)).toEqual([25_000, 50_000, 100_000, 250_000, 40_000, 40_000]);
-    expect(options.map((option) => option.notHedgedMaxQty)).toEqual([25, 40, 40, 40, 40, 40]);
-    expect(options[4].count).toBe(150);
-    expect(options[5]).toMatchObject({ whole: true, count: 150 });
-    const free = sliceOptions({ ...input, maxUsd: undefined, customUsd: 6_000_000 })[4];
-    expect(free.sizeUsd).toBe(6_000_000);
-    expect(free.count).toBe(1);
+    expect(sliceOptions(input)).toEqual([expect.objectContaining({ sizeUsd: 40_000, whole: true, count: 150, notHedgedMaxQty: 40 })]);
+    expect(sliceOptions({ ...input, maxUsd: undefined })).toEqual([expect.objectContaining({ sizeUsd: ONE_ORDER_USD, count: 1, notHedgedMaxQty: 6_000 })]);
   });
 
   it('returns no rows without a book, a mid or a total', () => {

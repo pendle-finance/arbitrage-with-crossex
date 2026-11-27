@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import { averagedRealize, minQtyOf, planRealize, type RealizeInput, realizedNetUsd, twapEstimateOf, type RealizePlan } from '../../src/core/rebalance/realize';
-import { impactOf, ONE_ORDER_USD, twapQtysFor } from '../../src/core/rebalance/slices';
+import { impactOf, twapQtysFor } from '../../src/core/rebalance/slices';
 import { splitFixOf, type SplitLeg, splitPlans, splitSlices, type TwapLegRule } from '../../src/core/twap';
 import { FEE_ROWS, perp, PERP_RULES } from './fixtures/realize-books';
 import type { PairRow } from '../../src/engine/types';
@@ -120,7 +120,7 @@ describe('entry averaging across realize slices', () => {
   });
 
   it('$6M ETH in 100 TWAP slices sizes the close up so a $300k debt is still cleared', () => {
-    const flat = legOf(shortOf(2_000, 3_300, 300_000, { sliceUsd: ONE_ORDER_USD }));
+    const flat = legOf(shortOf(2_000, 3_300, 300_000, {}));
     const twap = legOf(shortOf(2_000, 3_300, 300_000, { twapSlices: 100 }));
     expect(flat.qty).toBeGreaterThan(1_000);
     expect(flat.qty).toBeLessThan(1_010);

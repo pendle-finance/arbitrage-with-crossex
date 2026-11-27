@@ -15,7 +15,7 @@ import {
   HALT_TEXT,
   haltReasonFor,
   type HaltKind,
-  hedgesOf,
+  hedgeBeforeOf,
   isChildOf,
   type Job,
   type JobFile,
@@ -120,6 +120,8 @@ const SLICE_NUMBER = /-[sf](\d+)(?:-\d+)?$/;
 const ENDED: readonly PairMode[] = ['DONE', 'HALTED'];
 
 const lastPass = new Map<string, number>();
+const sliceMisses = new Map<string, number>();
+const SLICE_MISS_HALT = 3;
 
 const childOf = (store: Store, job: Job, slice: number): PairRow | null =>
   slice > 0 ? store.getPair(childIdFor(job.id, slice, 1)) : null;
@@ -127,16 +129,29 @@ const childOf = (store: Store, job: Job, slice: number): PairRow | null =>
 const childrenOf = (store: Store, job: Job, opts?: { activeOnly?: boolean }): PairRow[] =>
   store.listPairs(opts).filter((pair) => isChildOf(job.id, pair.id));
 
-const filledOf = (store: Store, pair: PairRow): Fx => fx(project(pair, store.listOrders(pair.id)).aFilled);
+const makerOf = (twap: JobTwap): { symbol: string; side: Side } => (twap.makerLeg === 'b' && twap.deal.b ? twap.deal.b : twap.deal.a);
 
-const isUnwindChild = (job: Job, pair: PairRow): boolean => pair.id.startsWith(`${job.id}-f`);
+const makerSymbolOf = (twap: JobTwap): string => makerOf(twap).symbol;
 
-const filledAll = (store: Store, job: Job): Fx =>
-  childrenOf(store, job).reduce((sum, pair) => (isUnwindChild(job, pair) ? sum - filledOf(store, pair) : sum + filledOf(store, pair)), FX_ZERO);
+function netFilledOn(store: Store, pair: PairRow, leg: { symbol: string; side: Side }): Fx {
+  return store.listOrders(pair.id).reduce((sum, order) => {
+    const contract = order.leg === 'A' ? pair.a.contract : pair.b?.contract;
+    if (contract !== leg.symbol) return sum;
+    return order.side === leg.side ? sum + fx(order.cumQty) : sum - fx(order.cumQty);
+  }, FX_ZERO);
+}
+
+const filledAll = (store: Store, job: Job & { twap: JobTwap }): Fx =>
+  childrenOf(store, job).reduce((sum, pair) => sum + netFilledOn(store, pair, makerOf(job.twap)), FX_ZERO);
 
 const exchangeOf = (symbol: string): string => parseSymbol(symbol).exchange;
 
-const makerSymbolOf = (twap: JobTwap): string => (twap.makerLeg === 'b' && twap.deal.b ? twap.deal.b.symbol : twap.deal.a.symbol);
+export function twapHedgeOf(store: Store, job: Job): JobFollow | null {
+  const child = job.kind === 'twap' && job.twap ? childOf(store, job, job.twap.sliceIndex) : null;
+  if (!child?.b || !(job.notHedgedQty > 0)) return null;
+  const { contract, side, reduceOnly } = child.b;
+  return { symbol: contract, exchange: exchangeOf(contract), side, qty: job.notHedgedQty, reduceOnly: reduceOnly === true };
+}
 
 function markOf(store: Store, job: Job): number | null {
   const twap = job.twap;
@@ -153,6 +168,11 @@ function markOf(store: Store, job: Job): number | null {
 function isMarginRefusal(err: unknown): boolean {
   if (err instanceof CoreError) return err.category === 'insufficient-margin';
   return classifyGateError(err).category === 'insufficient-margin';
+}
+
+function isRetryable(err: unknown): boolean {
+  if (err instanceof CoreError) return err.category === 'network' || err.category === 'rate-limited';
+  return classifyGateError(err).retryable;
 }
 
 function isRefusedForMargin(orders: OrderRow[]): boolean {
@@ -212,6 +232,7 @@ function haltTwap(deps: TwapRunDeps, job: Job, kind: HaltKind | null, reason: st
   }
   deps.jobs.write(job);
   lastPass.delete(job.id);
+  sliceMisses.delete(job.id);
 }
 
 function haltSize(deps: TwapRunDeps, job: Job, breach: Breach, at: { slice: number; qty: Fx; rest: Fx; coin: string }): void {
@@ -234,6 +255,7 @@ function finishTwap(deps: TwapRunDeps, job: Job): void {
   }
   deps.jobs.write(job);
   lastPass.delete(job.id);
+  sliceMisses.delete(job.id);
 }
 
 function pauseTwap(deps: TwapRunDeps, job: Job): void {
@@ -255,11 +277,7 @@ export function unwindTargetOf(job: Job, step: Step, child: PairRow, qty: number
     return { symbol: child.a.contract, exchange: parseSymbol(child.a.contract).exchange, side: child.a.side === 'BUY' ? 'SELL' : 'BUY', qty, reduceOnly: child.a.reduceOnly !== true };
   }
   const leg = job.realize?.legs.find((row) => row.symbol === step.perp?.symbol);
-  const hedge = leg
-    ? hedgesOf(leg, job.before?.perps ?? [])
-        .filter((perp) => leg.hedge === null || perp.exchange === leg.hedge)
-        .sort((x, y) => y.qty - x.qty)[0]
-    : undefined;
+  const hedge = leg ? hedgeBeforeOf(job, leg) : undefined;
   return hedge ? { symbol: hedge.symbol, exchange: hedge.exchange, side: hedge.side === 'LONG' ? 'SELL' : 'BUY', qty, reduceOnly: true } : null;
 }
 
@@ -366,6 +384,7 @@ async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: 
   const breach = limitBreachOf(qty, twap.deal.rules, markOf(deps.store, job), slice);
   const at = { slice, qty, rest, coin: twap.deal.coin };
   if (breach !== null) return haltSize(deps, job, breach, at);
+  const before = { behindQty: twap.behindQty, carryQty: twap.carryQty, sliceIndex: twap.sliceIndex, nextAt: twap.nextAt };
   twap.behindQty = twap.carryQty;
   twap.carryQty = '0';
   twap.sliceIndex = slice;
@@ -378,6 +397,13 @@ async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: 
     const target = fresh?.id === job.id ? fresh : job;
     void stopLiveChild(deps, target);
     if (target.status !== 'running') return;
+    const misses = (sliceMisses.get(job.id) ?? 0) + 1;
+    if (isRetryable(err) && misses < SLICE_MISS_HALT && target.twap && !childOf(deps.store, target, slice)) {
+      sliceMisses.set(job.id, misses);
+      Object.assign(target.twap, before);
+      deps.jobs.write(target);
+      return;
+    }
     if (isMarginRefusal(err)) {
       return haltTwap(deps, target, 'refused', `${prettyVenue(exchangeOf(makerSymbolOf(twap)))} refused slice ${slice}: not enough margin`);
     }
@@ -387,6 +413,7 @@ async function startSlice(deps: TwapRunDeps, job: Job & { twap: JobTwap }, now: 
     deps.store.alert('error', childIdFor(job.id, slice, 1), reason, deps.now());
     return haltTwap(deps, target, 'error', reason);
   }
+  sliceMisses.delete(job.id);
   const after = deps.jobs.read();
   if (after?.id !== job.id || after.status !== 'running' || after.pauseRequested) await stopLiveChild(deps, job);
   deps.engineWake();
@@ -479,6 +506,12 @@ export async function runTwap(deps: TwapRunDeps, job: Job): Promise<void> {
     return;
   }
   lastPass.set(current.id, now);
+  if (current.notHedgedQty > 0 || current.unwindTarget || current.follow) {
+    current.notHedgedQty = 0;
+    current.unwindTarget = null;
+    current.follow = null;
+    deps.jobs.write(current);
+  }
   await passTwap(deps, current, now);
   if (current.status === 'running') lastPass.set(current.id, deps.now());
 }

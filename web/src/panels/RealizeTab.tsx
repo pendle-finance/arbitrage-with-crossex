@@ -2,7 +2,7 @@ import { ArrowRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
-import type { Pool, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RealizeTwap, RealizeTwapTargets, RebalanceView } from '../api/types';
+import type { Pool, PriceImpactPreview, RealizeExec, RealizePlan, RealizeTab as RealizeTabData, RealizeTwap, RealizeTwapTargets, RebalanceView } from '../api/types';
 import { AmountPresets } from '../components/AmountPresets';
 import { EmptyState } from '../components/EmptyState';
 import { OrdersGroup, perMode } from '../components/OrdersGroup';
@@ -49,7 +49,7 @@ export function RealizeTab(props: TabProps) {
   const [picked, setPicked] = useState<Pool | null>(null);
   const pool = base && picked !== null && base.pools.includes(picked) ? picked : (base?.pool ?? null);
   const other = base !== null && pool !== null && pool !== base.pool;
-  const poolQuery = useRealizeCustom(null, null, other ? pool : null);
+  const poolQuery = useRealizeCustom(null, other ? pool : null);
   const loaded = other ? (poolQuery.data?.realize ?? null) : null;
   const lost = other && loaded !== null && !loaded.pools.includes(pool);
   useEffect(() => {
@@ -111,13 +111,14 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const splitPlan = amount === 'clear' ? clearDebt : all;
   const sliceUsd = presetOptions.find((o) => o.whole)?.sizeUsd ?? 0;
   const baseAllNet = all ? Math.max(0, netOf(all, costOf(all, exec, sliceOf(presetOptions, sliceUsd, all.legs[0], all === basePriced)))) : 0;
+  const [allCap, setAllCap] = useState(baseAllNet);
   const typedUsd = parsedAmount(customText);
-  const customUsd = typedUsd !== null && typedUsd > 0 ? Math.min(typedUsd, baseAllNet) : null;
+  const customUsd = typedUsd !== null && typedUsd > 0 ? Math.min(typedUsd, allCap) : null;
   const debouncedUsd = useDebounced(customUsd, CUSTOM_DEBOUNCE_MS);
   const leadQty = (amount === 'custom' ? customLead : (splitPlan?.legs[0]?.qty ?? 0));
   const twapQuery = twap.on && !twap.startBlocked ? twapQueryOf(twap.input, leadQty) : null;
   const queried = (amount === 'custom' && debouncedUsd !== null) || twapQuery !== null;
-  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, null, queried && tab ? tab.pool : null, twapQuery);
+  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, queried && tab ? tab.pool : null, twapQuery);
   const customPlan = customQuery.data?.realize?.custom ?? null;
   useTwapDefault(twap, amount === 'custom' ? customQuery.data?.realize?.twapDefault.custom : tab?.twapDefault[TWAP_TARGET[amount]], exec);
   const customLeadNow = customPlan?.legs[0]?.qty ?? 0;
@@ -143,7 +144,9 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const twapPlan = twap.on ? (activeTwap?.plan ?? null) : null;
   const takerOff = useTwapTakerAfter(maker.taker, twap.on, twapPlan?.takerAfterSec ?? null);
   const allNet = shownAll ? Math.max(0, netOf(shownAll, costFor(shownAll, exec))) : 0;
-
+  useEffect(() => {
+    if (!twapPricing) setAllCap(allNet);
+  }, [twapPricing, allNet]);
 
   if (!tab || (!clearDebt && !all)) {
     return (
@@ -167,6 +170,12 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const legCosts = active && cost && !pricing ? legCostsOf(active, exec, cost) : null;
   const net = active && cost ? netOf(active, cost) : 0;
   const twapBlocked = twap.blockedBy(activeTwap);
+  const wholeOption = options.find((o) => o.whole) ?? null;
+  const wholeSlice = active ? sliceOf(options, shownSliceUsd, active.legs[0], true) : null;
+  const impact: Pick<PriceImpactPreview, 'whole' | 'sliced'> | null =
+    twap.on && !twapBlocked && !pricing && active && active === pricedPlan && wholeOption && activeTwap?.estimates
+      ? { whole: wholeOption.pastBook ? null : costOf(active, exec, wholeSlice).impactUsd, sliced: activeTwap.estimates[exec].impactUsd }
+      : null;
   const otherRefusal = active?.refused && active.refused.reason !== 'past-book' ? active.refused : null;
   const sliceRefused = !otherRefusal && active?.refused?.reason === 'past-book' && (!twap.on || liveTab !== null);
   const refusal = !active
@@ -254,7 +263,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const sentence: string | null = customMissing
     ? t('accounts.realizeTab.typeAmount')
     : customOverAll
-      ? t('accounts.realizeTab.customOverAll', { amount: num(allNet, 0), coin: poolCoin(tab.pool) })
+      ? t('accounts.realizeTab.customOverAll', { amount: num(allCap, 0), coin: poolCoin(tab.pool) })
       : null;
 
   return (
@@ -310,7 +319,7 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
               ),
               usd: legCosts ? leg.convert.feeUsd : null,
             };
-            return [convert, close];
+            return [close, convert];
           })}
         />
       )}
@@ -318,8 +327,8 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       {active && (!refusal || sliceRefused) && active.legs.length > 0 && (
         <>
           <OrdersGroup value={exec} onChange={setExec} cost={orderCost} seconds={orderSec} whole={perMode(() => oneOrder)}>
-              {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} />}
-              <TwapArea on={twap.on} onToggle={twap.setOn} input={twap.input} onInput={twap.setInput} preview={activeTwap} impact={null} coin={twapCoin} />
+              {exec === 'maker' && <CloseMakerSettings maker={maker} capSec={twapPlan?.takerAfterSec ?? null} symbols={active?.legs.map((l) => l.symbol)} />}
+              <TwapArea on={twap.on} onToggle={twap.setOn} input={twap.input} onInput={twap.setInput} preview={activeTwap} impact={impact} coin={twapCoin} />
               {legSlices.length > 1 && (
                 <div className="flex flex-col gap-1.5 px-3">
                   {legSlices.map((row) => (

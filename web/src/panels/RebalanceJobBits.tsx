@@ -42,7 +42,7 @@ export function abandonNote(job: RebalanceJob, transfer: TransferView | undefine
 
 export const haltLine = (reason: string | null): string[] => (reason ? [localizeServerText(reason)] : []);
 
-const GAP_SENTENCE = /(?<=^|\. )(The )?\S+ (long|short) is \S+ \S+ smaller than the \S+ (long|short)\.( |$)/g;
+const GAP_SENTENCE = /(?<=^|\. )(The )?\S+ (long|short) is \S+ \S+ smaller than (the \S+ (long|short)|before)\.( |$)/g;
 
 export const gapBoxLines = (reason: string | null): string[] => {
   const rest = reason?.replace(GAP_SENTENCE, '').trim();

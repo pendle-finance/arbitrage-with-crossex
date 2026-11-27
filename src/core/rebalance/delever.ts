@@ -15,13 +15,13 @@ export interface DeleverRequest {
   perps: { symbol: string; qty: number }[];
   boros: { marketId: number; size: number }[];
   exec: RealizeExec;
-  sliceUsd?: number;
 }
 
 export interface DeleverEstimate {
   feePerpsUsd: number;
   feeBorosUsd: number;
   impactUsd: number;
+  impactBorosUsd: number;
   totalUsd: number;
 }
 
@@ -235,8 +235,7 @@ export function planDelever(input: DeleverInput, twapQtys?: number[]): DeleverPl
   const slice = { book: follow.book, side: closeSideOf(follow), mid };
   const maxUsd = Math.min(...legs.map((leg) => marketCapUsd({ maxLeverage: leg.maxLeverage }, leg.rule, leg.exchange, leg.mark)));
   const defaultSliceUsd = oneOrderUsdOf(maxUsd);
-  const customUsd = request.sliceUsd !== undefined && request.sliceUsd > 0 ? Math.min(request.sliceUsd, maxUsd) : undefined;
-  const chosenUsd = Math.min(customUsd ?? defaultSliceUsd, maxUsd);
+  const chosenUsd = Math.min(defaultSliceUsd, maxUsd);
   const qtys = twapQtys && twapQtys.length > 0 ? twapQtys : sliceQtys(closeQty, chosenUsd > 0 ? chosenUsd / mid : 0, minQty, lot);
   const notHedgedMaxQty = qtys.reduce((max, qty) => Math.max(max, qty), 0);
   const whole = legs.map((leg) => closeQty > 0 && closesWhole(legs, leg, closeQty, lot));
@@ -253,11 +252,11 @@ export function planDelever(input: DeleverInput, twapQtys?: number[]): DeleverPl
   const feeOf = (leg: Leg, rate: number): number => closeQty * leg.mark * rate;
   const estimateOf = (feePerpsUsd: number, perpImpactUsd: number): DeleverEstimate => {
     const impactUsd = perpImpactUsd + borosImpactUsd;
-    return { feePerpsUsd, feeBorosUsd, impactUsd, totalUsd: feePerpsUsd + feeBorosUsd + impactUsd };
+    return { feePerpsUsd, feeBorosUsd, impactUsd, impactBorosUsd: borosImpactUsd, totalUsd: feePerpsUsd + feeBorosUsd + impactUsd };
   };
   const followImpactUsd = impactUsdOf(follow, qtys);
   const leadPastBook = (qty: number): boolean => request.exec === 'market' && (impactOf(lead.book, closeSideOf(lead), lead.mid, qty)?.pastBook ?? true);
-  const options = sliceOptions({ ...slice, totalQty: closeQty, minQty, lot, customUsd, maxUsd }).map((option) =>
+  const options = sliceOptions({ ...slice, totalQty: closeQty, minQty, lot, maxUsd }).map((option) =>
     option.pastBook || !leadPastBook(option.notHedgedMaxQty) ? option : { ...option, pastBook: true },
   );
   return {

@@ -214,11 +214,12 @@ describe('AssetCard — roll over', () => {
     ['a stray level inside the seed does not hide the opportunity: sized at the band', [[0.004, 0.01], [0.013, 1000]], 0.0143, 0],
     // Fees already paid to open the pair are not charged to "now": rolling
     // cannot get them back. "Now" stays the forward 14.29%.
-    ['fees already paid do not lower the rate the roll is compared with', undefined, 0.01, 2_000],
-  ] as const)('%s', async (_name, depth, wantSlip, paidFeeUsd) => {
+    ['fees already paid do not lower the rate the roll is compared with', undefined, 0.01, 2_000, 0.02, 0.01],
+    ['the first quote takes half the tightest cap of the new markets, not the mean', undefined, 0.01, 0, 0.01, 0.005],
+  ] as const)('%s', async (_name, depth, wantSlip, paidFeeUsd, lateCap = 0.02, wantFirst = 0.01) => {
     const now = Math.floor(Date.now() / 1000);
     const LATER = now + 45 * DAY;
-    const row = (marketId: number, venue: string, maturity: number) => ({
+    const row = (marketId: number, venue: string, maturity: number, cap = 0.02) => ({
       marketId,
       name: `${venue} ETH`,
       venue,
@@ -228,7 +229,7 @@ describe('AssetCard — roll over', () => {
       maturity,
       midApr: 0.06,
       markApr: 0.06,
-      maxRateDeviationApr: 0.02,
+      maxRateDeviationApr: cap,
       isolatedOnly: false,
       onIsolatedMargin: false,
       isolatedHasPositionOrOrders: false,
@@ -243,7 +244,7 @@ describe('AssetCard — roll over', () => {
           data: {
             // The markets the pair HOLDS (its own 8-day maturity), plus the
             // one later maturity it can roll into.
-            markets: [row(1, 'Gate', now + 8 * DAY), row(2, 'Hyperliquid', now + 8 * DAY), row(11, 'Gate', LATER), row(12, 'Hyperliquid', LATER)],
+            markets: [row(1, 'Gate', now + 8 * DAY), row(2, 'Hyperliquid', now + 8 * DAY), row(11, 'Gate', LATER), row(12, 'Hyperliquid', LATER, lateCap)],
             crossByToken: [],
             isolatedByMarket: [],
             defaultSlippageApr: 0.0025,
@@ -346,7 +347,7 @@ describe('AssetCard — roll over', () => {
     // seeded tolerance (half of 2%, floored to 1 s.f.) …
     const first = sims.find((b) => b.intent === 'open');
     expect(first?.size).toBe(20);
-    expect(first?.legA.slippageApr).toBeCloseTo(0.01, 9);
+    expect(first?.legA.slippageApr).toBeCloseTo(wantFirst, 9);
     // … then the size the modal opens on (the whole position here), both
     // batches, at the tolerance the modal gives that size, so the promise IS
     // the modal's headline.

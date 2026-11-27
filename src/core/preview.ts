@@ -101,6 +101,7 @@ export interface MakerLegPreview {
 export interface PriceImpactPreview {
   whole: number | null;
   sliced: number;
+  slicedLegs: number[];
 }
 
 export interface TwapPlanPreview {
@@ -197,12 +198,8 @@ export function priceImpactOf(legs: TwapLegBook[], qty: number, plan: TwapPlan):
     : null;
   const sliceQty = Number(plan.sliceQty);
   const lastQty = Number(plan.lastQty);
-  const sliced = legs.reduce(
-    (total, leg) =>
-      total + (impactAt(leg, sliceQty)?.usd ?? 0) * (plan.slices - 1) + (impactAt(leg, lastQty)?.usd ?? 0),
-    0,
-  );
-  return { whole, sliced };
+  const slicedLegs = legs.map((leg) => (impactAt(leg, sliceQty)?.usd ?? 0) * (plan.slices - 1) + (impactAt(leg, lastQty)?.usd ?? 0));
+  return { whole, sliced: slicedLegs.reduce((total, usd) => total + usd, 0), slicedLegs };
 }
 
 export function legsTwapDefaultOf(legs: TwapLegBook[], qty: number): TwapDefault | null | undefined {

@@ -9,6 +9,7 @@ import { makerLegOf } from '../../src/core/preview';
 import { planSlices, type TwapLegRule } from '../../src/core/twap';
 import type { DealRequest } from '../../src/engine/create';
 import { Store } from '../../src/engine/db';
+import { fx, fxStr } from '../../src/engine/fx';
 import { commands } from '../../src/engine/loop';
 import { type OrderRow, type PairMode, type PairRow, TUNING } from '../../src/engine/types';
 import {
@@ -31,9 +32,13 @@ import {
   runTwap,
   sleepHaltTwap,
   stopLiveChild,
+  twapHedgeOf,
   type TwapRunDeps,
   twapViewOf,
 } from '../../src/server/twapRun';
+import { applyFix, type RunnerDeps } from '../../src/server/rebalanceRunner';
+import { TtlCache } from '../../src/server/cache';
+import type { Clients } from '../../src/core/clients';
 
 const T0 = Date.UTC(2026, 10, 25, 14, 0, 0);
 const MIN = 60_000;
@@ -520,6 +525,35 @@ describe('twap halts', () => {
     expect(read).toMatchObject({ haltKind: 'hedge-margin', haltReason: 'Hyperliquid refused the hedge in slice 1' });
   });
 
+  it('a failed book read at slice start retries the same slice on the next pass', async () => {
+    const job = startJob(ethOpen('60'));
+    w.refuse = new CoreError('No best price for GATE_FUTURE_ETH_USDT, so the slice was not sent.', 'network');
+    const missed = await pass(job);
+    expect(missed.status).toBe('running');
+    expect(missed.twap?.sliceIndex).toBe(0);
+    expect(w.store.listAlerts()).toHaveLength(0);
+    w.refuse = null;
+    at(T0 + 2000);
+    const read = await pass(job);
+    expect(read.status).toBe('running');
+    expect(read.twap?.sliceIndex).toBe(1);
+    expect(ids()).toEqual([`${job.id}-s1-1`, `${job.id}-s1-1`]);
+    expect(w.store.getPair(`${job.id}-s1-1`)).not.toBeNull();
+  });
+
+  it('three slice-start misses in a row halt the run with one alert', async () => {
+    const job = startJob(ethOpen('60'));
+    w.refuse = Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' });
+    await pass(job);
+    at(T0 + 2000);
+    await pass(job);
+    at(T0 + 4000);
+    const read = await pass(job);
+    expect(read).toMatchObject({ status: 'halted', haltKind: 'error' });
+    expect(ids()).toHaveLength(3);
+    expect(w.store.listAlerts()).toHaveLength(1);
+  });
+
   it('a create error halts with kind error and an alert', async () => {
     const job = startJob(ethOpen('60'));
     w.refuse = new CoreError('Size 5 is not a multiple of the lot');
@@ -787,6 +821,74 @@ describe('twap fixes', () => {
     expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-s3-1`, qty: rest });
     const read = w.jobs.read() as Job;
     expect(twapViewOf(read, await loadTwapChildren(w.deps, read)).legs[0].filledQty).toBe(sliceQty);
+  });
+
+  it.each([
+    ['$5k', '0.056', '0.028', '0.01', '0.004', '0.006', '0.022'],
+    ['$6M', '66.6', '33.3', '20', '8', '12', '21.3'],
+  ])('at %s, after a part unwind the hedge goes on the hedge leg, the run does not count it, and Resume clears the gap', async (_size, total, sliceQty, slice2Fill, unwound, gap, rest) => {
+    const job = startJob(btcOpen(total), { slices: 2, mark: 90_000 });
+    await pass(job);
+    fill(`${job.id}-s1-1`, sliceQty, '90000');
+    await advance(job, T0 + 30 * MIN);
+    fill(`${job.id}-s2-1`, slice2Fill, '90000', { mode: 'HALTED', filledB: '0' });
+    w.store.updatePair(`${job.id}-s2-1`, { haltKind: 'hedge-margin' });
+    await pass(job);
+    await unwindChild(job, 2, unwound);
+    w.store.updatePair(`${job.id}-s2-1`, { mode: 'DONE' });
+    const halted = w.jobs.read() as Job;
+    halted.notHedgedQty = Number(gap);
+    halted.unwindTarget = { symbol: 'GATE_FUTURE_BTC_USDT', exchange: 'GATE', side: 'SELL', qty: Number(gap), reduceOnly: true };
+    w.jobs.write(halted);
+    expect(twapHedgeOf(w.store, halted)).toEqual({ symbol: 'BINANCE_FUTURE_BTC_USDT', exchange: 'BINANCE', side: 'SELL', qty: Number(gap), reduceOnly: false });
+    const hedgeId = `${job.id}-f2-2`;
+    await w.deps.createChild({ id: hedgeId, a: { symbol: 'BINANCE_FUTURE_BTC_USDT', side: 'SELL' }, b: null, qty: gap, execution: 'taker' });
+    fill(hedgeId, gap, '90000', { aKind: 'taker' });
+    w.requests.pop();
+    resume();
+    at(T0 + 31 * MIN);
+    const read = await pass(job);
+    expect(read.notHedgedQty).toBe(0);
+    expect(read.unwindTarget).toBeNull();
+    expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-s3-1`, qty: rest });
+    const legs = twapViewOf(read, await loadTwapChildren(w.deps, read)).legs;
+    expect(legs[1].filledQty).toBe(fxStr(fx(sliceQty) + fx(gap)));
+  });
+
+  it.each([
+    ['$5k', '0.056', '0.028', '0.01', '0.004', '0.006'],
+    ['$6M', '66.6', '33.3', '20', '8', '12'],
+  ])('at %s, Hedge at market after a part unwind sends the gap on the hedge leg and pauses', async (_size, total, sliceQty, slice2Fill, unwound, gap) => {
+    const job = startJob(btcOpen(total), { slices: 2, mark: 90_000 });
+    await pass(job);
+    fill(`${job.id}-s1-1`, sliceQty, '90000');
+    await advance(job, T0 + 30 * MIN);
+    fill(`${job.id}-s2-1`, slice2Fill, '90000', { mode: 'HALTED', filledB: '0' });
+    w.store.updatePair(`${job.id}-s2-1`, { haltKind: 'hedge-margin' });
+    await pass(job);
+    await unwindChild(job, 2, unwound);
+    w.store.updatePair(`${job.id}-s2-1`, { mode: 'DONE' });
+    const halted = w.jobs.read() as Job;
+    halted.notHedgedQty = Number(gap);
+    halted.unwindTarget = { symbol: 'GATE_FUTURE_BTC_USDT', exchange: 'GATE', side: 'SELL', qty: Number(gap), reduceOnly: true };
+    w.jobs.write(halted);
+    const rules = [{ symbol: 'BINANCE_FUTURE_BTC_USDT', lotSize: '0.001', tickSize: '0.1', minSize: '0.001', state: 'live' }];
+    const deps: RunnerDeps = {
+      clients: () => ({ crossEx: { listCrossexRuleSymbols: async () => ({ body: rules }) } }) as unknown as Clients,
+      jobs: w.jobs,
+      cache: new TtlCache(),
+      now: () => w.t,
+      sleep: async () => {
+        const last = w.requests.at(-1);
+        const pair = last ? w.store.getPair(last.id) : null;
+        if (pair && pair.mode !== 'DONE') fill(pair.id, pair.targetQty, '90000', { aKind: 'taker' });
+      },
+      onHalt: () => undefined,
+      twap: w.deps,
+    };
+    const fixed = await applyFix(deps, halted, 'market');
+    expect(w.requests.at(-1)).toMatchObject({ id: `${job.id}-f2-2`, a: { symbol: 'BINANCE_FUTURE_BTC_USDT', side: 'SELL' }, b: null, qty: gap, execution: 'taker' });
+    expect(fixed).toMatchObject({ status: 'halted', paused: true, notHedgedQty: 0 });
   });
 
   it('market fix hedges the filled leg and the next slice takes the rest', async () => {

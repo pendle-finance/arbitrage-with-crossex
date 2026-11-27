@@ -139,7 +139,7 @@ export function useTwapDefault(twap: TwapInputState, value: TwapDefault | null |
   return landed && value === undefined && !twap.decided;
 }
 
-export function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boolean }) {
+export function ImpactPair({ impact }: { impact: Pick<PriceImpactPreview, 'whole' | 'sliced'> }) {
   const { t } = useTranslation();
   return (
     <span className="ml-auto flex items-center gap-1.5 text-[11px] text-ink-400">
@@ -151,7 +151,6 @@ export function ImpactPair({ impact, on }: { impact: PriceImpactPreview; on: boo
       </span>{' '}
       <ArrowRight size={12} aria-hidden />{' '}
       <span className="num text-grass">{fmtUsd(impact.sliced, 0)}</span>
-      {on && <span>{t('trade.twap.area.wholeRun')}</span>}
     </span>
   );
 }
@@ -196,7 +195,7 @@ export function TwapArea({
   input: TwapInput;
   onInput: (input: TwapInput) => void;
   preview: TwapPlanPreview | null;
-  impact: PriceImpactPreview | null;
+  impact: Pick<PriceImpactPreview, 'whole' | 'sliced'> | null;
   coin: string;
   lot?: string;
   waiting?: boolean;
@@ -282,7 +281,7 @@ export function TwapArea({
         {waiting ? (
           <span className="ml-auto text-[11px] text-ink-400">{t('trade.twap.area.readingBook')}</span>
         ) : (
-          impact && <ImpactPair impact={impact} on={on} />
+          impact && <ImpactPair impact={impact} />
         )}
       </div>
       {on && (

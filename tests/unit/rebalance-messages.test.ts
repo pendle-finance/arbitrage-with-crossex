@@ -441,8 +441,23 @@ describe('reopen halt texts', () => {
     );
   });
 
-  it('stops the reopen when no cash is left', () => {
-    expect(REOPEN_HALT.noCash).toBe('Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.');
+  it('stops the reopen when no cash is left, and names the wallet of the job', () => {
+    expect(REOPEN_HALT.noCash('CROSSEX')).toBe('Not enough margin, and no cash left to convert. Move USDT into USDT · CrossEx, then Resume.');
+    expect(REOPEN_HALT.noCash('HYPERLIQUID')).toBe('Not enough margin, and no cash left to convert. Move USDC into USDC · Hyperliquid, then Resume.');
+    expect(REOPEN_HALT.noCash('LIGHTER')).toBe('Not enough margin, and no cash left to convert. Move USDC into USDC · Lighter, then Resume.');
+    expect(REOPEN_HALT.noBorrow('CROSSEX')).toBe('Not enough margin. USDC · Hyperliquid has no borrow for a Convert to repay. Add margin, then Resume.');
+  });
+
+  it('a perp with no other perp says smaller than before and names no other leg', () => {
+    const alone = { ...leg, hedge: null };
+    expect(REOPEN_HALT.quotesUsedLegOpen(alone, 0.2)).toBe(
+      "Gate's 100 Convert quotes for today are used up. The Hyperliquid short is 0.2 ETH smaller than before. Resume after Gate's count clears, within 24 hours.",
+    );
+    expect(REOPEN_HALT.refused(alone, 0.2, '')).toBe('Gate refused the reopen. The Hyperliquid short is 0.2 ETH smaller than before. Resume to try again.');
+    expect(REOPEN_HALT.underMinimum(alone, 0.2)).toBe(
+      "The rest is under Gate's smallest order. The Hyperliquid short is 0.2 ETH smaller than before. Abandon it and check Positions.",
+    );
+    expect(REOPEN_HALT.closeOnly(alone, 0.2)).toBe('Gate CrossEx takes no new orders on this contract. Resume when it does.');
   });
 
   it('stops on the quote limit with the leg open', () => {
@@ -757,15 +772,17 @@ describe('bannerFor', () => {
   });
 
   it('names the leg gap while the slices step has the close filled and the hedge behind', () => {
-    const gapAt = (leg: RealizeLeg, filled: number, hedged: number): Job => {
+    const gapAt = (leg: RealizeLeg, filled: number, hedged: number, hedge: string | null = leg.exchange === 'GATE' ? 'HYPERLIQUID' : 'GATE'): Job => {
       const job = closedAt(realizeJob([leg]), filled, 0);
       Object.assign(job.steps[0], { status: 'running', qty: hedged });
+      if (job.realize) job.realize.legs[0].hedge = hedge;
       return job;
     };
 
     expect(bannerFor(gapAt(realizeLeg(), 53.8, 0))).toBe('Rebalance stopped. Hyperliquid short is 53.8 ETH smaller than the Gate long.');
     expect(bannerFor(gapAt(realizeLeg(), 30, 0))).toBe('Rebalance stopped. Hyperliquid short is 30 ETH smaller than the Gate long.');
     expect(bannerFor(gapAt(gateLong(), 47.1, 20))).toBe('Rebalance stopped. Gate long is 27.1 ETH smaller than the Hyperliquid short.');
+    expect(bannerFor(gapAt(realizeLeg(), 0.2, 0, null))).toBe('Rebalance stopped. Hyperliquid short is 0.2 ETH smaller than before.');
   });
 
   it('reads as a route stop once the slices are done', () => {
