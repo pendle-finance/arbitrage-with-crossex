@@ -213,6 +213,20 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   different sizes, the headline names each leg.
 - **Chinese:** 55 more server messages show in Chinese, and two joined sentences no longer show
   "。.".
+- **Realize uPnL's limit hold rests a maker order.** "Hold to reopen at limit" rests a post-only
+  order at the best price, follows the book and goes to market after at most 5 minutes, inside
+  0.25% of the price. Before, it sent the same market order as "Hedge at market".
+- **Resume never drops an unhedged gap.** After a part "Close filled" on a TWAP, Resume asks you to
+  close or reopen the gap with a hold first. Realize Resume reads both live legs and stops when one
+  moved.
+- **Close one leg at the Max figure closes the whole position,** even when the figure shown is
+  cut to 4 decimals.
+- **Order choices count price impact.** Limit + hedge and Market show fees plus price impact.
+  With TWAP on, Limit + hedge counts the hedge leg's impact per slice, the Cost card title says
+  "total", and Realize uPnL shows "Price impact X → Y".
+- **Every running rebalance keeps the Mac awake,** not only TWAP runs.
+- **Stop reasons name the right wallet,** and a missing borrow or a poor Convert quote gets its
+  own line.
 
 ## 1.7.9 — 2026-11-10
 
