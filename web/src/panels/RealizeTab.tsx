@@ -1,4 +1,3 @@
-import { ArrowRight } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useRealizeCustom, useStartRebalance } from '../api/queries';
@@ -18,10 +17,11 @@ import { spanText } from '../lib/span';
 import { useDebounced } from '../lib/useDebounced';
 import { borrowRows, RebalanceBeforeAfter, type WalletChange } from './RebalanceBeforeAfter';
 import { VerdictAlert } from './RebalanceBits';
-import { keyOf, SLICE_HOVER, Term } from './RebalanceHovers';
+import { keyOf, SLICE_HOVER } from './RebalanceHovers';
 import { RebalanceModalFooter } from './RebalanceModalFooter';
-import { PlanSteps, realizeText, refusalOf, TotalCost, type CostRow, type PlanStep } from './RebalancePlanBits';
-import { CONVERT_TO, HOVER, hoverCash, poolCoin, poolKey, sizeText, WALLET_LABEL } from './rebalanceCopy';
+import { PlanSteps, realizeText, refusalOf, TotalCost, type CostRow } from './RebalancePlanBits';
+import { CONVERT_TO, hoverCash, poolCoin, poolKey, WALLET_LABEL } from './rebalanceCopy';
+import { BigFirstSlice, realizeStepRows } from './realizeSteps';
 import { CUSTOM_DEBOUNCE_MS, parsedAmount } from './rebalanceModalPlan';
 import type { RebalanceTab } from './rebalanceOpener';
 import { costOf, hasPlan, legCostsOf, netOf, sliceOf, twapQueryOf, type Cost, type Slice } from './realizeTabCost';
@@ -117,17 +117,19 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
   const debouncedUsd = useDebounced(customUsd, CUSTOM_DEBOUNCE_MS);
   const leadQty = (amount === 'custom' ? customLead : (splitPlan?.legs[0]?.qty ?? 0));
   const twapQuery = twap.on && !twap.startBlocked ? twapQueryOf(twap.input, leadQty) : null;
-  const queried = (amount === 'custom' && debouncedUsd !== null) || twapQuery !== null;
-  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, queried && tab ? tab.pool : null, twapQuery);
+  const takerSec = maker.taker.sec !== null && (!twap.on || maker.taker.picked) ? maker.taker.sec : null;
+  const never = exec === 'maker' && maker.taker.takerAfter.kind === 'never';
+  const close = exec === 'market' ? { exec } : never ? { exec, takerAfterSec: null } : takerSec !== null ? { exec, takerAfterSec: takerSec } : { exec };
+  const customQuery = useRealizeCustom(amount === 'custom' ? debouncedUsd : null, tab ? tab.pool : null, twapQuery, close);
   const customPlan = customQuery.data?.realize?.custom ?? null;
   useTwapDefault(twap, amount === 'custom' ? customQuery.data?.realize?.twapDefault.custom : tab?.twapDefault[TWAP_TARGET[amount]], exec);
   const customLeadNow = customPlan?.legs[0]?.qty ?? 0;
   useEffect(() => {
     if (customLeadNow > 0) setCustomLead(customLeadNow);
   }, [customLeadNow]);
-  const twapPricing = twapQuery !== null && (customQuery.isPlaceholderData || customQuery.isPending);
+  const twapPricing = customQuery.isPlaceholderData || customQuery.isPending;
   const realizeTwap = twapQuery !== null && !twapPricing ? (customQuery.data?.realizeTwap ?? null) : null;
-  const liveTab = twapQuery !== null && !twapPricing ? (customQuery.data?.realize ?? null) : null;
+  const liveTab = !twapPricing ? (customQuery.data?.realize ?? null) : null;
   const shownClear = liveTab ? (hasPlan(liveTab.clearDebt) ? liveTab.clearDebt : null) : clearDebt;
   const shownAll = liveTab ? (hasPlan(liveTab.all) ? liveTab.all : null) : all;
   const pricedPlan = shownClear && shownClear.legs.length > 0 ? shownClear : shownAll;
@@ -250,8 +252,9 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
         realizeTarget: TARGET[amount],
         realizePool: tab.pool,
         costUsd: cost.totalUsd,
+        realizeShown: active.legs.map((leg) => ({ symbol: leg.symbol, at: leg.margin?.at ?? null, firstQty: leg.margin?.firstQty ?? null })),
         ...(twapPlan && twapQuery
-          ? { twap: { ...twapQuery, ...(exec === 'maker' ? maker.opts : {}) } }
+          ? { twap: { ...twapQuery, ...(exec === 'maker' ? { repegBehindBp: maker.opts.repegBehindBp, ...('takerAfterSec' in close ? { takerAfterSec: close.takerAfterSec } : {}) } : {}) } }
           : exec === 'maker'
             ? { maker: maker.opts }
             : {}),
@@ -295,34 +298,11 @@ function RealizeBody({ view, tab, holdMs, lock, onTab, onStarted }: TabProps & {
       {active && active.legs.length > 0 && (
         <PlanSteps
           label={t('accounts.realizeTab.closeReopen')}
-          rows={active.legs.flatMap((leg, at) => {
-            const close: PlanStep = {
-              key: leg.symbol,
-              icon: leg.base,
-              text: (
-                <span className="num">
-                  {t('accounts.realizeTab.legPart', { coin: leg.base, side: t(leg.side === 'LONG' ? 'common.long' : 'common.short'), size: sizeText(leg.qty), held: sizeText(leg.positionQty) })}
-                </span>
-              ),
-              usd: legCosts ? (legCosts[at] ?? null) : null,
-            };
-            if (!leg.convert || !(leg.convert.feeUsd > 0)) return [close];
-            const convert: PlanStep = {
-              key: `${leg.symbol}:convert`,
-              icon: poolCoin(leg.pool),
-              text: (
-                <span className="num inline-flex items-center gap-1.5">
-                  <Term label={t('accounts.rebalanceRealize.convertAction', { amount: num(leg.convert.amount, 0), coin: poolCoin(leg.pool) })} text={HOVER.convert} />
-                  <ArrowRight size={12} aria-hidden className="shrink-0 text-ink-500" />
-                  {WALLET_LABEL[poolKey(CONVERT_TO[leg.pool])]}
-                </span>
-              ),
-              usd: legCosts ? leg.convert.feeUsd : null,
-            };
-            return [close, convert];
-          })}
+          rows={realizeStepRows(active.legs, legCosts, never)}
         />
       )}
+
+      {active && !refusal && <BigFirstSlice legs={active.legs} twap={activeTwap} never={never} />}
 
       {active && (!refusal || sliceRefused) && active.legs.length > 0 && (
         <>

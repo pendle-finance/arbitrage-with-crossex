@@ -3,6 +3,15 @@ import i18n from '.';
 import { localizeServerError, localizeServerText } from './serverMessages';
 
 const ENGLISH = [
+  "The margin ratio is under 103%, so the app will not Convert. Add margin, then Resume.",
+  "Free margin ran short again after 5 Converts in this run. Both legs are hedged. Add margin, then Resume.",
+  "Too few Convert quotes are left today for ETH slice 1. No ETH was closed. Press Resume later.",
+  "Free margin and cash are too low to close ETH slice 1 and reopen it. No ETH was closed. Add margin, then Resume.",
+  "ETH slice 1 must close 25 ETH, not the planned 10 ETH, to fund its Convert. No ETH was closed. Press Resume to close 25 ETH.",
+  "Not enough free margin to reopen. Add margin, then Resume.",
+  "ETH slice 1 must close 52 ETH in all to fund its Convert, not 40 ETH. Press Resume to close 12 ETH more.",
+  "Cash no longer covers the Convert before ETH slice 1. ETH slice 1 must close 4.5 ETH alone, unhedged from its first close fill until it reopens. No ETH was closed. Press Resume to go on.",
+  "The margin ratio is under 103%, so the Convert cannot run before ETH slice 1. ETH slice 1 must close 4.5 ETH alone, unhedged from its first close fill until it reopens. No ETH was closed. Press Resume to go on.",
   "Exit: ETHUSDT-31OCT: order book unavailable — cannot price this position.",
   "Gate refused the API key.",
   "Gate refused the API key",
@@ -548,6 +557,16 @@ const CHINESE: ReadonlyArray<readonly [string, string]> = [
     "Not enough free margin for the next slice. Nothing is open. Add margin, then Resume.",
     "可用保证金不足以执行下一片。目前没有未对冲的仓位。请补充保证金，然后点击恢复。",
   ],
+  ["The margin ratio is under 103%, so the app will not Convert. Add margin, then Resume.", "保证金率低于 103%，因此应用不会兑换。请补充保证金，然后点击恢复。"],
+  ["Free margin ran short again after 5 Converts in this run. Both legs are hedged. Add margin, then Resume.", "本次运行已兑换 5 次后，可用保证金再次不足。两条腿都已对冲。请补充保证金，然后点击恢复。"],
+  ["Too few Convert quotes are left today for ETH slice 1. No ETH was closed. Press Resume later.", "今天剩余的兑换报价不足以完成 ETH 第 1 片。ETH 没有平仓。请稍后点击恢复。"],
+  ["Free margin and cash are too low to close ETH slice 1 and reopen it. No ETH was closed. Add margin, then Resume.", "可用保证金和现金不足以平仓并重开 ETH 第 1 片。ETH 没有平仓。请补充保证金，然后点击恢复。"],
+  ["ETH slice 1 must close 25 ETH, not the planned 10 ETH, to fund its Convert. No ETH was closed. Press Resume to close 25 ETH.", "为支付兑换，ETH 第 1 片需平仓 25 ETH，而不是计划的 10 ETH。ETH 没有平仓。请点击恢复以平仓 25 ETH。"],
+  ["Not enough free margin to reopen. Add margin, then Resume.", "可用保证金不足以重开。请补充保证金，然后点击恢复。"],
+  ["ETH slice 1 must close 52 ETH in all to fund its Convert, not 40 ETH. Press Resume to close 12 ETH more.", "为支付兑换，ETH 第 1 片共需平仓 52 ETH，而不是 40 ETH。请点击恢复以再平仓 12 ETH。"],
+  ["Cash no longer covers the Convert before ETH slice 1. ETH slice 1 must close 4.5 ETH alone, unhedged from its first close fill until it reopens. No ETH was closed. Press Resume to go on.", "现金已不足以在 ETH 第 1 片前完成兑换。ETH 第 1 片需单独平仓 4.5 ETH，从首笔平仓成交到重开成交前未对冲。ETH 没有平仓。点击恢复继续。"],
+  ["The margin ratio is under 103%, so the Convert cannot run before ETH slice 1. ETH slice 1 must close 4.5 ETH alone, unhedged from its first close fill until it reopens. No ETH was closed. Press Resume to go on.", "保证金率低于 103%，兑换无法在 ETH 第 1 片前进行。ETH 第 1 片需单独平仓 4.5 ETH，从首笔平仓成交到重开成交前未对冲。ETH 没有平仓。点击恢复继续。"],
+  ["Not enough free margin to reopen. Add margin, then Resume. The Hyperliquid short is 1 ETH smaller than the Gate long. Or close 1 ETH of the Gate long in Positions.", "可用保证金不足以重开。请补充保证金，然后点击恢复。Hyperliquid 空头比 Gate 多头少 1 ETH。或在持仓中平掉 Gate 多头的 1 ETH。"],
   ["Could not find the other perp of this pair. Close the gap in Positions.", "找不到此组合的另一条永续合约。请在持仓中补平差额。"],
   ["Gate refused the hedge again. Nothing else changed.", "Gate 再次拒绝了对冲单。其他均未变动。"],
   [
@@ -707,6 +726,13 @@ describe('localizeServerText in Chinese', () => {
 
   it.each(CHINESE)('translates %s', (text, chinese) => {
     expect(localizeServerText(text)).toBe(chinese);
+  });
+
+  it('translates a margin halt that names the open leg, one sentence group at a time', () => {
+    const head = 'The margin ratio is under 103%, so the app will not Convert. Add margin, then Resume.';
+    const tail = 'The Hyperliquid short is 1 ETH smaller than before.';
+    expect(localizeServerText(`${head} ${tail}`)).toBe(i18n.t('errors.sentences', { first: localizeServerText(head), rest: localizeServerText(tail) }));
+    expect(localizeServerText(tail)).not.toBe(tail);
   });
 
   it.each(UNKNOWN)('passes %s through', (text) => {

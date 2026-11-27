@@ -79,6 +79,18 @@ describe('SliceJobView, one order', () => {
   });
 });
 
+describe('SliceJobView, a running Realize in its slice 1 gap', () => {
+  it('shows the closed part that is not reopened yet as not hedged now', () => {
+    show(rebalanceViews.ownerRealizeRunning, { notHedgedQty: 0.5 });
+    expect(screen.getByText('Not hedged now').parentElement!.parentElement).toHaveTextContent(/Not hedged now\s*0\.5 ETH/);
+  });
+
+  it('shows 0 once the reopen fills', () => {
+    show(rebalanceViews.ownerRealizeRunning, { notHedgedQty: 0 });
+    expect(screen.getByText('Not hedged now').parentElement!.parentElement).toHaveTextContent(/Not hedged now\s*0(\.0)? ETH /);
+  });
+});
+
 describe('SliceJobView, a done Realize', () => {
   it('offers Next: Move cash only while a borrow is left', () => {
     const view = rebalanceViews.ownerRealizeDone;
