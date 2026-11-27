@@ -237,6 +237,28 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Settings → About has a Check for updates button.** It reads GitHub now instead of waiting up to
   6 hours, at most once in 5 minutes. A failed read keeps the last good answer.
 
+## 1.7.10 — 2026-11-27
+
+TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets, in Single mode or as a
+Gate + Hyperliquid pair on the HL-GATE spread.
+
+- **Jan 2027 Hyperliquid markets show.** Boros lists Hyperliquid ETH and BTC for 29 Jan 2027,
+  and the HL-GATE spreads for the same date, but no Gate market. Before, the terminal hid a Boros
+  market that had no other market at its date, so both Hyperliquid markets were missing. Now a
+  spread over the market's venue counts as its partner.
+- **Single mode opens them.** Single mode now sends one Boros order on its own when no other
+  market shares its collateral and date. Before, it could only quote a market that had such a
+  partner.
+- **A Gate + Hyperliquid pair offers 29 Jan 2027.** The pair ticket shows a date chip where Boros
+  lists the HL-GATE spread but no Gate market. Picking it sends one order on that spread. Before,
+  the ticket only offered dates where both venues list a market. If that spread stops taking the
+  order, the ticket stays on it and says why, instead of moving to another date.
+- **Switching from Single back to Pair keeps both pickers usable.** Before, a market picked in
+  Single mode on the other leg's venue (Hyperliquid when the pair was Gate + Hyperliquid) left both
+  legs on one venue: each picker hid it, both showed "Select market", and the ticket said "a market
+  cannot offset itself". Now the other leg clears, or moves to the new date, or the pair takes the
+  spread at that date.
+
 ## 1.7.9 — 2026-11-10
 
 TLDR: The terminal suggests a Boros liquidation buffer and says how much margin to add. A Boros
