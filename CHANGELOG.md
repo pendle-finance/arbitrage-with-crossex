@@ -191,6 +191,10 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
 - **Abandon ends a halted Realize reopen.** Before, the reopen kept retrying every 3 s after
   Abandon, so a later fill could open an unhedged position. The gap shown after Abandon counts
   the fills that landed while the halted slice settled.
+- **Realize works when free margin is too low to reopen.** Slice 1 closes, Converts the cash to
+  pay the debt, then reopens. The plan refuses up front when no slice 1 can fund its reopen and
+  the next slice. The start refuses with "The plan changed" when the fresh plan closes first or
+  grows slice 1 by more than 1%. A restart or a laptop sleep during slice 1 reopens the leg.
 - **The hold waits for the order book.** When a book read fails and no TWAP suggestion comes, the
   TWAP row says "Reading the order book… Turn TWAP on or off to go on." on the pair, single,
   close, perp-only close and Delever tickets. One click on the TWAP switch ends the wait.
