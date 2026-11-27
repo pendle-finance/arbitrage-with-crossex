@@ -310,6 +310,8 @@ export function BorosPairTicket({
     }
     if (!spread?.spreadVenues) setBehind(null);
     setIntent('open');
+    // An earlier fill report's Complete and Retry would arm against these new legs.
+    setReport(null);
     setOverlaps(openPrefill.overlaps ?? []);
     /**
      * A Boros size is denominated in the market's COLLATERAL, so the collateral
@@ -721,8 +723,9 @@ export function BorosPairTicket({
      * quoted and never traded. A single with no such partner (the HL Jan
      * singles beside the HL-GATE spread) goes on the wire alone.
      */
+    // A completion keeps the pair's own leg B: `onlyLeg` may name it.
     const partnerId =
-      mode === 'single'
+      mode === 'single' && onlyLeg === null
         ? (markets.find(
             (m) =>
               m.marketId !== marketA &&
@@ -828,7 +831,7 @@ export function BorosPairTicket({
   // intent makes it meaningless, so it must not survive into a normal ticket.
   useEffect(() => {
     setOnlyLeg(null);
-  }, [marketA, marketB, dirA, dirB, intent, mode]);
+  }, [marketA, marketB, dirA, dirB, intent]);
 
   const execute = useExecuteBorosPair();
 
