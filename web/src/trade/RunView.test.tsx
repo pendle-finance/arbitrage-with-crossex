@@ -524,6 +524,68 @@ describe('RunView, fix round', () => {
     expect(within(rowOf('Boros')).getByText('900.00 → 873.75 YU · closes after each slice')).toBeTruthy();
   });
 
+  const unhedgedDelever = (over: Partial<RebalanceJob> = {}) =>
+    paused({
+      kind: 'delever',
+      paused: false,
+      haltKind: 'error',
+      haltReason: 'Slice 4 stopped on an error. Check the orders, then resume or stop.',
+      legs: closeLegs('177.61', '173.41'),
+      notHedgedQty: 4.2,
+      follow: { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', side: 'BUY', qty: 4.2, reduceOnly: true },
+      unwindTarget: { symbol: 'GATE_FUTURE_ETH_USDT', exchange: 'GATE', side: 'BUY', qty: 4.2, reduceOnly: false },
+      ...over,
+    });
+
+  it('a Delever TWAP halted with a leg not hedged shows the not-hedged line and the fix holds', async () => {
+    const posts: unknown[] = [];
+    server.use(
+      http.post('/api/rebalance/:id/fix', async ({ request }) => {
+        posts.push(await request.json());
+        return HttpResponse.json(env(unhedgedDelever()));
+      }),
+    );
+    renderRun(unhedgedDelever());
+    expect(screen.getByText('4.20 ETH not hedged')).toBeTruthy();
+    expect(screen.getByText('Slice 4 stopped on an error. Check the orders, then resume or stop.')).toBeTruthy();
+    const holds = screen.getAllByRole('button').map((b) => b.textContent ?? '').filter((text) => text.includes('at market'));
+    expect(holds).toEqual(['Hold to close Hyperliquid Short 4.20 ETH at market', 'Hold to undo the close · Gate Long 4.20 ETH at market']);
+    expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Hold to close Hyperliquid Short 4.20 ETH at market' }));
+    await waitFor(() => expect(posts).toEqual([{ action: 'market' }]), { timeout: 3000 });
+  });
+
+  it('a Delever TWAP at $6M not hedged reads the whale size, and a paused one shows no holds', () => {
+    const big = { notHedgedQty: 1734.1, follow: { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', exchange: 'HYPERLIQUID', side: 'BUY' as const, qty: 1734.1, reduceOnly: true } };
+    const { unmount } = renderRun(unhedgedDelever(big));
+    expect(screen.getByText('1,734.10 ETH not hedged')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Hold to close Hyperliquid Short 1,734.10 ETH at market' })).toBeTruthy();
+    unmount();
+    renderRun(unhedgedDelever({ paused: true, haltKind: null, haltReason: null }));
+    expect(screen.queryByText(/not hedged$/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /at market$/ })).toBeNull();
+  });
+
+  it('a stopped Delever TWAP with a Boros gap keeps the Boros close hold', async () => {
+    const posts: unknown[] = [];
+    server.use(
+      http.post('/api/rebalance/:id/fix', async ({ request }) => {
+        posts.push(await request.json());
+        return HttpResponse.json(env(unhedgedDelever()));
+      }),
+    );
+    const legs = closeLegs('26.25', '26.25');
+    renderRun(job({ kind: 'delever', status: 'abandoned', child: null, legs, borosGapYu: 52.82 }, { nextAt: null }));
+    expect(screen.getByText('Boros 52.82 YU has no perp behind it')).toBeTruthy();
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Hold to close 52.82 YU on Boros' }));
+    await waitFor(() => expect(posts).toEqual([{ action: 'boros-retry' }]), { timeout: 3000 });
+  });
+
+  it('a stopped Delever TWAP with no Boros gap has no hold', () => {
+    renderRun(job({ kind: 'delever', status: 'abandoned', child: null, legs: closeLegs('26.25', '26.25'), borosGapYu: 0 }, { nextAt: null }));
+    expect(screen.queryByRole('button', { name: /on Boros$/ })).toBeNull();
+  });
+
   it('keep-awake line off macOS', () => {
     vi.spyOn(navigator, 'platform', 'get').mockReturnValue('Win32');
     renderRun(job());

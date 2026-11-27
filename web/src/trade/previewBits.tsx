@@ -79,17 +79,21 @@ export function legNotional(p: PreviewResult): number | null {
 export function pairModeFees(
   previews: readonly (PreviewResult | undefined)[] | undefined,
   makerIdx: number | null,
+  slicedLegs: readonly number[] | null = null,
 ): { maker: number | null; market: number | null } {
   const legs = (previews ?? []).map((p) => {
     const n = p?.fees ? legNotional(p) : null;
-    return p?.fees && n !== null ? { n, fees: p.fees } : null;
+    const impact = p?.fillEstimate ? (Math.max(0, p.fillEstimate.slippagePct) / 100) * (n ?? 0) : 0;
+    return p?.fees && n !== null ? { n, fees: p.fees, impact } : null;
   });
   const [a, b] = legs;
   if (legs.length !== 2 || !a || !b) return { maker: null, market: null };
   const asMaker = (l: typeof a) => l.fees.est.maker ?? l.n * l.fees.makerRate;
-  const asTaker = (l: typeof a) => l.fees.est.taker ?? l.n * l.fees.takerRate;
-  const rest = (m: typeof a, h: typeof a) => asMaker(m) + asTaker(h);
-  const maker = makerIdx === 0 ? rest(a, b) : makerIdx === 1 ? rest(b, a) : Math.min(rest(a, b), rest(b, a));
+  const takerFee = (l: typeof a) => l.fees.est.taker ?? l.n * l.fees.takerRate;
+  const asTaker = (l: typeof a) => takerFee(l) + l.impact;
+  const sliced = slicedLegs?.length === 2 ? slicedLegs : null;
+  const rest = (m: typeof a, h: typeof a, hi: number) => asMaker(m) + takerFee(h) + (sliced ? sliced[hi] : h.impact);
+  const maker = makerIdx === 0 ? rest(a, b, 1) : makerIdx === 1 ? rest(b, a, 0) : Math.min(rest(a, b, 1), rest(b, a, 0));
   return { maker, market: asTaker(a) + asTaker(b) };
 }
 

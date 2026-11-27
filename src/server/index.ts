@@ -23,7 +23,7 @@ import { TtlCache, TTL } from './cache';
 import { readOrCreateApiToken } from './authToken';
 import { InterestFile } from './interestLedger';
 import { JobFile, TransferFile } from './rebalanceJob';
-import { startKeepAwake } from './keepAwake';
+import { needsAwake, startKeepAwake } from './keepAwake';
 import { bootHaltTwap, sleepHaltTwap, type TwapRunDeps } from './twapRun';
 import { tokenizedIndexHtml } from './spa';
 import { restrictToOwner } from './secretFile';
@@ -31,6 +31,7 @@ import { botBaseUrl, createBotClient } from './telegram/botClient';
 import { createTelegramLink } from './telegram/link';
 import { TelegramStatus } from './telegram/status';
 import { createRollProbe } from './telegram/rollProbe';
+import { currentRebateClient } from './borosRebate';
 import { createTelegramSync, readTriggerCoins } from './telegram/sync';
 import { assetViewBuilderFor } from './routes/assetView';
 import { configuredRoot, createPairPricer } from './routes/borosPair';
@@ -155,7 +156,7 @@ const keepAwake: { current: ReturnType<typeof startKeepAwake> | null } = { curre
     platform: process.platform,
     pid: process.pid,
     spawn,
-    isLive: () => store.listPairs({ activeOnly: true }).length > 0 || rebalanceJobs.read()?.status === 'running',
+    isLive: () => needsAwake(store.listPairs({ activeOnly: true }), rebalanceJobs.read()),
   });
   const keepAwakeTimer = setInterval(() => keepAwake.current?.update(), 5000);
   keepAwakeTimer.unref();
@@ -220,6 +221,20 @@ const telegramSync = createTelegramSync({
     buildAssetView: (params) => assetViewBuilderFor(appDeps)(params),
     loadMarkets: (fresh) => (pairPricer ??= createPairPricer(appDeps)).loadMarkets(fresh),
     price: (body, fresh) => (pairPricer ??= createPairPricer(appDeps)).priceRequest(body, fresh),
+    loadRebate: async () => {
+      const client = currentRebateClient(appDeps);
+      if (!client) return null;
+      try {
+        const { value } = await cache.get(
+          `boros:rebate:${process.env.BOROS_ROOT_ADDRESS?.toLowerCase() ?? ''}`,
+          TTL.boros,
+          async () => (await client.status()).rebate,
+        );
+        return value;
+      } catch {
+        return null;
+      }
+    },
     now: Date.now,
   }),
   port,

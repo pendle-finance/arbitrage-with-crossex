@@ -92,9 +92,12 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   const cashCoin = poolCoin(legs[0]?.pool ?? 'HYPERLIQUID');
   const realized = legs.reduce((sum, l) => sum + l.realizedUsd, 0) - (realCost ?? job.feeSoFarUsd ?? 0);
   const addedLegs = job.steps.find((step) => step.addBack)?.addBack?.legs ?? [];
+  const closedOf = (symbol: string): number =>
+    legs.find((l) => l.symbol === symbol)?.filledQty ??
+    sliceSteps.filter((step) => step.perp?.symbol !== symbol).reduce((sum, step) => sum + (step.qty ?? 0), 0);
   const perpSizes = (delever?.legs ?? []).map((l) => ({
     venue: prettyVenue(l.exchange),
-    qty: perpNow + (addedLegs.find((row) => row.symbol === l.symbol)?.filled ?? 0),
+    qty: Math.max(0, l.before - closedOf(l.symbol)) + (addedLegs.find((row) => row.symbol === l.symbol)?.filled ?? 0),
   }));
   const [perpA, perpB] = perpSizes;
   const perpsRow = {
@@ -161,6 +164,11 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
             <span className="num">{sk('holdCloseMarket', { venue: prettyVenue(unwind.exchange), side: t(unwind.side === 'SELL' ? 'common.long' : 'common.short'), qty: sizeText(unwind.qty), coin })}</span>
           </HoldToConfirmButton>
         )}
+        {undo && !delever && !unwind && leg?.hedge === null && (
+          <HoldToConfirmButton tone="outline" holdMs={holdMs} disabled={pending} onConfirm={() => press('unwind')}>
+            <span className="num">{sk('holdKeepSmaller', { venue: prettyVenue(leg.exchange), side: t(leg.side === 'LONG' ? 'common.long' : 'common.short'), qty: sizeText(open), coin })}</span>
+          </HoldToConfirmButton>
+        )}
         {fixError}
       </div>
     );
@@ -208,7 +216,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
           rows={totalCostRows}
         />
       ),
-      acts: nextMove(true),
+      acts: nextMove(borrowLeft),
     });
   }
 
@@ -221,7 +229,7 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
   const imEnd = imOf(job.imUsedEnd, imAccount);
   const factRows: RunProps['rows'] = delever
     ? [
-        { label: sk('perpsLabel', { i: num(index, 0), n: num(count, 0) }), value: sk('perpsLine', { old: sizeText(perpBefore), now: sizeText(perpNow), coin }) },
+        { label: count > 1 ? sk('perpsLabel', { i: num(index, 0), n: num(count, 0) }) : sk('perpsRow'), value: sk('perpsLine', { old: sizeText(perpBefore), now: sizeText(perpNow), coin }) },
         ...(borosNow > 0 ? [{ label: sk('borosLabel'), value: sk('borosLine', { amount: sizeText(borosNow), end: sizeText(borosEnd) }) }] : []),
         ...(imNow !== null && imEnd !== null
           ? [{ label: sk('imLabel', { account: accountText(imAccount) }), value: sk('imNowEnd', { a: pctText(imNow), b: pctText(imEnd) }) }]
@@ -263,14 +271,14 @@ export function SliceJobView(props: JobViewProps & { onTab?: (tab: RebalanceTab)
           <Spinner className="h-3 w-3" />
           {sk('pausing', { i: num(index, 0), n: num(count, 0) })}
         </p>
-      ) : (
+      ) : count > 1 ? (
         <>
           <button type="button" className="btn px-4 py-2 text-sm" disabled={pending} onClick={() => pause.mutate(job.id)}>
             {sk('holdPause')}
           </button>
           {pause.error instanceof Error && <Line tone="text-guava">{localizeServerText(pause.error.message)}</Line>}
         </>
-      ),
+      ) : null,
     });
   }
 

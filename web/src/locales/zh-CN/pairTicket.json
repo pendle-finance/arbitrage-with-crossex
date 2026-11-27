@@ -260,6 +260,8 @@
     "autoBook": "自动：手续费相同，盘口较薄的一条腿挂单。",
     "hoverRests": "挂限价单 · 挂单手续费 {{bp}} bps（{{pct}}%）",
     "hoverHedges": "每笔成交以市价对冲 · 吃单手续费 {{bp}} bps（{{pct}}%）",
+    "hoverRestsPlain": "挂限价单，收挂单手续费",
+    "hoverHedgesPlain": "每笔成交以市价对冲，收吃单手续费",
     "takerAfter": "转吃单时限",
     "takerChoice": {
       "m5": "5 分钟",
@@ -268,10 +270,12 @@
       "custom": "自定义"
     },
     "takerHover": "仍未成交的部分随后以市价单成交（吃单手续费 {{bp}} bps，{{pct}}%）。",
+    "takerHoverPlain": "仍未成交的部分随后以市价单成交，收吃单手续费。",
     "takerNeverHover": "永不：限价单一直挂到成交。",
     "takerOver": "不得超过间隔的 80%（{{max}}）",
     "customAria": "转吃单时限，自定义时间",
     "customRange": "30 秒到 24 小时",
+    "customReads": "= {{span}}",
     "repeg": "落后时改价",
     "repegChoiceOff": "关",
     "repegHover": "落后到这个幅度时，把限价移到最优价。最多每 5 秒一次。"

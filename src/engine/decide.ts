@@ -282,21 +282,14 @@ export function decide(pair: PairRow, p: Projection, now: number, ctx: DecideCtx
     m.closeReason === 'cancelled' && // loop encodes POC insta-cancels as 'poc-reject', never 'cancelled'
     !m.cancelRequested
   ) {
-    // A close is different: Gate itself cancels resting orders when margin runs
-    // low or the position changes (liquidation, ADL), which is exactly when the
-    // trader most wants out. Finish the close at market instead of stopping
-    // half done. If leg A's position is gone, the reduce-only clips are refused
-    // and the clip budget stops the deal with an error alert.
-    if (pair.a.reduceOnly && pair.deadlineAt !== null) {
-      return {
-        type: 'setMode',
-        mode: 'CONVERTING',
-        reason: 'maker canceled on venue — closing the rest at market',
-        resetClipBudget: true,
-        alert: `The resting close order on ${pair.a.contract} was cancelled on the venue. Closing the rest at market.`,
-      };
-    }
-    return { type: 'setMode', mode: 'STOPPING', reason: 'maker canceled on venue = STOP' };
+    return {
+      type: 'setMode',
+      mode: 'STOPPING',
+      reason: 'maker canceled on venue = STOP',
+      ...(pair.a.reduceOnly
+        ? { alert: `The resting close order on ${pair.a.contract} was cancelled on the venue. The close stopped with the rest still open.` }
+        : {}),
+    };
   }
   if (pair.mode === 'OPENING' && pair.deadlineAt !== null && now >= pair.deadlineAt) {
     return { type: 'setMode', mode: 'CONVERTING', reason: 'maker timeout' };

@@ -56,6 +56,10 @@ export function ListPicker<K extends string>({
     panel.current?.focus({ preventScroll: true });
   }, [open, place]);
 
+  useEffect(() => {
+    if (open) panel.current?.children[at]?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, place, at]);
+
   const select = (row: ListPickerRow<K>) => {
     if (fired.current || row.disabled) return;
     fired.current = true;
@@ -63,12 +67,32 @@ export function ListPicker<K extends string>({
     if (row.key !== value) onChange(row.key);
   };
 
+  const letterOf = (e: KeyboardEvent<HTMLElement>): string | null =>
+    e.key.length === 1 && e.key !== ' ' && !e.ctrlKey && !e.metaKey && !e.altKey ? e.key.toLowerCase() : null;
+
+  const matchAfter = (from: number, letter: string): number => {
+    for (let step = 1; step <= rows.length; step += 1) {
+      const index = (from + step) % rows.length;
+      const name = rows[index].name;
+      if (!rows[index].disabled && typeof name === 'string' && name.toLowerCase().startsWith(letter)) return index;
+    }
+    return -1;
+  };
+
   const onTriggerKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       if (open) hide(true);
       else show();
+      return;
     }
+    const letter = letterOf(e);
+    if (letter === null || open) return;
+    const match = matchAfter(rows.findIndex((row) => row.key === value), letter);
+    if (match < 0) return;
+    e.preventDefault();
+    show();
+    setActive(match);
   };
 
   const onListKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -84,7 +108,10 @@ export function ListPicker<K extends string>({
       if (!e.repeat) select(rows[at]);
       return;
     }
-    const next = e.key === 'ArrowDown' ? (at + 1) % rows.length : e.key === 'ArrowUp' ? (at <= 0 ? rows.length : at) - 1 : null;
+    const letter = letterOf(e);
+    const typed = letter === null ? -1 : matchAfter(at, letter);
+    const next =
+      e.key === 'ArrowDown' ? (at + 1) % rows.length : e.key === 'ArrowUp' ? (at <= 0 ? rows.length : at) - 1 : typed >= 0 ? typed : null;
     if (next === null) return;
     e.preventDefault();
     e.stopPropagation();

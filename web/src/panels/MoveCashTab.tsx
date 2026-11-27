@@ -86,11 +86,16 @@ export function MoveCashTab({
     setAcceptNext(next === 'custom');
     if (next !== 'custom') setAccepted(acceptedOf(view.plans[next], pickedRoute(view.plans[next], null).name));
   };
+  const sendableOf = (pool: Pool): number => {
+    const own = Math.max(0, bucketOf(buckets, pool)?.cash ?? 0);
+    const gate = pool === 'CROSSEX' ? (buckets.find((b) => keyOf(b) === 'USDC/GATE')?.cash ?? 0) : 0;
+    return floorCents(own + (gate >= DUST ? gate : 0));
+  };
   const enterCustom = () => {
     const first = movesOf(planSteps(plan))[0];
     setCustomFrom(first?.from ?? 'HYPERLIQUID');
     setCustomTo(first?.to ?? 'CROSSEX');
-    const cash = floorCents(bucketOf(buckets, first?.from ?? 'HYPERLIQUID')?.cash ?? 0);
+    const cash = sendableOf(first?.from ?? 'HYPERLIQUID');
     const prefill = floorCents(Math.min(plan.moves, cash));
     setCustomText(prefill > 0 ? String(prefill) : '');
     pickGoal('custom');
@@ -126,7 +131,8 @@ export function MoveCashTab({
   const imStop = fromPools.includes('CROSSEX') ? crossexImFull(view.imUsed) : null;
   const cashShort = goal === 'repay' && !plan.balanced && flow.left >= DUST && flow.borrowCoin !== null;
   const walletPools = POOLS.filter((pool) => buckets.some((bucket) => keyOf(bucket) === poolKey(pool)));
-  const fromCash = floorCents(bucketOf(buckets, customFrom)?.cash ?? 0);
+  const serverMax = goal === 'custom' && plan.goal.kind === 'custom' && plan.goal.from === customFrom ? plan.customMaxUsd : null;
+  const fromCash = serverMax != null ? floorCents(serverMax) : sendableOf(customFrom);
   const borrowing = borrowingBuckets(buckets);
   const borrowTotal = borrowing.reduce((total, b) => total + b.borrow, 0);
 

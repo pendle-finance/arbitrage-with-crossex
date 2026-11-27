@@ -1139,14 +1139,14 @@ describe('POST /api/rebalance with a close and reopen', () => {
     expect(plans.repay.realize).toBeNull();
   });
 
-  it('a custom slice size gets its own slice row', async () => {
+  it('a realize read prices only the one order row and ignores a sent slice size', async () => {
     mockAccount(ownerAccount());
     const h = boot();
 
     const res = await h.get('/api/rebalance?sliceUsd=30000');
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().data.realize.sliceOptions).toContainEqual(expect.objectContaining({ sizeUsd: 30_000, custom: true }));
+    expect(res.json().data.realize.sliceOptions).toEqual([expect.objectContaining({ whole: true, custom: false })]);
   });
 
   it('a realize job is rebuilt from realizeUsd and ignores sent leg sizes', async () => {
@@ -1536,58 +1536,6 @@ describe('POST /api/rebalance with a close and reopen', () => {
       .reply(200, { coin: 'ETH', levels: [levels(SHALLOW_HL_ETH.bids), levels(SHALLOW_HL_ETH.asks)] });
   }
 
-  it('a realize start at a slice past the book is refused, and a slice inside the book starts', async () => {
-    mockShallowHlBook();
-    refuseSends();
-    const h = boot();
-    const { realize } = (await h.view()).data;
-    const options = realize.sliceOptions as SliceOption[];
-    const past = options.find((option) => option.pastBook);
-    const inside = options.find((option) => !option.pastBook);
-    expect(past).toBeDefined();
-    expect(inside).toBeDefined();
-    const startAt = async (sliceUsd: number) => {
-      const plan = (await h.get(`/api/rebalance?sliceUsd=${sliceUsd}`)).json().data.realize.all;
-      return h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', sliceUsd, costUsd: plan.estimates.maker.totalUsd });
-    };
-
-    const refused = await startAt(past!.sizeUsd);
-
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
-    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
-
-    const started = await startAt(inside!.sizeUsd);
-
-    expect(started.statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-  });
-
-  it('a delever start at a slice past the book is refused, and a slice inside the book starts', async () => {
-    mockShallowHlBook();
-    mockGateEthBook();
-    refuseSends();
-    const h = boot();
-    const plan = (await h.post('/api/rebalance/delever/plan', DELEVER_ASK)).json().data;
-    const options = plan.sliceOptions as SliceOption[];
-    const past = options.find((option) => option.pastBook);
-    const inside = options.find((option) => !option.pastBook);
-    expect(past).toBeDefined();
-    expect(inside).toBeDefined();
-    const startAt = (sliceUsd: number) => h.post('/api/rebalance', { kind: 'delever', exec: 'maker', sliceUsd, costUsd: plan.estimates.maker.totalUsd, delever: DELEVER_ASK });
-
-    const refused = await startAt(past!.sizeUsd);
-
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json().error).toMatchObject({ label: 'PLAN_CHANGED', message: PLAN_CHANGED_TEXT });
-    expect(existsSync(path.join(h.dataDir, 'rebalance.json'))).toBe(false);
-
-    const started = await startAt(inside!.sizeUsd);
-
-    expect(started.statusCode).toBe(202);
-    await waitFor(() => h.file().status === 'halted', 'the halt');
-  });
-
   it('a delever on a thin book refuses one order, and the same close with TWAP on starts', async () => {
     mockShallowHlBook();
     mockGateEthBook();
@@ -1603,6 +1551,25 @@ describe('POST /api/rebalance with a close and reopen', () => {
     const twapped = (await h.post('/api/rebalance/delever/plan', { ...DELEVER_ASK, twap })).json().data;
     expect(twapped.twap.refusal).toBeNull();
     const started = await h.post('/api/rebalance', { kind: 'delever', exec: 'maker', costUsd: twapped.estimates.maker.totalUsd, delever: { ...DELEVER_ASK, twap } });
+    expect(started.statusCode, started.body).toBe(202);
+    await waitFor(() => h.file().status === 'halted', 'the halt');
+  });
+
+  it('a realize on a thin book refuses one order, and the same start with TWAP on starts', async () => {
+    mockShallowHlBook();
+    mockGateEthBook();
+    refuseSends();
+    const h = boot();
+    const { realize } = (await h.view()).data;
+    expect((realize.sliceOptions as SliceOption[]).find((option) => option.whole)?.pastBook).toBe(true);
+    const costUsd = realize.all.estimates.maker.totalUsd;
+
+    const refused = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd });
+
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json().error.label).toBe('PLAN_CHANGED');
+    expect(realize.all.refused).toMatchObject({ reason: 'past-book' });
+    const started = await h.post('/api/rebalance', { kind: 'realize', realizeTarget: 'all', exec: 'maker', costUsd, twap: { durationSec: 3600, slices: 40 } });
     expect(started.statusCode, started.body).toBe(202);
     await waitFor(() => h.file().status === 'halted', 'the halt');
   });
@@ -1798,6 +1765,7 @@ describe('POST /api/rebalance with a close and reopen', () => {
       expect(res.statusCode, res.body).toBe(200);
       const data = res.json().data;
       expect(data.boros[0].closeSize).toBeGreaterThan(0);
+      expect(data.boros[0].name).toBe('Hyperliquid ETH 31 Dec 2099');
       expect(data.borosCloses).toBe(12);
       if (gasUsd === null) expect(data.borosGasUsd).toBeNull();
       else expect(data.borosGasUsd).toBeCloseTo(gasUsd, 9);

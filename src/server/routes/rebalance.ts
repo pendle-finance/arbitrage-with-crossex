@@ -109,6 +109,7 @@ const NOTHING_TO_REALIZE = 'No perp in profit to realize.';
 const NOTHING_TO_CLOSE = 'Nothing to close.';
 const NOTHING_TO_FIX = 'Nothing is left to fix.';
 const FIX_RUNNING = 'A fix is still running. Wait for it to finish.';
+const TWAP_GAP_FIRST = 'A leg is not hedged. Close or reopen it with a hold first.';
 const NOT_SLICED = 'Only a sliced run can pause.';
 const REALIZE_TARGET_NEEDED = 'Pick Clear debt, All or Custom before you realize.';
 const CUSTOM_NEEDS_USD = 'Enter the Custom amount before you realize.';
@@ -302,7 +303,6 @@ function poolQueryOf(raw: unknown): Pool | undefined {
 function deleverRequestOf(value: unknown): DeleverRequest | null {
   const raw = (value ?? {}) as Partial<Record<keyof DeleverRequest, unknown>>;
   if (!Array.isArray(raw.perps) || !Array.isArray(raw.boros) || !isExec(raw.exec)) return null;
-  if (raw.sliceUsd !== undefined && !isPositive(raw.sliceUsd)) return null;
   const perps = raw.perps.map((leg: unknown) => {
     const { symbol, qty } = (leg ?? {}) as { symbol?: unknown; qty?: unknown };
     return typeof symbol === 'string' && isPositive(qty) ? { symbol, qty } : null;
@@ -316,7 +316,6 @@ function deleverRequestOf(value: unknown): DeleverRequest | null {
     perps: perps.filter((leg) => leg !== null),
     boros: boros.filter((leg) => leg !== null),
     exec: raw.exec,
-    ...(raw.sliceUsd === undefined ? {} : { sliceUsd: raw.sliceUsd }),
   };
 }
 
@@ -331,11 +330,6 @@ const belowMinText = (refused: NonNullable<DeleverPlan['refused']>): string =>
   refused.reason === 'same-side'
     ? 'Both perps are on the same side, so a Delever would add to the position.'
     : `${refused.venue} takes at least ${refused.minQty} ${refused.coin}.`;
-
-const cappedSliceOf = (options: SliceOption[], asked: number): number =>
-  options.some((option) => !option.custom && option.sizeUsd === asked)
-    ? asked
-    : Math.min(asked, options.find((option) => option.custom)?.sizeUsd ?? asked);
 
 const twapQtysOf = (plan: { slices: number; sliceQty: string; lastQty: string }): number[] =>
   plan.slices > 0 ? [...Array.from({ length: plan.slices - 1 }, () => Number(plan.sliceQty)), Number(plan.lastQty)] : [];
@@ -532,7 +526,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         const tick = (rules.value.find((rule) => rule.symbol === maker.symbol) as { tickSize?: string } | undefined)?.tickSize;
         if (!tick) throw new CoreError(`No venue rule for ${maker.symbol}, so the slice was not sent.`);
         price = (await deps.engine!.venue.best(maker.symbol, maker.side, tick)) ?? undefined;
-        if (price === undefined) throw new CoreError(`No best price for ${maker.symbol}, so the slice was not sent.`);
+        if (price === undefined) throw new CoreError(`No best price for ${maker.symbol}, so the slice was not sent.`, 'network');
       }
       const outcome = await createDeal(deps, { ...req, price });
       if ('refusal' in outcome) throw new CoreError(outcome.refusal.message, outcome.refusal.category);
@@ -638,7 +632,7 @@ export function rebalanceRoutes(deps: AppDeps) {
         ),
       );
 
-    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, sliceUsd?: number, realizePool?: Pool, twapSlices?: number) => {
+    const loadView = async (fresh: boolean, custom: Goal | null, realizeUsd: number | null = null, realizePool?: Pool, twapSlices?: number) => {
       const account = await readAccount(fresh);
       const userId = account.value.userId ? String(account.value.userId) : null;
       const [positions, rates, paid, coins, rules, fees, tickers, depth] = await Promise.all([
@@ -690,14 +684,14 @@ export function rebalanceRoutes(deps: AppDeps) {
         repay: planFor(buckets, account.value, inputs, REPAY_GOAL),
         custom: custom ? planFor(buckets, account.value, inputs, custom) : null,
       };
-      const realize = realizeTabOf(buckets, account.value, twapSlices === undefined ? inputs : { ...inputs, twapSlices }, realizeUsd, sliceUsd, realizePool);
+      const realize = realizeTabOf(buckets, account.value, twapSlices === undefined ? inputs : { ...inputs, twapSlices }, realizeUsd, realizePool);
       const fullPlan = fullPlanOf(buckets, account.value, inputs);
       const imUsed = imUsedOf(account.value);
       const stale = [account, positions, rates, paid, coins, rules, fees, tickers].some((r) => r.stale);
       return { buckets, plans, realize, fullPlan, imUsed, stale, userId, perpRules, perps, books };
     };
 
-    const borosLegsOf = async (request: DeleverRequest, fresh: boolean): Promise<DeleverInput['boros']> => {
+    const borosLegsOf = async (request: DeleverRequest, fresh: boolean): Promise<(DeleverInput['boros'][number] & { name: string })[]> => {
       if (request.boros.length === 0) return [];
       const address = configuredRoot();
       if (!address) throw new CoreError(NO_BOROS_WALLET);
@@ -715,6 +709,7 @@ export function rebalanceRoutes(deps: AppDeps) {
           if (!isPositive(collateralPriceUsd)) throw new CoreError(`No collateral price for Boros market ${marketId}.`);
           return {
             marketId,
+            name: market.name,
             size,
             book: await fetchBorosOrderBook(borosFetch, marketId).catch(() => null),
             collateralPriceUsd,
@@ -755,7 +750,8 @@ export function rebalanceRoutes(deps: AppDeps) {
         rules: perpRulesOf(rules.value),
         account: account.value,
       };
-      return { input, plan: planDelever(input), userId: account.value.userId ? String(account.value.userId) : null, account: account.value, perps: positions.value ?? [] };
+      const names = new Map(boros.map((row) => [row.marketId, row.name]));
+      return { input, names, plan: planDelever(input), userId: account.value.userId ? String(account.value.userId) : null, account: account.value, perps: positions.value ?? [] };
     };
 
     const loadInTransit = async (job: Job): Promise<ReturnType<typeof inTransitOf>> => {
@@ -811,13 +807,12 @@ export function rebalanceRoutes(deps: AppDeps) {
     };
 
     app.get('/rebalance', async (req, reply) => {
-      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; sliceUsd?: unknown; realizePool?: unknown; twapDurationSec?: unknown; twapSlices?: unknown };
+      const query = (req.query ?? {}) as { from?: unknown; to?: unknown; amount?: unknown; realizeUsd?: unknown; realizePool?: unknown; twapDurationSec?: unknown; twapSlices?: unknown };
       const custom = customGoalOf(query);
       const realizeUsd = positiveQueryOf(query.realizeUsd, 'realizeUsd') ?? null;
-      const sliceUsd = positiveQueryOf(query.sliceUsd, 'sliceUsd');
       const realizePool = poolQueryOf(query.realizePool);
       const twapInput = realizeTwapQueryOf(query.twapDurationSec, query.twapSlices);
-      const { buckets, plans, realize, fullPlan, imUsed, stale, perps, books } = await loadView(false, custom, realizeUsd, sliceUsd, realizePool, twapInput?.slices);
+      const { buckets, plans, realize, fullPlan, imUsed, stale, perps, books } = await loadView(false, custom, realizeUsd, realizePool, twapInput?.slices);
       const twapOf = (plan: RealizePlan | null) => (twapInput ? realizeTwapOf(plan, perps, books, twapInput, false).catch(() => null) : null);
       const realizeTwap = twapInput && realize ? { clearDebt: await twapOf(realize.clearDebt), all: await twapOf(realize.all), custom: await twapOf(realize.custom) } : null;
       const job = jobs?.read() ?? null;
@@ -898,12 +893,13 @@ export function rebalanceRoutes(deps: AppDeps) {
       const request = deleverRequestOf(req.body);
       if (!request) throw new CoreError(DELEVER_NEEDS);
       const twapInput = twapInputOf((req.body as { twap?: unknown } | undefined)?.twap);
-      const { input, plan: whole, perps } = await loadDelever(request, false);
+      const { input, names, plan: whole, perps } = await loadDelever(request, false);
       const twapped = await deleverTwapOf(whole, perps, twapInput, false);
       const plan = twapped.twap?.plan ? planDelever(input, twapQtysOf(twapped.twap.plan)) : whole;
       const borosCloses = twapped.twap?.plan ? twapped.twap.plan.slices * plan.boros.filter((row) => row.closeSize > 0).length : 0;
       const perCloseUsd = borosCloses > 0 ? await borosOrderGasUsd() : 0;
-      return reply.ok({ ...plan, ...twapped, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
+      const boros = plan.boros.map((row) => ({ ...row, name: names.get(row.marketId) ?? null }));
+      return reply.ok({ ...plan, boros, ...twapped, borosCloses, borosGasUsd: perCloseUsd === null ? null : borosCloses * perCloseUsd });
     });
 
     interface StartBody {
@@ -916,7 +912,6 @@ export function rebalanceRoutes(deps: AppDeps) {
       amount?: unknown;
       realizeQty?: unknown;
       exec?: unknown;
-      sliceUsd?: unknown;
       realizeUsd?: unknown;
       realizeTarget?: unknown;
       realizePool?: unknown;
@@ -1033,8 +1028,7 @@ export function rebalanceRoutes(deps: AppDeps) {
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
-      const shownSlice = isPositive(body.sliceUsd) ? body.sliceUsd : undefined;
-      const view = await catchRateLimit(loadView(true, null, realizeUsd, shownSlice, realizePool, twapInput?.slices));
+      const view = await catchRateLimit(loadView(true, null, realizeUsd, realizePool, twapInput?.slices));
       if (!view) return conflict(reply, STALE_TEXT);
       const tab = view.realize;
       if (tab && realizePool !== undefined && tab.pool !== realizePool) return conflict(reply, WALLET_HAS_NO_UPNL, PLAN_CHANGED_LABEL);
@@ -1045,10 +1039,9 @@ export function rebalanceRoutes(deps: AppDeps) {
       const twap = twapInput ? await realizeTwapOf(plan, view.perps, view.books, twapInput, true) : null;
       if (twap?.refusal) return refuse400(reply, twap.refusal.text);
       if (twapInput && !twap?.plan) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
-      const sliceUsd = cappedSliceOf(tab.sliceOptions, shownSlice ?? tab.defaultSliceUsd);
       const takerAfterSec = twap?.plan ? takerAfterOf({ timeoutSec: askedTwap?.takerAfterSec }, twap.plan) : null;
       const repegBehindBp = repegOf({ repegBehindBp: askedTwap?.repegBehindBp });
-      const estimate = twap?.estimates ? twap.estimates[exec] : realizeTabEstimateOf(tab, plan, exec, sliceUsd);
+      const estimate = twap?.estimates ? twap.estimates[exec] : realizeTabEstimateOf(tab, plan, exec);
       if (costRoseTooMuch(estimate.totalUsd, body.costUsd as number)) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
@@ -1069,8 +1062,8 @@ export function rebalanceRoutes(deps: AppDeps) {
           openGaps: gapsLeftBy(store.read(), livePerps),
           kind: 'realize',
           exec,
-          sliceUsd: shownSlice === undefined ? 0 : sliceUsd,
-          sliceCount: twap?.plan ? twap.plan.slices : sliceCountOf(tab.sliceOptions, sliceUsd, notionalUsd),
+          sliceUsd: 0,
+          sliceCount: twap?.plan ? twap.plan.slices : sliceCountOf(tab.sliceOptions, tab.defaultSliceUsd, notionalUsd),
           capsUsd: capsUsdOf(view.perps, view.perpRules),
           estimate,
           twap: twap?.plan
@@ -1095,8 +1088,7 @@ export function rebalanceRoutes(deps: AppDeps) {
     const startDelever = async (body: StartBody, exec: RealizeExec, reply: FastifyReply): Promise<FastifyReply> => {
       const asked = deleverRequestOf(body.delever);
       if (!asked) throw new CoreError(DELEVER_NEEDS);
-      const shownSlice = isPositive(body.sliceUsd) ? body.sliceUsd : asked.sliceUsd;
-      const request: DeleverRequest = { ...asked, exec, ...(shownSlice === undefined ? {} : { sliceUsd: shownSlice }) };
+      const request: DeleverRequest = { ...asked, exec };
       const store = requireJobs();
       const locked = findLock();
       if (locked) return conflict(reply, locked);
@@ -1118,8 +1110,8 @@ export function rebalanceRoutes(deps: AppDeps) {
       const [rates, paid] = await Promise.all([readRates(), interestPaid(userId)]);
       const lockedNow = findLock();
       if (lockedNow) return conflict(reply, lockedNow);
-      const sliceUsd = cappedSliceOf(plan.sliceOptions, shownSlice ?? plan.defaultSliceUsd);
-      if (!twap?.plan && plan.sliceOptions.find((option) => option.sizeUsd === sliceUsd)?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
+      const sliceUsd = plan.defaultSliceUsd;
+      if (!twap?.plan && plan.sliceOptions[0]?.pastBook) return conflict(reply, PLAN_CHANGED_TEXT, PLAN_CHANGED_LABEL);
       const lead = plan.legs[plan.makerLeg];
       const leadUsd = lead ? (lead.closeQty * plan.notHedgedMaxUsd) / Math.max(plan.notHedgedMaxQty, Number.EPSILON) : 0;
       const livePerps = jobPerpsOf(loaded.perps);
@@ -1167,7 +1159,6 @@ export function rebalanceRoutes(deps: AppDeps) {
           throw new CoreError(`unknown order mode ${String(body.exec)}`);
         })();
         if (!isShownCost(body.costUsd)) return conflict(reply, RELOAD_TEXT);
-        if (body.sliceUsd !== undefined && !isPositive(body.sliceUsd)) return conflict(reply, RELOAD_TEXT);
         return kind === 'realize' ? startRealize(body, exec, reply) : startDelever(body, exec, reply);
       }
       const { route, costUsd } = body;
@@ -1304,6 +1295,9 @@ export function rebalanceRoutes(deps: AppDeps) {
       }
       const lockedNow = resumeLock(current);
       if (lockedNow) return conflict(reply, lockedNow);
+      if (current.kind === 'twap' && current.notHedgedQty > 0 && !deps.engine!.store.listPairs().some((pair) => isChildOf(current.id, pair.id) && pair.mode === 'HALTED')) {
+        return conflict(reply, TWAP_GAP_FIRST);
+      }
       current.status = 'running';
       current.haltReason = null;
       if (current.kind === 'twap') {

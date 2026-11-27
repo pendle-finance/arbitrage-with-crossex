@@ -38,9 +38,8 @@ export interface DealOpts {
   clipBandPct?: number;
 }
 
-function makerLegOf(opts: DealOpts, restsOn: 'a' | 'b', pricePolicy: 'fixed' | 'touch'): 'auto' | 'a' | 'b' | null {
-  if (opts.makerLeg === 'auto') return pricePolicy === 'touch' ? 'auto' : restsOn;
-  return opts.makerLeg === restsOn ? restsOn : null;
+function makerLegOf(opts: DealOpts, restsOn: 'a' | 'b'): 'a' | 'b' | null {
+  return opts.makerLeg === 'auto' || opts.makerLeg === restsOn ? restsOn : null;
 }
 
 function makerFieldsOf(opts: DealOpts, pricePolicy: 'fixed' | 'touch') {
@@ -77,7 +76,7 @@ export function dealFromActions(
     if (!closeMaker.preview.qty || Number(hedge.preview.qty) !== Number(closeMaker.preview.qty)) return null;
     if (!m.makerPrice || !(Number(m.makerPrice) > 0)) return null;
     if (opts) {
-      const makerLeg = makerLegOf(opts, legs[0] === closeMaker ? 'a' : 'b', 'touch');
+      const makerLeg = makerLegOf(opts, legs[0] === closeMaker ? 'a' : 'b');
       if (!makerLeg) return null;
       const [first, second] = legs;
       return {
@@ -118,7 +117,7 @@ export function dealFromActions(
     if (!maker.preview.qty || !maker.preview.price) return null;
     const pricePolicy = maker.action.pegToTouch ? 'touch' : 'fixed';
     if (opts) {
-      const makerLeg = makerLegOf(opts, legs[0] === maker ? 'a' : 'b', pricePolicy);
+      const makerLeg = makerLegOf(opts, legs[0] === maker ? 'a' : 'b');
       if (!makerLeg) return null;
       const [first, second] = legs;
       return {

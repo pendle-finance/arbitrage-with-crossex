@@ -115,8 +115,24 @@ describe('dealFromActions with maker opts', () => {
     expect(map([long, short()], { ...opts, makerLeg: 'a' })).toBeNull();
   });
 
-  it('auto with a tracked price lets the server pick, and Never sends a null timeout', () => {
-    expect(map([long, short()], { ...opts, timeoutSec: null })).toMatchObject({ makerLeg: 'auto', timeoutSec: null });
+  it('auto with a tracked price sends the leg the preview rested, and Never sends a null timeout', () => {
+    expect(map([long, short()], { ...opts, timeoutSec: null })).toMatchObject({
+      a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY' },
+      b: { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'SELL' },
+      price: '2500',
+      makerLeg: 'b',
+      timeoutSec: null,
+    });
+    expect(map([short({ symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY' }), { ...long, symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', side: 'SELL' }], opts)).toMatchObject({
+      a: { symbol: 'GATE_FUTURE_ETH_USDT', side: 'BUY' },
+      makerLeg: 'a',
+    });
+  });
+
+  it('auto sends the resting leg on a TWAP start too, so the server never picks again', () => {
+    const plan = { slices: 12, sliceQty: '0.004', lastQty: '0.006', intervalSec: 300, durationSec: 3600, takerAfterSec: 240 };
+    const deal = map([long, short()], opts)!;
+    expect(twapStartFrom(deal, plan, 'client-1').deal).toMatchObject({ makerLeg: 'b', price: '2500' });
   });
 
   it('typed price turns re-peg off and pins the leg the price was typed for', () => {
@@ -159,7 +175,7 @@ describe('dealFromActions with maker opts', () => {
     expect(map(actions, { ...opts, clipBandPct: 0.5 })).toMatchObject({
       a: { symbol: 'GATE_FUTURE_ETH_USDT', reduceOnly: true },
       b: { symbol: 'HYPERLIQUID_FUTURE_ETH_USDC', reduceOnly: true },
-      makerLeg: 'auto',
+      makerLeg: 'a',
       clipBandPct: 0.5,
       timeoutSec: 240,
       repegBehindBp: 5,

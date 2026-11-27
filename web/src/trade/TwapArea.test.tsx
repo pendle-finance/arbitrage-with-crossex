@@ -105,7 +105,7 @@ describe('TwapArea', () => {
   });
 
   it('price impact pair from preview', () => {
-    const impact: PriceImpactPreview = { whole: 1_320, sliced: 240 };
+    const impact: PriceImpactPreview = { whole: 1_320, sliced: 240, slicedLegs: [240] };
     renderWithClient(<Ticket previewOf={ethPreview} coin="ETH" impact={impact} />);
     const row = twapSwitch().closest('div.flex') as HTMLElement;
     expect(row).toHaveTextContent(/Price impact.*\$1,320.*\$240/);
@@ -122,15 +122,15 @@ describe('TwapArea', () => {
     expect(await screen.findByText('Slices 12 · Last slice 2,000.011 ETH')).toBeInTheDocument();
   });
 
-  it('labels the impact pair as the whole run only with the switch on', async () => {
-    renderWithClient(<Ticket previewOf={ethPreview} coin="ETH" impact={{ whole: 1_320, sliced: 240 }} />);
-    expect(screen.queryByText('whole run')).toBeNull();
+  it('the impact pair shows one order against the slices with no total label', async () => {
+    renderWithClient(<Ticket previewOf={ethPreview} coin="ETH" impact={{ whole: 1_320, sliced: 240, slicedLegs: [120, 120] }} />);
     await turnOn();
-    expect(screen.getByText('whole run')).toBeInTheDocument();
+    expect(twapSwitch().closest('div.flex')).toHaveTextContent(/Price impact.*\$1,320.*\$240/);
+    expect(twapSwitch().closest('div.flex')).not.toHaveTextContent(/\btotal\b/);
   });
 
   it('price impact reads too thin when the book ends before the whole size', () => {
-    renderWithClient(<Ticket previewOf={ethPreview} coin="ETH" impact={{ whole: null, sliced: 240 }} />);
+    renderWithClient(<Ticket previewOf={ethPreview} coin="ETH" impact={{ whole: null, sliced: 240, slicedLegs: [240] }} />);
     expect(twapSwitch().closest('div.flex')).toHaveTextContent(/Price impact.*Book too thin to price.*\$240/);
   });
 

@@ -1,17 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BorosPairSimulation, SimulatedLeg } from '../../src/core/boros/pair';
+import { rollFitSize, rollTargetsFor, type RollPairFacts, type RollTarget } from '../../src/core/boros/rollProbe';
 import {
   ROLL_OPPORTUNITY_SHARE,
   exitPnlOf,
   rollFigures,
-  rollFitSize,
   rollOpportunities,
-  rollTargetsFor,
-  type RollPairFacts,
   type RollProbeResult,
-  type RollTarget,
-} from '../../src/core/boros/rollProbe';
+} from '../../web/src/panels/assets/rollSizing';
 import { fetchBorosMarkets, type BorosMarket, type FetchLike } from '../../src/core/boros/client';
 
 const NOW = 1_760_000_000;
@@ -256,10 +253,10 @@ describe('the roll rate', () => {
     // a loss of 8% × size × years where the truth is a gain of 2%.
     const held = { kind: 'yu' as const, sizeToken: 1_000, imUsd: 0, maturity: NOW + YEAR };
     const exitSim = sim({ intent: 'close', legs: [leg({ execApr: -0.03, estFillSize: 1_000 }), leg({ execApr: -0.03, estFillSize: 1_000 })] });
-    const long = exitPnlOf(exitSim, [{ ...held, venue: 'Gate', side: 'LONG', lockedApr: 0.05 }], NOW);
+    const long = exitPnlOf(exitSim, [{ ...held, venue: 'Gate', side: 'LONG', lockedApr: 0.05 }], NOW).total;
     expect(long).toBeCloseTo((-0.03 - -0.05) * 1_000, 9);
     // A SHORT entered at −5% stores −0.05; closing at −3% loses 2%.
-    const short = exitPnlOf(exitSim, [{ ...held, venue: 'Gate', side: 'SHORT', lockedApr: -0.05 }], NOW);
+    const short = exitPnlOf(exitSim, [{ ...held, venue: 'Gate', side: 'SHORT', lockedApr: -0.05 }], NOW).total;
     expect(short).toBeCloseTo((-0.05 - -0.03) * 1_000, 9);
   });
 

@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
-import { useBorosAgent } from '../api/queries';
+import { useBorosAgent, useRebalanceFix } from '../api/queries';
+import { HoldToConfirmButton } from '../components/HoldToConfirmButton';
 import { useActiveWallet } from '../panels/trackedAddress';
 import type { RebalanceJob, RunLegView, RunOrderView } from '../api/types';
 import { Chip } from '../components/Chip';
@@ -128,6 +129,18 @@ export function RunView({ title, chip, progress, firstLine, rows, graph, priceBo
         </div>
       )}
       {acts}
+    </div>
+  );
+}
+
+function BorosGapHold({ jobId, amount }: { jobId: string; amount: number }) {
+  const fix = useRebalanceFix();
+  return (
+    <div className="flex flex-col gap-2">
+      <HoldToConfirmButton tone="cyan" disabled={fix.isPending} onConfirm={() => fix.mutate({ id: jobId, action: 'boros-retry' })}>
+        <span className="num">{t('accounts.deleverTab.holdCloseBoros', { amount: qtyText(amount) })}</span>
+      </HoldToConfirmButton>
+      {fix.error instanceof Error && <span className="text-[11px] text-rose-400">{localizeServerText(fix.error.message)}</span>}
     </div>
   );
 }
@@ -283,8 +296,16 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
       ...slippageRow(t('trade.deal.slippage')),
       { label: t('trade.twap.run.fees'), value: usdText(fees.readUsd + fees.estUsd) },
     ];
-    const firstLine = <ResultBox tone="stop" title={t('trade.twap.run.stopped', { i: slice, n: of })} rows={toResultRows(stopRows)} />;
-    return { ...base, firstLine, rows: [], acts: null };
+    const result = <ResultBox tone="stop" title={t('trade.twap.run.stopped', { i: slice, n: of })} rows={toResultRows(stopRows)} />;
+    const borosGap = job.kind === 'delever' ? (job.borosGapYu ?? 0) : 0;
+    if (borosGap <= 0) return { ...base, firstLine: result, rows: [], acts: null };
+    const firstLine = (
+      <>
+        {result}
+        <VerdictAlert tone="act" text={<span className="num">{t('accounts.deleverTab.borosNoPerp', { amount: qtyText(borosGap) })}</span>} />
+      </>
+    );
+    return { ...base, firstLine, rows: [], acts: <BorosGapHold jobId={job.id} amount={borosGap} /> };
   }
 
   if (pausing) {
@@ -353,6 +374,19 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
     } else if (kind !== null && kind !== 'restart' && kind !== 'sleep' && kind !== 'refused' && kind !== 'hedge-margin' && kind !== 'capped-rest') {
       firstLine = <VerdictAlert tone={redHalt ? 'act' : 'warn'} text={localizeServerText(job.haltReason ?? '')} />;
     }
+    const open = job.notHedgedQty ?? 0;
+    const followLeg = legs.find((leg) => leg.symbol === job.follow?.symbol) ?? hedge;
+    const leadLeg = legs.find((leg) => leg.symbol === job.unwindTarget?.symbol) ?? maker;
+    const notHedged = job.kind === 'delever' && open > 0 && kind !== null && kind !== 'hedge-margin' && borosHold === null && followLeg !== undefined && leadLeg !== undefined;
+    if (notHedged) {
+      const text = (
+        <>
+          <span className="num block">{t('accounts.sliceRun.notHedged', { qty: qtyText(open), coin })}</span>
+          {job.haltReason && <span className="block text-ink-300">{localizeServerText(job.haltReason)}</span>}
+        </>
+      );
+      firstLine = <VerdictAlert tone="act" text={text} />;
+    }
     const holdOn = (key: 'holdOpenHedge' | 'holdCloseFilled', leg: RunLegView) =>
       t(`trade.twap.run.${key}`, { venue: leg.name, side: sideWord(leg.side), qty: qtyText(gap), coin });
     const holds =
@@ -360,7 +394,12 @@ export function twapRunProps(job: RebalanceJob, now: number): RunViewProps {
         ? close
           ? { open: holdOn('holdCloseFilled', hedge), close: holdOn('holdOpenHedge', maker) }
           : { open: holdOn('holdOpenHedge', hedge), close: holdOn('holdCloseFilled', maker) }
-        : null;
+        : notHedged && followLeg && leadLeg
+          ? {
+              open: t('accounts.sliceRun.holdCloseMarket', { venue: followLeg.name, side: sideWord(followLeg.side), qty: qtyText(job.follow?.qty ?? open), coin }),
+              close: t('accounts.sliceRun.holdUndoClose', { venue: leadLeg.name, side: sideWord(leadLeg.side), qty: qtyText(open), coin }),
+            }
+          : null;
     const acts = <TwapActs jobId={job.id} state="halted" holds={holds} borosHold={borosHold} noResume={stuck} />;
     return { ...base, firstLine, rows, acts };
   }

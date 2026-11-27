@@ -23,10 +23,11 @@ export function useCloseMaker(): CloseMaker {
   return { taker, repegBp, setRepegBp, opts: { takerAfterSec: taker.sec, repegBehindBp: repegBp } };
 }
 
-export function CloseMakerSettings({ maker, capSec }: { maker: CloseMaker; capSec: number | null }) {
+export function CloseMakerSettings({ maker, capSec, symbols }: { maker: CloseMaker; capSec: number | null; symbols?: readonly string[] }) {
   return (
     <MakerSettings
       legs={null}
+      symbols={symbols}
       makerLeg="auto"
       autoPick={null}
       onMakerLeg={() => undefined}

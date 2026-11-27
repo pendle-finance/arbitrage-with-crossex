@@ -56,6 +56,7 @@ export interface RealizeLeg {
   closeImpactUsd: number;
   reopenImpactUsd: number;
   impactBp: number;
+  takerRate?: number;
 }
 
 export type RealizeRefusalReason = 'no-fee-rate' | 'no-margin' | 'past-book' | 'over-cap';
@@ -90,7 +91,6 @@ export interface RealizeInput {
   books: Record<string, NormalizedBook | null>;
   feeRows: VenueFeeRow[];
   rules: Record<string, PerpRule>;
-  sliceUsd?: number;
   twapSlices?: number;
 }
 
@@ -115,7 +115,7 @@ interface Paying {
   takerRate: number;
   book: NormalizedBook | null;
   capUsd: number;
-  split: Pick<RealizeInput, 'sliceUsd' | 'twapSlices'>;
+  split: Pick<RealizeInput, 'twapSlices'>;
 }
 
 interface Priced {
@@ -158,6 +158,8 @@ export const isInProfit = (perp: RealizePerp): boolean => {
   if (!(entry > 0) || !(mark > 0) || !Number.isFinite(qty) || qty === 0) return false;
   return qty < 0 ? entry > mark : mark > entry;
 };
+
+export const realizeFeePerCoin = (mark: number, takerRate: number): number => 2 * mark * takerRate;
 
 export const legFeeUsd = (leg: RealizeLeg): number => leg.closeFeeUsd + leg.reopenFeeUsd + (leg.convert?.feeUsd ?? 0);
 
@@ -223,7 +225,7 @@ function payingLegs(input: RealizeInput): { legs: Paying[]; feeMissing: boolean 
         takerRate: rates.takerRate,
         book: input.books[symbol] ?? null,
         capUsd: marketCapUsd(perp, rule, exchange, mark),
-        split: { sliceUsd: input.sliceUsd, twapSlices: input.twapSlices },
+        split: { twapSlices: input.twapSlices },
       },
     ];
   });
@@ -268,15 +270,14 @@ export function averagedRealize(profitPerCoin: number, positionQty: number, qtys
 
 function slicesOf(leg: Paying, qty: number): number[] {
   const capQty = leg.capUsd / leg.mark;
-  const { sliceUsd, twapSlices } = leg.split;
+  const { twapSlices } = leg.split;
   if (twapSlices !== undefined && twapSlices > 0) return twapQtysFor(qty, twapSlices, leg.lot, leg.minQty, capQty);
   const mid = touchOf(leg.book)?.mid ?? leg.mark;
-  const askedUsd = sliceUsd !== undefined && sliceUsd > 0 ? sliceUsd : ONE_ORDER_USD;
-  return sliceQtys(qty, Math.min(askedUsd / mid, capQty), leg.minQty, leg.lot, capQty);
+  return sliceQtys(qty, Math.min(ONE_ORDER_USD / mid, capQty), leg.minQty, leg.lot, capQty);
 }
 
 function orderOf(leg: Paying, qty: number, state: State): Order {
-  const run = averagedRealize(leg.profitPerCoin, leg.positionQty, slicesOf(leg, qty), 2 * leg.mark * leg.takerRate);
+  const run = averagedRealize(leg.profitPerCoin, leg.positionQty, slicesOf(leg, qty), realizeFeePerCoin(leg.mark, leg.takerRate));
   const closed = run.qty > 0 && run.qty < qty ? Number(roundToStep(run.qty, leg.lot, 'nearest')) : qty;
   const realizedUsd = run.qty > 0 ? run.realizedUsd : qty * leg.profitPerCoin;
   const priced = priceOrder(leg, closed);
@@ -339,6 +340,7 @@ function legOf(pool: Pool, leg: Paying, order: Order): RealizeLeg {
     closeImpactUsd: order.priced.closeImpactUsd,
     reopenImpactUsd: order.priced.reopenImpactUsd,
     impactBp: order.priced.impactBp,
+    takerRate: leg.takerRate,
   };
 }
 

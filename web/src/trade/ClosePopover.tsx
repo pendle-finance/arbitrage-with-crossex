@@ -192,9 +192,9 @@ export function ClosePopover({
   // "151.202" typed against a 151.20195 position — the very figure the max
   // hint printed. Converted back to base units when the box is in USD.
   const displayRounding = (() => {
-    const shown = Number(sig(maxInUnit));
-    if (!Number.isFinite(shown)) return 0;
-    const slack = Math.abs(shown - maxInUnit);
+    const shown = [Number(sig(maxInUnit)), Number(qtyGrouped(maxInUnit).replace(/,/g, ''))].filter(Number.isFinite);
+    if (shown.length === 0) return 0;
+    const slack = Math.max(...shown.map((s) => Math.abs(s - maxInUnit)));
     return effUnit === 'usd' && mark > 0 ? slack / mark : slack;
   })();
   const qtyEps = Math.max(1e-9, maxQtyBase * 1e-7, displayRounding);
@@ -418,6 +418,7 @@ export function ClosePopover({
         {twapOn && (
           <MakerSettings
             legs={null}
+            symbols={[position.symbol]}
             makerLeg="auto"
             autoPick={null}
             onMakerLeg={() => {}}
@@ -485,7 +486,7 @@ export function ClosePopover({
                     sub={t('trade.close.reduceOnlyIoc')}
                     value={
                       <span className="inline-flex items-center gap-1.5">
-                        <SideChip side={heldSide} />
+                        <SideChip side={p.side} />
                         {p.qty ? `${qtyGrouped(p.qty)} ${base}` : '—'}
                       </span>
                     }

@@ -119,7 +119,7 @@ const ceilDiv = (a: bigint, b: bigint): bigint => (a + b - 1n) / b;
 
 const gcd = (a: bigint, b: bigint): bigint => (b === 0n ? a : gcd(b, a % b));
 
-function spanText(sec: number): string {
+export function spanText(sec: number): string {
   const hours = Math.floor(sec / 3600);
   const minutes = Math.floor((sec % 3600) / 60);
   const seconds = sec % 60;

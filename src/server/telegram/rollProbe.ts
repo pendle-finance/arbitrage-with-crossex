@@ -1,22 +1,30 @@
-import type { AssetGroup } from '../../../web/src/api/types';
+import type { AssetGroup, Rebate } from '../../../web/src/api/types';
 import { deriveAsset, pairRollDue, type PairEstimate } from '../../../web/src/panels/assets/assetModel';
+import {
+  NO_ROLL_RATE_INPUTS,
+  ROLL_OPPORTUNITY_SHARE,
+  exitLegBodies,
+  inRollUnits,
+  pairRollGeometry,
+  rollFigures,
+  rollOpportunities,
+  rollPart,
+  rollRebateApr,
+  type RollProbeResult,
+  type RollRateInputs,
+} from '../../../web/src/panels/assets/rollSizing';
 import type { BorosMarket } from '../../core/boros/client';
 import { readSpreadSide, type SpreadSide } from '../../core/boros/spread';
 import { normalizeVenue } from '../../core/boros/venue';
 import type { BorosPairSimulation } from '../../core/boros/pair';
 import {
   MAX_ROLL_TARGETS,
-  ROLL_OPPORTUNITY_SHARE,
-  pairRollGeometry,
-  rollFigures,
   rollBatchTolerance,
   rollFitSize,
-  rollOpportunities,
   rollQuoteIsFillable,
   rollTargetsFor,
   type RollTarget,
   seedSlippageApr,
-  type RollProbeResult,
 } from '../../core/boros/rollProbe';
 import type { AssetViewOut, AssetViewParams } from '../routes/assetView';
 import type { RollSignalInput } from './sync';
@@ -36,6 +44,7 @@ export interface RollProbeDeps {
   borosAddress: () => string | null;
   buildAssetView: (params: AssetViewParams) => Promise<AssetViewOut>;
   loadMarkets: (fresh: boolean) => Promise<BorosMarket[]>;
+  loadRebate: () => Promise<Rebate | null>;
   price: PairPricer;
   now: () => number;
   log?: (message: string) => void;
@@ -45,16 +54,20 @@ function entryLegsOf(
   target: RollTarget,
   markets: ReadonlyArray<BorosMarket>,
   perpSides: Readonly<Record<string, SpreadSide>>,
-): { marketId: number; direction: 'long' | 'short' }[] | null {
+  exposure: { long: number; short: number },
+  heldSize: number,
+): { marketId: number; direction: 'long' | 'short'; own: number }[] | null {
   if (!('spreadMarketId' in target)) {
     return [
-      { marketId: target.longMarketId, direction: 'long' },
-      { marketId: target.shortMarketId, direction: 'short' },
+      { marketId: target.longMarketId, direction: 'long', own: exposure.long },
+      { marketId: target.shortMarketId, direction: 'short', own: exposure.short },
     ];
   }
   const venues = markets.find((m) => m.marketId === target.spreadMarketId)?.spreadVenues;
   const side = venues ? readSpreadSide(venues, perpSides) : null;
-  return side === null ? null : [{ marketId: target.spreadMarketId, direction: side === 'LONG' ? 'long' : 'short' }];
+  return side === null
+    ? null
+    : [{ marketId: target.spreadMarketId, direction: side === 'LONG' ? 'long' : 'short', own: heldSize }];
 }
 
 export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalInput[]> {
@@ -63,12 +76,15 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
     base: string,
     markets: BorosMarket[],
     nowSec: number,
+    rebate: Rebate | null,
   ): Promise<RollSignalInput['targets']> => {
-    const { yuLegs, heldSize, pairPerpImUsd } = pairRollGeometry(pair);
+    const { yuLegs, heldSize, exposure, pairPerpImUsd } = pairRollGeometry(pair);
     if (yuLegs.length === 0 || yuLegs.some((l) => l.marketId === undefined) || !(heldSize > 0)) return [];
     const heldIds = yuLegs.map((l) => l.marketId as number);
     const current = pair.lockedAprFwd;
     if (current === null) return [];
+    const settleOf = (id: number): number => markets.find((m) => m.marketId === id)?.settleFeeApr ?? 0;
+    const rates: RollRateInputs = { ...NO_ROLL_RATE_INPUTS, rebateApr: (ids) => rollRebateApr(settleOf, rebate, ids) };
 
     const targets = rollTargetsFor(markets, pair, base, pair.soonestMaturitySec).slice(0, MAX_ROLL_TARGETS);
     if (targets.length === 0) return [];
@@ -82,7 +98,7 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
 
     const probes: Record<number, RollProbeResult> = {};
     for (const target of targets) {
-      const entryLegs = entryLegsOf(target, markets, perpSides);
+      const entryLegs = entryLegsOf(target, markets, perpSides, exposure, heldSize);
       if (entryLegs === null) continue;
       const entrySlippageApr = seedSlippageApr(
         markets,
@@ -93,19 +109,10 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
         exitSlip = exitSlippageApr,
         entrySlip = entrySlippageApr,
       ): { exit: PairSimulateBody; entry: PairSimulateBody } => ({
-        exit: {
-          address,
-          legs: yuLegs.map((l) => ({
-            marketId: l.marketId as number,
-            direction: l.side === 'LONG' ? 'short' : 'long',
-            slippageApr: exitSlip,
-            size,
-          })),
-          intent: 'close',
-        },
+        exit: { address, legs: exitLegBodies({ pair, slippageApr: exitSlip, size }) ?? [], intent: 'close' },
         entry: {
           address,
-          legs: entryLegs.map((l) => ({ ...l, slippageApr: entrySlip, size })),
+          legs: entryLegs.map(({ own, ...l }) => ({ ...l, slippageApr: entrySlip, size: rollPart(own, size, heldSize) })),
           intent: 'open',
         },
       });
@@ -115,9 +122,10 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
         deps.price(fifth.exit, false),
         deps.price(fifth.entry, false),
       ]);
-      const exitFifthLegs = exitFifth.simulation.legs;
-      const entryFifthLegs = entryFifth.simulation.legs;
-      assertBooksRead([...exitFifthLegs, ...entryFifthLegs]);
+      assertBooksRead([...exitFifth.simulation.legs, ...entryFifth.simulation.legs]);
+      const whole = bodies(heldSize);
+      const exitFifthLegs = inRollUnits(exitFifth.simulation.legs, whole.exit.legs, heldSize);
+      const entryFifthLegs = inRollUnits(entryFifth.simulation.legs, whole.entry.legs, heldSize);
       const size = rollFitSize(exitFifthLegs, entryFifthLegs, heldSize);
       if (size === null) {
         probes[target.maturity] = { ok: false, rate: null, size: 0 };
@@ -144,6 +152,7 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
         maturity: target.maturity,
         heldLegs: yuLegs,
         nowSec,
+        rates,
       });
       probes[target.maturity] = { ok, rate: ok ? netRate : null, size };
     }
@@ -160,15 +169,16 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
     if (address === null) return [];
     const nowMs = deps.now();
     const nowSec = Math.floor(nowMs / 1000);
-    const [view, markets] = await Promise.all([
+    const [view, markets, rebate] = await Promise.all([
       deps.buildAssetView({ address, requestedSinceSec: null, legSince: new Map(), fresh: false }),
       deps.loadMarkets(false),
+      deps.loadRebate(),
     ]);
 
     const signals: RollSignalInput[] = [];
     let logged = false;
     for (const group of view.assets) {
-      const derived = deriveAsset(group as unknown as AssetGroup, {}, view.sinceSec, nowSec);
+      const derived = deriveAsset(group as unknown as AssetGroup, {}, view.sinceSec, nowSec, undefined, rebate);
       for (const pair of derived.pairs) {
         if (!pairRollDue(pair, nowSec)) continue;
         const signal: RollSignalInput = {
@@ -181,7 +191,7 @@ export function createRollProbe(deps: RollProbeDeps): () => Promise<RollSignalIn
           targets: [],
         };
         try {
-          signal.targets = await probePair(pair, group.base, markets, nowSec);
+          signal.targets = await probePair(pair, group.base, markets, nowSec, rebate);
         } catch (err) {
           // A pair that could not be priced (a Boros 429, a book that did
           // not load) is NOT a pair with nothing to roll into: it is marked
