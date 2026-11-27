@@ -429,6 +429,16 @@ export function useVersion() {
   });
 }
 
+/** Re-reads GitHub now instead of waiting out the six-hour cache. The answer
+ * goes under `qk.version`, so the header's update pill sees it at once. */
+export function useCheckForUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => fetchJson<UpdateStatus>('/version?fresh=1'),
+    onSuccess: (data) => qc.setQueryData(qk.version, data),
+  });
+}
+
 /**
  * Watches the installed commit while an update runs, so the page can reload
  * onto the new bundle.
