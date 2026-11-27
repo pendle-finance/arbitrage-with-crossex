@@ -1447,8 +1447,12 @@ describe('pairs over legs: spread opens and mixed closes', () => {
     leg({ market: bnMarket, book: book(101, 0.04, 0.042), direction: 'long', ...over });
   const gateShort = () => leg({ market: gateSingle, book: book(52, 0.04, 0.042) });
 
+  it('accepts an open of one single leg, as Single mode sends when no same-date single exists', () => {
+    const legs = [{ ...leg(), size: SIZE }];
+    expect(codes(gateOf(pairOf(legs), legs))).not.toContain('unhedged-open');
+  });
+
   it.each([
-    ['one single leg', () => [{ ...leg(), size: SIZE }]],
     ['three same-side legs', () => [{ ...leg(), size: SIZE }, { ...binanceLong({ direction: 'short' }), size: SIZE }, { ...gateShort(), size: SIZE }]],
     ['two single legs of unequal size', () => [{ ...leg(), size: SIZE }, { ...binanceLong(), size: SIZE / 2 }]],
     ['two spread legs', () => [{ ...spreadLeg(), size: SIZE }, { ...spreadLeg({ direction: 'long' }), size: SIZE }]],

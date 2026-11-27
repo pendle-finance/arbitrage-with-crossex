@@ -718,7 +718,8 @@ export function BorosPairTicket({
      * itself") — which also stops it walking either book. So a single-leg
      * ticket borrows a real, eligible partner (same collateral and maturity)
      * purely to satisfy the shape; `onlyLeg: 0` sizes it to zero, so it is
-     * quoted and never traded.
+     * quoted and never traded. A single with no such partner (the HL Jan
+     * singles beside the HL-GATE spread) goes on the wire alone.
      */
     const partnerId =
       mode === 'single'
@@ -733,7 +734,7 @@ export function BorosPairTicket({
     // Two markets sharing no maturity are no pair: nothing to quote.
     if (!address || marketA === null || !sizeOk) return null;
     const hedgeBody = hedgeBase ? { hedge: { base: hedgeBase, longVenue: hedgeLong, shortVenue: hedgeShort } } : {};
-    if (isSpread) {
+    if (isSpread || (mode === 'single' && onlyLeg === null && partnerId === null)) {
       return {
         address,
         legs: [{ marketId: marketA, direction: dirA, slippageApr: aprA, size: sizeNum }],

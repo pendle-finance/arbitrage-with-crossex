@@ -879,7 +879,9 @@ function receiveLegOf(legs: readonly SimulatedLeg[]): number | null {
 }
 
 function isHedgedOpenShape(inputs: readonly BorosPairLegInput[], legs: readonly SimulatedLeg[]): boolean {
-  if (inputs.length === 1) return isSpreadMarket(inputs[0].market);
+  // One leg is a spread, or a single that Single mode opens alone, as it does
+  // with a zero-size partner when one exists.
+  if (inputs.length === 1) return true;
   if (inputs.length !== 2 || inputs.some((l) => isSpreadMarket(l.market))) return false;
   const [a, b] = legs.map((l) => Math.abs(l.sizing.deltaSize));
   return a === 0 || b === 0 || a === b;
