@@ -8,6 +8,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRATEGY_STORAGE_KEY } from '../panels/HomeControls';
 import { installFakeWallet, removeFakeWallet } from '../test/fakeWallet';
@@ -2127,6 +2128,127 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() =>
       expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short' })]),
     );
+  });
+
+  describe('Single back to Pair after leg A moved on its own', () => {
+    const LATER = SPREAD_OPP_MATURITY + 64 * 86_400;
+    const janSetup = (bodies: Record<string, unknown>[], spread: Record<string, unknown> = {}) =>
+      server.use(
+        ...spreadHandlers((b) => bodies.push(b), {
+          extraMarkets: [marketRow({ marketId: 219, name: 'Hyperliquid ETH 29 Jan 2027', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: LATER })],
+          extraSpreads: [spreadRow({ marketId: 299, name: 'ETH Spread HL-GATE 29 Jan 2027', maturity: LATER, ...spread })],
+        }),
+      );
+    const chips = () => within(screen.getByRole('group', { name: 'Maturity' })).getAllByRole('button');
+    const optionKeys = async (user: ReturnType<typeof userEvent.setup>, label: string) => {
+      await user.click(screen.getByRole('button', { name: label }));
+      const list = await screen.findByRole('listbox', { name: label });
+      const keys = [...list.querySelectorAll<HTMLElement>('[data-value]')].map((o) => o.dataset.value ?? '');
+      await user.keyboard('{Escape}');
+      return keys;
+    };
+
+    it('the same holds when the trade rail owns the Pair/Single switch', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      function RailHarness() {
+        const [mode, setMode] = useState<'pair' | 'single'>('pair');
+        return (
+          <>
+            <button type="button" onClick={() => setMode('single')}>rail single</button>
+            <button type="button" onClick={() => setMode('pair')}>rail pair</button>
+            <BorosPairTicket mode={mode} onModeChange={setMode} />
+          </>
+        );
+      }
+      renderWithClient(<RailHarness />);
+      await waitForOptions(user, 'Market A');
+      await pickOption(user, 'Market A', '211');
+      await pickOption(user, 'Market B', '209');
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      await user.click(screen.getByRole('button', { name: 'rail single' }));
+      await pickOption(user, 'Market', '209');
+      await user.click(screen.getByRole('button', { name: 'rail pair' }));
+
+      expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '209');
+      expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '');
+      expect(await optionKeys(user, 'Market B')).toContain('211');
+    });
+
+    it('leg B on the same venue as the new leg A clears, and both pickers list every venue', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      await user.click(screen.getByRole('radio', { name: 'Single' }));
+      await pickOption(user, 'Market', '209');
+      await user.click(screen.getByRole('radio', { name: 'Pair' }));
+
+      expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '209');
+      expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '');
+      expect(await optionKeys(user, 'Market B')).toContain('211');
+      expect(screen.queryByText(/cannot offset itself/)).not.toBeInTheDocument();
+      await pickOption(user, 'Market B', '211');
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+    });
+
+    it('leg A moved to a date leg B lacks takes the spread at that date', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      // Swap so HL is leg A, then Single keeps HL and moves it to Jan.
+      await user.click(screen.getByRole('button', { name: /swap/i }));
+      await user.click(screen.getByRole('radio', { name: 'Single' }));
+      expect(screen.getByRole('button', { name: 'Market' })).toHaveAttribute('data-value', '209');
+      await user.click(chips()[1]);
+      expect(screen.getByRole('button', { name: 'Market' })).toHaveAttribute('data-value', '219');
+      await user.click(screen.getByRole('radio', { name: 'Pair' }));
+
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByLabelText('Market A')).toHaveAttribute('data-value', '219');
+      expect(screen.getByLabelText('Market B')).toHaveAttribute('data-value', '211');
+      await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+      await waitFor(() =>
+        expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: 299, size: 0.121 })]),
+      );
+    });
+
+    it('a spread at a date only it lists stays picked when it stops taking the trade, never moving to another date', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      await user.click(chips()[1]);
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+      // Reduce-only with no Jan spread held: the spread no longer takes it.
+      await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
+
+      expect(tradeOn()).toBeInTheDocument();
+      expect(chips()).toHaveLength(2);
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+      expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled();
+    });
+
+    it('clicking Pair while Pair is on leaves a Jan spread pick alone', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+      await user.click(chips()[1]);
+      await user.click(screen.getByRole('radio', { name: 'Pair' }));
+
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+      await waitFor(() =>
+        expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: 299, size: 0.121 })]),
+      );
+    });
   });
 
   it('keeps the two single markets when the venues list no spread at that maturity', async () => {
