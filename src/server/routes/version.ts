@@ -8,25 +8,63 @@ import { isUpdating, startUpdate, updateProgress } from '../updater';
 import { compareVersions, fetchLatestVersion, type RemoteVersion } from '../version';
 import { borosExecutionsPending } from './borosPair';
 
+const FORCED_GAP_MS = 5 * 60_000;
+
 /**
  * GET /api/version — is a newer release published on GitHub main?
  *
  * Always 200; never throws. The remote read happens lazily (first request),
  * only when the running copy KNOWS its own version and the check isn't
  * disabled — so an unconfigured `updateCheck` dep (every test app, public
- * mode) makes this route provably network-free. Failures are cached as null
- * for the full TTL: silent by design.
+ * mode) makes this route provably network-free. A plain read's failure is
+ * cached as null for the full TTL: silent by design. A `?fresh=1` read
+ * stores only a good answer.
  */
 export function versionRoutes(deps: AppDeps) {
   const fetchImpl: FetchLike = deps.versionFetch ?? (globalThis.fetch as unknown as FetchLike);
+  /** When `?fresh=1` last read GitHub. GitHub allows 60 unauthenticated API
+   * reads an hour per IP, and its raw file server caches version.json for 5
+   * minutes, so a forced read sooner than that would spend reads for nothing. */
+  let forcedAt = 0;
+  let forcing: Promise<RemoteVersion | null> | null = null;
   return async function plugin(app: FastifyInstance): Promise<void> {
-    app.get('/version', async (_req, reply) => {
+    app.get('/version', async (req, reply) => {
       const current = deps.updateCheck?.current ?? null;
+      const checkOn = current !== null && !deps.updateCheck?.disabled;
       let remote: RemoteVersion | null = null;
-      if (current !== null && !deps.updateCheck?.disabled) {
-        remote = (
-          await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl))
-        ).value;
+      let freshRead: 'ok' | 'failed' | 'skipped' | null = null;
+      if (checkOn) {
+        const fresh = (req.query as { fresh?: string } | undefined)?.fresh === '1';
+        // Read outside the cache and store only a good answer. A null in the
+        // cache would hide an available update for 6 hours, and a throwing
+        // loader would fail every plain read that joined it. A press during
+        // another press's read shares it; a failed read does not start the wait.
+        const mine = fresh && !forcing && Date.now() - forcedAt >= FORCED_GAP_MS;
+        if (mine) {
+          forcing = fetchLatestVersion(fetchImpl)
+            .then(async (read) => {
+              if (read === null) return null;
+              forcedAt = Date.now();
+              await deps.cache.get('version:latest', TTL.version, async () => read, { fresh: true });
+              return read;
+            })
+            .finally(() => {
+              forcing = null;
+            });
+        }
+        const pending = fresh ? forcing : null;
+        if (pending) {
+          const read = await pending;
+          freshRead = read === null ? 'failed' : 'ok';
+          // On a failure, the last good answer, without a second read that
+          // would fail too.
+          remote = read ?? deps.cache.peek<RemoteVersion | null>('version:latest') ?? null;
+        } else if (fresh) freshRead = 'skipped';
+        if (freshRead !== 'failed') {
+          remote ??= (
+            await deps.cache.get('version:latest', TTL.version, () => fetchLatestVersion(fetchImpl))
+          ).value;
+        }
       }
       const updateAvailable =
         remote !== null && current !== null && (compareVersions(remote.version, current) ?? 0) > 0;
@@ -38,6 +76,8 @@ export function versionRoutes(deps: AppDeps) {
         updateAvailable,
         // Highlights only when they describe a version the user doesn't have.
         highlights: updateAvailable && remote ? remote.highlights : [],
+        checkOn,
+        freshRead,
       });
     });
 

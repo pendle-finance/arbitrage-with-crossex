@@ -201,6 +201,10 @@
     "available": " — v{{version}} available",
     "commitUnknown": "Commit unknown",
     "installed": " · installed {{date}}",
+    "checkUpdates": "Check for updates",
+    "upToDate": " · up to date",
+    "checkFailed": " · could not reach GitHub",
+    "checkedRecently": " · checked in the last 5 min",
     "sourceCheckout": "Source checkout"
   },
   "permissions": {
