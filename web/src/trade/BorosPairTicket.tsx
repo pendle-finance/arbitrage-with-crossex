@@ -912,7 +912,7 @@ export function BorosPairTicket({
     if (onlyLeg !== null) setSizeStr('');
     setOnlyLeg(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [marketA, marketB, dirA, dirB, intent, mode]);
+  }, [address, marketA, marketB, dirA, dirB, intent, mode]);
 
   const execute = useExecuteBorosPair();
 
@@ -1547,10 +1547,11 @@ export function BorosPairTicket({
              * the replay guard does not cover it.) The size that produced this
              * report has been spent; re-entering one is the point of
              * dismissing rather than using Complete or Retry, which set their
-             * own sizes.
-             *
+             * own sizes. A completion ends with it too, or the next size
+             * typed would trade one market alone.
              */
             setSizeStr('');
+            setOnlyLeg(null);
             setReport(null);
           }}
         />

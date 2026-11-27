@@ -1262,13 +1262,13 @@ describe('BorosPairTicket', () => {
       await user.click(screen.getByRole('radio', { name: 'Single' }));
       expect(screen.getByRole('button', { name: 'Complete now at market' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Retry' })).toBeDisabled();
-      expect(screen.getByText(/now shows another trade/)).toBeInTheDocument();
+      expect(screen.getByText(/no longer shows this trade/)).toBeInTheDocument();
 
       await user.click(screen.getByRole('radio', { name: 'Pair' }));
       // Complete sets its own size, so an empty box does not block it.
       await user.clear(screen.getByLabelText(/^Size per market/));
       expect(screen.getByRole('button', { name: 'Complete now at market' })).toBeEnabled();
-      expect(screen.queryByText(/now shows another trade/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/no longer shows this trade/)).not.toBeInTheDocument();
       await user.click(screen.getByRole('button', { name: 'Complete now at market' }));
       await waitFor(() => {
         const last = bodies[bodies.length - 1] as { onlyLeg?: number; legs: { marketId: number }[] };
@@ -1290,6 +1290,29 @@ describe('BorosPairTicket', () => {
       expect(screen.queryByText(/Completing market B only/i)).not.toBeInTheDocument();
       // The 40k residual was for leg B; on leg A it would widen the gap.
       expect(screen.getByLabelText(/^Size/)).toHaveValue('');
+    });
+
+    it('dismissing the report after a completion sends both markets next time', async () => {
+      const user = userEvent.setup();
+      const bodies: Record<string, unknown>[] = [];
+      server.use(...handlers({ onSimulate: (b) => bodies.push(b), execute: legBShort }));
+      renderWithClient(<BorosPairTicket />);
+      await sendPair(user);
+      await user.click(screen.getByRole('button', { name: 'Complete now at market' }));
+      expect(screen.getByText(/Completing market B only/i)).toBeInTheDocument();
+
+      // The completion part-fills again; the trader leaves it.
+      const confirm = await screen.findByRole('button', { name: /complete market B/i });
+      await waitFor(() => expect(confirm).not.toBeDisabled());
+      await user.pointer({ keys: '[MouseLeft>]', target: confirm });
+      await user.click(await screen.findByRole('button', { name: 'Leave it' }, { timeout: 3_000 }));
+
+      expect(screen.queryByText(/Completing market B only/i)).not.toBeInTheDocument();
+      await user.type(screen.getByLabelText(/^Size per market/), '1000');
+      await waitFor(() => {
+        const last = bodies[bodies.length - 1] as { onlyLeg?: number | null };
+        expect(last.onlyLeg ?? null).toBeNull();
+      });
     });
 
     it("a card's Open ends the report and starts the card's trade", async () => {
