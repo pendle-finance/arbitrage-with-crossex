@@ -1785,6 +1785,7 @@ describe('BorosPairTicket — spread ticket', () => {
       spread?: Record<string, unknown>;
       gasBalanceUsd?: number;
       extraMarkets?: ReturnType<typeof marketRow>[];
+      extraSpreads?: ReturnType<typeof marketRow>[];
       singles?: Record<string, unknown>;
       gateSingle?: Record<string, unknown>;
     } = {},
@@ -1800,7 +1801,7 @@ describe('BorosPairTicket — spread ticket', () => {
           marketRow({ marketId: 211, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'Gate', tokenId: 2, collateral: 'ETH', maturity: SPREAD_OPP_MATURITY, ...extra.singles, ...extra.gateSingle }),
           ...(extra.extraMarkets ?? []),
         ],
-        spreadMarkets: [spreadRow(extra.spread)],
+        spreadMarkets: [spreadRow(extra.spread), ...(extra.extraSpreads ?? [])],
         crossByToken: [{ tokenId: 2, available: extra.available ?? 10 }],
       }),
       sim: {
@@ -2126,6 +2127,38 @@ describe('BorosPairTicket — spread ticket', () => {
     await waitFor(() => expect(tradeOn()).toBeInTheDocument());
     expect(screen.getByRole('checkbox', { name: 'Reduce-only' })).not.toBeChecked();
     expect(await screen.findByRole('button', { name: /Confirm · 1 Boros market order/ })).toBeInTheDocument();
+  });
+
+  it('offers a date only the spread lists (no Gate single then) and sends the order on that spread', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const LATER = SPREAD_OPP_MATURITY + 64 * 86_400;
+    server.use(
+      ...spreadHandlers((b) => bodies.push(b), {
+        extraMarkets: [marketRow({ marketId: 219, name: 'Hyperliquid ETH 29 Jan 2027', venue: 'Hyperliquid', tokenId: 2, collateral: 'ETH', maturity: LATER })],
+        extraSpreads: [spreadRow({ marketId: 299, name: 'ETH Spread HL-GATE 29 Jan 2027', maturity: LATER })],
+      }),
+    );
+    const user = userEvent.setup();
+    await pickShortHl(user);
+    await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+    const chips = () => within(screen.getByRole('group', { name: 'Maturity' })).getAllByRole('button');
+    expect(chips()).toHaveLength(2);
+    await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+
+    await user.click(chips()[1]);
+    expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+    expect(tradeOn()).toBeInTheDocument();
+    expect(screen.getByLabelText('Market A')).toHaveValue('211');
+    expect(screen.getByLabelText('Market B')).toHaveValue('209');
+    await waitFor(() =>
+      expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: 299, direction: 'short', size: 0.121 })]),
+    );
+
+    await user.click(chips()[0]);
+    expect(chips()[0]).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() =>
+      expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: SPREAD_OPP_MARKET_ID, direction: 'short' })]),
+    );
   });
 
   it('keeps the two single markets when the venues list no spread at that maturity', async () => {
