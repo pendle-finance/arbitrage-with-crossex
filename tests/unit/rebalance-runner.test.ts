@@ -4,14 +4,17 @@ import * as path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Clients } from '../../src/core/clients';
 import { floorToStep } from '../../src/core/numbers';
-import { marginPerConvertUsdc, realizeEstimateOf, type RealizeLeg, type RealizePlan } from '../../src/core/rebalance/realize';
+import { closeSecondsOf, DRIFT_DEFAULT_SEC, driftShareOf, exposureUsdOf, GAP_CONVERT_SEC, liftPerConvert, realizeEstimateOf, sliceReserveUsd, type RealizeLeg, type RealizePlan } from '../../src/core/rebalance/realize';
+import { impactOf } from '../../src/core/rebalance/slices';
+
+const LIFT = liftPerConvert(0.2);
 import type { NormalizedBook } from '../../src/core/estimate/books';
 import { pickMakerLeg } from '../../src/core/estimate/makerLeg';
 import type { DealRequest } from '../../src/engine/create';
 import { Store } from '../../src/engine/db';
 import { project } from '../../src/engine/decide';
 import type { PairMode, PairRow } from '../../src/engine/types';
-import { sleepHaltTwap, type TwapRunDeps } from '../../src/server/twapRun';
+import { markOpenGap, sleepHaltTwap, TAKER_FEE_BP, type TwapRunDeps } from '../../src/server/twapRun';
 import { closeBorosLegs, MAY_HAVE_FILLED, type BorosCloseDeps, type BorosCloseInput } from '../../src/server/borosClose';
 import { CoreError } from '../../src/core/errors';
 import {
@@ -28,6 +31,8 @@ import {
 } from '../../src/core/rebalance/plan';
 import { TtlCache } from '../../src/server/cache';
 import {
+  asRealize,
+  CONVERT_QUOTES_PER_DAY,
   convertSteps,
   HALT_TEXT,
   JobFile,
@@ -39,7 +44,9 @@ import {
   bannerFor,
   borosPartText,
   borosWaitText,
+  DAY_MS,
   FIX_UNCONFIRMED,
+  MAKER_REST_MS,
   RETRY_CONVERT_CAP,
   type DeleverJobInput,
   type Job,
@@ -53,12 +60,18 @@ import {
   LOOKUP_WINDOW_MS,
   POLL_MS,
   QUOTE_FLOOR,
-  QUOTE_RECHECK_MS,
   quoteFloor,
   applyFix,
+  creditGapChild,
   endHaltedChildren,
   BOROS_LATE_SEND_MS,
   cancelRestingLead,
+  FALLBACK_CONVERT_CAP,
+  GAP_EXTRA_CLOSES,
+  GAP_NET_MS,
+  GAP_GROWTH_CAP,
+  gapQuotesNeeded,
+  GAP_QUOTE_RETRIES,
   runJob,
   STEP_TIMEOUT_MS,
   tagFor,
@@ -5266,7 +5279,20 @@ const bookAt = (bid: number, ask: number): NormalizedBook => ({ bids: [[bid, 1_0
 const BOOK = bookAt(2999.9, 3000.1);
 const filled = (req: OrderReq): Outcome => ({ state: 'FILLED', executed: req.qty ?? '0' });
 
-function sliceVenue(decide: (req: OrderReq, index: number) => Outcome | (() => never) = filled, accountBody = account({ hyperliquid: 1_000 })) {
+const marginRefused = { now: false };
+
+const withUsdtDebt = (body: ReturnType<typeof account>): ReturnType<typeof account> => {
+  const [usdt, ...rest] = body.body.assets;
+  if ('liability' in usdt) return body;
+  const debt = { ...usdt, liability: '1000000000', borrowingInitialMargin: '200000000' } as typeof usdt;
+  return { body: { ...body.body, assets: [debt, ...rest] } };
+};
+
+function sliceVenue(decide: (req: OrderReq, index: number) => Outcome | (() => never) = filled, given = account({ hyperliquid: 1_000, availableMargin: 1e9 })) {
+  const accountBody = withUsdtDebt(given);
+  marginRefused.now = false;
+  const convertOrders = ordersInTurn();
+  const roomy = { body: { ...accountBody.body, availableMargin: String(Math.max(1e9, Number(accountBody.body.availableMargin))) } };
   const placed: Placed[] = [];
   const cancels: string[] = [];
   const find = (key: string) => placed.find((p) => p.id === key || p.req.text === key);
@@ -5298,12 +5324,15 @@ function sliceVenue(decide: (req: OrderReq, index: number) => Outcome | (() => n
     listCrossexRuleSymbols: seq({
       body: [HL_ETH, GATE_ETH].map((symbol) => ({ symbol, state: 'live', lotSize: '0.0001', minSize: '0.0001', tickSize: '0.1', businessType: 'FUTURE' })),
     }),
-    getCrossexAccount: seq(accountBody),
+    getCrossexAccount: async () => (marginRefused.now ? accountBody : roomy),
     listCrossexPositions: heldShort,
     listCrossexOpenOrders: seq({ body: [] }),
     listCrossexHistoryOrders: seq({ body: [] }),
     createCrossexConvertQuote: quotesAt((from) => from * 0.998),
-    createCrossexConvertOrder: ordersInTurn(),
+    createCrossexConvertOrder: async (...args: unknown[]) => {
+      marginRefused.now = false;
+      return (convertOrders as (...rest: unknown[]) => Promise<unknown>)(...args);
+    },
   };
   const reqs = () => placed.map((p) => p.req);
   return { placed, cancels, handlers, reqs };
@@ -5347,7 +5376,7 @@ function sliceRun(
 const hedgeRefused = (req: DealRequest): ChildOutcome => ({ a: req.qty, b: '0', mode: 'HALTED', haltKind: 'hedge-margin' });
 
 describe('slices: the follow', () => {
-  const marginRefusals = (accountBody = account({ hyperliquid: 1_000 })) => {
+  const marginRefusals = (accountBody = account({ hyperliquid: 1_000, availableMargin: 1e9 })) => {
     const h = sliceRun(sliceVenue(filled, accountBody), { exec: 'market', sliceUsd: 3_000 });
     return { h, engine: childEngine(h, hedgeRefused) };
   };
@@ -5370,27 +5399,38 @@ describe('slices: the follow', () => {
   it('fourth margin refusal halts', async () => {
     const { h, engine } = marginRefusals();
     await h.run();
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.convertCap, haltKind: 'margin' });
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: `${REOPEN_HALT.convertCap} The Hyperliquid short is 1 ETH smaller than before.`, haltKind: 'margin' });
     expect(engine.requests).toHaveLength(4);
   });
 
   it('no convert at zero borrow', async () => {
-    const body = account({ hyperliquid: 1_000 });
+    const body = account({ hyperliquid: 1_000, availableMargin: 1e9 });
     body.body.assets[0] = { ...body.body.assets[0], liability: '0' } as (typeof body.body.assets)[number];
     const { h, engine } = marginRefusals(body);
     await h.run();
     expect(h.count('createCrossexConvertQuote')).toBe(0);
     expect(engine.requests).toHaveLength(1);
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.noBorrow('HYPERLIQUID') });
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: `${REOPEN_HALT.noBorrow('HYPERLIQUID')} The Hyperliquid short is 1 ETH smaller than before.` });
   });
 });
 
 describe('slices: retry Convert at size', () => {
   const RUNGS = [50, 5_000, 100_000, 1_000_000, 6_000_000];
   const OPEN_QTY = 10;
-  const marginFor = (usd: number): number => Math.round(((usd * marginPerConvertUsdc) / 1.05) * 100) / 100;
-  const sized = (marginUsd: number, cash: number, refusals = 1, liability?: string) => {
-    const body = account({ hyperliquid: cash });
+  const IMPACT = impactOf(BOOK, 'SELL', 3000, OPEN_QTY)?.usd ?? 0;
+  const NAKED = OPEN_QTY * 3000 * driftShareOf(GAP_CONVERT_SEC);
+  const DEBT_DRIFT = 0.2 * OPEN_QTY * 3000 * driftShareOf(DRIFT_DEFAULT_SEC);
+  const marginFor = (usd: number): number => Math.max(1, Math.round(((usd * LIFT - OPEN_QTY * 3000 * 0.002 - IMPACT - NAKED - DEBT_DRIFT) / (1.05 + driftShareOf(DRIFT_DEFAULT_SEC))) * 100) / 100);
+  const retryNeed = (marginUsd: number, exposureUsd = marginUsd + 0.2 * OPEN_QTY * 3000): number =>
+    ceilCents(
+      ceilCents(
+        (marginUsd +
+          sliceReserveUsd({ qty: OPEN_QTY, price: 3000, marginPerCoin: marginUsd / OPEN_QTY, impactUsd: IMPACT, seconds: DRIFT_DEFAULT_SEC, exposureUsd, nakedUsd: OPEN_QTY * 3000, nakedSec: GAP_CONVERT_SEC })) /
+          LIFT,
+      ) * 1.05,
+    );
+  const sized = (marginUsd: number, cash: number, refusals = 1, liability?: string, availableMargin = 0) => {
+    const body = account({ hyperliquid: cash, availableMargin });
     if (liability !== undefined) body.body.assets[0] = { ...body.body.assets[0], liability } as (typeof body.body.assets)[number];
     const venue = sliceVenue(filled, body);
     venue.handlers.listCrossexPositions = seq({ body: [{ symbol: HL_ETH, positionQty: String(-OPEN_QTY), initialMargin: String(marginUsd) }] });
@@ -5402,13 +5442,13 @@ describe('slices: retry Convert at size', () => {
   const cents = (amounts: number[]) => amounts.reduce((total, amount) => total + Math.round(amount * 100), 0);
   const retryAmount = (h: ReturnType<typeof sliceRun>) => h.jobs.read()?.steps.find((step) => step.retry)?.retry?.convertAmount;
 
-  it.each(RUNGS)('converts need over margin per USDC plus 5%%, to the cent (%d USD)', async (usd) => {
+  it.each(RUNGS)('converts the reopen margin plus its reserve, less free margin, over the live lift, plus 5%%, to the cent (%d USD)', async (usd) => {
     const marginUsd = marginFor(usd);
-    const expected = ceilCents(((OPEN_QTY * (marginUsd / OPEN_QTY)) / marginPerConvertUsdc) * 1.05);
+    const expected = Math.min(usd * 2, Math.max(11, retryNeed(marginUsd)));
     const h = sized(marginUsd, usd * 2);
     await h.run();
     expect(retryAmount(h)).toBe(expected);
-    expect(Math.abs(expected - usd)).toBeLessThan(usd * 0.001 + 0.02);
+    if (usd >= 5_000) expect(Math.abs(expected - usd * 1.05)).toBeLessThan(usd * 0.001 + 0.02);
     const amounts = quoted(h);
     expect(amounts).toHaveLength(chunkCount(expected));
     for (const amount of amounts) expect(amount).toBeLessThanOrEqual(CONVERT_MAX);
@@ -5429,20 +5469,35 @@ describe('slices: retry Convert at size', () => {
     expect(cents(amounts)).toBeLessThanOrEqual(Math.round(cash * 100));
   });
 
-  it.each([50, 6_000_000])('at most 3 retry Converts per job (%d USD)', async (usd) => {
-    const marginUsd = marginFor(usd);
-    const expected = ceilCents(((OPEN_QTY * (marginUsd / OPEN_QTY)) / marginPerConvertUsdc) * 1.05);
-    const h = sized(marginUsd, usd * 2, Number.POSITIVE_INFINITY);
+  it.each([50, 6_000_000])('at most 3 retry Converts per job, and none before a slice while free margin covers it (%d USD)', async (usd) => {
+    const h = sized(marginFor(usd), usd * 2, Number.POSITIVE_INFINITY, undefined, 1e12);
     await h.run();
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.convertCap, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP });
-    expect(h.count('createCrossexConvertOrder')).toBe(RETRY_CONVERT_CAP * chunkCount(expected));
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: `${REOPEN_HALT.convertCap} The Hyperliquid short is 10 ETH smaller than before.`, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP, fallbackConverts: 0 });
+    expect(h.count('createCrossexConvertOrder')).toBe(RETRY_CONVERT_CAP);
   });
 
   it.each([50, 6_000_000])('no retry Convert once the To wallet borrow is 0 (%d USD)', async (usd) => {
     const h = sized(marginFor(usd), usd * 2, 1, '0');
     await h.run();
     expect(h.count('createCrossexConvertQuote')).toBe(0);
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.noBorrow('HYPERLIQUID'), haltKind: 'margin', retryConverts: 0 });
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: `${REOPEN_HALT.noBorrow('HYPERLIQUID')} The Hyperliquid short is 10 ETH smaller than before.`, haltKind: 'margin', retryConverts: 0 });
+  });
+
+  it.each([50, 6_000_000])('a hedged last slice that closes the whole position Converts the reopen need it read before the close, not an 11 USDC retry (%d USD)', async (usd) => {
+    const marginUsd = marginFor(usd);
+    const body = account({ hyperliquid: usd * 2, availableMargin: 0 });
+    const venue = sliceVenue(filled, body);
+    let flat = false;
+    venue.handlers.listCrossexPositions = (async () => ({ body: flat ? [] : [{ symbol: HL_ETH, positionQty: String(-OPEN_QTY), initialMargin: String(marginUsd), entryPrice: '3400', markPrice: '3000' }] })) as typeof venue.handlers.listCrossexPositions;
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 30_000, leg: { qty: OPEN_QTY } });
+    childEngine(h, (req, index) => {
+      if (index > 0) return {};
+      flat = true;
+      return hedgeRefused(req);
+    });
+    await h.run();
+    expect(retryAmount(h)).toBe(Math.min(usd * 2, Math.max(11, retryNeed(marginUsd, 0))));
+    expect(h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 1 });
   });
 });
 
@@ -5583,7 +5638,7 @@ describe('slices: pause, boot and fix', () => {
   it('cancelRestingLead stops the live child, halts, and resume hedges what filled', async () => {
     const { h, engine, id } = await childAtBoot(false, resting);
     await cancelRestingLead(h.deps, h.jobs.read()!);
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restart, haltKind: 'restart' });
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restartGap, haltKind: 'restart', notHedgedQty: 2 });
     expect(engine.store.getPair(id)?.mode).toBe('STOPPING');
     await h.resume();
     expect(engine.requests.map((req) => req.qty)).toEqual(['5', '5', '3']);
@@ -5653,6 +5708,45 @@ describe('slices: delever', () => {
     Object.assign(h.deps, { boros });
     return { venue, h, engine };
   };
+
+  const stoppingDelever = async () => {
+    const { h, engine } = deleverRun(undefined, (_req, index) => (index === 0 ? { a: '2', b: '0.8', mode: 'OPENING' } : {}));
+    const live = liveJobOf(h);
+    const tick = h.deps.sleep;
+    Object.assign(h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        if (engine.requests.length > 0) live().status = 'halted';
+      },
+    });
+    await h.run();
+    Object.assign(h.deps, { sleep: tick });
+    const job = live();
+    await cancelRestingLead(h.deps, job);
+    return { h, engine, job, id: engine.requests[0].id };
+  };
+
+  it('a restart with a stopping child that owes 1.2 ETH of hedge shows 1.2 ETH not hedged before the trader picks', async () => {
+    const { h, engine, job, id } = await stoppingDelever();
+    expect(engine.store.getPair(id)?.mode).toBe('STOPPING');
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restartGap, notHedgedQty: 1.2 });
+    await expect(applyFix(h.deps, job, 'market')).rejects.toThrow(FIX_UNCONFIRMED);
+    await h.deps.sleep(0);
+    expect(engine.store.getPair(id)?.mode).toBe('DONE');
+    const sent = engine.requests.length;
+    const fixed = await applyFix(h.deps, h.jobs.read()!, 'market');
+    expect(engine.requests).toHaveLength(sent);
+    expect(fixed).toMatchObject({ notHedgedQty: 0, follow: null });
+  });
+
+  it('Abandon on that stopping delever child places the 1.2 ETH hedge and leaves nothing open', async () => {
+    const { h, engine, job, id } = await stoppingDelever();
+    expect(job.notHedgedQty).toBe(1.2);
+    await endHaltedChildren(h.deps, job);
+    expect(engine.store.getPair(id)?.mode).toBe('DONE');
+    expect(project(engine.store.getPair(id)!, engine.store.listOrders(id)).bFilled).toBe('2');
+    expect(job).toMatchObject({ notHedgedQty: 0, follow: null });
+  });
 
   it('delever lead leg', async () => {
     const { h, engine } = deleverRun();
@@ -6127,7 +6221,7 @@ describe('slices: a 100% Delever leaves no dust', () => {
   });
 });
 
-type ChildOutcome = { a?: string; b?: string; mode?: PairMode; haltKind?: 'hedge-margin' | null; refuse?: unknown; reason?: string; kind?: 'maker' | 'taker' };
+type ChildOutcome = { a?: string; b?: string; mode?: PairMode; haltKind?: 'hedge-margin' | null; refuse?: unknown; reason?: string; kind?: 'maker' | 'taker'; after?: string };
 
 function childEngine(h: ReturnType<typeof sliceRun>, script: (req: DealRequest, index: number) => ChildOutcome = () => ({})) {
   const store = new Store(':memory:');
@@ -6138,6 +6232,10 @@ function childEngine(h: ReturnType<typeof sliceRun>, script: (req: DealRequest, 
     const a = out.a ?? pair.targetQty;
     const orderA = store.insertPendingOrder({ pairId: id, leg: 'A', kind: out.kind ?? 'taker', side: pair.a.side, qty: pair.targetQty, price: null, tif: 'ioc', now: h.clock.now() });
     store.updateOrder(id, 'A', orderA.seq, { state: out.reason ? 'DEAD' : 'CLOSED', cumQty: a, avgFillPrice: a === '0' ? '0' : '3000', resolvedAt: h.clock.now(), ...(out.reason ? { closeReason: out.reason } : {}) });
+    if (out.after) {
+      const rest = store.insertPendingOrder({ pairId: id, leg: 'A', kind: 'taker', side: pair.a.side, qty: out.after, price: null, tif: 'ioc', now: h.clock.now() });
+      store.updateOrder(id, 'A', rest.seq, { state: 'CLOSED', cumQty: out.after, avgFillPrice: '3000', resolvedAt: h.clock.now() });
+    }
     if (pair.b) {
       const b = out.b ?? a;
       const orderB = store.insertPendingOrder({ pairId: id, leg: 'B', kind: 'taker', side: pair.b.side, qty: b, price: null, tif: 'ioc', now: h.clock.now() });
@@ -6175,6 +6273,7 @@ function childEngine(h: ReturnType<typeof sliceRun>, script: (req: DealRequest, 
       if (store.getPair(req.id)) return;
       const out = script(req, requests.length);
       requests.push(req);
+      marginRefused.now = Boolean(out.refuse) || out.mode === 'HALTED';
       if (out.refuse) throw out.refuse;
       const spec = (leg: { symbol: string; side: 'BUY' | 'SELL'; reduceOnly?: boolean }) => ({
         contract: leg.symbol,
@@ -6636,8 +6735,8 @@ describe('realize slices: guards before a close', () => {
     expect(job).toMatchObject({ status: 'halted', haltKind: 'other' });
   });
 
-  it.each(CONVERTS)('a $%d Realize checks one quote of its first Convert of %d before the first close and never sends it', async (usd, amount) => {
-    const venue = sliceVenue(filled, account({ hyperliquid: amount }));
+  it.each(CONVERTS)('a $%d Realize spends no Convert quote before the first close (Convert %d after the slices)', async (usd, amount) => {
+    const venue = sliceVenue(filled, account({ hyperliquid: amount, availableMargin: 1e9 }));
     const { h } = realizeAt(usd, venue, withConvert(amount));
     const planned = firstConvertPlanned(h);
     const seen: [number, number][] = [];
@@ -6646,8 +6745,9 @@ describe('realize slices: guards before a close', () => {
       return {};
     });
     await h.run();
-    expect(seen).toEqual([[1, 0]]);
+    expect(seen).toEqual([[0, 0]]);
     expect(Number(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest.fromAmount)).toBeCloseTo(Math.min(planned, amount), 2);
+    expect(h.count('createCrossexConvertOrder')).toBeGreaterThan(0);
   });
 
   it.each(CONVERTS)('a $%d Realize with the cash for its %d Convert not yet in the wallet closes without a check quote', async (usd, amount) => {
@@ -6663,18 +6763,15 @@ describe('realize slices: guards before a close', () => {
     expect(engine.requests.length).toBeGreaterThan(0);
   });
 
-  it.each(CONVERTS)("a $%d Realize with the day's Convert quotes used halts before any close, after one wait (Convert %d)", async (usd, amount) => {
-    const venue = sliceVenue(filled, account({ hyperliquid: amount }));
+  it.each(CONVERTS)("a $%d Realize with the day's Convert quotes used closes its slices, then halts hedged at the Convert (%d)", async (usd, amount) => {
+    const venue = sliceVenue(filled, account({ hyperliquid: amount, availableMargin: 1e9 }));
     venue.handlers.createCrossexConvertQuote = seq(gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests'));
     const { h } = realizeAt(usd, venue, withConvert(amount));
     const engine = childEngine(h);
-    const start = h.clock.now();
     await h.run();
-    expect(engine.requests).toHaveLength(0);
-    expect(venue.placed).toHaveLength(0);
-    expect(h.count('createCrossexConvertQuote')).toBe(2);
-    expect(h.clock.now() - start).toBeGreaterThanOrEqual(QUOTE_RECHECK_MS);
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'other', haltReason: HALT_TEXT.quotesUsed });
+    expect(engine.requests.length).toBeGreaterThan(0);
+    expect(h.count('createCrossexConvertQuote')).toBe(1);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'other', haltReason: HALT_TEXT.quotesUsed, notHedgedQty: 0 });
   });
 
   it.each(RUNGS)('a $%d Realize with no Convert asks Gate for no quote', async (usd) => {
@@ -6728,7 +6825,7 @@ describe('slices: a reopen Gate keeps refusing after a retry Convert', () => {
     await h.run();
     const job = h.jobs.read()!;
     expect(h.count('createCrossexConvertOrder')).toBe(RETRY_CONVERT_CAP);
-    expect(job).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.convertCap, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP, notHedgedQty: 1 });
+    expect(job).toMatchObject({ status: 'halted', haltReason: `${REOPEN_HALT.convertCap} The Hyperliquid short is 1 ETH smaller than before.`, haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP, notHedgedQty: 1 });
     expect(job.follow).toEqual({ symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SELL', qty: 1, reduceOnly: false });
     expect(engine.requests).toHaveLength(1);
     expect(engine.store.getPair(engine.requests[0].id)?.mode).toBe('HALTED');
@@ -6760,25 +6857,26 @@ describe('slices: a reopen Gate keeps refusing after a retry Convert', () => {
 
 describe('slices: margin top-up before a slice', () => {
   const OPEN_IM_PER_COIN = 120;
-  const toppedUp = (usd: number, refusals: number) => {
+  const toppedUp = (usd: number, refusals: number, availableMargin = 0) => {
     const qty = Number((usd / 3000).toFixed(4));
-    const venue = sliceVenue(filled, account({ hyperliquid: 2 * usd + 100, availableMargin: 0 }));
+    const venue = sliceVenue(filled, account({ hyperliquid: 2 * usd + 100, availableMargin }));
     venue.handlers.listCrossexPositions = seq({ body: [{ symbol: HL_ETH, positionQty: String(-2 * qty), initialMargin: String(2 * qty * OPEN_IM_PER_COIN) }] });
     const h = sliceRun(venue, { exec: 'market', sliceUsd: Math.min(usd, 100_000), leg: { qty, positionQty: 2 * qty } });
     const engine = childEngine(h, (_req, index) => (index < refusals ? { refuse: marginRefusal() } : {}));
     return { h, engine, qty };
   };
-  const expectedTopUp = (tried: number, rest: number): number => {
-    const need = tried * (OPEN_IM_PER_COIN * 0.05 + 2 * 3000 * 0.001);
+  const expectedTopUp = (tried: number, rest: number, available = 0): number => {
+    const need = sliceReserveUsd({ qty: tried, price: 3000, marginPerCoin: OPEN_IM_PER_COIN, impactUsd: impactOf(BOOK, 'SELL', 3000, tried)?.usd ?? 0, seconds: DRIFT_DEFAULT_SEC, exposureUsd: 2 * rest * (OPEN_IM_PER_COIN + 0.2 * 3000) });
     const drain = (rest * 3000 * 10) / 10_000;
-    return Math.max(11, ceilCents(((need + drain) / marginPerConvertUsdc) * 1.05));
+    return Math.max(11, ceilCents(((Math.max(0, need - available) + drain) / LIFT) * 1.05));
   };
 
   it.each([50, 6_000_000])('sizes one top-up for the rest of the run and leaves the retry cap alone (%d USD)', async (usd) => {
-    const { h, engine, qty } = toppedUp(usd, 1);
+    const available = usd >= 1_000_000 ? 350 : 0;
+    const { h, engine, qty } = toppedUp(usd, 1, available);
     await h.run();
     const top = h.jobs.read()!.steps.find((step) => step.retry)?.retry?.convertAmount;
-    expect(top).toBe(expectedTopUp(Number(engine.requests[0].qty), qty));
+    expect(top).toBe(expectedTopUp(Number(engine.requests[0].qty), qty, available));
     expect(h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 0 });
     expect(engine.requests[1].qty).toBe(engine.requests[0].qty);
   });
@@ -6915,6 +7013,29 @@ describe('slices: profit check before each slice', () => {
     expect(engine.requests).toHaveLength(1);
     expect(job).toMatchObject({ status: 'done', haltReason: null });
     expect(job.profitStops).toEqual([{ symbol: HL_ETH, exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', entry: 3002.9, mark: 3000, closedQty: 1, plannedQty: 3, at: expect.any(Number) }]);
+  });
+
+  it.each([300, 3_000_000])('a done reverse fallback Convert does not shrink the leg own Convert of %d USDC when the profit runs out', async (amount) => {
+    let entry = '3100';
+    const venue = sliceVenue(filled, account({ hyperliquid: 2 * amount, availableMargin: 1e9 }));
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: entry, markPrice: '3000' }] });
+    const h = sliceRun(venue, {
+      exec: 'market',
+      sliceUsd: 3_000,
+      leg: { qty: 3, convert: { amount, count: Math.ceil(amount / CONVERT_MAX), feeUsd: amount * 0.002 } },
+      edit: (job) => {
+        const own = job.steps.find((step) => step.name === 'Convert')!;
+        job.steps.unshift({ ...own, from: 'CROSSEX', to: 'HYPERLIQUID', status: 'done', qty: amount / 2, doneAt: 0, retry: { reason: 'fallback', convertAmount: amount / 2 } });
+        job.stepIndex = 1;
+      },
+    });
+    childEngine(h, () => {
+      entry = '3002.9';
+      return {};
+    });
+    await h.run();
+    const quoted = h.sent('createCrossexConvertQuote').map((arg) => Math.round(Number(arg.crossexConvertQuoteRequest.fromAmount) * 100));
+    expect(quoted.reduce((total, cents) => total + cents, 0)).toBe(Math.round((amount / 3) * 100));
   });
 
   it('keeps going while each slice still frees cash', async () => {
@@ -7115,13 +7236,13 @@ describe('slices: Convert quote probe', () => {
     return { h, engine };
   };
 
-  it('probes the quotes once per job, not on every retry of a failed first slice', async () => {
+  it('asks for no quote on the retries of a failed first slice, only for the Convert it sends', async () => {
     const clean = await probeRun(0);
     const { h, engine } = await probeRun(4);
     expect(engine.requests.length).toBe(5);
-    expect(clean.h.count('createCrossexConvertQuote')).toBeGreaterThan(0);
-    expect(h.count('createCrossexConvertQuote')).toBe(clean.h.count('createCrossexConvertQuote'));
-    expect(h.jobs.read()).toMatchObject({ status: 'done', quotesChecked: true });
+    expect(clean.h.count('createCrossexConvertQuote')).toBe(1);
+    expect(h.count('createCrossexConvertQuote')).toBe(1);
+    expect(h.jobs.read()).toMatchObject({ status: 'done' });
   });
 });
 
@@ -7187,7 +7308,7 @@ describe('slices: profit check after a Limit close fell back to market', () => {
 describe('Realize: a halt holds the hedge, and Resume reads both legs', () => {
   const HELD = Number.MAX_SAFE_INTEGER;
   const noBorrow = () => {
-    const body = account({ hyperliquid: 1_000 });
+    const body = account({ hyperliquid: 1_000, availableMargin: 1e9 });
     body.body.assets[0] = { ...body.body.assets[0], liability: '0' } as (typeof body.body.assets)[number];
     return body;
   };
@@ -7218,7 +7339,7 @@ describe('Realize: a halt holds the hedge, and Resume reads both legs', () => {
   it('holds the hedge of the halted slice and names a missing borrow', async () => {
     const { h, child } = pairRun();
     await h.run();
-    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'margin', haltReason: REOPEN_HALT.noBorrow('HYPERLIQUID'), notHedgedQty: 1 });
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'margin', haltReason: `${REOPEN_HALT.noBorrow('HYPERLIQUID')} The Hyperliquid short is 1 ETH smaller than the Gate long. Or close 1 ETH of the Gate long in Positions.`, notHedgedQty: 1 });
     expect(REOPEN_HALT.noBorrow('HYPERLIQUID')).toBe('Not enough margin. USDT · CrossEx has no borrow for a Convert to repay. Add margin, then Resume.');
     expect(child()).toMatchObject({ mode: 'HALTED', hedgeNotBefore: HELD });
   });
@@ -7364,5 +7485,1557 @@ describe('Realize: the limit reopen rests as maker', () => {
     await h.run();
     await applyFix(h.deps, h.jobs.read()!, 'limit');
     expect(engine.requests[1]).toMatchObject({ execution: 'maker', timeoutSec: 300, repegBehindBp: 10 });
+  });
+});
+
+describe('realize margin Convert at slice 1', () => {
+  type Body = ReturnType<typeof account>;
+  const withDebt = (body: Body, usdt: string, usdc: string): Body => {
+    body.body.assets[0] = { ...body.body.assets[0], liability: usdt, borrowingInitialMargin: String(Number(usdt) * 0.2) } as (typeof body.body.assets)[number];
+    body.body.assets[2] = { ...body.body.assets[2], liability: usdc, borrowingInitialMargin: String(Number(usdc) * 0.2) } as (typeof body.body.assets)[number];
+    return body;
+  };
+  const MARK = 3_000;
+  const PER_COIN = 200;
+  const CLOSE_FEE = MARK * 0.0005;
+  const lots = (qty: number): number => Number((Math.floor(qty / 0.0001 + 1e-9) * 0.0001).toFixed(4));
+  const reserveAt = (qty: number, held: number, naked = true, nakedSec = GAP_CONVERT_SEC): number =>
+    sliceReserveUsd({
+      qty,
+      price: MARK,
+      marginPerCoin: PER_COIN,
+      impactUsd: impactOf(BOOK, 'SELL', MARK, qty)?.usd ?? 0,
+      seconds: DRIFT_DEFAULT_SEC,
+      exposureUsd: exposureUsdOf({ legImUsd: held * PER_COIN, hedgeImUsd: 0, notionalUsd: held * MARK, debtRate: 0.2 }),
+      nakedUsd: naked ? qty * MARK : 0,
+      nakedSec,
+    });
+  interface GateRun {
+    usd: number;
+    first: 'gap' | 'before' | null;
+    free: (q1: number) => number;
+    cash: number;
+    ratio?: number;
+    slices?: number;
+    refuseReopen?: boolean;
+    closeFill?: (qty: number, index: number) => number;
+    tooSmall?: number;
+    drainPairs?: boolean;
+    noDebtRow?: boolean;
+    whole?: boolean;
+    firstQty?: number;
+    maxMarket?: number;
+    beforeAmount?: number;
+    cashPerCoin?: number;
+    perCoin?: number;
+    book?: { mb: number; im: number; hedgeIm: number; debt: number };
+    convertAmount?: number;
+    failSend?: number;
+    strictCash?: boolean;
+    reopenError?: Error;
+    hedgeLot?: string;
+    rejectReopen?: { label: string; price?: number; drain?: number };
+    accountEdit?: (body: Body) => Body;
+    exec?: 'maker' | 'market';
+    closeOut?: (filled: number, index: number) => ChildOutcome;
+    maker?: Job['maker'];
+    reopenFill?: (size: number) => number;
+    readFailsAfterReopen?: boolean;
+    twap?: number;
+  }
+  const gateRun = (o: GateRun) => {
+    const qty = lots(o.usd / MARK);
+    const q1 = o.whole ? qty : (o.firstQty ?? lots(qty * 0.3));
+    const position = o.whole ? qty : Number((2 * qty).toFixed(4));
+    const perCoin = o.perCoin ?? PER_COIN;
+    const gate = { free: o.free(q1), cash: o.cash, debt: o.book?.debt ?? 1e9, closed: 0, mb: o.book?.mb ?? 0, im: o.book?.im ?? 0, price: 1, hedge: o.whole ? qty : Number((2 * qty).toFixed(4)), reads: 0 };
+    let sendFails = o.failSend ?? 0;
+    let readFails = false;
+    let rejectReopen = o.rejectReopen;
+    const freeNow = (): number => (o.book ? gate.mb - gate.im : gate.free);
+    const events: string[] = [];
+    let lastQuote = 0;
+    let quoteFails = 0;
+    let failKind: 'limit' | 'poor' | 'transient' | 'timeout' | 'unreachable' | 'broken' = 'limit';
+    const venue = sliceVenue();
+    if (o.maxMarket || o.hedgeLot) {
+      venue.handlers.listCrossexRuleSymbols = seq({
+        body: [HL_ETH, GATE_ETH].map((symbol) => ({ symbol, state: 'live', lotSize: symbol === GATE_ETH && o.hedgeLot ? o.hedgeLot : '0.0001', minSize: '0.0001', tickSize: '0.1', businessType: 'FUTURE', ...(o.maxMarket ? { maxMarketSize: String(o.maxMarket) } : {}) })),
+      });
+    }
+    venue.handlers.getCrossexAccount = (async () => {
+      if (readFails) throw Object.assign(new Error('connect ETIMEDOUT 1.2.3.4:443'), { code: 'ETIMEDOUT' });
+      const margins = o.book ? { marginBalance: gate.mb, initialMargin: gate.im } : o.ratio ? { marginBalance: o.ratio * 1e6, initialMargin: 1e6 } : {};
+      const body = account({ usdt: -gate.debt, hyperliquid: gate.cash, hyperliquidEquity: gate.cash + (position - gate.closed) * 400, availableMargin: freeNow(), ...margins });
+      const out = o.noDebtRow ? body : withDebt(body, String(gate.debt), '0');
+      return o.accountEdit ? o.accountEdit(out) : out;
+    }) as typeof venue.handlers.getCrossexAccount;
+    venue.handlers.listCrossexPositions = (async () => {
+      const left = Number((position - gate.closed).toFixed(4));
+      const lead = left > 0 ? [{ symbol: HL_ETH, positionQty: String(-left), initialMargin: String(left * perCoin * gate.price), entryPrice: String(MARK + 400), markPrice: String(MARK * gate.price) }] : [];
+      gate.reads += 1;
+      if (gate.reads > 400) gate.hedge = 0;
+      const hedge = o.book ? [{ symbol: GATE_ETH, positionQty: String(qty), initialMargin: String(o.book.hedgeIm), entryPrice: String(MARK), markPrice: String(MARK) }] : o.hedgeLot ? [{ symbol: GATE_ETH, positionQty: String(gate.hedge), initialMargin: '0', entryPrice: String(MARK), markPrice: String(MARK) }] : [];
+      return { body: [...lead, ...hedge] };
+    }) as typeof venue.handlers.listCrossexPositions;
+    const quote = venue.handlers.createCrossexConvertQuote as (arg: RequestOf<'createCrossexConvertQuote'>) => Promise<{ body: { toAmount: string } }>;
+    venue.handlers.createCrossexConvertQuote = (async (arg: RequestOf<'createCrossexConvertQuote'>) => {
+      if (quoteFails > 0) {
+        quoteFails -= 1;
+        if (failKind === 'poor') {
+          events.push('quote poor');
+          const quoted = await quote(arg);
+          return { ...quoted, body: { ...quoted.body, toAmount: String(Number(quoted.body.toAmount) * 0.99) } };
+        }
+        events.push('quote refused');
+        if (failKind === 'broken') throw new Error('unexpected quote body');
+        if (failKind === 'timeout') throw Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED' });
+        if (failKind === 'unreachable') throw Object.assign(new Error('connect ECONNREFUSED 1.2.3.4:443'), { code: 'ECONNREFUSED' });
+        return failKind === 'limit' ? gateError(429, 'TOO_MANY_REQUESTS', 'Too Many Requests')() : gateError(503, 'SERVER_ERROR', 'Service Unavailable')();
+      }
+      lastQuote = Number(arg.crossexConvertQuoteRequest.fromAmount);
+      events.push(`quote ${lastQuote}`);
+      return quote(arg);
+    }) as typeof venue.handlers.createCrossexConvertQuote;
+    const order = venue.handlers.createCrossexConvertOrder as (...args: unknown[]) => Promise<unknown>;
+    venue.handlers.createCrossexConvertOrder = (async (...args: unknown[]) => {
+      if (o.strictCash && lastQuote > gate.cash + 1e-9) {
+        events.push(`convert refused ${lastQuote}`);
+        return gateError(400, 'BALANCE_NOT_ENOUGH', 'Balance not enough')();
+      }
+      if (o.book) {
+        gate.im -= lastQuote * 0.998 * 0.2;
+        gate.mb -= lastQuote * 0.0023;
+      } else gate.free += lastQuote * LIFT;
+      gate.cash -= lastQuote;
+      gate.debt -= lastQuote * 0.998;
+      return order(...args);
+    }) as typeof venue.handlers.createCrossexConvertOrder;
+    const before = o.beforeAmount ?? 500;
+    const margin = o.first === 'gap' ? { at: 'gap' as const, amount: 0, firstQty: q1 } : o.first === 'before' ? { at: 'before' as const, amount: before, firstQty: q1 } : null;
+    const h = sliceRun(venue, {
+      exec: o.exec ?? 'market',
+      sliceUsd: o.usd / (o.slices ?? 10),
+      leg: { qty, positionQty: position, convert: o.first === 'before' ? { amount: o.convertAmount ?? before, count: 1, feeUsd: 1 } : null, ...(margin ? { margin } : {}) },
+      book: () => bookAt(2999.9 * gate.price, 3000.1 * gate.price),
+      ...(o.hedgeLot ? { edit: (job: Job) => void (job.before = { buckets: [], perps: [{ symbol: GATE_ETH, exchange: 'GATE', side: 'LONG', qty: gate.hedge }] }) } : {}),
+      ...(o.maker ? { edit: (job: Job) => void (job.maker = o.maker) } : {}),
+      ...(o.twap ? { edit: (job: Job) => void (job.deleverTwap = { durationSec: o.twap! * 60, intervalSec: 60, slices: o.twap! }) } : {}),
+    });
+    let closes = 0;
+    const engine = childEngine(h, (req) => {
+      const size = Number(req.qty);
+      if (o.maxMarket && size > o.maxMarket) {
+        events.push(`too big ${req.qty}`);
+        return { refuse: new CoreError(`Size ${req.qty} is above ${HL_ETH}'s largest market order (${o.maxMarket}). Lower the size.`) };
+      }
+      if (req.b === null && req.a.reduceOnly) {
+        if (closes === 1 && sendFails > 0) {
+          sendFails -= 1;
+          events.push('send failed');
+          return { refuse: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) };
+        }
+        if (closes === o.tooSmall) {
+          closes += 1;
+          events.push(`too small ${req.qty}`);
+          return { a: '0', reason: 'rejected:TRADE_ORDER_QUANTITY_MIN_ERROR' };
+        }
+        const filledQty = o.closeFill ? o.closeFill(size, closes) : size;
+        closes += 1;
+        events.push(`close ${req.qty}`);
+        const out = o.closeOut?.(filledQty, closes - 1) ?? {};
+        if (o.book) {
+          gate.im -= filledQty * perCoin;
+          gate.mb -= filledQty * CLOSE_FEE;
+        } else gate.free += filledQty * (perCoin - CLOSE_FEE);
+        gate.cash += filledQty * (o.cashPerCoin ?? 400);
+        gate.closed = Number((gate.closed + filledQty).toFixed(4));
+        return { a: String(filledQty), ...out };
+      }
+      if (req.b === null) {
+        events.push(`reopen ${req.qty}`);
+        if (o.reopenError) return { refuse: o.reopenError };
+        if (rejectReopen) {
+          const { label, price, drain } = rejectReopen;
+          rejectReopen = undefined;
+          if (price) gate.price = price;
+          if (drain) gate.free -= drain;
+          events.push('reopen rejected');
+          return { a: '0', reason: `rejected:${label}` };
+        }
+        if (o.reopenFill) {
+          const got = o.reopenFill(size);
+          gate.free -= got * perCoin * gate.price;
+          gate.closed = Number((gate.closed - got).toFixed(4));
+          readFails = o.readFailsAfterReopen === true;
+          return { a: String(got) };
+        }
+        if (o.refuseReopen || size * perCoin * gate.price * 1.05 + size * MARK * 0.001 > freeNow() + 1e-9) return { refuse: marginRefusal() };
+        if (o.book) gate.im += size * perCoin * gate.price;
+        else gate.free -= size * perCoin * gate.price;
+        gate.closed = Number((gate.closed - size).toFixed(4));
+        return {};
+      }
+      events.push(`pair ${req.qty}`);
+      if (0.05 * size * perCoin + 0.002 * size * MARK > freeNow() + 1e-9) return { refuse: marginRefusal() };
+      if (o.book) gate.mb -= size * MARK * 0.001;
+      else gate.free = o.drainPairs ? 0 : gate.free - size * MARK * 0.001;
+      return {};
+    });
+    return {
+      h,
+      engine,
+      events,
+      gate,
+      qty,
+      q1,
+      failQuotes: (n: number, kind: 'limit' | 'poor' | 'transient' | 'timeout' | 'unreachable' | 'broken' = 'limit') => {
+        quoteFails = n;
+        failKind = kind;
+      },
+    };
+  };
+  const shortFree = (q1: number): number => -50 * q1;
+  const gapConvertHeld = (q1: number, held: number, nakedSec = GAP_CONVERT_SEC): number => Math.max(11, ceilCents((q1 * PER_COIN + reserveAt(q1, held, true, nakedSec) - (shortFree(q1) + q1 * (PER_COIN - CLOSE_FEE))) / LIFT));
+  const gapConvert = (q1: number, qty: number): number => gapConvertHeld(q1, Number((2 * qty).toFixed(4)) - q1);
+  const qty0 = (usd: number): number => lots(usd / MARK);
+  const retryAmounts = (job: Job): number[] => [...new Set(job.steps.filter((step) => step.retry?.reason === 'margin').map((step) => step.retry))].map((retry) => retry?.convertAmount ?? 0);
+
+  const roomy = (usd: number): number => 9 + 0.05 * usd;
+  const quotesBefore = (events: string[], stop: string): number[] =>
+    events.slice(0, events.findIndex((event) => event.startsWith(stop))).filter((event) => event.startsWith('quote ')).map((event) => Number(event.slice(6)));
+
+  it.each([
+    [50, 6, 0.0126],
+    [6_000_000, -180_000, 1686.3279],
+  ])('at $%d with %d USDC of cash after the slice 1 close, the extra close past 2x the planned slice 1 is not sent; the leg halts with the gap and the size to close, and Resume closes it', async (usd, cashAfter, total) => {
+    const ref: { gate?: { cash: number } } = {};
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), closeOut: (_filled, index) => {
+      if (index === 0) ref.gate!.cash = cashAfter;
+      return {};
+    } });
+    ref.gate = run.gate;
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    const more = REOPEN_HALT.gapMore(halted.realize!.legs[0], 2 * run.q1, total, run.q1);
+    expect(run.events).toEqual([`close ${run.q1}`, `reopen ${run.q1}`]);
+    expect(halted).toMatchObject({ status: 'halted', haltKind: 'margin', notHedgedQty: run.q1 });
+    expect(halted.haltReason).toBe(`${more} The Hyperliquid short is ${run.q1} ETH smaller than before.`);
+    await run.h.resume();
+    expect(run.events[2]).toBe(`close ${Number((total - run.q1).toFixed(4))}`);
+  });
+
+  it.each([
+    [50, 8, ['close 0.0049', 'reopen 0.0012']],
+    [6_000_000, 0, ['close 600', 'quote 60000', 'reopen 150']],
+  ])('at $%d a Pause while the slice 1 gap close fills a quarter sends no extra close, Converts what fits, then halts with the quarter shown when the reopen is refused', async (usd, cashAfter, sent) => {
+    const ref: { gate?: { cash: number }; live?: () => Job } = {};
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), closeFill: (size, index) => (index === 0 ? lots(size / 4) : size), closeOut: (_filled, index) => {
+      if (index === 0) {
+        ref.gate!.cash = cashAfter;
+        ref.live!().pauseRequested = true;
+      }
+      return {};
+    } });
+    ref.gate = run.gate;
+    ref.live = liveJobOf(run.h);
+    await run.h.run();
+    const part = lots(run.q1 / 4);
+    const job = run.h.jobs.read()!;
+    expect(run.events).toEqual(sent);
+    expect(job).toMatchObject({ status: 'halted', haltKind: 'margin', notHedgedQty: part });
+    expect(job.haltReason).toBe(`${REOPEN_HALT.noCash('HYPERLIQUID')} The Hyperliquid short is ${part} ETH smaller than before.`);
+  });
+
+  const sleepIn = (run: ReturnType<typeof gateRun>, live: () => Job, when: () => boolean): { slept: boolean } => {
+    const seen = { slept: false };
+    const tick = run.h.deps.sleep;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        if (seen.slept || !when()) return;
+        seen.slept = true;
+        sleepHaltTwap((run.h.deps as unknown as { twap: TwapRunDeps }).twap, live(), { fromMs: 0, toMs: 600_000 });
+      },
+    });
+    return seen;
+  };
+
+  it.each([50, 6_000_000])('at $%d a laptop sleep while the TWAP slice 1 close rests stops it and reopens the part that filled, with no halt', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: usd === 50 ? roomy(usd) : 9, cashPerCoin: usd === 50 ? undefined : 1e6, twap: 10, closeFill: (size, index) => (index === 0 ? lots(size / 3) : size), closeOut: (_filled, index) => (index === 0 ? { mode: 'OPENING' } : {}) });
+    const live = liveJobOf(run.h);
+    const seen = sleepIn(run, live, () => run.engine.store.getPair(run.engine.requests[0]?.id ?? '')?.mode === 'OPENING');
+    await run.h.run();
+    const part = lots(firstCloseOf(run.events) / 3);
+    expect(seen.slept).toBe(true);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${part}`]);
+    expect(live().haltKind).not.toBe('sleep');
+    expect(live().notHedgedQty).toBe(0);
+  });
+
+  it.each([50, 6_000_000])('at $%d a laptop sleep after the TWAP slice 1 Convert quote reopens all that closed, with no halt', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: usd === 50 ? roomy(usd) : 9, cashPerCoin: usd === 50 ? undefined : 1e6, twap: 10 });
+    const live = liveJobOf(run.h);
+    const seen = { slept: false };
+    const write = run.h.jobs.write.bind(run.h.jobs);
+    run.h.jobs.write = (job: Job) => {
+      const gapCut = job.steps.find((step) => step.cut?.gap === 'convert');
+      if (!seen.slept && gapCut && job.steps[job.stepIndex] === gapCut) {
+        seen.slept = true;
+        sleepHaltTwap((run.h.deps as unknown as { twap: TwapRunDeps }).twap, live(), { fromMs: 0, toMs: 600_000 });
+      }
+      return write(job);
+    };
+    await run.h.run();
+    expect(seen.slept).toBe(true);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${firstCloseOf(run.events)}`]);
+    expect(live().haltKind).not.toBe('sleep');
+    expect(live().notHedgedQty).toBe(0);
+  });
+
+  it.each([100_000, 6_000_000])('at $%d a restart after a part-filled slice 1 close sends no extra close, only the reopen path', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.033 * usd, closeFill: (size, index) => (index === 0 ? lots(size / 3) : size), closeOut: (_filled, index) => (index === 0 ? { mode: 'OPENING' } : {}) });
+    const live = liveJobOf(run.h);
+    const tick = run.h.deps.sleep;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        const id = run.engine.requests[0]?.id;
+        if (!id || run.engine.store.getPair(id)?.mode !== 'OPENING') return;
+        run.engine.store.updatePair(id, { mode: 'DONE' });
+        live().status = 'halted';
+      },
+    });
+    await run.h.run();
+    Object.assign(run.h.deps, { sleep: tick });
+    run.h.jobs.write(live());
+    const part = lots(firstCloseOf(run.events) / 3);
+    const after = await rebootInGap(run);
+    expect(after.filter((event) => event.startsWith('close '))).toEqual([]);
+    const job = run.h.jobs.read()!;
+    const reopened = after.filter((event) => event.startsWith('reopen ')).length > 0;
+    expect(reopened || job.notHedgedQty === part).toBe(true);
+  });
+
+  it.each([50, 6_000_000])('at $%d a gap quote that works after a network failure clears the tries, so a failure 130 s later retries instead of halting', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    const tick = run.h.deps.sleep;
+    let stage = 0;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        if (stage === 0 && run.events.includes('quote refused')) {
+          stage = 1;
+          run.failQuotes(1, 'poor');
+        } else if (stage === 1 && run.events.includes('quote poor')) {
+          stage = 2;
+          await run.h.clock.sleep(130_000);
+          run.failQuotes(1, 'transient');
+        }
+      },
+    });
+    run.failQuotes(1, 'transient');
+    await run.h.run();
+    const lastRefused = run.events.lastIndexOf('quote refused');
+    expect(stage).toBe(2);
+    expect(run.events.filter((event) => event === 'quote refused')).toHaveLength(2);
+    expect(run.events.slice(lastRefused + 1).some((event) => /^quote \d/.test(event))).toBe(true);
+    expect(run.h.jobs.read()?.haltReason).not.toBe(HALT_TEXT.convertUnreachable);
+  });
+
+  const rebootInGap = async (run: ReturnType<typeof gateRun>, edit: (job: Job) => void = () => {}): Promise<string[]> => {
+    const job = run.h.jobs.read()!;
+    const cut = job.steps.find((step) => step.cut?.gap)?.cut;
+    if (cut) {
+      delete cut.failed;
+      delete cut.netTries;
+      delete cut.netSince;
+    }
+    Object.assign(job, { status: 'running', haltReason: null, haltKind: null });
+    edit(job);
+    run.h.jobs.write(job);
+    const before = run.events.length;
+    await runJob({ ...run.h.deps, pollOnly: true });
+    return run.events.slice(before);
+  };
+
+  it.each([50, 6_000_000])('at $%d a restart after the slice 1 close filled and before the Convert runs the Convert and reopens all that closed', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    const write = run.h.jobs.write.bind(run.h.jobs);
+    let crashed: Job | null = null;
+    run.h.jobs.write = (job: Job) => {
+      if (!crashed && job.steps[job.stepIndex]?.name === 'Convert' && job.steps.some((step) => step.cut?.gap === 'convert')) crashed = structuredClone(job);
+      return write(job);
+    };
+    run.failQuotes(1_000, 'transient');
+    await run.h.run();
+    run.h.jobs.write = write;
+    expect(crashed).not.toBeNull();
+    expect(run.events).toEqual(expect.not.arrayContaining([expect.stringMatching(/^reopen /)]));
+    run.failQuotes(0);
+    const after = await rebootInGap(run, (job) => Object.assign(job, structuredClone(crashed)));
+    expect(after.filter((event) => event.startsWith('close '))).toEqual([]);
+    expect(after.filter((event) => /^quote \d/.test(event))).toHaveLength(1);
+    expect(after.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${run.q1}`]);
+    expect(run.h.jobs.read()?.notHedgedQty).toBe(0);
+  });
+
+  it.each([50, 6_000_000])('at $%d a restart after the Convert and before the reopen filled sends one reopen of all that closed and no second Convert', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), rejectReopen: { label: 'ORDER_REJECTED' } });
+    await run.h.run();
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', notHedgedQty: run.q1 });
+    const after = await rebootInGap(run);
+    expect(after).toEqual([`reopen ${run.q1}`]);
+    expect(run.h.jobs.read()?.notHedgedQty).toBe(0);
+  });
+
+  it.each([50, 6_000_000])('at $%d a restart while the slice 1 maker close rests a third filled stops the close, then reopens what filled', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), exec: 'maker', closeFill: (size, index) => (index === 0 ? lots(size / 3) : size), closeOut: (_filled, index) => (index === 0 ? { mode: 'OPENING' } : {}) });
+    const live = liveJobOf(run.h);
+    const tick = run.h.deps.sleep;
+    let rests = 0;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        const id = run.engine.requests[0]?.id;
+        if (!id || run.engine.store.getPair(id)?.mode !== 'OPENING') return;
+        rests += 1;
+        if (rests < 3) return;
+        run.engine.store.updatePair(id, { mode: 'DONE' });
+        live().status = 'halted';
+      },
+    });
+    await run.h.run();
+    const part = lots(run.q1 / 3);
+    expect(run.h.jobs.read()?.steps.find((step) => step.cut?.gap)?.cut?.gap).toBe('close');
+    Object.assign(run.h.deps, { sleep: tick });
+    const after = await rebootInGap(run);
+    expect(after.filter((event) => event.startsWith('close '))).toEqual([]);
+    expect(after.filter((event) => /^quote \d/.test(event))).toHaveLength(1);
+    expect(after.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${part}`]);
+    expect(run.h.jobs.read()?.notHedgedQty).toBe(0);
+  });
+
+  it.each([50, 6_000_000])('an in-gap slice 1 at $%d closes alone at market, Converts, then reopens alone, and the rest goes as pairs', async (usd) => {
+    const { h, events, gate, q1, qty } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    await h.run();
+    expect(events.slice(0, 3)).toEqual([`close ${q1}`, `quote ${gapConvert(q1, qty)}`, `reopen ${q1}`]);
+    expect(events.slice(3).every((event) => event.startsWith('pair '))).toBe(true);
+    expect(events.length).toBeGreaterThan(3);
+    expect(gate.closed).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 0, fallbackConverts: 0, notHedgedQty: 0 });
+    expect(h.jobs.quotesSince(0)).toBe(events.filter((event) => event.startsWith('quote')).length);
+  });
+
+  it.each([100_000, 6_000_000])('at $%d the live account no longer fits the planned slice 1, so it grows slice 1 before it closes anything', async (usd) => {
+    const { h, events, q1 } = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.02 * usd });
+    await h.run();
+    const first = Number(events[0].slice('close '.length));
+    expect(events[0]).toMatch(/^close /);
+    expect(first).toBeGreaterThan(q1);
+    expect(h.jobs.read()?.realize?.legs[0].margin?.firstQty).toBe(first);
+    expect(events).toContain(`reopen ${first}`);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it('at $6000000 with 10M USD of free margin missing no slice 1 up to the whole leg fits live, so it halts hedged with nothing closed', async () => {
+    const { h, events } = gateRun({ usd: 6_000_000, first: 'gap', free: () => -1e7, cash: 20 });
+    await h.run();
+    expect(events).toEqual([]);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapNoFit(h.jobs.read()!.realize!.legs[0]), haltKind: 'margin', notHedgedQty: 0 });
+  });
+
+  it.each([100_000, 6_000_000])('a part-filled close at $%d leaves too little cash, so it closes only as much more as the Convert needs, then reopens all it closed', async (usd) => {
+    const { h, events, gate, q1 } = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.033 * usd, closeFill: (size, index) => (index === 0 ? lots(size / 3) : size) });
+    await h.run();
+    const part = lots(q1 / 3);
+    expect(events[0]).toBe(`close ${q1}`);
+    expect(events[1]).toMatch(/^close /);
+    const extra = Number(events[1].slice('close '.length));
+    expect(extra).toBeGreaterThan(0);
+    expect(extra).toBeLessThan(Number((q1 - part).toFixed(4)));
+    expect(events[2]).toMatch(/^quote /);
+    expect(events[3]).toBe(`reopen ${Number((part + extra).toFixed(4))}`);
+    expect(h.jobs.read()?.realize?.legs[0].margin?.firstQty).toBe(Number((part + extra).toFixed(4)));
+    expect(gate.closed).toBe(0);
+    expect(h.jobs.read()?.notHedgedQty).toBe(0);
+  });
+
+  it.each([100_000, 6_000_000])('at $%d an extra close Gate refuses as too small goes on to the Convert and the reopen, not to the end of the step', async (usd) => {
+    const { h, events, gate, q1 } = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.033 * usd, closeFill: (size, index) => (index === 0 ? lots(size / 3) : size), tooSmall: 1 });
+    await h.run();
+    const part = lots(q1 / 3);
+    expect(events[0]).toBe(`close ${q1}`);
+    expect(events[1]).toMatch(/^too small /);
+    expect(events).toContain(`reopen ${part}`);
+    expect(gate.closed).toBe(0);
+    expect(h.jobs.read()?.openGaps ?? []).toEqual([]);
+  });
+
+  it.each([50, 6_000_000])('at $%d each retry Convert is sized from the shortfall read live, not twice the last, then halts at the cap naming the open leg', async (usd) => {
+    const { h, q1, qty } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), cashPerCoin: 1e6, refuseReopen: true });
+    await h.run();
+    const job = h.jobs.read()!;
+    const amounts = retryAmounts(job);
+    expect(amounts).toHaveLength(1 + RETRY_CONVERT_CAP);
+    expect(amounts[0]).toBe(gapConvert(q1, qty));
+    expect(amounts.slice(1)).toEqual(Array(RETRY_CONVERT_CAP).fill(11));
+    expect(job).toMatchObject({ status: 'halted', haltKind: 'margin', retryConverts: RETRY_CONVERT_CAP, notHedgedQty: q1 });
+    expect(job.haltReason).toContain(REOPEN_HALT.convertCap);
+    expect(job.haltReason).toContain('smaller than before');
+    expect(job.follow).toEqual({ symbol: HL_ETH, exchange: 'HYPERLIQUID', side: 'SELL', qty: q1, reduceOnly: false });
+  });
+
+  it.each([50, 6_000_000])('a quote failure inside slice 1 at $%d tries the reopen first; when Gate refuses it, it halts naming the open leg, and Resume Converts and reopens', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1);
+    await run.h.run();
+    expect(run.events.slice(0, 3)).toEqual([`close ${run.q1}`, 'quote refused', `reopen ${run.q1}`]);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', notHedgedQty: run.q1, follow: { side: 'SELL', qty: run.q1 } });
+    expect(run.h.jobs.read()?.haltReason).toContain('100 Convert quotes');
+    await run.h.resume();
+    expect(run.events.slice(3, 4)).toEqual([`reopen ${run.q1}`]);
+    expect(run.events[4]).toMatch(/^quote \d/);
+    expect(run.events[5]).toBe(`reopen ${run.q1}`);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it('at $6000000 a planned gap whose hedged slice 1 already fits on free margin runs slice 1 hedged, with no gap and no Convert', async () => {
+    const run = gateRun({ usd: 6_000_000, first: 'gap', free: (q1) => reserveAt(q1, 2 * qty0(6_000_000) - q1, false) + 10 * q1, cash: roomy(6_000_000) });
+    await run.h.run();
+    expect(run.events[0]).toBe(`pair ${run.q1}`);
+    expect(run.events.some((event) => event.startsWith('close ') || event.startsWith('reopen '))).toBe(false);
+    expect(run.h.jobs.read()?.realize?.legs[0]).toMatchObject({ margin: null, hedgedFirstQty: run.q1 });
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50])('a quote failure inside slice 1 at $%d reopens at once when free margin already covers the reopen', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: (q1) => 20 * q1, cash: roomy(usd) });
+    run.failQuotes(1);
+    await run.h.run();
+    expect(run.events.slice(0, 3)).toEqual([`close ${run.q1}`, 'quote refused', `reopen ${run.q1}`]);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d an Unwind after a restart during the gap reopen counts the reopen that filled and unwinds nothing', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1);
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    expect(halted.notHedgedQty).toBe(run.q1);
+    const tag = halted.tagCount;
+    run.gate.free = 1e12;
+    await (run.h.deps as Parameters<typeof applyFix>[0]).twap!.createChild({ id: `${halted.id}-g${halted.tagCount}`, a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: String(run.q1), execution: 'taker' });
+    const job = await applyFix(run.h.deps, halted, 'unwind');
+    const leg = job.realize?.legs[0];
+    expect(job.notHedgedQty).toBe(0);
+    expect(leg?.shrunkQty ?? 0).toBe(0);
+    expect(job.tagCount).toBe(tag + 1);
+    expect(run.events.filter((event) => event.startsWith('close'))).toHaveLength(1);
+  });
+
+  it('too few Convert quotes left today for the gap halts before slice 1 closes, with nothing open', async () => {
+    const { h, events } = gateRun({ usd: 100_000, first: 'gap', free: shortFree, cash: roomy(100_000) });
+    for (let n = 0; n < CONVERT_QUOTES_PER_DAY - 2; n += 1) h.jobs.noteQuote(h.clock.now());
+    await h.run();
+    expect(events).toEqual([]);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.quotesLow(h.jobs.read()!.realize!.legs[0]), notHedgedQty: 0 });
+  });
+
+  it.each([50, 30_000, 6_000_000])('a slice 1 that closes the whole $%d leg Converts from the margin it read before the close, then reopens it all', async (usd) => {
+    const { h, events, gate, qty } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), whole: true });
+    await h.run();
+    const quotes = quotesBefore(events, 'reopen');
+    expect(events[0]).toBe(`close ${qty}`);
+    expect(quotes.reduce((total, amount) => total + Math.round(amount * 100), 0)).toBe(Math.round(gapConvertHeld(qty, 0) * 100));
+    expect(events[1 + quotes.length]).toBe(`reopen ${qty}`);
+    expect(gate.closed).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 0, notHedgedQty: 0 });
+  });
+
+  it('a 10 ETH short at a 99.3% ratio, closed whole, Converts $1,947.58 of its new cash and reopens all 10 ETH', async () => {
+    const { h, events } = gateRun({ usd: 30_000, first: 'gap', free: () => 0, cash: 0, whole: true, perCoin: 300, book: { mb: 6_950, im: 7_000, hedgeIm: 3_000, debt: 5_000 } });
+    await h.run();
+    const reserve = sliceReserveUsd({
+      qty: 10,
+      price: MARK,
+      marginPerCoin: 300,
+      impactUsd: impactOf(BOOK, 'SELL', MARK, 10)?.usd ?? 0,
+      seconds: DRIFT_DEFAULT_SEC,
+      exposureUsd: exposureUsdOf({ legImUsd: 0, hedgeImUsd: 3_000, notionalUsd: 0, debtRate: 0.2 }),
+      nakedUsd: 10 * MARK,
+      nakedSec: GAP_CONVERT_SEC,
+    });
+    const freeAfterClose = 6_950 - 10 * CLOSE_FEE - (7_000 - 10 * 300);
+    const amount = ceilCents((10 * 300 + reserve - freeAfterClose) / LIFT);
+    expect(events.slice(0, 3)).toEqual(['close 10', `quote ${amount}`, 'reopen 10']);
+    expect(amount).toBe(1_947.58);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it('at a 50 ETH venue cap a 48 ETH slice 1 that must close more reopens in parts under the cap, and all of it fills', async () => {
+    const { h, events, gate } = gateRun({ usd: 600_000, first: 'gap', free: shortFree, cash: 16_500, firstQty: 48, maxMarket: 50, cashPerCoin: 250 });
+    await h.run();
+    expect(events.filter((event) => event.startsWith('too big'))).toEqual([]);
+    expect(Number(events[0].slice('close '.length))).toBeGreaterThanOrEqual(48);
+    expect(Number(events[0].slice('close '.length))).toBeLessThanOrEqual(50);
+    expect(events[1]).toMatch(/^close /);
+    const closed = events.filter((event) => event.startsWith('close ')).reduce((total, event) => total + Number(event.slice('close '.length)), 0);
+    expect(closed).toBeGreaterThan(50);
+    const reopens = events.filter((event) => event.startsWith('reopen ')).map((event) => Number(event.slice('reopen '.length)));
+    expect(reopens.length).toBeGreaterThan(1);
+    for (const part of reopens) expect(part).toBeLessThanOrEqual(50);
+    expect(Math.max(...reopens) - Math.min(...reopens)).toBeLessThanOrEqual(0.0001);
+    expect(Number(reopens.reduce((total, part) => total + part, 0).toFixed(4))).toBe(Number(closed.toFixed(4)));
+    expect(gate.closed).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ notHedgedQty: 0 });
+    expect(h.jobs.read()?.status).not.toBe('halted');
+  });
+
+  it.each([50, 6_000_000])('at $%d a restart during a reopen sent in two parts credits each part by its tag and unwinds nothing', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1);
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    const tag = halted.tagCount;
+    const half = lots(run.q1 / 2);
+    run.gate.free = 1e12;
+    const twap = (run.h.deps as Parameters<typeof applyFix>[0]).twap!;
+    await twap.createChild({ id: `${halted.id}-g${tag}`, a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: String(half), execution: 'taker' });
+    await twap.createChild({ id: `${halted.id}-g${tag + 1}`, a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: String(Number((run.q1 - half).toFixed(4))), execution: 'taker' });
+    const job = await applyFix(run.h.deps, halted, 'unwind');
+    expect(job.notHedgedQty).toBe(0);
+    expect(job.realize?.legs[0].shrunkQty ?? 0).toBe(0);
+    expect(job.tagCount).toBe(tag + 2);
+    expect(run.events.filter((event) => event.startsWith('close'))).toHaveLength(1);
+  });
+
+  it.each([100_000, 6_000_000])('at $%d a live slice 1 more than twice the planned size halts hedged, names both sizes, and Resume closes the new size', async (usd) => {
+    const { h, events, qty } = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.02 * usd, firstQty: lots(qty0(usd) * 0.05) });
+    await h.run();
+    const halted = h.jobs.read()!;
+    const leg = halted.realize!.legs[0];
+    const planned = lots(qty * 0.05);
+    expect(events).toEqual([]);
+    expect(leg.margin!.firstQty).toBeGreaterThan(2 * planned);
+    expect(halted).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapGrew(leg, planned, leg.margin!.firstQty), haltKind: 'margin', notHedgedQty: 0 });
+    await h.resume();
+    expect(events[0]).toBe(`close ${leg.margin!.firstQty}`);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d when free margin already covers the reopen with 10%% spare, slice 1 runs as a hedged pair with no gap', async (usd) => {
+    const { h, events } = gateRun({ usd, first: 'gap', free: () => 1e3 * usd, cash: roomy(usd) });
+    await h.run();
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.startsWith('pair '))).toBe(true);
+    expect(h.jobs.read()?.realize?.legs[0].margin ?? null).toBeNull();
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a planned Convert before slice 1 that the cash no longer covers pauses hedged, names the new unhedged slice 1, and Resume closes it, Converts and reopens', async (usd) => {
+    const { h, events, qty } = gateRun({ usd, first: 'before', free: shortFree, cash: roomy(usd), beforeAmount: 2 * roomy(usd) + 100 });
+    await h.run();
+    const halted = h.jobs.read()!;
+    const first = halted.realize!.legs[0].margin!.firstQty;
+    expect(events).toEqual([]);
+    expect(halted).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapSwitched(halted.realize!.legs[0], first), notHedgedQty: 0 });
+    await h.resume();
+    expect(events.slice(0, 3)).toEqual([`close ${first}`, `quote ${gapConvert(first, qty)}`, `reopen ${first}`]);
+    expect(h.jobs.read()?.realize?.legs[0].margin?.at).toBe('gap');
+    expect(h.jobs.read()).toMatchObject({ notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d slice 1 waits until the day has quotes for its Convert, 2 quote retries and 3 retry Converts', async (usd) => {
+    const { h, events } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    for (let n = 0; n < CONVERT_QUOTES_PER_DAY - (1 + GAP_QUOTE_RETRIES + RETRY_CONVERT_CAP) + 1; n += 1) h.jobs.noteQuote(h.clock.now());
+    await h.run();
+    expect(gapQuotesNeeded(1)).toBe(1 + GAP_QUOTE_RETRIES + RETRY_CONVERT_CAP);
+    expect(gapQuotesNeeded(2)).toBe(2 * (1 + RETRY_CONVERT_CAP) + GAP_QUOTE_RETRIES);
+    expect(events).toEqual([]);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.quotesLow(h.jobs.read()!.realize!.legs[0]), notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d two poor quotes in slice 1 get two more tries, and the third quote Converts before the reopen', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(2, 'poor');
+    await run.h.run();
+    expect(run.events.slice(0, 5)).toEqual([`close ${run.q1}`, 'quote poor', 'quote poor', `quote ${gapConvert(run.q1, run.qty)}`, `reopen ${run.q1}`]);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a quote that keeps failing in slice 1 gets two more tries, then the reopen runs and the halt names the open leg', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(10, 'broken');
+    await run.h.run();
+    expect(run.events.slice(0, 5)).toEqual([`close ${run.q1}`, 'quote refused', 'quote refused', 'quote refused', `reopen ${run.q1}`]);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'margin', notHedgedQty: run.q1 });
+    expect(run.h.jobs.read()?.haltReason).toContain('smaller than before');
+  });
+
+  it.each([50, 6_000_000])('at $%d a USDT · CrossEx wallet with no liability row has no debt, so slice 1 never closes for a Convert into it', async (usd) => {
+    const { h, events } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), noDebtRow: true });
+    await h.run();
+    expect(events).toEqual([]);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapNoFit(h.jobs.read()!.realize!.legs[0]), notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d when the debt is gone after the slice 1 close, the halt says there is no borrow to repay, not no cash', async (usd) => {
+    const ref: { gate?: { debt: number } } = {};
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), refuseReopen: true, closeOut: (_filled, index) => {
+      if (index === 0) ref.gate!.debt = 0;
+      return {};
+    } });
+    ref.gate = run.gate;
+    await run.h.run();
+    expect(run.events[0]).toBe(`close ${run.q1}`);
+    expect(run.events.some((event) => event.startsWith('quote '))).toBe(false);
+    expect(run.h.jobs.read()?.haltReason).toContain('has no borrow for a Convert to repay');
+    expect(run.h.jobs.read()?.haltReason).not.toContain('no cash left to convert');
+  });
+
+  it('a planned slice 1 above the venue cap goes out at the cap', async () => {
+    const { h, events } = gateRun({ usd: 600_000, first: 'before', free: () => 1e9, cash: 1e7, firstQty: 60, maxMarket: 50 });
+    await h.run();
+    expect(events.filter((event) => event.startsWith('too big'))).toEqual([]);
+    expect(events.find((event) => event.startsWith('pair '))).toBe('pair 50');
+  });
+
+  it.each([100_000, 6_000_000])('at $%d close-more stops after 3 extra closes in one gap, then Converts what fits', async (usd) => {
+    const { h, events } = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.033 * usd, closeFill: (size, index) => (index === 0 ? lots(size / 3) : lots(size / 10)) });
+    await h.run();
+    expect(events.filter((event) => event.startsWith('close '))).toHaveLength(1 + GAP_EXTRA_CLOSES);
+    expect(events[1 + GAP_EXTRA_CLOSES]).toMatch(/^quote /);
+  });
+
+  it.each([50, 6_000_000])('a $%d leg with no margin plan checks free margin before slice 1 and Converts while hedged first', async (usd) => {
+    const { h, events } = gateRun({ usd, first: null, free: () => 0, cash: 1e7 });
+    await h.run();
+    expect(events[0]).toMatch(/^quote /);
+    expect(quotesBefore(events, 'pair').length).toBeGreaterThan(0);
+    expect(events.find((event) => !event.startsWith('quote'))).toMatch(/^pair /);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', fallbackConverts: 1, retryConverts: 0, notHedgedQty: 0 });
+  });
+
+  it.each([
+    [50, 2_000, 1_500, 9_500],
+    [6_000_000, 2_000, 1_500, 9_500],
+    [50, 500, 300, 4_450],
+    [6_000_000, 500, 300, 4_450],
+  ])('at $%d with $%d of cash, a $%d margin Convert runs before slice 1 hedged and the rest of the $%d leg Convert waits for the slices', async (usd, cash, marginUsd, total) => {
+    const { h, events } = gateRun({ usd, first: 'before', free: () => 1e3 * usd, cash, beforeAmount: marginUsd, convertAmount: total, strictCash: true });
+    await h.run();
+    expect(events[0]).toBe(`quote ${marginUsd}`);
+    expect(events[1]).toMatch(/^pair /);
+    expect(events.filter((event) => event.startsWith('close') || event.startsWith('reopen') || event.startsWith('convert refused'))).toEqual([]);
+    expect(h.jobs.read()?.realize?.legs[0].margin?.at).toBe('before');
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([100_000, 6_000_000])('at $%d a USDC wallet at minus 2 percent of the run counts its cash as negative, so slice 1 grows before the close and needs no extra close', async (usd) => {
+    const { h, events, q1 } = gateRun({ usd, first: 'gap', free: shortFree, cash: -0.02 * usd });
+    await h.run();
+    const grown = h.jobs.read()!.realize!.legs[0].margin!.firstQty;
+    expect(grown).toBeGreaterThan(2 * q1);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapGrew(h.jobs.read()!.realize!.legs[0], q1, grown), notHedgedQty: 0 });
+    await h.resume();
+    expect(events[0]).toBe(`close ${grown}`);
+    expect(events[1]).toMatch(/^quote /);
+    expect(events).toContain(`reopen ${grown}`);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([100_000, 6_000_000])('at $%d after a pause that names a slice 1 size, the close and its extra closes never pass it; more pauses again with the new size', async (usd) => {
+    const ref: { gate?: { cash: number }; resumed?: boolean } = {};
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: -0.02 * usd, closeFill: (size, index) => (index === 0 ? lots(size / 2) : size), closeOut: (_filled, index) => {
+      if (index === 0) ref.gate!.cash -= 0.015 * usd;
+      return {};
+    } });
+    ref.gate = run.gate;
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    const grown = halted.realize!.legs[0].margin!.firstQty;
+    expect(halted.haltReason).toBe(REOPEN_HALT.gapGrew(halted.realize!.legs[0], run.q1, grown));
+    await run.h.resume();
+    const again = run.h.jobs.read()!;
+    expect(run.events.filter((event) => event.startsWith('close '))).toEqual([`close ${grown}`]);
+    expect(again.status).toBe('halted');
+    expect(again.haltReason).toContain(`ETH slice 1 must close `);
+    expect(again.haltReason).toMatch(/ETH in all to fund its Convert, not [\d,.]+ ETH\. Press Resume to close [\d,.]+ ETH more\. The Hyperliquid short is [\d,.]+ ETH smaller than before\./);
+    expect(again.notHedgedQty).toBe(lots(grown / 2));
+  });
+
+  it.each([50, 6_000_000])('at $%d when the receiving wallet holds no borrow margin after the slice 1 close, the gap Converts nothing and halts with no borrow to repay', async (usd) => {
+    const flag = { zero: false };
+    const edit = (body: Body): Body => {
+      if (flag.zero) body.body.assets = body.body.assets.map((asset) => ({ ...asset, borrowingInitialMargin: '0' })) as typeof body.body.assets;
+      return body;
+    };
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), accountEdit: edit, refuseReopen: true, closeOut: () => {
+      flag.zero = true;
+      return {};
+    } });
+    await run.h.run();
+    expect(run.events[0]).toBe(`close ${run.q1}`);
+    expect(run.events.some((event) => /^quote \d/.test(event))).toBe(false);
+    expect(run.h.jobs.read()?.haltReason).toContain('has no borrow for a Convert to repay');
+  });
+
+  it.each([50, 6_000_000])('at $%d a slice 1 gap close Gate refuses as too small finishes the leg instead of halting with nothing filled', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), tooSmall: 0 });
+    await run.h.run();
+    expect(run.events[0]).toBe(`too small ${run.q1}`);
+    expect(run.h.jobs.read()?.haltReason ?? '').not.toBe(HALT_TEXT.nothingFilled);
+    expect(run.h.jobs.read()?.steps.find((step) => step.name === 'Slices')?.status).toBe('done');
+  });
+
+  it.each([50, 6_000_000])('at $%d a 429 on a Convert quote blocks quotes until the next UTC midnight, so a same-day gap plan refuses to start its one-leg close', async (usd) => {
+    const first = gateRun({ usd, first: 'gap', free: (q1) => 20 * q1, cash: usd === 50 ? roomy(usd) : 9, cashPerCoin: 1e6 });
+    first.failQuotes(1, 'limit');
+    await first.h.run();
+    const midnight = Math.floor(first.h.clock.now() / DAY_MS + 1) * DAY_MS;
+    expect(first.events).toContain('quote refused');
+    expect(first.h.jobs.quotesBlockedUntil()).toBe(midnight);
+    const next = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    next.h.jobs.blockQuotesUntil(midnight);
+    await next.h.run();
+    expect(next.events).toEqual([]);
+    expect(next.h.jobs.read()?.haltReason).toBe(REOPEN_HALT.quotesLow(next.h.jobs.read()!.realize!.legs[0]));
+  });
+
+  it('a wallet balance of -2,000 USD leaves 2,000 less cash for slice 1, so it closes more than at a balance of 0', async () => {
+    const zero = gateRun({ usd: 100_000, first: 'gap', free: shortFree, cash: 0 });
+    const negative = gateRun({ usd: 100_000, first: 'gap', free: shortFree, cash: -2_000 });
+    await zero.h.run();
+    await negative.h.run();
+    const firstOf = (run: typeof zero): number => run.h.jobs.read()!.realize!.legs[0].margin!.firstQty;
+    expect(firstOf(negative)).toBeGreaterThan(firstOf(zero));
+  });
+
+  it.each([100_000, 6_000_000])('at $%d an extra close lost to a network error with no order at Gate is sent again, and only sent closes count toward the 3', async (usd) => {
+    const { h, events } = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.033 * usd, closeFill: (size, index) => (index === 0 ? lots(size / 3) : lots(size / 10)), failSend: 1 });
+    await h.run();
+    if (h.jobs.read()?.status === 'halted') await h.resume();
+    expect(events[1]).toBe('send failed');
+    expect(events.filter((event) => event.startsWith('close '))).toHaveLength(1 + GAP_EXTRA_CLOSES);
+    expect(events[2 + GAP_EXTRA_CLOSES]).toMatch(/^quote /);
+  });
+
+  it.each([50, 6_000_000])('at $%d a whole-leg gap resumed after a 10 percent price rise Converts once for the reopen at the new price, and the reopen fills', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), whole: true });
+    run.failQuotes(1);
+    await run.h.run();
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', notHedgedQty: run.qty });
+    run.gate.price = 1.1;
+    await run.h.resume();
+    expect(run.events.filter((event) => event.startsWith('reopen ')).at(-1)).toBe(`reopen ${run.qty}`);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0, retryConverts: 1 });
+    expect(run.gate.closed).toBe(0);
+  });
+
+  it.each([50, 6_000_000])('at $%d free margin between the need and 1.1 times it runs slice 1 as a hedged pair, since no Convert is needed', async (usd) => {
+    const position = Number((2 * qty0(usd)).toFixed(4));
+    const need = (q1: number): number => reserveAt(q1, position) + q1 * CLOSE_FEE + q1 * 0.1;
+    const { h, events } = gateRun({ usd, first: 'gap', free: (q1) => 1.05 * need(q1), cash: roomy(usd) });
+    await h.run();
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.every((event) => event.startsWith('pair '))).toBe(true);
+    expect(h.jobs.read()?.realize?.legs[0].margin ?? null).toBeNull();
+  });
+
+  it.each([50, 6_000_000])('at $%d the rest of a leg Convert under 11 USDC after the slices is raised to 11 while the debt allows', async (usd) => {
+    const { h, events } = gateRun({ usd, first: 'before', free: () => 1e3 * usd, cash: 2_000, beforeAmount: 500, convertAmount: 505 });
+    await h.run();
+    expect(events[0]).toBe('quote 500');
+    expect(events.at(-1)).toBe('quote 11');
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a gap reopen Gate rejects for a reason other than margin halts naming the open leg and the way to close it', async (usd) => {
+    const { h, events, q1 } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), reopenError: new CoreError('Gate rejected the order: TRADE_ORDER_PRICE_ERROR') });
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(events[0]).toBe(`close ${q1}`);
+    expect(events[1]).toMatch(/^quote \d/);
+    expect(events[2]).toBe(`reopen ${q1}`);
+    expect(job).toMatchObject({ status: 'halted', haltKind: 'not-hedged', notHedgedQty: q1 });
+    expect(job.haltReason).toContain('Gate rejected the order');
+    expect(job.haltReason).toContain('smaller than before');
+  });
+
+  it.each([
+    ['a switch to the gap', 50, 'before' as const, (run: ReturnType<typeof gateRun>): void => void (run.gate.cash = 9)],
+    ['a switch to the gap', 6_000_000, 'before' as const, (run: ReturnType<typeof gateRun>): void => void (run.gate.cash *= 0.5)],
+    ['a slice 1 that grew', 6_000_000, 'gap' as const, (run: ReturnType<typeof gateRun>): void => void (run.gate.cash *= 0.7)],
+  ])('after a pause for %s at $%d, Resume closes no more than the size the pause named, and pauses again when the live size is larger', async (_label, usd, first, squeeze) => {
+    const run =
+      first === 'before'
+        ? gateRun({ usd, first, free: shortFree, cash: roomy(usd), beforeAmount: 2 * roomy(usd) + 100 })
+        : gateRun({ usd, first, free: shortFree, cash: 0.02 * usd, firstQty: lots(qty0(usd) * 0.05) });
+    await run.h.run();
+    const shown = run.h.jobs.read()!.realize!.legs[0].margin!.firstQty;
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', notHedgedQty: 0 });
+    squeeze(run);
+    await run.h.resume();
+    const again = run.h.jobs.read()!;
+    const now = again.realize!.legs[0].margin!.firstQty;
+    expect(run.events).toEqual([]);
+    expect(now).toBeGreaterThan(shown);
+    expect(now).toBeLessThanOrEqual(GAP_GROWTH_CAP * shown);
+    expect(again).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapGrew(again.realize!.legs[0], shown, now), haltKind: 'margin', notHedgedQty: 0 });
+    await run.h.resume();
+    expect(run.events[0]).toBe(`close ${now}`);
+  });
+
+  it.each([50, 6_000_000])('at $%d a gap whose rest after a hedge trimmed by hand is under one lead lot ends, with no reopen loop', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), hedgeLot: '0.00001' });
+    run.failQuotes(1);
+    await run.h.run();
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', notHedgedQty: run.q1 });
+    run.gate.hedge = Number((run.gate.hedge - (run.q1 - 0.00007)).toFixed(5));
+    run.gate.reads = 0;
+    run.gate.free = 1e12;
+    await run.h.resume();
+    expect(run.gate.reads).toBeLessThan(400);
+    expect(run.h.jobs.read()).toMatchObject({ notHedgedQty: 0 });
+    expect(run.h.jobs.read()?.status).not.toBe('halted');
+  });
+
+  it.each([50, 6_000_000])("at $%d slice 1's reopen fee counts in the run's fees, like every other order", async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    const twap = (run.h.deps as Parameters<typeof applyFix>[0]).twap!;
+    twap.readFees = async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, -1]));
+    await run.h.run();
+    const job = run.h.jobs.read()!;
+    expect(run.events.slice(0, 3)).toEqual([`close ${run.q1}`, `quote ${gapConvert(run.q1, run.qty)}`, `reopen ${run.q1}`]);
+    expect(twap.store.listPairs().some((pair) => pair.id.startsWith(`${job.id}-g`))).toBe(true);
+    expect(job.feeSoFarUsd).toBe(twap.store.listPairs().length);
+  });
+
+  it.each([
+    [50, { price: 1.1, drain: 3 }],
+    [6_000_000, { price: 1.1, drain: 100_000 }],
+  ])('at $%d a slice 1 reopen Gate rejects with no margin label, while live free margin is short of its bare need, gets a retry Convert and fills', async (usd, move) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), cashPerCoin: 1e6, rejectReopen: { label: 'ORDER_REJECTED', ...move } });
+    await run.h.run();
+    expect(run.events.slice(0, 4)).toEqual([`close ${run.q1}`, `quote ${gapConvert(run.q1, run.qty)}`, `reopen ${run.q1}`, 'reopen rejected']);
+    expect(run.events[4]).toMatch(/^quote \d/);
+    expect(run.events.slice(5)).toContain(`reopen ${run.q1}`);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 1, notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a slice 1 reopen Gate rejects with a margin label gets a retry Convert and fills', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), cashPerCoin: 3_000, rejectReopen: { label: 'INSUFFICIENT_MARGIN' } });
+    await run.h.run();
+    expect(run.events[3]).toBe('reopen rejected');
+    expect(run.events[4]).toMatch(/^quote \d/);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', retryConverts: 1, notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a slice 1 reopen Gate rejects with no margin label while free margin covers it halts naming the open leg, with no Convert', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), rejectReopen: { label: 'ORDER_REJECTED' } });
+    await run.h.run();
+    expect(run.events.slice(2)).toEqual([`reopen ${run.q1}`, 'reopen rejected']);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'not-hedged', retryConverts: 0, notHedgedQty: run.q1 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a Convert before slice 1 blocked by a margin ratio under 103%% pauses with the ratio as the cause, not cash', async (usd) => {
+    const qty = qty0(usd);
+    const im = 2 * qty * PER_COIN + qty * PER_COIN;
+    const run = gateRun({ usd, first: 'before', free: () => 0, cash: roomy(usd), perCoin: PER_COIN, book: { mb: 1.02 * im, im, hedgeIm: qty * PER_COIN, debt: 1e9 } });
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    const leg = halted.realize!.legs[0];
+    expect(run.events).toEqual([]);
+    expect(halted).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapSwitched(leg, leg.margin!.firstQty, 'ratio'), notHedgedQty: 0 });
+    expect(halted.haltReason).toContain('margin ratio is under 103%');
+  });
+
+  it.each([50, 6_000_000])('at $%d the backup Convert runs from the wallet whose cash can pay the other wallet debt, not the one with only uPnL', async (usd) => {
+    const edit = (body: Body): Body => {
+      body.body.assets[0] = { ...body.body.assets[0], balance: String(10 * usd + 1_000), equity: String(10 * usd + 1_000) } as (typeof body.body.assets)[number];
+      body.body.assets[2] = { ...body.body.assets[2], liability: String(10 * usd + 1_000), borrowingInitialMargin: String(2 * usd + 200) } as (typeof body.body.assets)[number];
+      return body;
+    };
+    const { h, events } = gateRun({ usd, first: null, free: () => 0, cash: 0, accountEdit: edit });
+    await h.run();
+    expect(events[0]).toMatch(/^quote /);
+    expect(h.jobs.read()?.steps.find((step) => step.retry?.reason === 'fallback')).toMatchObject({ from: 'CROSSEX', to: 'HYPERLIQUID' });
+  });
+
+  it.each([50, 6_000_000])('at $%d a reopen part that filled before a restart counts against the gap shown on the halt', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1);
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    const half = lots(run.q1 / 2);
+    run.gate.free = 1e12;
+    const twap = (run.h.deps as Parameters<typeof applyFix>[0]).twap!;
+    await twap.createChild({ id: `${halted.id}-g${halted.tagCount}`, a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: String(half), execution: 'taker' });
+    markOpenGap(twap.store, halted);
+    expect(halted.notHedgedQty).toBe(Number((run.q1 - half).toFixed(4)));
+  });
+
+  it.each([
+    [50, 'maker'],
+    [6_000_000, 'maker'],
+    [50, 'market'],
+    [6_000_000, 'market'],
+  ] as const)('at $%d with %s execution the in-gap slice 1 close follows the setting, alone and reduce-only, and the reopen after the Convert is a taker order', async (usd, exec) => {
+    const { h, engine, events, gate, qty } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), exec });
+    await h.run();
+    const first = events[0].slice('close '.length);
+    const held = Number((2 * qty).toFixed(4)) - Number(first);
+    const close = engine.requests[0];
+    expect(close).toMatchObject({ b: null, a: { side: 'BUY', reduceOnly: true }, qty: first, execution: exec === 'maker' ? 'maker' : 'taker' });
+    if (exec === 'maker') expect(close).toMatchObject({ pricePolicy: 'touch', timeoutSec: 300 });
+    else expect(close.pricePolicy).toBeUndefined();
+    expect(events[1]).toBe(`quote ${gapConvertHeld(Number(first), held)}`);
+    expect(engine.requests.find((req) => req.b === null && !req.a.reduceOnly)).toMatchObject({ qty: first, execution: 'taker' });
+    expect(gate.closed).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a slice 1 maker close that part fills, then sends the rest taker after the wait, counts both parts and reopens the whole slice', async (usd) => {
+    const { h, engine, events, gate } = gateRun({
+      usd,
+      first: 'gap',
+      free: shortFree,
+      cash: roomy(usd),
+      exec: 'maker',
+      closeOut: (filled, index) => (index === 0 ? { a: String(lots(filled / 3)), kind: 'maker', after: String(Number((filled - lots(filled / 3)).toFixed(4))) } : {}),
+    });
+    await h.run();
+    const first = Number(events[0].slice('close '.length));
+    expect(engine.requests[0].execution).toBe('maker');
+    expect(events.filter((event) => event.startsWith('close '))).toHaveLength(1);
+    expect(events.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${first}`]);
+    expect(h.jobs.read()?.realize?.legs[0].margin?.firstQty).toBe(first);
+    expect(gate.closed).toBe(0);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a restart while the slice 1 maker close rests stops it at boot, counts the part that filled as the gap, and Resume finishes the gap', async (usd) => {
+    let crashed = false;
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), exec: 'maker', closeFill: (size, index) => (index === 0 ? lots(size / 3) : size), closeOut: (_filled, index) => (index === 0 ? { mode: 'OPENING' } : {}) });
+    const sleep = run.h.deps.sleep;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        if (run.events.length > 0 && !crashed) {
+          crashed = true;
+          throw new Error('process died');
+        }
+        return sleep(ms);
+      },
+    });
+    await run.h.run().catch(() => undefined);
+    const part = lots(Number(run.events[0].slice('close '.length)) / 3);
+    expect(run.engine.requests[0]).toMatchObject({ b: null, execution: 'maker' });
+    await cancelRestingLead(run.h.deps, run.h.jobs.read()!);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'restart', haltReason: HALT_TEXT.restartGap, notHedgedQty: part });
+    await run.h.resume();
+    expect(run.events.filter((event) => event.startsWith('reopen '))[0]).toBe(`reopen ${part}`);
+    expect(run.gate.closed).toBe(0);
+    expect(run.h.jobs.read()?.notHedgedQty).toBe(0);
+  });
+
+
+  it.each([
+    ['a switch to the gap', 50, 'before' as const, (run: ReturnType<typeof gateRun>): void => void (run.gate.cash = 9)],
+    ['a slice 1 that grew', 6_000_000, 'gap' as const, (run: ReturnType<typeof gateRun>): void => void (run.gate.cash *= 0.7)],
+  ])('after a pause for %s at $%d, a Resume that halts on low quotes keeps the limit, so the next Resume with a larger live size pauses again', async (_label, usd, first, squeeze) => {
+    const run =
+      first === 'before'
+        ? gateRun({ usd, first, free: shortFree, cash: roomy(usd), beforeAmount: 2 * roomy(usd) + 100 })
+        : gateRun({ usd, first, free: shortFree, cash: 0.02 * usd, firstQty: lots(qty0(usd) * 0.05) });
+    await run.h.run();
+    const shown = run.h.jobs.read()!.realize!.legs[0].margin!.firstQty;
+    if (first === 'gap') expect(shown).toBe(245.9469);
+    for (let n = 0; n < CONVERT_QUOTES_PER_DAY; n += 1) run.h.jobs.noteQuote(run.h.clock.now());
+    await run.h.resume();
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.quotesLow(run.h.jobs.read()!.realize!.legs[0]), notHedgedQty: 0 });
+    expect(run.h.jobs.read()!.realize!.legs[0].gapPaused).toBe(true);
+    await run.h.clock.sleep(86_400_001);
+    squeeze(run);
+    await run.h.resume();
+    const again = run.h.jobs.read()!;
+    const now = again.realize!.legs[0].margin!.firstQty;
+    if (first === 'gap') expect(now).toBe(387.7527);
+    expect(run.events).toEqual([]);
+    expect(now).toBeGreaterThan(shown);
+    expect(now).toBeLessThanOrEqual(GAP_GROWTH_CAP * shown);
+    expect(again).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapGrew(again.realize!.legs[0], shown, now), notHedgedQty: 0 });
+  });
+
+  it('at $6000000 a $600,000 slice 1 reopen rejected for a non-margin reason, with $548 of noise against a $5,800 spare, halts with no retry Convert', async () => {
+    const run = gateRun({ usd: 6_000_000, first: 'gap', free: shortFree, cash: 220_000, firstQty: 200, rejectReopen: { label: 'ORDER_REJECTED', drain: 548 } });
+    await run.h.run();
+    expect(run.events.slice(0, 4)).toEqual(['close 200', `quote ${gapConvertHeld(200, Number((2 * run.qty).toFixed(4)) - 200)}`, 'reopen 200', 'reopen rejected']);
+    expect(run.gate.free - 200 * PER_COIN).toBeGreaterThan(5_000);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'not-hedged', retryConverts: 0, notHedgedQty: 200 });
+  });
+
+  it.each([100_000, 6_000_000])('at $%d when the first backup route reaches 11 USDC but cannot cover the short, the other route funds it', async (usd) => {
+    const edit = (body: Body): Body => {
+      body.body.assets[0] = { ...body.body.assets[0], balance: String(10 * usd + 1_000), equity: String(10 * usd + 1_000) } as (typeof body.body.assets)[number];
+      body.body.assets[2] = { ...body.body.assets[2], liability: String(10 * usd + 1_000), borrowingInitialMargin: String(2 * usd + 200) } as (typeof body.body.assets)[number];
+      return body;
+    };
+    const { h, events } = gateRun({ usd, first: null, free: () => 0, cash: 20, accountEdit: edit });
+    await h.run();
+    expect(events[0]).toMatch(/^quote /);
+    expect(h.jobs.read()?.steps.find((step) => step.retry?.reason === 'fallback')).toMatchObject({ from: 'CROSSEX', to: 'HYPERLIQUID' });
+  });
+
+  it.each([50, 6_000_000])('at $%d reopen parts credited after a restart add their fees to the run cost', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1);
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    const tag = halted.tagCount;
+    const half = lots(run.q1 / 2);
+    run.gate.free = 1e12;
+    const twap = (run.h.deps as Parameters<typeof applyFix>[0]).twap!;
+    twap.readFees = async (ids: string[]) => Object.fromEntries(ids.map((id) => [id, -1]));
+    const before = halted.feeSoFarUsd;
+    await twap.createChild({ id: `${halted.id}-g${tag}`, a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: String(half), execution: 'taker' });
+    await twap.createChild({ id: `${halted.id}-g${tag + 1}`, a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: String(Number((run.q1 - half).toFixed(4))), execution: 'taker' });
+    const job = await applyFix(run.h.deps, halted, 'unwind');
+    expect(job.tagCount).toBe(tag + 2);
+    expect(job.feeSoFarUsd).toBe(before + 2);
+  });
+
+  it('the slice 1 halts name the coin, so on the second leg they do not say nothing was closed', () => {
+    const btc = { base: 'BTC' } as Parameters<typeof REOPEN_HALT.gapNoFit>[0];
+    for (const text of [REOPEN_HALT.gapNoFit(btc), REOPEN_HALT.quotesLow(btc), REOPEN_HALT.gapGrew(btc, 1, 2), REOPEN_HALT.gapSwitched(btc, 2), REOPEN_HALT.gapSwitched(btc, 2, 'ratio')]) {
+      expect(text).toContain('BTC slice 1');
+      expect(text).toContain('No BTC was closed.');
+      expect(text).not.toContain('Nothing was closed');
+    }
+    expect(REOPEN_HALT.fallbackCap).toBe(`Free margin ran short again after ${FALLBACK_CONVERT_CAP} Converts in this run. Both legs are hedged. Add margin, then Resume.`);
+  });
+
+  it.each([
+    [100_000, 10, 6],
+    [6_000_000, 400, 240],
+  ])('at $%d a %d ETH gap reopen that fills %d ETH, then an account read that times out, halts on disk with the rest open and calls onHalt', async (usd, size, filled) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), firstQty: size, reopenFill: () => filled, readFailsAfterReopen: true });
+    const halts: Job[] = [];
+    Object.assign(run.h.deps, { onHalt: (job: Job) => void halts.push(job) });
+    await run.h.run();
+    expect(run.events.slice(0, 3)).toEqual([`close ${size}`, expect.stringMatching(/^quote /), `reopen ${size}`]);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', haltKind: 'not-hedged', notHedgedQty: size - filled });
+    expect(run.h.jobs.read()?.haltReason).toContain('Gate refused the reopen.');
+    expect(halts).toHaveLength(1);
+  });
+
+  it.each([50, 6_000_000])('at $%d a reopen part that fills after the halt lowers the open gap when Abandon credits it', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(3, 'broken');
+    await run.h.run();
+    const halted = run.h.jobs.read()!;
+    expect(halted).toMatchObject({ status: 'halted', notHedgedQty: run.q1 });
+    const half = lots(run.q1 / 2);
+    const twap = (run.h.deps as Parameters<typeof applyFix>[0]).twap!;
+    await twap.createChild({ id: `${halted.id}-g${halted.tagCount}`, a: { symbol: HL_ETH, side: 'SELL' }, b: null, qty: String(half), execution: 'taker' });
+    await endHaltedChildren(run.h.deps, halted);
+    await creditGapChild(run.h.deps, halted);
+    expect(halted.notHedgedQty).toBe(Number((run.q1 - half).toFixed(4)));
+  });
+
+  const restingRun = (usd: number, closeOut: (filled: number, index: number) => ChildOutcome, maker?: Job['maker']) =>
+    gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), exec: 'maker', closeFill: (size, index) => (index === 0 ? lots(size / 3) : size), closeOut, maker });
+  const firstCloseOf = (events: string[]): number => Number(events[0].slice('close '.length));
+
+  it.each([50, 6_000_000])('at $%d under Never the running job shows the filled part of the resting slice 1 close as not hedged, then 0 after the reopen', async (usd) => {
+    const fill = (size: number): number => Math.min(lots(size / 3), 50);
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), exec: 'maker', maker: { takerAfterSec: null, repegBehindBp: null }, closeFill: (size, index) => (index === 0 ? fill(size) : size), closeOut: (_filled, index) => (index === 0 ? { mode: 'OPENING' } : {}) });
+    const live = liveJobOf(run.h);
+    const tick = run.h.deps.sleep;
+    const seen: { status: string; open: number }[] = [];
+    let rests = 0;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        const id = run.engine.requests[0]?.id;
+        if (!id || run.engine.store.getPair(id)?.mode !== 'OPENING') return;
+        rests += 1;
+        if (rests < 3) return;
+        seen.push({ status: live().status, open: live().notHedgedQty });
+        run.engine.store.updatePair(id, { mode: 'DONE' });
+      },
+    });
+    await run.h.run();
+    const part = fill(run.q1);
+    if (usd === 6_000_000) expect(part).toBe(50);
+    expect(seen).toEqual([{ status: 'running', open: part }]);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${part}`]);
+    expect(run.h.jobs.read()?.notHedgedQty).toBe(0);
+  });
+
+  it.each([50, 6_000_000])('at $%d a Pause while the slice 1 maker close rests stops it, counts the part that filled, finishes the gap, then pauses', async (usd) => {
+    const ref: { live?: () => Job } = {};
+    const run = restingRun(usd, (_filled, index) => {
+      if (index !== 0) return {};
+      ref.live!().pauseRequested = true;
+      return { mode: 'OPENING' };
+    }, { takerAfterSec: 600, repegBehindBp: 5 });
+    ref.live = liveJobOf(run.h);
+    await run.h.run();
+    const part = lots(firstCloseOf(run.events) / 3);
+    expect(run.engine.requests[0]).toMatchObject({ b: null, execution: 'maker', timeoutSec: 600 });
+    expect(run.engine.modes.some((mode) => mode.endsWith(':STOPPING'))).toBe(true);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${part}`]);
+    expect(run.gate.closed).toBe(0);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', paused: true, notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a slice 1 maker close the engine stops with a part filled counts the part, Converts for it, and reopens it', async (usd) => {
+    const run = restingRun(usd, (_filled, index) => (index === 0 ? { mode: 'STOPPING' } : {}));
+    await run.h.run();
+    const part = lots(firstCloseOf(run.events) / 3);
+    expect(run.engine.requests[0]).toMatchObject({ b: null, execution: 'maker' });
+    expect(run.events.filter((event) => event.startsWith('reopen ')).slice(0, 1)).toEqual([`reopen ${part}`]);
+    expect(run.gate.closed).toBe(0);
+    expect(run.h.jobs.read()?.notHedgedQty).toBe(0);
+  });
+
+  it.each([50, 6_000_000])('at $%d an Abandon after the run halted with the slice 1 maker close resting stops the close, counts the part, and shows it as an open gap', async (usd) => {
+    let crashed = false;
+    const run = restingRun(usd, (_filled, index) => (index === 0 ? { mode: 'OPENING' } : {}));
+    const sleep = run.h.deps.sleep;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        if (run.events.length > 0 && !crashed) {
+          crashed = true;
+          throw new Error('process died');
+        }
+        return sleep(ms);
+      },
+    });
+    await run.h.run().catch(() => undefined);
+    const part = lots(firstCloseOf(run.events) / 3);
+    await cancelRestingLead(run.h.deps, run.h.jobs.read()!);
+    const job = run.h.jobs.read()!;
+    await run.h.deps.sleep(1);
+    await endHaltedChildren(run.h.deps, job);
+    await creditGapChild(run.h.deps, job);
+    expect(run.engine.store.listPairs({ activeOnly: true })).toEqual([]);
+    expect(job.realize?.legs[0].filledQty).toBe(part);
+    expect(job.notHedgedQty).toBe(part);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([]);
+  });
+
+  it.each([100_000, 6_000_000])('at $%d slice 1 and its 3 extra closes share one 300 s taker-after: each extra rests only what is left, then goes taker', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.033 * usd, exec: 'maker', closeFill: (size, index) => (index < 3 ? lots(size / 20) : size) });
+    const twap = (run.h.deps as Parameters<typeof applyFix>[0]).twap!;
+    const create = twap.createChild;
+    const closes: { execution: string; timeoutSec?: number | null; restSec: number }[] = [];
+    twap.createChild = async (req: DealRequest) => {
+      if (req.b === null && req.a.reduceOnly) {
+        const restSec = req.execution === 'maker' ? Math.min(req.timeoutSec ?? 0, 100) : 0;
+        closes.push({ execution: req.execution, timeoutSec: req.timeoutSec, restSec });
+        void run.h.clock.sleep(restSec * 1000);
+      }
+      return create(req);
+    };
+    await run.h.run();
+    expect(closes, run.events.join(" | ")).toHaveLength(4);
+    expect(closes.map((close) => close.timeoutSec)).toEqual([300, 200, 100, undefined]);
+    expect(closes.map((close) => close.execution)).toEqual(['maker', 'maker', 'maker', 'taker']);
+    expect(closes.reduce((total, close) => total + close.restSec, 0)).toBeLessThanOrEqual(300);
+    expect(run.gate.closed).toBe(0);
+  });
+
+  it.each([100_000, 6_000_000])('at $%d with taker-after Never, slice 1 and its extra closes rest with no deadline and never turn taker; the reserve uses the 300 s default the planner uses', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: 0.033 * usd, exec: 'maker', maker: { takerAfterSec: null, repegBehindBp: null }, closeFill: (size, index) => (index < 3 ? lots(size / 20) : size) });
+    const twap = (run.h.deps as Parameters<typeof applyFix>[0]).twap!;
+    const create = twap.createChild;
+    const closes: { execution: string; timeoutSec?: number | null }[] = [];
+    twap.createChild = async (req: DealRequest) => {
+      if (req.b === null && req.a.reduceOnly) closes.push({ execution: req.execution, timeoutSec: req.timeoutSec });
+      return create(req);
+    };
+    await run.h.run();
+    expect(closes).toEqual([1, 2, 3, 4].map(() => ({ execution: 'maker', timeoutSec: null })));
+    expect(DRIFT_DEFAULT_SEC).toBe(MAKER_REST_MS / 1000);
+    expect(closeSecondsOf({ exec: 'maker', takerAfterSec: null })).toBe(DRIFT_DEFAULT_SEC);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([100_000, 6_000_000])('at $%d after the slice 1 close ends, the gap Convert reserves only the 30 s still ahead, not the close time again', async (usd) => {
+    const { h, events, qty } = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), exec: 'maker' });
+    await h.run();
+    const first = Number(events[0].slice('close '.length));
+    const held = Number((2 * qty).toFixed(4)) - first;
+    expect(events[1]).toBe(`quote ${gapConvertHeld(first, held)}`);
+    expect(gapConvertHeld(first, held)).toBeLessThan(gapConvertHeld(first, held, 300 + GAP_CONVERT_SEC));
+  });
+
+  it.each([
+    [50, 'timeout', 3],
+    [6_000_000, 'timeout', 3],
+    [50, 'transient', 3],
+    [6_000_000, 'transient', 3],
+    [6_000_000, 'unreachable', 0],
+  ] as const)('at $%d three %s failures on the slice 1 gap quote wait and try again, then Convert and reopen with no halt, counting %d of the failed quotes', async (usd, kind, counted) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(3, kind);
+    await run.h.run();
+    expect(run.events.filter((event) => event === 'quote refused')).toHaveLength(3);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${Number(run.events[0].slice('close '.length))}`]);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+    const quotesBeforeReopen = run.events.slice(0, run.events.findIndex((event) => event.startsWith('reopen '))).filter((event) => event.startsWith('quote')).length;
+    expect(quotesBeforeReopen).toBe(4);
+    expect(run.h.jobs.quotesSince(0)).toBe(run.events.filter((event) => event.startsWith('quote ')).length - 3 + counted);
+  });
+
+  it.each([
+    [50, 'transient', 5],
+    [6_000_000, 'transient', 5],
+    [50, 'timeout', 5],
+    [6_000_000, 'timeout', 5],
+    [6_000_000, 'unreachable', 0],
+  ] as const)('at $%d a %s outage on the slice 1 gap quote stops after 5 tries within 120 s, starts no retry Convert, and halts with the leg shown, counting %d quotes', async (usd, kind, counted) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1_000, kind);
+    const start = run.h.clock.now();
+    await run.h.run();
+    const job = run.h.jobs.read()!;
+    expect(run.events.filter((event) => event === 'quote refused')).toHaveLength(5);
+    expect(run.events.some((event) => event.startsWith('reopen '))).toBe(false);
+    expect(run.h.clock.now() - start).toBeLessThanOrEqual(GAP_NET_MS + 60_000);
+    expect(job).toMatchObject({ status: 'halted', haltKind: 'margin', retryConverts: 0, notHedgedQty: run.q1 });
+    expect(job.haltReason).toContain('Gate did not answer the Convert quote.');
+    expect(job.haltReason).toContain(`${run.q1} ETH smaller`);
+    expect(run.h.jobs.quotesSince(0)).toBe(counted);
+  });
+
+  it.each([50, 6_000_000])('at $%d after a gap quote outage halts, Resume gets the full 5 tries again, so 4 more failures still Convert and reopen', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1_000, 'transient');
+    await run.h.run();
+    expect(run.h.jobs.read()?.haltReason).toContain(HALT_TEXT.convertUnreachable);
+    const halted = run.events.length;
+    run.failQuotes(4, 'transient');
+    await run.h.resume();
+    const after = run.events.slice(halted);
+    expect(after.filter((event) => event === 'quote refused')).toHaveLength(4);
+    expect(Number(after.find((event) => /^quote \d/.test(event))?.slice(6))).toBeGreaterThanOrEqual(gapConvert(run.q1, run.qty));
+    expect(after).toContain(`reopen ${run.q1}`);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d when the gap quote never answers but free margin already covers the reopen, it reopens once with no Convert', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: (q1) => 20 * q1, cash: usd === 50 ? roomy(usd) : 9, cashPerCoin: 1e6 });
+    run.failQuotes(5, 'transient');
+    await run.h.run();
+    const reopenAt = run.events.findIndex((event) => event.startsWith('reopen '));
+    expect(run.events.slice(0, reopenAt).filter((event) => event === 'quote refused')).toHaveLength(5);
+    expect(run.events.slice(0, reopenAt).some((event) => /^quote \d/.test(event))).toBe(false);
+    expect(run.events[0]).toMatch(/^close /);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([`reopen ${firstCloseOf(run.events)}`]);
+    expect(run.h.jobs.read()).toMatchObject({ retryConverts: 0, notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a Pause during the gap quote wait stops the tries at once', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd) });
+    run.failQuotes(1_000, 'transient');
+    const live = liveJobOf(run.h);
+    const tick = run.h.deps.sleep;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        if (run.events.includes('quote refused')) live().pauseRequested = true;
+      },
+    });
+    await run.h.run();
+    expect(run.events.filter((event) => event === 'quote refused')).toHaveLength(1);
+    expect(run.h.jobs.read()).toMatchObject({ status: 'halted', retryConverts: 0, notHedgedQty: run.q1 });
+  });
+
+  it.each([50, 6_000_000])('at $%d a planned gap whose cash now covers a hedged Convert before slice 1 with 10 percent headroom runs that Convert, then a hedged slice 1', async (usd) => {
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: 9 + 0.2 * usd + 5_000 });
+    await run.h.run();
+    const quote = Number(run.events[0].slice('quote '.length));
+    expect(run.events[0]).toMatch(/^quote \d/);
+    expect(run.events[1]).toBe(`pair ${run.q1}`);
+    expect(1.1 * quote).toBeLessThanOrEqual(9 + 0.2 * usd + 5_000);
+    expect(run.events.some((event) => event.startsWith('close ') || event.startsWith('reopen '))).toBe(false);
+    expect(run.h.jobs.read()?.realize?.legs[0].margin).toMatchObject({ at: 'before', amount: quote, firstQty: run.q1 });
+    expect(run.h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d the rest of a leg Convert under 11 USDC is skipped when the debt left is 10.99, under the minimum', async (usd) => {
+    const { h, events, gate } = gateRun({ usd, first: 'before', free: () => 1e3 * usd, cash: 2_000, beforeAmount: 500, convertAmount: 505 });
+    gate.debt = 500 * 0.998 + 10.99;
+    await h.run();
+    expect(events.filter((event) => event.startsWith('quote '))).toEqual(['quote 500']);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it.each([50, 6_000_000])('at $%d the rest of a leg Convert under 11 USDC is skipped when the debt left is under 11', async (usd) => {
+    const { h, events, gate } = gateRun({ usd, first: 'before', free: () => 1e3 * usd, cash: 2_000, beforeAmount: 500, convertAmount: 505 });
+    gate.debt = 505;
+    await h.run();
+    expect(events.filter((event) => event.startsWith('quote '))).toEqual(['quote 500']);
+    expect(h.jobs.read()).toMatchObject({ status: 'done', notHedgedQty: 0 });
+  });
+
+  it('a fallback never Converts into a wallet with no borrow row, so it halts hedged', async () => {
+    const { h, events } = gateRun({ usd: 100_000, first: null, free: () => 0, cash: 1e7, noDebtRow: true });
+    await h.run();
+    expect(events).toEqual([]);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.marginLow, notHedgedQty: 0, fallbackConverts: 0 });
+  });
+
+  it.each([
+    [10, 5],
+    [2, 2],
+  ])('a fallback with %d slices left covers the next %d slices', async (slices, ahead) => {
+    const { h, events, qty } = gateRun({ usd: 6_000_000, first: null, free: () => 0, cash: 1e7, slices });
+    await h.run();
+    const slice = lots(qty / slices);
+    const perSlice = reserveAt(slice, 2 * qty, false) + (slice * MARK * TAKER_FEE_BP) / 10_000;
+    const total = quotesBefore(events, 'pair').reduce((sum, amount) => sum + Math.round(amount * 100), 0);
+    expect(Math.abs(total - Math.round(ceilCents((ahead * perSlice) / LIFT) * 100))).toBeLessThanOrEqual(1);
+  });
+
+  it.each([5_000, 6_000_000])('at $%d the sixth short slice in one run halts hedged at the fallback cap', async (usd) => {
+    const { h, events } = gateRun({ usd, first: null, free: () => 0, cash: 1e7, drainPairs: true });
+    await h.run();
+    expect(events.filter((event) => event.startsWith('quote')).length).toBeGreaterThanOrEqual(FALLBACK_CONVERT_CAP);
+    expect(events.filter((event) => event.startsWith('pair'))).toHaveLength(FALLBACK_CONVERT_CAP);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.fallbackCap, haltKind: 'margin', notHedgedQty: 0, fallbackConverts: FALLBACK_CONVERT_CAP });
+  });
+
+  it('under a 103% margin ratio the fallback Converts nothing and halts hedged', async () => {
+    const { h, events } = gateRun({ usd: 100_000, first: null, free: () => 0, cash: 1e7, ratio: 1.01 });
+    await h.run();
+    expect(events).toEqual([]);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.ratioLow, notHedgedQty: 0 });
+  });
+
+  it('under a 103% margin ratio the planned pre-Convert falls to the gap path, and halts hedged when that does not fit either', async () => {
+    const { h, events } = gateRun({ usd: 100_000, first: 'before', free: () => 0, cash: 1e7, ratio: 1.01 });
+    expect(h.jobs.read()?.steps[0]).toMatchObject({ name: 'Convert', leg: HL_ETH });
+    await h.run();
+    expect(events).toEqual([]);
+    expect(h.jobs.read()).toMatchObject({ status: 'halted', haltReason: REOPEN_HALT.gapNoFit(h.jobs.read()!.realize!.legs[0]), notHedgedQty: 0 });
+  });
+
+  it('after a debt flip the fallback pays the wallet that now owes, from the one with equity', async () => {
+    const venue = sliceVenue();
+    let converted = false;
+    const send = venue.handlers.createCrossexConvertOrder as (...args: unknown[]) => Promise<unknown>;
+    venue.handlers.createCrossexConvertOrder = (async (...args: unknown[]) => {
+      converted = true;
+      return send(...args);
+    }) as typeof venue.handlers.createCrossexConvertOrder;
+    venue.handlers.getCrossexAccount = (async () => withDebt(account({ usdt: 1_000, hyperliquid: 0, availableMargin: converted ? 1e9 : 0 }), '0', '500')) as typeof venue.handlers.getCrossexAccount;
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 3_000, leg: { qty: 3 } });
+    childEngine(h);
+    await h.run();
+    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest).toMatchObject({ fromCoin: 'USDT', toCoin: 'USDC' });
+    expect(h.jobs.read()).toMatchObject({ status: 'done', fallbackConverts: 1 });
+  });
+
+  it('a reverse fallback after a debt flip leaves the leg own forward Convert untouched', async () => {
+    const venue = sliceVenue();
+    let converted = false;
+    const send = venue.handlers.createCrossexConvertOrder as (...args: unknown[]) => Promise<unknown>;
+    venue.handlers.createCrossexConvertOrder = (async (...args: unknown[]) => {
+      converted = true;
+      return send(...args);
+    }) as typeof venue.handlers.createCrossexConvertOrder;
+    venue.handlers.getCrossexAccount = (async () => withDebt(account({ usdt: 1_000, hyperliquid: 0, availableMargin: converted ? 1e9 : 0 }), '0', '500')) as typeof venue.handlers.getCrossexAccount;
+    const h = sliceRun(venue, { exec: 'market', sliceUsd: 3_000, leg: { qty: 3, convert: { amount: 9_000, count: 1, feeUsd: 18 } } });
+    const planned = () => h.jobs.read()!.steps.find((step) => step.name === 'Convert' && step.from === 'HYPERLIQUID' && !step.retry)?.planned;
+    expect(planned()).toBe(9_000);
+    childEngine(h);
+    await h.run();
+    expect(h.sent('createCrossexConvertQuote')[0].crossexConvertQuoteRequest).toMatchObject({ fromCoin: 'USDT', toCoin: 'USDC' });
+    expect(h.jobs.read()?.fallbackConverts).toBe(1);
+    expect(planned()).toBe(9_000);
+  });
+
+  it.each([
+    [5, '2', '0.8', 1.2],
+    [60, '40', '16', 24],
+  ])('Abandon on a stopping two-leg %d ETH slice child places its owed hedge, so nothing is left open', async (slice, a, b, owed) => {
+    const h = sliceRun(sliceVenue(), { exec: 'maker', sliceUsd: slice * 3_000, leg: { qty: slice } });
+    const live = liveJobOf(h);
+    const engine = childEngine(h, () => ({ a, b, mode: 'OPENING' }));
+    const tick = h.deps.sleep;
+    Object.assign(h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        if (engine.requests.length > 0) live().status = 'halted';
+      },
+    });
+    await h.run();
+    const job = live();
+    await cancelRestingLead(h.deps, job);
+    const id = engine.requests[0].id;
+    expect(engine.store.getPair(id)?.mode).toBe('STOPPING');
+    expect(job.notHedgedQty).toBeCloseTo(owed, 9);
+    await endHaltedChildren(h.deps, job);
+    const pair = engine.store.getPair(id)!;
+    expect(pair.mode).toBe('DONE');
+    expect(pair.hedgeNotBefore).not.toBe(Number.MAX_SAFE_INTEGER);
+    expect(project(pair, engine.store.listOrders(id)).bFilled).toBe(a);
+    expect(job).toMatchObject({ notHedgedQty: 0, follow: null });
+  });
+
+  it.each([50, 6_000_000])('at $%d Abandon on a stopping one-leg slice 1 gap close holds it and keeps its filled part visible', async (usd) => {
+    const fill = (size: number): number => lots(size / 3);
+    const run = gateRun({ usd, first: 'gap', free: shortFree, cash: roomy(usd), exec: 'maker', maker: { takerAfterSec: null, repegBehindBp: null }, closeFill: (size, index) => (index === 0 ? fill(size) : size), closeOut: (_filled, index) => (index === 0 ? { mode: 'OPENING' } : {}) });
+    const live = liveJobOf(run.h);
+    const tick = run.h.deps.sleep;
+    Object.assign(run.h.deps, {
+      sleep: async (ms: number) => {
+        await tick(ms);
+        if (run.engine.requests.length > 0) live().status = 'halted';
+      },
+    });
+    await run.h.run();
+    const job = live();
+    await cancelRestingLead(run.h.deps, job);
+    const id = run.engine.requests[0].id;
+    const part = fill(firstCloseOf(run.events));
+    expect(run.engine.store.getPair(id)).toMatchObject({ mode: 'STOPPING', b: null });
+    expect(job.notHedgedQty).toBeCloseTo(part, 9);
+    await endHaltedChildren(run.h.deps, job);
+    expect(run.engine.store.getPair(id)).toMatchObject({ mode: 'DONE', hedgeNotBefore: Number.MAX_SAFE_INTEGER });
+    expect(job.notHedgedQty).toBeCloseTo(part, 9);
+    expect(run.events.filter((event) => event.startsWith('reopen '))).toEqual([]);
+  });
+
+  it.each([
+    [6_000, 0],
+    [1_000, 2_000],
+  ])('a profit stop leaves the planned total times the closed share, less the %d already converted', async (already, rest) => {
+    let entry = '3100';
+    const venue = sliceVenue();
+    venue.handlers.listCrossexPositions = async () => ({ body: [{ symbol: HL_ETH, positionQty: '-12.2', initialMargin: '2440', entryPrice: entry, markPrice: '3000' }] });
+    const h = sliceRun(venue, {
+      exec: 'market',
+      sliceUsd: 3_000,
+      leg: { qty: 3, convert: { amount: 9_000, count: 1, feeUsd: 18 } },
+      edit: (job) => {
+        const done = { ...asRealize(convertSteps('HYPERLIQUID', 'CROSSEX', already))[0], status: 'done' as const, qty: already * 0.998, doneAt: 0, leg: HL_ETH, retry: { reason: 'margin' as const, convertAmount: already } };
+        job.steps.unshift(done);
+        job.stepIndex = 1;
+      },
+    });
+    childEngine(h, () => {
+      entry = '3002.9';
+      return {};
+    });
+    await h.run();
+    const job = h.jobs.read()!;
+    expect(job.profitStops).toHaveLength(1);
+    const after = job.steps.slice(2).filter((step) => step.name === 'Convert').reduce((total, step) => total + (step.planned ?? 0), 0);
+    expect(after).toBeCloseTo(rest, 2);
   });
 });

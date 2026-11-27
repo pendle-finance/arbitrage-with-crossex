@@ -1848,9 +1848,9 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(after!.textContent).toBe(sigGrouped(Math.max(0, borrow - landed)));
   });
 
-  it('realize hold label', () => {
+  it('realize hold label', async () => {
     showOn(owner);
-    expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
   });
 
   it('while a new custom amount prices, the hold reads Refreshing and nothing above or below it moves', async () => {
@@ -1866,11 +1866,11 @@ describe('RebalanceModal Realize uPnL tab', () => {
     expect(screen.getByRole('button', { name: /Refreshing…/ })).toBeDisabled();
   });
 
-  it('a slice row marked past the book does not block a plan the server priced as fine', () => {
+  it('a slice row marked past the book does not block a plan the server priced as fine', async () => {
     const marked = { ...owner, realize: { ...owner.realize!, sliceOptions: ownerSlices.map((o) => (o.whole ? { ...o, pastBook: true } : o)) } };
     showOn(marked);
+    expect(await screen.findByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
     expect(screen.queryByText('Turn on TWAP to close it in parts.')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Hold to realize' })).toBeInTheDocument();
   });
 
   it('a small Custom amount behind a preset past the book can start', async () => {

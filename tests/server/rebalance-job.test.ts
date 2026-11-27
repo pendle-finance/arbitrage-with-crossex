@@ -929,7 +929,7 @@ describe('sliced jobs through the routes', () => {
     await waitFor(() => h.file().status === 'halted', 'the boot halt');
 
     expect(store.getPair(id)?.mode).toBe('STOPPING');
-    expect(h.file()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restart, haltKind: 'restart', paused: false });
+    expect(h.file()).toMatchObject({ status: 'halted', haltReason: HALT_TEXT.restartGap, haltKind: 'restart', paused: false, notHedgedQty: 3 });
     expect(sent).toEqual([]);
   });
 

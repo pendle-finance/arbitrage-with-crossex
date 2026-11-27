@@ -6,7 +6,7 @@ import { classifyGateError, plainErrorFor } from '../core/errors';
 import { parseSymbol } from '../core/numbers';
 import { CONVERT_MAX, CONVERT_RATE, CONVERT_TO, floorCents, PAIR_CONVERT_MAX, POOLS, poolWallet, spotArrivalFor, walletKey } from '../core/rebalance/plan';
 import type { Bucket, GateAccount, GoalKind, PlannedStep, Pool, RouteName, TransferCoin, Venue, WalletAfter } from '../core/rebalance/plan';
-import type { PerpSide, RealizeEstimate, RealizeExec, RealizeLeg, RealizePlan } from '../core/rebalance/realize';
+import type { PerpSide, RealizeEstimate, RealizeExec, RealizeLeg, RealizeMargin, RealizePlan } from '../core/rebalance/realize';
 import type { TwapLegRule, TwapPlan } from '../core/twap';
 import type { DealRequest } from '../engine/create';
 import { restrictToOwner } from './secretFile';
@@ -32,7 +32,7 @@ export interface StepPerp {
 }
 
 export interface StepRetry {
-  reason: 'margin';
+  reason: 'margin' | 'fallback';
   convertAmount: number;
 }
 
@@ -54,7 +54,13 @@ export interface RealizeJobLeg {
   reopenImpactUsd?: number;
   convert?: { amount: number; feeUsd: number } | null;
   takerRate?: number;
+  makerRate?: number;
   shrunkQty?: number;
+  margin?: RealizeMargin | null;
+  hedgedFirstQty?: number;
+  preClose?: { imRate: number; entry: number } | null;
+  gapSwitched?: 'cash' | 'ratio' | null;
+  gapPaused?: boolean;
 }
 
 export interface JobPerp {
@@ -102,6 +108,7 @@ export interface Step {
   hedge?: PerpOrder | null;
   cut?: SliceCut | null;
   addBack?: AddBack | null;
+  leg?: string;
 }
 
 export interface AddBack {
@@ -129,6 +136,16 @@ export interface SliceCut {
   ioc: boolean;
   n?: number;
   taker?: boolean;
+  gap?: 'close' | 'convert';
+  closedBefore?: number;
+  extras?: number;
+  quoteTries?: number;
+  capQty?: number;
+  netTries?: number;
+  netSince?: number;
+  moreOnResume?: boolean;
+  reopenOnly?: boolean;
+  failed?: string;
 }
 
 export interface ProfitStop {
@@ -238,6 +255,9 @@ const CHILD_SUFFIX = /^(s[1-9]\d*-[1-9]\d*|f[1-9]\d*(-[1-9]\d*)?)$/;
 export const isChildOf = (jobId: string, dealId: string): boolean =>
   jobId !== '' && dealId.startsWith(`${jobId}-`) && CHILD_SUFFIX.test(dealId.slice(jobId.length + 1));
 
+export const isGapChildOf = (jobId: string, dealId: string): boolean =>
+  jobId !== '' && dealId.startsWith(`${jobId}-`) && /^g\d+$/.test(dealId.slice(jobId.length + 1));
+
 export interface Job {
   id: string;
   /** Gate user id the job was started on. A resume on another account is
@@ -288,7 +308,8 @@ export interface Job {
   unwindTarget?: JobFollow | null;
   topUps?: number;
   topUpPending?: boolean;
-  quotesChecked?: boolean;
+  fallbackConverts?: number;
+  fallbackPending?: boolean;
   maker?: MakerOpts | null;
   sleptFrom?: number | null;
   sleptTo?: number | null;
@@ -374,6 +395,7 @@ export const HALT_TEXT = {
   unconfirmed: 'Gate did not confirm the last order. Press Resume to check again.',
   shortBuy: 'The USDC buy filled under 11 USDC.',
   poorQuote: 'Convert quote was more than 0.3% under the Gate spot price.',
+  convertUnreachable: 'Gate did not answer the Convert quote.',
   convertTooBig: 'Gate takes at most 500,000 in one Convert. Abandon this rebalance and start a new one.',
   marginRefused: 'Gate refused the move: free margin or wallet cash is too low.',
   noRecord: 'Gate has no record of this transfer. Try again.',
@@ -485,9 +507,13 @@ export function addBackGapsOf(job: Job, unread: readonly string[] = []): OpenGap
 }
 
 export function restGapOf(job: Job, lead: RealizeJobLeg, followSymbol: string, rest: number): OpenGap | null {
+  const { symbol, base, exchange, side, positionQty } = lead;
+  if (job.kind === 'realize') {
+    const hedge = hedgeBeforeOf(job, lead);
+    return { leg: { symbol, base, exchange, side, positionQty, hedge: hedge?.exchange ?? null }, qty: rest, hedges: hedge ? [hedge] : [] };
+  }
   const other = job.delever?.legs.find((row) => row.symbol === followSymbol && row.symbol !== lead.symbol);
   if (!other) return null;
-  const { symbol, base, exchange, side, positionQty } = lead;
   return {
     leg: { symbol, base, exchange, side, positionQty, hedge: other.exchange },
     qty: rest,
@@ -508,6 +534,18 @@ export const REOPEN_HALT = {
   poorQuoteLegOpen: (leg: OpenLeg, open: number): string =>
     `${HALT_TEXT.poorQuote} The ${legGapText(leg, open)} Resume to try again${orCloseOther(leg, open)}.`,
   marginLow: 'Not enough free margin for the next slice. Nothing is open. Add margin, then Resume.',
+  ratioLow: 'The margin ratio is under 103%, so the app will not Convert. Add margin, then Resume.',
+  fallbackCap: 'Free margin ran short again after 5 Converts in this run. Both legs are hedged. Add margin, then Resume.',
+  quotesLow: (leg: OpenLeg): string => `Too few Convert quotes are left today for ${leg.base} slice 1. No ${leg.base} was closed. Press Resume later.`,
+  gapNoFit: (leg: OpenLeg): string => `Free margin and cash are too low to close ${leg.base} slice 1 and reopen it. No ${leg.base} was closed. Add margin, then Resume.`,
+  gapGrew: (leg: OpenLeg, planned: number, now: number): string =>
+    `${leg.base} slice 1 must close ${fmtSize(now)} ${leg.base}, not the planned ${fmtSize(planned)} ${leg.base}, to fund its Convert. No ${leg.base} was closed. Press Resume to close ${fmtSize(now)} ${leg.base}.`,
+  marginShort: 'Not enough free margin to reopen. Add margin, then Resume.',
+  gapSwitched: (leg: OpenLeg, now: number, cause: 'cash' | 'ratio' = 'cash'): string =>
+    `${cause === 'ratio' ? 'The margin ratio is under 103%, so the Convert cannot run before' : 'Cash no longer covers the Convert before'} ${leg.base} slice 1. ${leg.base} slice 1 must close ${fmtSize(now)} ${leg.base} alone, unhedged from its first close fill until it reopens. No ${leg.base} was closed. Press Resume to go on.`,
+  gapMore: (leg: OpenLeg, agreed: number, now: number, closed: number): string =>
+    `${leg.base} slice 1 must close ${fmtSize(now)} ${leg.base} in all to fund its Convert, not ${fmtSize(agreed)} ${leg.base}. Press Resume to close ${fmtSize(Math.max(0, now - closed))} ${leg.base} more.`,
+  marginLegOpen: (reason: string, leg: OpenLeg, open: number): string => `${reason} The ${legGapText(leg, open)}${leg.hedge === null ? '' : ` Or ${closeOtherText(leg, open)}.`}`,
   convertCap: `Gate still wants more margin after ${RETRY_CONVERT_CAP} Converts in this run. Add margin, then Resume.`,
   noHedgePerp: 'Could not find the other perp of this pair. Close the gap in Positions.',
   hedgeRefusedAgain: 'Gate refused the hedge again. Nothing else changed.',
@@ -632,10 +670,12 @@ function sliceStep(pool: Pool, planned: number, perp: StepPerp, follow: StepPerp
 function slicedRealizeSteps(leg: RealizeLeg): Step[] {
   const perp = { symbol: leg.symbol, exchange: leg.exchange, side: sideOf(leg.side, true), reduceOnly: true };
   const follow = { ...perp, side: sideOf(leg.side, false), reduceOnly: false };
-  return [
-    sliceStep(leg.pool, leg.qty, perp, follow),
-    ...(leg.convert ? asRealize(convertSteps(leg.pool, CONVERT_TO[leg.pool], leg.convert.amount)) : []),
-  ];
+  const slice = sliceStep(leg.pool, leg.qty, perp, follow);
+  const convertsOf = (amount: number): Step[] => (amount > 0 ? asRealize(convertSteps(leg.pool, CONVERT_TO[leg.pool], amount)).map((step) => ({ ...step, leg: leg.symbol })) : []);
+  const total = leg.convert?.amount ?? 0;
+  if (leg.margin?.at !== 'before') return [slice, ...convertsOf(total)];
+  const first = Math.min(total, leg.margin.amount);
+  return [...convertsOf(first), slice, ...convertsOf(floorCents(total - first))];
 }
 
 function deleverParts(input: DeleverJobInput): { leg: RealizeJobLeg; steps: Step[]; delever: JobDelever } | null {
@@ -700,6 +740,9 @@ const realizeJobLeg = (leg: RealizeLeg, perps: JobPerp[]): RealizeJobLeg => ({
   reopenImpactUsd: leg.reopenImpactUsd,
   convert: leg.convert ? { amount: leg.convert.amount, feeUsd: leg.convert.feeUsd } : null,
   ...(leg.takerRate === undefined ? {} : { takerRate: leg.takerRate }),
+  ...(leg.makerRate === undefined ? {} : { makerRate: leg.makerRate }),
+  ...(leg.margin ? { margin: leg.margin } : {}),
+  ...(leg.hedgedFirstQty === undefined ? {} : { hedgedFirstQty: leg.hedgedFirstQty }),
 });
 
 export function newJob(
@@ -761,6 +804,7 @@ export function newJob(
     imUsedStart: kind === 'delever' ? (input.imUsedStart ?? null) : null,
     totalCostUsd: null,
     retryConverts: 0,
+    fallbackConverts: 0,
     haltKind: null,
     deleverTwap: delever || kind === 'realize' ? (input.twap ?? null) : null,
     profitStops: [],
@@ -1053,7 +1097,8 @@ function applyDefaults(job: Partial<Job>): void {
   if (typeof job.unwindTarget !== 'object') job.unwindTarget = null;
   job.topUps = finiteOr(job.topUps, 0);
   job.topUpPending = job.topUpPending === true;
-  job.quotesChecked = job.quotesChecked === true;
+  job.fallbackConverts = finiteOr(job.fallbackConverts, 0);
+  job.fallbackPending = job.fallbackPending === true;
   if (!isMakerOpts(job.maker)) job.maker = null;
   job.sleptFrom = typeof job.sleptFrom === 'number' && Number.isFinite(job.sleptFrom) ? job.sleptFrom : null;
   job.sleptTo = typeof job.sleptTo === 'number' && Number.isFinite(job.sleptTo) ? job.sleptTo : null;
@@ -1187,9 +1232,69 @@ class RecordFile<T extends { updatedAt: number }> {
   }
 }
 
+export const CONVERT_QUOTES_PER_DAY = 100;
+export const DAY_MS = 86_400_000;
+
 export class JobFile extends RecordFile<Job> {
+  private readonly quotesFile: string;
+
   constructor(dataDir: string, now: () => number = Date.now) {
     super(path.join(dataDir, 'rebalance.json'), parseJob, now);
+    this.quotesFile = path.join(dataDir, 'convert-quotes.json');
+  }
+
+  quotesSince(since: number): number {
+    return this.quoteTimes().filter((at) => at >= since).length;
+  }
+
+  noteQuote(at: number): void {
+    const kept = [...this.quoteTimes().filter((time) => time > at - DAY_MS), at];
+    fs.mkdirSync(path.dirname(this.quotesFile), { recursive: true, mode: 0o700 });
+    const tmp = `${this.quotesFile}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(kept), { mode: 0o600 });
+    fs.renameSync(tmp, this.quotesFile);
+    restrictToOwner(this.quotesFile);
+  }
+
+  blockQuotesUntil(at: number): void {
+    fs.mkdirSync(path.dirname(this.quotesFile), { recursive: true, mode: 0o700 });
+    const file = `${this.quotesFile}.blocked`;
+    const tmp = `${file}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(at), { mode: 0o600 });
+    fs.renameSync(tmp, file);
+    restrictToOwner(file);
+  }
+
+  quotesBlockedUntil(): number {
+    const file = `${this.quotesFile}.blocked`;
+    if (!fs.existsSync(file)) return 0;
+    try {
+      const at: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+      return typeof at === 'number' && Number.isFinite(at) ? at : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  dropQuote(at: number): void {
+    const times = this.quoteTimes();
+    const index = times.lastIndexOf(at);
+    if (index < 0) return;
+    times.splice(index, 1);
+    const tmp = `${this.quotesFile}.tmp-${process.pid}`;
+    fs.writeFileSync(tmp, JSON.stringify(times), { mode: 0o600 });
+    fs.renameSync(tmp, this.quotesFile);
+    restrictToOwner(this.quotesFile);
+  }
+
+  private quoteTimes(): number[] {
+    if (!fs.existsSync(this.quotesFile)) return [];
+    try {
+      const raw: unknown = JSON.parse(fs.readFileSync(this.quotesFile, 'utf8'));
+      return Array.isArray(raw) ? raw.filter((time): time is number => typeof time === 'number' && Number.isFinite(time)) : [];
+    } catch {
+      return [];
+    }
   }
 
   haltIfRunning(): boolean {

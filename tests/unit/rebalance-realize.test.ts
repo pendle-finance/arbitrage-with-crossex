@@ -6,7 +6,6 @@ import {
   BORROW_INITIAL_MARGIN,
   bucketsFrom,
   CONVERT_MAX,
-  CONVERT_RATE,
   fullPlanOf,
   planFor,
   REPAY_GOAL,
@@ -15,8 +14,11 @@ import {
 } from '../../src/core/rebalance/plan';
 import {
   capsUsdOf,
-  convertFor,
-  marginPerConvertUsdc,
+  convertToLift,
+  DRIFT_DEFAULT_SEC,
+  exposureUsdOf,
+  sliceReserveUsd,
+  liftPerConvert,
   planRealize,
   type RealizeInput,
   type RealizeLeg,
@@ -29,6 +31,7 @@ import {
 import { resolveFeeRates } from '../../src/core/estimate/fees';
 import { costOf, sliceOf } from '../../web/src/panels/realizeTabCost';
 import { newJob } from '../../src/server/rebalanceJob';
+import type { SliceOption } from '../../src/core/rebalance/slices';
 import {
   bookBb43,
   bookC0df,
@@ -110,7 +113,7 @@ describe('planRealize on the owner book', () => {
     const realize = ownerRealize();
     expect(realize.legs).toHaveLength(1);
     expect(realize.legs[0]).toMatchObject({ exchange: 'HYPERLIQUID', base: 'ETH', side: 'SHORT', positionQty: 66 });
-    expect(Math.abs(realize.legs[0].qty - 54.0615)).toBeLessThanOrEqual(0.0001);
+    expect(realize.legs[0].qty).toBe(54.0842);
     expect(realize.refused).toBeNull();
   });
 
@@ -132,9 +135,19 @@ describe('planRealize on the owner book', () => {
   it('converts just enough for the reopen', () => {
     const leg = ownerRealize().legs[0];
     const amount = leg.convert?.amount ?? 0;
-    const reopenMargin = (leg.qty * 66 * 1_821 * 0.05) / 66;
-    const passes = (converted: number) => -1_284 + converted * marginPerConvertUsdc >= 0.15 * reopenMargin + 20;
-    expect(marginPerConvertUsdc).toBeCloseTo(BORROW_INITIAL_MARGIN * (1 - CONVERT_RATE), 12);
+    const lift = liftPerConvert(BORROW_INITIAL_MARGIN);
+    const closeUsd = leg.closeFeeUsd + leg.closeImpactUsd;
+    const input = bookInput(ownerBook(), 'HYPERLIQUID', OWNER_EVEN_MOVE);
+    const imOf = (perp: { initialMargin?: string }) => Math.abs(Number(perp.initialMargin) || 0);
+    const lead = input.perps.find((perp) => perp.symbol === leg.symbol)!;
+    const hedgeImUsd = input.perps
+      .filter((perp) => perp !== lead && perp.symbol?.includes('_ETH_') && Math.sign(Number(perp.positionQty)) === -Math.sign(Number(lead.positionQty)))
+      .reduce((total, perp) => total + imOf(perp), 0);
+    const exposureUsd = exposureUsdOf({ legImUsd: imOf(lead), hedgeImUsd, notionalUsd: Math.abs(Number(lead.positionQty)) * 1_821, debtRate: input.borrowUsd > 0 ? BORROW_INITIAL_MARGIN : 0 });
+    const reserve = sliceReserveUsd({ qty: leg.qty, price: 1_821, marginPerCoin: 1_821 * 0.05, impactUsd: leg.reopenImpactUsd, seconds: DRIFT_DEFAULT_SEC, exposureUsd, nakedUsd: leg.qty * 1_821 });
+    const passes = (converted: number) => -1_284 + converted * lift - closeUsd >= reserve;
+    expect(lift).toBeCloseTo(0.2 * (1 - 0.0023) - 0.0023, 12);
+    expect(leg.margin).toMatchObject({ at: 'gap', amount, firstQty: leg.qty });
     expect(amount).toBeGreaterThan(0);
     expect(passes(amount)).toBe(true);
     expect(passes(amount - 1)).toBe(false);
@@ -180,9 +193,13 @@ describe('planRealize on the owner book', () => {
     expect((leg.qty - 0.0001) * 1_821).toBeLessThan(10);
   });
 
-  it('a small realize with no margin refuses', () => {
+  it('a small realize at negative free margin closes enough for its Convert to lift the reopen', () => {
     const realize = ownerRealize({ moveUsd: 3_141 });
-    expect(realize.refused).toEqual({ reason: 'no-margin', bp: null });
+    const leg = realize.legs[0];
+    expect(realize.refused).toBeNull();
+    expect(leg.margin?.at).toBe('gap');
+    expect(leg.margin?.amount ?? 0).toBeLessThanOrEqual(3_140 + leg.qty * 639);
+    expect(-1_284 + liftPerConvert(BORROW_INITIAL_MARGIN) * (leg.margin?.amount ?? 0) - leg.closeFeeUsd - leg.closeImpactUsd).toBeGreaterThanOrEqual(leg.reopenFeeUsd + leg.reopenImpactUsd);
   });
 
   it('parses the signed gate position strings', () => {
@@ -210,7 +227,8 @@ describe('planRealize leg order', () => {
     const realize = clearDebtOf(bookBb43());
     expect(realize.legs[0].base).toBe('BTC');
     expect(realize.legs[0].positionQty).toBeCloseTo(92.7, 1);
-    expect(Math.abs(realize.legs[0].qty - 59.07153)).toBeLessThanOrEqual(0.00001);
+    expect(Math.abs(realize.legs[0].qty - 62.03773)).toBeLessThanOrEqual(0.00001);
+    expect(realize.legs[0].margin?.at).toBe('gap');
     expect(realize.legs.some((leg) => leg.base === 'ETH')).toBe(false);
     expect(realize.refused).toBeNull();
   });
@@ -218,7 +236,8 @@ describe('planRealize leg order', () => {
   it('splits a convert above 500,000', () => {
     const convert = clearDebtOf(bookBb43()).legs[0].convert;
     expect(convert?.amount).toBeGreaterThan(CONVERT_MAX);
-    expect(convert?.count).toBe(2);
+    expect(convert?.count).toBe(Math.ceil((convert?.amount ?? 0) / CONVERT_MAX));
+    expect(convert?.count).toBe(3);
   });
 
   it('gate long pays when eth rises', () => {
@@ -250,7 +269,7 @@ describe('planRealize sizes and refusals', () => {
     const realize = clearDebtOf(bookC0df());
     expect(realize.legs[0]).toMatchObject({ exchange: 'GATE', base: 'ETH' });
     expect(Math.abs(realize.legs[0].impactBp - 52.3)).toBeLessThanOrEqual(0.1);
-    expect(realize.refused).toBeNull();
+    expect(realize.refused).toEqual({ reason: 'no-margin', bp: null });
     const at = (half: number) =>
       planRealize(input({ moveUsd: 1_000, perps: [perp(OWNER_ETH, -10, 1_200, 1_000)], books: { [OWNER_ETH]: flatBook(1_000, half, 100) } }));
     const wide = at(1.255);
@@ -324,7 +343,7 @@ describe('planRealize at size', () => {
           moveUsd,
           cashUsd,
           borrowUsd: rung,
-          availableMargin: 25 - 0.1 * rung,
+          availableMargin: 25 - 0.05 * rung,
           perps: [perp(OWNER_ETH, -positionQty, ETH_MARK + 639, ETH_MARK)],
           books: { [OWNER_ETH]: HL_ETH },
         }),
@@ -509,17 +528,15 @@ describe('realize fix round', () => {
     expect(plan.moves).toBeLessThanOrEqual(3_140);
   });
 
-  it('a plan convert under 11 USDC is raised to 11 and still passes the margin test', () => {
+  it('a plan convert under 11 USDC is raised to 11 and still lifts the short', () => {
+    const lift = liftPerConvert(BORROW_INITIAL_MARGIN);
     for (const need of LADDER) {
-      const margin = need / 20;
-      const edge = 0.15 * margin + 20;
-      const convert = convertFor(margin, edge - 0.01);
-      expect(convert).toBe(11);
-      expect(edge - 0.01 + convert * marginPerConvertUsdc).toBeGreaterThanOrEqual(edge);
-      expect(convertFor(margin, edge)).toBe(0);
-      const big = convertFor(margin, 0);
+      expect(convertToLift(0.01, lift, 11)).toBe(11);
+      expect(convertToLift(0, lift, 11)).toBe(0);
+      const big = convertToLift(need, lift, 11);
       expect(big).toBeGreaterThanOrEqual(11);
-      expect(big * marginPerConvertUsdc).toBeGreaterThanOrEqual(edge);
+      expect(big * lift).toBeGreaterThanOrEqual(need);
+      expect((big - 0.01) * lift).toBeLessThan(need);
     }
   });
 
@@ -649,9 +666,25 @@ describe('realize cost per slice, the same figure as the dialog', () => {
       legs: [{ closeImpactUsd: 10, reopenImpactUsd: 4 }],
       estimates: { maker: { feeUsd: 1, impactUsd: 4, totalUsd: 5 }, market: { feeUsd: 2, impactUsd: 14, totalUsd: 16 } },
     } as unknown as RealizePlan;
-    const slice = { impactUsd: 3, reopenImpactUsd: 7 };
+    const slice = { impactUsd: 3, reopenImpactUsd: 7, count: 2, notHedgedMaxQty: 1 };
     expect(slicedEstimateOf(plan, 'maker', slice)).toEqual({ feeUsd: 1, impactUsd: 7, totalUsd: 8 });
     expect(slicedEstimateOf(plan, 'market', slice)).toEqual({ feeUsd: 2, impactUsd: 10, totalUsd: 12 });
+  });
+
+  it('without TWAP, a gap slice 1 of 15 BTC walks at its own size: $1,080 plus 5 slices of $90 is $1,530, not the even $720', () => {
+    const margin = { at: 'gap' as const, amount: 500, firstQty: 15, impactUsd: 1_080, impactBp: 0, closeWalkUsd: 1_100, reopenWalkUsd: 1_080 };
+    const lead = { qty: 40, closeImpactUsd: 3_100, reopenImpactUsd: 3_000, margin, closeFeeUsd: 0, reopenFeeUsd: 0 };
+    const plan = {
+      legs: [lead],
+      estimates: { maker: { feeUsd: 0, impactUsd: 3_000, totalUsd: 3_000 }, market: { feeUsd: 0, impactUsd: 6_100, totalUsd: 6_100 } },
+    } as unknown as RealizePlan;
+    const option = { sizeUsd: 5, impactUsd: 760, reopenImpactUsd: 720, count: 8, notHedgedMaxQty: 5, notHedgedMaxUsd: 5 } as unknown as SliceOption;
+    expect(slicedEstimateOf(plan, 'maker', option).impactUsd).toBeCloseTo(1_080 + 5 * 90, 9);
+    expect(slicedEstimateOf(plan, 'market', option).impactUsd).toBeCloseTo(1_100 + 1_080 + 5 * (95 + 90), 9);
+    const web = (exec: 'maker' | 'market') => costOf(plan as never, exec, sliceOf([option] as never, 5, lead as never, true)).impactUsd;
+    expect(web('maker')).toBeCloseTo(1_530, 9);
+    expect(web('market')).toBeCloseTo(3_105, 9);
+    expect(slicedEstimateOf({ ...plan, legs: [{ ...lead, margin: null }] } as unknown as RealizePlan, 'maker', option).impactUsd).toBeCloseTo(720, 9);
   });
 
   it('a plan the slices do not price keeps its whole estimate, as the dialog does', () => {

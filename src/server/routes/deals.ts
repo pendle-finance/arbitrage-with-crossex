@@ -23,7 +23,7 @@ import { TTL } from '../cache';
 import { DISCLAIMER_NOT_ACCEPTED, isDisclaimerAccepted } from '../disclaimer';
 import { refuse } from '../errorReply';
 import { perpLimitBreach } from '../perpLimit';
-import { dealLockFor, isChildOf, type Job } from '../rebalanceJob';
+import { dealLockFor, isChildOf, isGapChildOf, type Job } from '../rebalanceJob';
 import { cachedTradesOf, feeReadWithin, feeRowsWithin } from '../dealFees';
 import { feesOf, repegRefusalOf } from '../twapRun';
 import { positionLimitFor } from './leverage';
@@ -60,7 +60,7 @@ function rebalanceLockFor(deps: AppDeps, dealId: string, what: string): string |
     const childLive = deps.engine!.store.listPairs({ activeOnly: true }).some((pair) => isChildOf(job.id, pair.id));
     return dealLockFor({ rebalance: job, dealId, childLive });
   }
-  if (!job || isChildOf(job.id, dealId)) return null;
+  if (!job || isChildOf(job.id, dealId) || isGapChildOf(job.id, dealId)) return null;
   const blocks = job.status === 'running' || (job.status === 'halted' && job.paused);
   return blocks ? `A rebalance is still running. Wait for it to finish, then ${what}.` : null;
 }
