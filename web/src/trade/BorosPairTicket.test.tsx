@@ -2227,9 +2227,25 @@ describe('BorosPairTicket — spread ticket', () => {
       await user.click(screen.getByRole('checkbox', { name: 'Reduce-only' }));
 
       expect(tradeOn()).toBeInTheDocument();
-      expect(chips()).toHaveLength(1);
-      expect(within(screen.getByRole('group', { name: 'Maturity' })).queryByRole('button', { pressed: true })).toBeNull();
+      expect(chips()).toHaveLength(2);
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
       expect(screen.getByRole('button', { name: /Confirm/ })).toBeDisabled();
+    });
+
+    it('clicking Pair while Pair is on leaves a Jan spread pick alone', async () => {
+      const bodies: Record<string, unknown>[] = [];
+      janSetup(bodies);
+      const user = userEvent.setup();
+      await pickShortHl(user);
+      await waitFor(() => expect(tradeOn()).toBeInTheDocument());
+      await user.type(screen.getByLabelText(/^Size \(ETH\)/), '0.121');
+      await user.click(chips()[1]);
+      await user.click(screen.getByRole('radio', { name: 'Pair' }));
+
+      expect(chips()[1]).toHaveAttribute('aria-pressed', 'true');
+      await waitFor(() =>
+        expect((bodies[bodies.length - 1] as SimBody).legs).toEqual([expect.objectContaining({ marketId: 299, size: 0.121 })]),
+      );
     });
   });
 

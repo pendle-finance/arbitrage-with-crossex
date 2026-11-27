@@ -610,7 +610,7 @@ export function BorosPairTicket({
   /** A spread at a date the two singles do not share (HL-GATE 29 Jan 2027, no Gate single then). */
   const spreadOnly =
     mode === 'pair' && onlyLeg === null
-      ? spreadsOver(slotA, slotB).filter((m) => wantSpread(m) && !maturities.includes(m.maturity))
+      ? spreadsOver(slotA, slotB).filter((m) => (wantSpread(m) || m.marketId === marketA) && !maturities.includes(m.maturity))
       : [];
   const chipDates = [...maturities, ...spreadOnly.map((m) => m.maturity)].sort((x, y) => x - y);
   /** Slot A's side: on a spread, the side the singles had when it took over. */
@@ -994,6 +994,8 @@ export function BorosPairTicket({
           ariaLabel={t('pairTicket.boros.modeAria')}
           value={mode}
           onChange={(next) => {
+            // The toggle also fires on the option already on.
+            if (next === mode) return;
             // Single trades leg A alone, so a spread hands back its singles
             // (leg A is the first); a spread with none behind it clears.
             if (isSpread) {
