@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState, type ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AssetBorosOpen, AssetGroup, AssetPerpOpen } from '../../api/types';
+import type { AssetBorosOpen, AssetGroup, AssetPerpClosed, AssetPerpOpen } from '../../api/types';
 import { fmtDateLocal } from '../../lib/fmt';
 import { renderWithClient } from '../../test/utils';
 import { ClosePairModal, RollPairModal } from './ClosePairModal';
@@ -25,8 +25,23 @@ function useMount() {
   return id;
 }
 
+const viewState = vi.hoisted(() => ({ since: [] as (number | undefined)[], perpClosed: [] as AssetPerpClosed[] }));
+
+vi.mock('../../api/queries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../api/queries')>()),
+  useAssetView: (address: string | null, since?: number) => {
+    viewState.since.push(since);
+    return { data: address ? { assets: [{ base: 'ETH', perpClosed: viewState.perpClosed }] } : undefined };
+  },
+}));
+
+vi.mock('../trackedAddress', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../trackedAddress')>()),
+  useTrackedAddressOptional: () => ({ address: '0xabc' }),
+}));
+
 vi.mock('../PerpOnlyBox', () => ({
-  ClosePairForm: ({ legs, borosUnhedged, allowTwap, onSent }: { legs: { symbol: string; qty: number; partial?: boolean }[]; allowTwap?: boolean; borosUnhedged?: { qty: number; coin: string } | null; onSent?: () => void }) => {
+  ClosePairForm: ({ legs, borosUnhedged, allowTwap, bookedBefore, closed, onSent }: { legs: { symbol: string; qty: number; partial?: boolean }[]; allowTwap?: boolean; borosUnhedged?: { qty: number; coin: string } | null; bookedBefore?: { usd: number; shared?: boolean } | null; closed?: boolean; onSent?: () => void }) => {
     const id = useMount();
     const max = String(Math.min(...legs.map((l) => l.qty)));
     const [size, setSize] = useState(max);
@@ -35,9 +50,11 @@ vi.mock('../PerpOnlyBox', () => ({
         <span>{legs.map((l) => l.symbol).join(' ')}</span>
         <span>{allowTwap ? 'twap allowed' : 'no twap'}</span>
         <span>{borosUnhedged ? `unhedged ${borosUnhedged.qty} ${borosUnhedged.coin}` : 'hedged'}</span>
+        <span>{bookedBefore ? `booked ${bookedBefore.usd}${bookedBefore.shared ? ' on this perp' : ''}` : 'booked none'}</span>
         <input aria-label="Close size" value={size} onChange={(e) => setSize(e.target.value)} />
         <button
           type="button"
+          disabled={closed}
           onClick={() => {
             sends.push(legs.map((l) => `${l.symbol}:${l.qty}${l.partial ? ':partial' : ''}`));
             onSent?.();
@@ -51,7 +68,7 @@ vi.mock('../PerpOnlyBox', () => ({
 }));
 
 vi.mock('../../trade/CloseBorosForm', () => ({
-  CloseBorosForm: ({ legs, underPicker, onSent }: { legs: { marketId: number; spreadVenues: unknown }[]; underPicker?: boolean; onSent?: () => void }) => {
+  CloseBorosForm: ({ legs, underPicker, closed, onSent }: { legs: { marketId: number; spreadVenues: unknown }[]; underPicker?: boolean; closed?: boolean; onSent?: () => void }) => {
     const id = useMount();
     const [sent, setSent] = useState(false);
     return (
@@ -61,6 +78,7 @@ vi.mock('../../trade/CloseBorosForm', () => ({
         {sent && <span>Closed</span>}
         <button
           type="button"
+          disabled={closed}
           onClick={() => {
             setSent(true);
             onSent?.();
@@ -74,7 +92,7 @@ vi.mock('../../trade/CloseBorosForm', () => ({
 }));
 
 vi.mock('./AssetCard', () => ({
-  RollOverModal: ({ pair, base, picker }: { pair: { soonestMaturitySec: number; size: number }; base: string; picker: ReactNode }) => {
+  RollOverModal: ({ pair, base, picker, onSending }: { pair: { soonestMaturitySec: number; size: number }; base: string; picker: ReactNode; onSending?: () => void }) => {
     const id = useMount();
     const [rolled, setRolled] = useState(false);
     return (
@@ -84,6 +102,9 @@ vi.mock('./AssetCard', () => ({
         {rolled && <span>{`Rolled ${pair.size} ${base}`}</span>}
         <button type="button" onClick={() => setRolled(true)}>
           Roll over
+        </button>
+        <button type="button" onClick={() => onSending?.()}>
+          Send roll
         </button>
       </div>
     );
@@ -307,6 +328,69 @@ describe('ClosePairModal', () => {
     });
   });
 
+  it('a pair that closes fully shows Closed and turns the hold off, so a second press cannot close another pair\'s share', async () => {
+    const user = userEvent.setup();
+    closeModal('perps', () => entriesOf(BTC, HYPE));
+    await user.click(screen.getByRole('button', { name: 'Close both' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    const mounted = screen.getByTestId('perp-form').dataset.mount;
+    await user.click(screen.getByRole('button', { name: 'Refetch' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Closed');
+    expect(screen.getByRole('button', { name: 'Close both' })).toBeDisabled();
+    expect(screen.getByTestId('perp-form').dataset.mount).toBe(mounted);
+  });
+
+  it('Close Boros: a pair that closes fully turns the hold off too', async () => {
+    const user = userEvent.setup();
+    closeModal('boros', () => entriesOf(BTC, HYPE));
+    expect(screen.getByRole('button', { name: 'Close position' })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: 'Refetch' }));
+    expect(screen.getByRole('status')).toHaveTextContent('Closed');
+    expect(screen.getByRole('button', { name: 'Close position' })).toBeDisabled();
+  });
+
+  describe('Realized earlier', () => {
+    const openedSec = NOW - 5 * DAY;
+    const closes = (rows: [number, number][]): AssetPerpClosed => ({
+      symbol: 'GATE_FUTURE_ETH_USDT',
+      venue: 'GATE',
+      closedPnlUsd: 0,
+      fundingUsd: 0,
+      feesUsd: 0,
+      count: rows.length,
+      lastClosedAt: null,
+      rows: rows.map(([closedAt, priceUsd]) => ({ closedAt, qty: 1, openPx: 1, closePx: 1, priceUsd, fundingUsd: 0, feesUsd: 0, complete: true, dedupedIntoOpen: false })),
+    });
+
+    beforeEach(() => {
+      viewState.since.length = 0;
+      openState.entries = entriesOf(ETH, BTC).map((e) => (e.group.base === 'ETH' ? { ...e, pair: { ...e.pair, borosOpenedSec: openedSec } } : e));
+    });
+
+    it('reads the closes from the Boros open date, not the view window', () => {
+      viewState.perpClosed = [closes([[NOW - 4 * DAY, 500], [NOW - 6 * DAY, 999]])];
+      closeModal('perps');
+      expect(viewState.since).toContain(openedSec);
+      expect(screen.getByTestId('perp-form')).toHaveTextContent('booked 500');
+      expect(screen.getByTestId('perp-form')).not.toHaveTextContent('on this perp');
+    });
+
+    it('says on this perp when two pairs share it, at $50 and at $6,000,000', () => {
+      const shared = (usd: number) => {
+        viewState.perpClosed = [closes([[NOW - 4 * DAY, usd]])];
+        openState.entries = openState.entries.map((e) =>
+          e.group.base === 'ETH' ? { ...e, pair: { ...e.pair, legs: e.pair.legs.map((l) => (l.kind === 'perp' ? { ...l, share: 0.5 } : l)) } } : e,
+        );
+        return closeModal('perps');
+      };
+      const small = shared(50);
+      expect(screen.getByTestId('perp-form')).toHaveTextContent('booked 50 on this perp');
+      small.unmount();
+      shared(6_000_000);
+      expect(screen.getByTestId('perp-form')).toHaveTextContent('booked 6000000 on this perp');
+    });
+  });
+
   it('the picker locks once an order is sent', async () => {
     const user = userEvent.setup();
     closeModal('perps');
@@ -348,5 +432,21 @@ describe('RollPairModal', () => {
   it('starts on the clicked pair', () => {
     roll();
     expect(screen.getByTestId('roll')).toHaveTextContent('roll ETH 100');
+  });
+
+  it('reads the live pair until the roll sends, then holds it for the rest of the roll', async () => {
+    const user = userEvent.setup();
+    const sized = (qty: number) => () => entriesOf(group('ETH', qty, 2500, 8, [1, 2]), BTC);
+    let next = sized(80);
+    roll(() => next());
+    const mounted = screen.getByTestId('roll').dataset.mount;
+    await user.click(screen.getByRole('button', { name: 'Refetch' }));
+    expect(screen.getByTestId('roll')).toHaveTextContent('roll ETH 80');
+    await user.click(screen.getByRole('button', { name: 'Send roll' }));
+    next = sized(30);
+    await user.click(screen.getByRole('button', { name: 'Refetch' }));
+    expect(screen.getByTestId('roll')).toHaveTextContent('roll ETH 80');
+    expect(screen.getByTestId('roll').dataset.mount).toBe(mounted);
+    expect(screen.getByRole('button', { name: 'Pair' })).toBeDisabled();
   });
 });

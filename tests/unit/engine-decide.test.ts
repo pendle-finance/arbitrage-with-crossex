@@ -325,12 +325,15 @@ describe('maker + hedge close (both legs reduce-only)', () => {
   const restingSell = (over?: Partial<OrderRow>): OrderRow =>
     order({ side: 'SELL', price: '2501', createdAt: 0, ...over });
 
-  it('a venue cancel of the resting close converts the rest at market, with an alert', () => {
+  it('a venue cancel of the resting close stops the close, with an alert that the rest is open', () => {
     const p = closePair();
     const proj = project(p, [restingSell({ state: 'CLOSED', closeReason: 'cancelled', cancelRequested: 0 })]);
     const a = decide(p, proj, 1_000, ctx);
-    expect(a).toMatchObject({ type: 'setMode', mode: 'CONVERTING', resetClipBudget: true });
-    expect(a.type === 'setMode' && a.alert).toMatch(/cancelled on the venue/);
+    expect(a).toMatchObject({ type: 'setMode', mode: 'STOPPING' });
+    expect(a.type === 'setMode' && a.resetClipBudget).toBeFalsy();
+    expect(a.type === 'setMode' && a.alert).toBe(
+      `The resting close order on ${A_CONTRACT} was cancelled on the venue. The close stopped with the rest still open.`,
+    );
   });
 
   it('an exhausted POC budget converts a close instead of stopping it', () => {

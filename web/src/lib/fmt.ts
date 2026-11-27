@@ -41,10 +41,14 @@ export function sigGrouped(value: number | string, maxDp = 8): string {
 
 export function qtyGrouped(value: number | string, maxDp = 8): string {
   const n = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(n) || Math.abs(n) < 1000) return sigGrouped(value, maxDp);
-  const [whole = '', frac] = n.toFixed(3).replace(/\.?0+$/, '').split('.');
-  const grouped = Number(whole).toLocaleString('en-US', { maximumFractionDigits: 0 });
-  return frac === undefined ? grouped : `${grouped}.${frac}`;
+  if (!Number.isFinite(n)) return String(value);
+  const abs = Number(Math.abs(n).toPrecision(12));
+  const dp = abs >= 1000 ? 3 : abs >= 1 ? 4 : maxDp;
+  const plain = String(abs);
+  const [whole = '0', frac = ''] = (/e/i.test(plain) ? abs.toFixed(20) : plain).split('.');
+  const kept = frac.slice(0, dp).replace(/0+$/, '');
+  const body = groupedExact(kept ? `${whole}.${kept}` : whole);
+  return n < 0 && /[1-9]/.test(body) ? `-${body}` : body;
 }
 
 export function groupedExact(text: string): string {

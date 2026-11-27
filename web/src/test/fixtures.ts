@@ -12,7 +12,6 @@ import type {
   AssetGroup,
   AssetPerpOpen,
   AssetViewResponse,
-  BookTouch,
   BorosAgentStatus,
   BorosPairContext,
   BorosPairMarketRow,
@@ -264,6 +263,8 @@ export function versionHandler(over: Partial<UpdateStatus> = {}) {
         latestCommit: null,
         updateAvailable: false,
         highlights: [],
+        checkOn: true,
+        freshRead: null,
         ...over,
       }),
     ),
@@ -300,10 +301,9 @@ export function baseHandlers() {
 // backend contract in src/core/boros/returns.ts.
 // ---------------------------------------------------------------------------
 
-export const STRATEGY_NOW = 1_752_000_000;
-export const STRATEGY_OPENED = STRATEGY_NOW - 2 * 86_400;
-export const STRATEGY_MATURITY = STRATEGY_NOW + 12 * 86_400;
-export const STRATEGY_ADDRESS = '0x' + 'ab'.repeat(20);
+const STRATEGY_NOW = 1_752_000_000;
+const STRATEGY_OPENED = STRATEGY_NOW - 2 * 86_400;
+const STRATEGY_MATURITY = STRATEGY_NOW + 12 * 86_400;
 
 export function makeStrategyLeg(overrides: Partial<StrategyLeg> = {}): StrategyLeg {
   return {
@@ -426,9 +426,9 @@ export const assetView: AssetViewResponse = {
   warnings: [],
 };
 
-export const OPP_NOW = 1_752_000_000;
+const OPP_NOW = 1_752_000_000;
 export const OPP_MATURITY = OPP_NOW + 30 * 86_400;
-export const OPP_SECONDS_TO_MATURITY = OPP_MATURITY - OPP_NOW;
+const OPP_SECONDS_TO_MATURITY =OPP_MATURITY - OPP_NOW;
 export const OPP_NOTIONAL = 10_000;
 
 /** N × T — the base every APR↔USD conversion in the fixture runs through. */
@@ -2456,7 +2456,7 @@ function sliceRowsOf(totalUsd: number, mid: number, custom: number | null = null
 
 export const TWAP_OFF: TwapDefault = { on: false, maker: { durationSec: 3_600, intervalSec: 300 }, market: { durationSec: 720, intervalSec: 60 } };
 
-export const TWAP_OFF_TARGETS = { clearDebt: TWAP_OFF, all: TWAP_OFF, custom: TWAP_OFF };
+const TWAP_OFF_TARGETS ={ clearDebt: TWAP_OFF, all: TWAP_OFF, custom: TWAP_OFF };
 
 function acctTab(b: BorrowBook, refused: RealizeRefusal | null, custom: number | null): RealizeTab {
   const clearDebt = b.realized > 0 ? acctRealize(b.realized, refused, custom ?? 25_000) : null;
@@ -2696,33 +2696,6 @@ export const deleverPlans = {
   noBoros: withTotals(deleverPlanOf(900, [], 20)),
   whale: withTotals(deleverPlanOf(4100, [4100], 20, {}, WHALE_ETH_DELEVER)),
 } satisfies Record<string, DeleverPlan>;
-
-type DeleverTwapBody = { durationSec?: number; intervalSec?: number; slices?: number };
-
-function deleverTwapOf(plan: DeleverPlan, price: number, input: DeleverTwapBody, thinAtSlices: number): DeleverPlan {
-  const close = plan.legs[plan.makerLeg]!.closeQty;
-  const durationSec = input.durationSec ?? 3_600;
-  const intervalSec = input.intervalSec ?? 300;
-  const slices = Math.max(1, input.slices ?? Math.floor(durationSec / intervalSec));
-  const sliceQty = r6(close / slices);
-  const coin = plan.legs[0]!.base;
-  const refusal = slices <= thinAtSlices
-    ? {
-        field: 'sliceSize' as const,
-        text: `Book too thin for ${sliceQty} ${coin} a slice.`,
-        fix: { label: `Use ${r6(sliceQty / 2)} ${coin}`, patch: { durationSec, sliceQty: String(r6(sliceQty / 2)) } },
-      }
-    : null;
-  const planView = refusal
-    ? null
-    : { slices, sliceQty: String(sliceQty), lastQty: String(sliceQty), intervalSec, durationSec, takerAfterSec: Math.floor(intervalSec * 0.8) };
-  return { ...plan, twap: { plan: planView, refusal, price }, priceImpact: { whole: null, sliced: 1200 }, twapDefault: TWAP_OFF };
-}
-
-export const deleverTwapPlans = {
-  twentyPctTwap: (input: DeleverTwapBody) => deleverTwapOf(deleverPlans.twentyPct, BTC_MID, input, 0),
-  whaleTwap: (input: DeleverTwapBody) => deleverTwapOf(deleverPlans.whale, WHALE_ETH_DELEVER.mid, input, 2),
-} satisfies Record<string, (input: DeleverTwapBody) => DeleverPlan>;
 
 const BTC_IM_USD = 4_050_000;
 
@@ -3226,58 +3199,6 @@ export const whaleRebalanceViews = {
   realizeWhale: { ...WHALE_VIEW, realize: { ...acctTab(WHALE_ACCOUNT, null, null), defaultSliceUsd: 50_000 }, job: null },
 } satisfies Record<string, RebalanceView>;
 
-const ownerPlans = (over: Partial<RebalancePlans>): RebalancePlans => ({ ...OWNER_BOOK_PLANS, ...over });
-
-const customPlan = (amount: number): EvenPlan => ({
-  ...OWNER_EVEN, goal: { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount }, customMaxUsd: 3140,
-});
-
-const BTC_HL_LEG: RealizeLeg = {
-  ...OWNER_ETH_LEG, symbol: 'HYPERLIQUID_FUTURE_BTC_USDC', base: 'BTC', positionQty: 2.1, qty: 1.4, realizedUsd: 9200,
-  convert: { amount: 2800, count: 1, feeUsd: 5.6 }, closeFeeUsd: 12.4, reopenFeeUsd: 12.4, closeImpactUsd: 2.1,
-  reopenImpactUsd: 2.1, impactBp: 1.6,
-};
-
-const BTC_GATE_LEG: RealizeLeg = {
-  pool: 'CROSSEX', symbol: 'GATE_FUTURE_BTC_USDT', exchange: 'GATE', base: 'BTC', side: 'LONG', positionQty: 2.1, qty: 1.4,
-  realizedUsd: 16000, convert: null, closeFeeUsd: 18.4, reopenFeeUsd: 18.4, closeImpactUsd: 3.2, reopenImpactUsd: 3.2,
-  impactBp: 1.7,
-};
-
-const TWO_LEGS_AFTER: WalletAfter[] = [
-  { coin: 'USDT', venue: 'CROSSEX', cash: 0, equity: 0 },
-  { coin: 'USDC', venue: 'HYPERLIQUID', cash: 0, equity: 5400 },
-];
-
-const TWO_LEGS_REPAY = realizeEven(
-  { kind: 'repay' }, 29812,
-  {
-    mix: null,
-    loop: loopRoute(5, 18912, 4, 1700, 4.94, TWO_LEGS_AFTER, HL_TO_GATE),
-    convert: convertRoute([18912], 37.8, 4.94, TWO_LEGS_AFTER, [HL_TO_GATE]),
-  },
-  'loop', { legs: [OWNER_CLEAR_LEG, BTC_HL_LEG], refused: null },
-);
-
-const TWO_LEGS_PLANS: RebalancePlans = {
-  even: { ...TWO_LEGS_REPAY, goal: { kind: 'even' } }, repay: TWO_LEGS_REPAY, custom: null,
-};
-
-const TWO_VENUES_BUCKETS: RebalanceBucket[] = [
-  { ...bucketOf('USDT', 'CROSSEX', -29812, 20000, 29812, 4.9357, 0.0596), imHeldUsd: 5962.4, mmHeldUsd: 2981.2 },
-  { ...bucketOf('USDC', 'HYPERLIQUID', 3140, 42174, 0, 0, 0.05), imHeldUsd: 0, mmHeldUsd: 0 },
-];
-
-const TWO_VENUES_EVEN = realizeEven(
-  { kind: 'even' }, 37526, OWNER_ROUTES, 'loop', { legs: [OWNER_ETH_LEG, BTC_GATE_LEG], refused: null },
-);
-
-const TWO_VENUES_VIEW = { buckets: TWO_VENUES_BUCKETS, plans: ownerPlans({ even: TWO_VENUES_EVEN }) };
-
-const LONG_HL_LEG: RealizeLeg = { ...OWNER_ETH_LEG, side: 'LONG' };
-
-const GATE_CONVERT_LEG: RealizeLeg = { ...ETH_UP_LEG, convert: { amount: 9000, count: 1, feeUsd: 18 } };
-
 interface TwapLegFixture {
   name: string;
   exchange: string;
@@ -3474,17 +3395,6 @@ const twapChildOf = (run: TwapRunFixture, s: TwapRunState): DealView | null =>
       })
     : null;
 
-function twapTouchesOf(run: TwapRunFixture): BookTouch[] {
-  const step = Number(run.tick) * 10;
-  const touch = (leg: TwapLegFixture, price: number): BookTouch => {
-    const buy = twapDealSide(leg, run.reduceOnly) === 'BUY';
-    const bestBid = buy ? price : r2(price - step);
-    const bestAsk = buy ? r2(price + step) : price;
-    return { symbol: leg.symbol, bestBid, bestAsk, mid: r2((bestBid + bestAsk) / 2) };
-  };
-  return [touch(run.legs[0], run.best), touch(run.legs[1], run.legs[1].avg)];
-}
-
 function twapDeleverOf(f: TwapDeleverFixture, view: RebalanceView, refused: boolean): { rebalance: RebalanceView; child: DealView | null } {
   const qty = f.run.sliceQty;
   const state: TwapRunState = refused
@@ -3620,19 +3530,6 @@ function twapFixturesOf(book: TwapFixtureBook): Record<TwapFixtureState, { rebal
   };
 }
 
-function twapPlainDealsOf(
-  run: TwapRunFixture, qty: number, part: [number, number],
-): Record<'running' | 'never' | 'done' | 'closeRunning' | 'halted', DealView> {
-  const base = { id: 'deal0001', qty, createdAt: REBALANCE_NOW - 8_000 };
-  return {
-    running: twapDealOf(run, { ...base, maker: part[0], hedge: part[1], mode: 'OPENING', deadlineAt: REBALANCE_NOW + 232_000 }),
-    never: twapDealOf(run, { ...base, maker: part[0], hedge: part[1], mode: 'OPENING', deadlineAt: null }),
-    done: twapDealOf(run, { ...base, maker: qty, hedge: qty, mode: 'DONE', deadlineAt: null }),
-    closeRunning: twapDealOf(twapCloseOf(run), { ...base, maker: part[0], hedge: part[1], mode: 'OPENING', deadlineAt: REBALANCE_NOW + 232_000 }),
-    halted: twapDealOf(run, { ...base, maker: part[0], hedge: part[1], mode: 'HALTED', deadlineAt: null }),
-  };
-}
-
 const twapEthLegs = (makerSide: 'LONG' | 'SHORT', rest: number, hedgeAvg: number, makerOnHyperliquid = false): [TwapLegFixture, TwapLegFixture] => {
   const gate: TwapLegFixture = { name: 'Gate', exchange: 'GATE', symbol: GATE_ETH, side: makerSide, lot: '0.001', avg: rest };
   const hyperliquid: TwapLegFixture = {
@@ -3693,135 +3590,6 @@ export const twapFixtures = {
     },
   }),
 };
-
-export const twapDealViews = {
-  normal: twapPlainDealsOf(TWAP_RUN, 57.803, [30.52, 30.1]),
-  whale: twapPlainDealsOf(WHALE_TWAP_RUN, 3468.208, [1834.6, 1830.2]),
-};
-
-export const twapBookTouches = {
-  normal: {
-    run: twapTouchesOf(TWAP_RUN), delever: twapTouchesOf(TWAP_DELEVER_RUN), close: twapTouchesOf(twapCloseOf(TWAP_RUN)),
-    short: twapTouchesOf(twapShortOf(TWAP_RUN)),
-  },
-  whale: {
-    run: twapTouchesOf(WHALE_TWAP_RUN), delever: twapTouchesOf(WHALE_TWAP_DELEVER_RUN), close: twapTouchesOf(twapCloseOf(WHALE_TWAP_RUN)),
-    short: twapTouchesOf(twapShortOf(WHALE_TWAP_RUN)),
-  },
-};
-
-const GATE_CONVERT_EVEN = realizeEven(
-  { kind: 'even' }, 30585,
-  {
-    mix: null,
-    loop: loopRoute(7, 21585, 7, 2700, 2.53, ETH_UP_AFTER, GATE_TO_HL),
-    convert: convertRoute([21585], 43.17, 2.53, ETH_UP_AFTER, [GATE_TO_HL]),
-  },
-  'loop', { legs: [GATE_CONVERT_LEG], refused: null },
-);
-
-const GATE_CONVERT_VIEW = { buckets: ETH_UP_BUCKETS, plans: plansOf(GATE_CONVERT_EVEN) };
-
-const REFUSED_HL_EVEN = realizeEven(
-  { kind: 'even' }, 37526,
-  {
-    mix: null,
-    loop: { ...OWNER_ROUTES.loop!, available: false, steps: [], after: [] },
-    convert: { ...OWNER_ROUTES.convert, available: false, steps: [], after: [] },
-  },
-  'loop', { legs: [OWNER_ETH_LEG], refused: { reason: 'past-book', bp: null } }, { recommended: null },
-);
-
-export const auditRebalanceViews = {
-  ownerCustomOverMax: { buckets: OWNER_BUCKETS, plans: ownerPlans({ custom: customPlan(50000) }), job: null },
-  ownerCustomAtMax: { buckets: OWNER_BUCKETS, plans: ownerPlans({ custom: customPlan(45190) }), job: null },
-  ownerCustomAtCash: {
-    buckets: OWNER_BUCKETS,
-    plans: ownerPlans({
-      custom: realizeEven(
-        { kind: 'custom', from: 'HYPERLIQUID', to: 'CROSSEX', amount: 3140 }, 3140,
-        {
-          mix: null,
-          loop: loopRoute(1, 3140, 1, 400, 0.5, OWNER_CASH_AFTER, HL_TO_GATE),
-          convert: convertRoute([3140], 6.3, 0.5, OWNER_CASH_AFTER, [HL_TO_GATE]),
-        },
-        'loop', null, { customMaxUsd: 3140 },
-      ),
-    }),
-    job: null,
-  },
-  ownerBookCostUp: {
-    buckets: OWNER_BUCKETS,
-    plans: ownerPlans({
-      even: {
-        ...OWNER_EVEN,
-        realize: {
-          refused: null,
-          legs: [{
-            ...OWNER_ETH_LEG, closeFeeUsd: OWNER_ETH_LEG.closeFeeUsd * 2, reopenFeeUsd: OWNER_ETH_LEG.reopenFeeUsd * 2,
-            convert: { amount: 10298, count: 1, feeUsd: 41.2 },
-          }],
-        },
-      },
-    }),
-    job: null,
-  },
-  ownerBookBorrowUnread: {
-    buckets: [bucketOf('USDT', 'CROSSEX', -29812, 0, 29812, 0, 0.0596), OWNER_BUCKETS[1]!], plans: OWNER_BOOK_PLANS, job: null,
-  },
-  refusedHlProfit: {
-    buckets: OWNER_BUCKETS, plans: ownerPlans({ even: REFUSED_HL_EVEN, repay: REFUSED_HL_EVEN }), job: null,
-  },
-  twoLegs: { buckets: OWNER_BUCKETS, plans: TWO_LEGS_PLANS, job: null },
-  twoVenues: { ...TWO_VENUES_VIEW, job: null },
-  longHlLeg: {
-    buckets: OWNER_BUCKETS,
-    plans: ownerPlans({ even: { ...OWNER_EVEN, realize: { legs: [LONG_HL_LEG], refused: null } } }),
-    job: null,
-  },
-  gateLegConvert: { ...GATE_CONVERT_VIEW, job: null },
-} satisfies Record<string, RebalanceView>;
-
-export const auditPositionsBodies = {
-  owner: positionsWithExposure(ownerPerps(66.0, 66.0)),
-  ownerAfterClose: positionsWithExposure(ownerPerps(12.2, 66.0)),
-  whale: positionsWithExposure(ownerPerps(13400.5, 13400.5)),
-  ownerEthBtc: positionsWithExposure([
-    ...ownerPerps(66.0, 66.0),
-    ...perpRows([
-      ['HYPERLIQUID_FUTURE_BTC_USDC', 'SHORT', 2.1, 83000],
-      ['GATE_FUTURE_BTC_USDT', 'LONG', 2.1, 83000],
-    ]),
-  ]),
-  ownerLongHl: positionsWithExposure(
-    perpRows([
-      ['HYPERLIQUID_FUTURE_ETH_USDC', 'LONG', 66.0, 1821],
-      ['GATE_FUTURE_ETH_USDT', 'SHORT', 66.0, 1821],
-    ]),
-  ),
-  ownerLighterHedge: positionsWithExposure(
-    perpRows([
-      ['HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', 66.0, 1821],
-      ['LIGHTER_FUTURE_ETH_USDC', 'LONG', 66.0, 1821],
-    ]),
-  ),
-} satisfies Record<string, PositionsResponse>;
-
-function perpRows(rows: [string, 'LONG' | 'SHORT', number, number][]): CrossexPosition[] {
-  return rows.map(([symbol, side, qty, mark]) =>
-    makeCrossexPosition({
-      symbol, positionSide: side, positionQty: String(side === 'SHORT' ? -qty : qty),
-      positionValue: String(Math.round(qty * mark)), entryPrice: String(mark), markPrice: String(mark), upnl: '0', upnlRate: '0',
-    }),
-  );
-}
-
-function ownerPerps(hlQty: number, gateQty: number): CrossexPosition[] {
-  return perpRows([
-    ['HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', hlQty, 1821],
-    ['GATE_FUTURE_ETH_USDT', 'LONG', gateQty, 1821],
-  ]);
-}
 
 const ACCOUNT_B_SPOT: SpotBalance[] = [
   { coin: 'USDT', available: 318.42, locked: 0 },
@@ -4206,21 +3974,6 @@ export const accountBodies = {
   },
 } satisfies Record<string, CrossexAccount>;
 
-export const whaleAccountBody = {
-  ...account, marginBalance: '6000000', availableMargin: '1500000', initialMargin: '900000', maintenanceMargin: '450000',
-  initialMarginRate: '0.15', maintenanceMarginRate: '0.075',
-  assets: [
-    {
-      coin: 'USDT', exchangeType: 'CROSSEX', balance: '-4500000', availableBalance: '0', upnl: '0', equity: '-4500000',
-      liability: '4500000', borrowingInitialMargin: '900000', borrowingMaintenanceMargin: '450000',
-    },
-    {
-      coin: 'USDC', exchangeType: 'HYPERLIQUID', balance: '500000', availableBalance: '500000', upnl: '10000000',
-      equity: '10500000', liability: '0', borrowingInitialMargin: '0', borrowingMaintenanceMargin: '0',
-    },
-  ],
-};
-
 /** Gate's /crossex/rule/risk_limits, read live 2026-09-21, mirrored in tests/fixtures/gate/risk-limits.json. */
 const GATE_RISK_TIERS: MarginTiers = {
   GATE_FUTURE_ETH_USDT: [
@@ -4376,34 +4129,13 @@ export const positionsBodies = {
   deleverAbandonedAddBackWhale: positionsWithExposure(abandonedAddBackPositions(53.36, 56.028)),
 } satisfies Record<string, PositionsResponse>;
 
-const twapPosition = (symbol: string, side: 'LONG' | 'SHORT', qty: number, maintenanceRate: number, mark = 1730): CrossexPosition => {
-  const value = r2(qty * mark);
-  return makeCrossexPosition({
-    symbol, positionSide: side, positionQty: String(side === 'LONG' ? qty : -qty), positionValue: String(value),
-    entryPrice: String(mark), markPrice: String(mark), leverage: '25', maxLeverage: '25', upnl: '0', upnlRate: '0', fee: '0',
-    initialMargin: String(r2(value / 25)), maintenanceMargin: String(r2(value * maintenanceRate)),
-  });
-};
-
-export const twapPositionsBodies = {
-  p1: positionsWithExposure([twapPosition('GATE_FUTURE_ETH_USDT', 'LONG', 1, 0.01), twapPosition('HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', 1, 0.02)]),
-  unequal: positionsWithExposure([
-    twapPosition('GATE_FUTURE_BTC_USDT', 'LONG', 4.4, 0.01, 58_000),
-    twapPosition('HYPERLIQUID_FUTURE_BTC_USDC', 'SHORT', 4.03, 0.02, 58_000),
-  ]),
-  whale: positionsWithExposure([
-    twapPosition('GATE_FUTURE_ETH_USDT', 'LONG', 3468.208, 0.01),
-    twapPosition('HYPERLIQUID_FUTURE_ETH_USDC', 'SHORT', 3468.208, 0.02),
-  ]),
-} satisfies Record<string, PositionsResponse>;
-
 const MIN_MS = 60_000;
 const FIXTURE_NOW_SEC = Math.floor(REBALANCE_NOW / 1000);
 const OWNER_WALLET = '0xab184fe7cc01f11bf80078b5bd2ac11f00c1ed9d';
-export const OWNER_DEFAULT_SINCE_SEC = 1_782_211_868;
+const OWNER_DEFAULT_SINCE_SEC = 1_782_211_868;
 const MAR_1_2026_SEC = 1_772_323_200;
 const DEC_2026_MATURITY = 1_798_156_800;
-export const LINK_CODE = 'q3Jv0cX9mT2bL8wYp5nK4A';
+const LINK_CODE ='q3Jv0cX9mT2bL8wYp5nK4A';
 const LINK_URL = `https://boros-bot-notification.pendle.finance/alerts?crossex=${LINK_CODE}`;
 const ALL_ON = { liquidation: true, interest: true, maturity: true, rollover: true };
 
@@ -4867,22 +4599,6 @@ export const assetViewPositions = {
   ]),
 } satisfies Record<string, PositionsResponse>;
 
-const whaleFrpGroup = assetGroup(
-  'ETH', 2472.74,
-  [perpFromPosition(whaleHlEth, 1_783_000_000), perpFromPosition(whaleBinanceEth, 1_783_000_000)],
-  { open: [{ ...btcBoros(101, 4100, 'LONG', 'HYPERLIQUID', ['HYPERLIQUID', 'BINANCE']), collateral: 'ETH', notionalUsd: 4100 * 2472.74 }], history: [] },
-);
-
-export const deleverPairViews = {
-  btcFrp: assetViewBodies.btc900,
-  whaleFrp: { ...whaleBook.assetView, assets: [whaleFrpGroup] } satisfies AssetViewResponse,
-} satisfies Record<string, AssetViewResponse>;
-
-export const deleverPairPositions = {
-  btcFrp: positionsWithExposure(deleverPairViews.btcFrp.assets.flatMap((g) => g.perpOpen).map(positionFromPerp)),
-  whaleFrp: positionsWithExposure(whaleFrpGroup.perpOpen.map(positionFromPerp)),
-} satisfies Record<string, PositionsResponse>;
-
 function closeOnlyOpportunities(context: BorosPairContext): OpportunitiesResult {
   const [binance, hyperliquid] = context.markets;
   const secondsToMaturity = binance.maturity - FIXTURE_NOW_SEC;
@@ -4944,11 +4660,9 @@ export const opportunitiesBodies = {
   closeOnlyA: closeOnlyOpportunities(pairContextBodies.closeOnlyA),
 } satisfies Record<string, OpportunitiesResult>;
 
-export const SPREAD_BOOK_PRICE = 2568;
-export const SPREAD_WHALE_NOTIONAL = 6_000_000;
-export const SPREAD_WHALE_QTY = 4672.9;
+const SPREAD_BOOK_PRICE = 2568;
+const SPREAD_WHALE_QTY = 4672.9;
 const SPREAD_BOOK_VENUES: [string, string] = ['HYPERLIQUID', 'GATE'];
-const OCT_30_2026_MATURITY = 1_793_318_400;
 const SPREAD_BOOK_OPENED = SPREAD_OPP_NOW - 2 * 86_400;
 
 interface SpreadBookLeg {
@@ -4966,16 +4680,6 @@ interface SpreadBookLeg {
 const spreadBookLeg = (side: 'LONG' | 'SHORT', sizeToken: number): SpreadBookLeg => ({
   marketId: SPREAD_OPP_MARKET_ID, venue: 'HYPERLIQUID', spreadVenues: SPREAD_BOOK_VENUES, side, sizeToken,
   maturity: SPREAD_OPP_MATURITY, entryApr: 0.0352, markApr: 0.0348, floatingApr: 0.031,
-});
-
-const hyperliquidSingleLeg = (marketId: number, sizeToken: number, maturity: number): SpreadBookLeg => ({
-  marketId, venue: 'HYPERLIQUID', spreadVenues: null, side: 'SHORT', sizeToken, maturity, entryApr: 0.083,
-  markApr: 0.083, floatingApr: 0.0712,
-});
-
-const gateSingleLeg = (marketId: number, sizeToken: number, maturity: number): SpreadBookLeg => ({
-  marketId, venue: 'GATE', spreadVenues: null, side: 'LONG', sizeToken, maturity, entryApr: 0.0482, markApr: 0.0482,
-  floatingApr: 0.0641,
 });
 
 function spreadBookBoros(legs: SpreadBookLeg[]): { open: AssetBorosOpen[]; history: AssetBorosHistory[] } {
@@ -5029,183 +4733,3 @@ export function makeSpreadWhaleBook(): AssetViewResponse {
   return spreadBook(spreadBookPerps(SPREAD_WHALE_QTY), [spreadBookLeg('SHORT', SPREAD_WHALE_QTY)], 999_999.995);
 }
 
-export const spreadBookBodies = {
-  spread: spreadBook(spreadBookPerps(0.555), [spreadBookLeg('SHORT', 0.555)]),
-  mixed: spreadBook(spreadBookPerps(0.555), [
-    hyperliquidSingleLeg(51, 0.3, SPREAD_OPP_MATURITY),
-    gateSingleLeg(60, 0.3, SPREAD_OPP_MATURITY),
-    spreadBookLeg('SHORT', 0.255),
-  ]),
-  missing: spreadBook(spreadBookPerps(0.555), []),
-  'wrong-side': spreadBook(spreadBookPerps(0.555), [spreadBookLeg('LONG', 0.555)]),
-  'spread-only': spreadBook([], [spreadBookLeg('SHORT', 0.555)]),
-  'early-singles': spreadBook(spreadBookPerps(0.555), [
-    hyperliquidSingleLeg(61, 0.555, OCT_30_2026_MATURITY),
-    gateSingleLeg(62, 0.555, OCT_30_2026_MATURITY),
-  ]),
-  whale: makeSpreadWhaleBook(),
-} satisfies Record<string, AssetViewResponse>;
-
-export const spreadBookPositions = Object.fromEntries(
-  Object.entries(spreadBookBodies).map(([name, body]) => [
-    name,
-    {
-      ...positionsWithExposure(body.assets.flatMap((g) => g.perpOpen).map(positionFromPerp)),
-      marginTiers: GATE_RISK_TIERS,
-    },
-  ]),
-) as Record<keyof typeof spreadBookBodies, PositionsResponse>;
-
-const spreadContextRow = (
-  marketId: number, venue: string, name: string, maturity: number, midApr: number,
-  spreadVenues: [string, string] | null = null,
-): BorosPairMarketRow =>
-  pairRow({
-    marketId, venue, name, maturity, midApr, markApr: midApr, spreadVenues, collateralPriceUsd: SPREAD_BOOK_PRICE,
-    maxRateDeviationApr: spreadVenues ? 0.02 : venue === 'GATE' ? 0.0137 : 0.01856,
-  });
-
-function spreadPairContext(spreads: 'listed' | 'none' | 'paused'): BorosPairContext {
-  return {
-    markets: [
-      spreadContextRow(61, 'HYPERLIQUID', 'Hyperliquid ETH 30 Oct 2026', OCT_30_2026_MATURITY, 0.083),
-      spreadContextRow(62, 'GATE', 'Gate ETHUSDT 30 Oct 2026', OCT_30_2026_MATURITY, 0.0482),
-      spreadContextRow(51, 'HYPERLIQUID', 'Hyperliquid ETH 27 Nov 2026', SPREAD_OPP_MATURITY, 0.083),
-      spreadContextRow(60, 'GATE', 'Gate ETHUSDT 27 Nov 2026', SPREAD_OPP_MATURITY, 0.0482),
-      spreadContextRow(64, 'HYPERLIQUID', 'Hyperliquid ETH 25 Dec 2026', DEC_2026_MATURITY, 0.083),
-      spreadContextRow(65, 'GATE', 'Gate ETHUSDT 25 Dec 2026', DEC_2026_MATURITY, 0.0482),
-    ],
-    spreadMarkets:
-      spreads === 'none'
-        ? []
-        : [
-            spreadContextRow(
-              63, 'HL-GATE', 'ETH Spread HL-GATE 30 Oct 2026', OCT_30_2026_MATURITY, 0.0348,
-              SPREAD_BOOK_VENUES,
-            ),
-            {
-              ...spreadContextRow(
-                SPREAD_OPP_MARKET_ID, 'HL-GATE', 'ETH Spread HL-GATE 27 Nov 2026', SPREAD_OPP_MATURITY,
-                0.0348, SPREAD_BOOK_VENUES,
-              ),
-              closeOnly: spreads === 'paused',
-              paused: spreads === 'paused',
-            },
-          ],
-    crossByToken: [{ tokenId: 2, available: 116 }],
-    isolatedByMarket: [],
-    defaultSlippageApr: 0.0025,
-    maxSlippageApr: 0.1,
-  };
-}
-
-export const spreadPairContextBodies = {
-  spread: spreadPairContext('listed'),
-  'no-spread': spreadPairContext('none'),
-  'spread-paused': spreadPairContext('paused'),
-} satisfies Record<string, BorosPairContext>;
-
-export function makeSpreadWhaleOpportunityPair(): OpportunityPair {
-  const k = SPREAD_WHALE_NOTIONAL / OPP_NOTIONAL;
-  const usd = (x: number | null): number | null => (x === null ? null : x * k);
-  const pair = makeSpreadOpportunityPair();
-  return {
-    ...pair,
-    costs: {
-      ...pair.costs,
-      borosTakerFeeUsd: pair.costs.borosTakerFeeUsd * k,
-      borosSettleFeeUsd: pair.costs.borosSettleFeeUsd * k,
-      perpEntryFeesUsd: usd(pair.costs.perpEntryFeesUsd),
-      perpEntrySlippageUsd: usd(pair.costs.perpEntrySlippageUsd),
-      perpExitFeesUsd: usd(pair.costs.perpExitFeesUsd),
-      perpExitSlippageUsd: usd(pair.costs.perpExitSlippageUsd),
-      totalUsd: usd(pair.costs.totalUsd),
-    },
-    capital: {
-      ...pair.capital,
-      borosIms: pair.capital.borosIms.map((im) => ({ ...im, imUsd: usd(im.imUsd) })),
-      perpShortImUsd: usd(pair.capital.perpShortImUsd),
-      perpLongImUsd: usd(pair.capital.perpLongImUsd),
-    },
-    capitalUsd: usd(pair.capitalUsd),
-    estProfitUsd: usd(pair.estProfitUsd),
-  };
-}
-
-function spreadSinglesOpportunityPair(): OpportunityPair {
-  const spread = makeSpreadOpportunityPair();
-  const nt = OPP_NOTIONAL * (spread.secondsToMaturity / SECONDS_IN_YEAR);
-  const shortExecApr = 0.083 - 0.0005;
-  const longExecApr = 0.0482 + 0.0005;
-  const execSpreadApr = shortExecApr - longExecApr;
-  const netFixedApr = execSpreadApr - (spread.costs.totalUsd ?? 0) / nt;
-  const estProfitUsd = netFixedApr * nt;
-  const capital = { ...spread.capital, borosIms: [{ marketId: 51, imUsd: 8 }, { marketId: 60, imUsd: 4 }] };
-  const capitalUsd = 8 + 4 + (capital.perpShortImUsd ?? 0) + (capital.perpLongImUsd ?? 0);
-  return {
-    ...spread,
-    borosLegs: [
-      makeOpportunityBorosLeg({ marketId: 51, side: 'SHORT', venue: 'HYPERLIQUID', midApr: 0.083, execApr: shortExecApr }),
-      makeOpportunityBorosLeg({ marketId: 60, side: 'LONG', venue: 'GATE', midApr: 0.0482, execApr: longExecApr }),
-    ],
-    execSpreadApr,
-    borosImpactApr: spread.grossSpreadApr - execSpreadApr,
-    capital,
-    capitalUsd,
-    netFixedApr,
-    netFixedAprOnCapital: estProfitUsd / (capitalUsd * (nt / OPP_NOTIONAL)),
-    effectiveLeverage: OPP_NOTIONAL / capitalUsd,
-    estProfitUsd,
-  };
-}
-
-function btcSpreadOnlyOpportunityPair(): OpportunityPair {
-  const pair = makeSpreadOpportunityPair({
-    base: 'BTC',
-    shortLeg: makeOpportunityLeg({ crossexSymbol: 'HYPERLIQUID_FUTURE_BTC_USDC', base: 'BTC' }),
-    longLeg: makeOpportunityLeg({
-      venue: 'GATE', crossexVenue: 'GATE', crossexSymbol: 'GATE_FUTURE_BTC_USDT', base: 'BTC',
-    }),
-  });
-  return {
-    ...pair,
-    borosLegs: pair.borosLegs.map((l) => ({ ...l, marketId: 58 })),
-    capital: { ...pair.capital, borosIms: pair.capital.borosIms.map((im) => ({ ...im, marketId: 58 })) },
-  };
-}
-
-function spreadOpportunities(
-  pairs: OpportunityPair[], group: Partial<OpportunityGroup> = {}, notionalUsd = OPP_NOTIONAL,
-): OpportunitiesResult {
-  return makeOpportunitiesResult({
-    groups: [
-      makeOpportunityGroup({
-        tokenId: 2, collateral: 'ETH', collateralPriceUsd: SPREAD_BOOK_PRICE, maturity: SPREAD_OPP_MATURITY,
-        secondsToMaturity: SPREAD_OPP_MATURITY - SPREAD_OPP_NOW, underlying: 'ETH',
-        markets: [
-          makeOpportunityMarketRow({
-            marketId: 51, name: 'Hyperliquid ETH 27 Nov 2026', midApr: 0.083, markApr: 0.083, floatingApr: 0.0712,
-            execShortApr: 0.0825, execLongApr: 0.0835,
-          }),
-          makeOpportunityMarketRow({
-            marketId: 60, name: 'Gate ETHUSDT 27 Nov 2026', venue: 'GATE', crossexVenue: 'GATE',
-            crossexSymbol: 'GATE_FUTURE_ETH_USDT', midApr: 0.0482, markApr: 0.0482, floatingApr: 0.0641,
-            execShortApr: 0.0477, execLongApr: 0.0487,
-          }),
-        ],
-        pairs,
-        ...group,
-      }),
-    ],
-    meta: { ...makeOpportunitiesResult().meta, asOfSec: SPREAD_OPP_NOW, notionalUsd },
-  });
-}
-
-export const spreadOpportunitiesBodies = {
-  spread: spreadOpportunities([makeSpreadOpportunityPair()]),
-  singles: spreadOpportunities([spreadSinglesOpportunityPair()]),
-  'btc-spread-only': spreadOpportunities([btcSpreadOnlyOpportunityPair()], {
-    tokenId: 1, collateral: 'BTC', collateralPriceUsd: null, underlying: 'BTC', markets: [],
-  }),
-  whale: spreadOpportunities([makeSpreadWhaleOpportunityPair()], {}, SPREAD_WHALE_NOTIONAL),
-} satisfies Record<string, OpportunitiesResult>;

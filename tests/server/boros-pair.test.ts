@@ -833,6 +833,15 @@ describe('POST /api/boros/pair/execute', () => {
       expect(res.statusCode).toBe(200);
       expect(seen).toEqual([undefined]);
     });
+
+    it('the close quote names the markets whose resting orders it cancels', async () => {
+      makeApp({ ...account(500_000, [{ marketId: HL, size: 100_000, resting: true }, { marketId: BN, size: -100_000 }]) });
+      const close = await post('/api/boros/pair/simulate', pairBody({ intent: 'close', opposingAcknowledged: true }));
+      expect(close.statusCode).toBe(200);
+      expect(close.json().data.cancelOrdersOn).toEqual([HL]);
+      const open = await post('/api/boros/pair/simulate', pairBody());
+      expect(open.json().data.cancelOrdersOn).toEqual([]);
+    });
   });
 
   it('trades ONE leg when onlyLeg is set, for a completion', async () => {

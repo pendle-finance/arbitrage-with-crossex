@@ -81,7 +81,10 @@ export function lockBorosMarkets(marketIds: readonly number[]): ((keep?: readonl
   };
 }
 
-export const freeCrossOf = (account: AccountView): Map<number, number> => new Map(account.crossFreeWithOrdersByToken);
+export const restingCancelsOn = (account: Pick<AccountView, 'restingOrderMarkets'>, marketIds: readonly number[]): number[] =>
+  [...new Set(marketIds)].filter((id) => account.restingOrderMarkets.has(id));
+
+export const freeCrossOf =(account: AccountView): Map<number, number> => new Map(account.crossFreeWithOrdersByToken);
 
 export function gasTopUpMarketFor(markets: BorosMarket[], account: AccountView, tradedFreeAfter?: number | null) {
   return (amountUsd: number, tradedMarketId: number): number => {
@@ -202,10 +205,7 @@ export async function sendBorosPair(deps: BorosCloseDeps, request: BorosSendRequ
       sendFirst: simulation.legs.flatMap((leg, i) =>
         (legMarginNeed(leg, pricedLegs[i].committedMargin) ?? 0) < 0 ? [i] : [],
       ),
-      cancelOrdersOn:
-        intent === 'close'
-          ? legOrders.flatMap((o) => (o && account.restingOrderMarkets.has(o.marketId) ? [o.marketId] : []))
-          : undefined,
+      cancelOrdersOn: intent === 'close' ? restingCancelsOn(account, legOrders.flatMap((o) => (o ? [o.marketId] : []))) : undefined,
       gasTopUpMarket: gasTopUpMarketFor(markets, account, intent !== 'close' && gate.gasTopUpFromFallback ? 0 : undefined),
     }).then((result) => ({ result, estimate: simulation, warnings: gate.warnings }));
     rememberExecution(memoKey, pending);

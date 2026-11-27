@@ -149,6 +149,18 @@ describe('CloseBorosForm — reporting what it closed', () => {
     expect(await screen.findByText(/no open position to close/)).toBeInTheDocument();
     expect(closed).toEqual([]);
   });
+
+  it('keeps the hold off when the pair is already closed', async () => {
+    server.use(...ready(), closeReturns({ closed: true, fill: fill(MINE) }));
+    const view = renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    const btn = await screen.findByRole('button', { name: /Close position/ });
+    await waitFor(() => expect(btn).toBeEnabled());
+    view.unmount();
+    renderWithClient(<CloseBorosForm legs={[leg()]} closed />);
+    const held = await screen.findByRole('button', { name: /Close position/ });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(held).toBeDisabled();
+  });
 });
 
 /**
@@ -1048,5 +1060,82 @@ describe('CloseBorosForm — a mixed book: two singles and one spread', () => {
     expect(within(after).getByText('4 ETH · not hedged, floating funding')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('radio', { name: '25%' }));
     expect(await within(after).findByText('1 ETH · not hedged, floating funding')).toBeInTheDocument();
+  });
+});
+
+describe('CloseBorosForm, resting orders the close cancels', () => {
+  beforeEach(() => {
+    window.localStorage.setItem(STRATEGY_STORAGE_KEY, JSON.stringify({ address: ACTIVE }));
+  });
+  afterEach(() => window.localStorage.clear());
+
+  const quotedWith = (cancelOrdersOn: number[] | undefined) => [
+    versionHandler(),
+    agentReady(),
+    http.get('/api/boros/pair/context', () =>
+      HttpResponse.json(
+        env({
+          markets: [
+            {
+              marketId: MARKET,
+              name: 'Hyperliquid ETH',
+              venue: 'Hyperliquid',
+              base: 'ETH',
+              tokenId: 2,
+              collateral: 'ETH',
+              maturity: 1_800_000_000,
+              midApr: 0.09,
+              markApr: 0.09,
+              isolatedOnly: false,
+              onIsolatedMargin: false,
+              isolatedHasPositionOrOrders: false,
+              currentSize: MINE,
+              collateralPriceUsd: 2_460,
+            },
+          ],
+          spreadMarkets: [],
+          crossByToken: [{ tokenId: 2, available: 5 }],
+          isolatedByMarket: [],
+          defaultSlippageApr: 0.0025,
+          maxSlippageApr: 0.1,
+        }),
+      ),
+    ),
+    http.post('/api/boros/pair/simulate', () =>
+      HttpResponse.json(
+        env({
+          simulation: { legs: [], collateralPriceUsd: 2_460 },
+          gate: { blockers: [], warnings: [], requiresAcknowledgement: false, opposingLegs: [] },
+          eligibility: { eligible: true, code: null, reason: null },
+          simulatedAtMs: Date.now(),
+          gasBalanceUsd: null,
+          ...(cancelOrdersOn ? { cancelOrdersOn } : {}),
+        }),
+      ),
+    ),
+  ];
+
+  it('says the whole close cancels the open orders on its market', async () => {
+    server.use(...quotedWith([MARKET]));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    const label = await screen.findByText(/^Open orders · /);
+    expect(label.closest('div')?.textContent).toMatch(/Cancelled$/);
+    expect(screen.queryByText('Cancelled, also on the part kept')).toBeNull();
+  });
+
+  it('says a part close cancels the orders on the part kept too', async () => {
+    server.use(...quotedWith([MARKET]));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    await screen.findByText(/^Open orders · /);
+    fireEvent.change(screen.getByLabelText(/Close size, applied to all positions/), { target: { value: '0.004' } });
+    expect(await screen.findByText('Cancelled, also on the part kept')).toBeInTheDocument();
+  });
+
+  it('shows no row when nothing rests on the market', async () => {
+    server.use(...quotedWith([]));
+    renderWithClient(<CloseBorosForm legs={[leg()]} />);
+    const btn = await screen.findByRole('button', { name: /Close position/ });
+    await waitFor(() => expect(btn).toBeEnabled());
+    expect(screen.queryByText(/^Open orders · /)).toBeNull();
   });
 });

@@ -311,6 +311,9 @@ export function BorosPairTicket({
     }
     if (!spread?.spreadVenues) setBehind(null);
     setIntent('open');
+    // A new trade: the last order's report and any completion end here.
+    setReport(null);
+    setOnlyLeg(null);
     setOverlaps(openPrefill.overlaps ?? []);
     /**
      * A Boros size is denominated in the market's COLLATERAL, so the collateral
@@ -338,6 +341,8 @@ export function BorosPairTicket({
   /** True when the report on screen is a REPLAY of an earlier submission —
    * the server answered from its memo and no new order went out. */
   const [reportReplayed, setReportReplayed] = useState(false);
+  /** The markets, sides and intent the report's order went out with. */
+  const [reportOf, setReportOf] = useState<string | null>(null);
   /** Set by "complete now at market": trade only the leg that filled LESS. */
   /**
    * Set by a PARTIAL FILL: "the pair half-filled, send the deficient leg".
@@ -363,18 +368,6 @@ export function BorosPairTicket({
     [markets, spreadMarkets],
   );
   const isSpread = marketA !== null && Boolean(byId.get(marketA)?.spreadVenues);
-  const lastMode = useRef(modeProp);
-  useEffect(() => {
-    if (lastMode.current === modeProp) return;
-    lastMode.current = modeProp;
-    if (modeProp !== 'single') return;
-    if (isSpread) {
-      setMarketA(behind ? behind.a : null);
-      setMarketB(behind ? behind.b : null);
-      if (behind) setDirA(behind.dirA);
-    }
-    setBehind(null);
-  }, [modeProp, isSpread, behind]);
   const legName = (id: number): string | null => {
     const row = byId.get(id);
     return row ? marketName(row) : null;
@@ -621,10 +614,48 @@ export function BorosPairTicket({
    * it holds a position, held singles or not (owner 2026-10-16): one held
    * single left the spread with a max of 0. Singles close in Single mode. */
   const wantSpread = (sp: BorosPairMarketRow) => (intent === 'close' ? sp.currentSize !== 0 : !sp.closeOnly);
+  /** The legs for a switch to `next`, from the ticket's toggle or the rail's. */
+  const settleLegsFor = (next: 'pair' | 'single') => {
+    if (next === 'single') {
+      // Single trades leg A alone, so a spread hands back its singles
+      // (leg A is the first); a spread with none behind it clears.
+      if (isSpread) {
+        setMarketA(behind ? behind.a : null);
+        setMarketB(behind ? behind.b : null);
+        if (behind) setDirA(behind.dirA);
+      }
+      setBehind(null);
+      return;
+    }
+    // A spread here came with the switch (a card's Open): it stays.
+    if (isSpread || !rowA || !rowB) return;
+    // Single moves leg A alone, so leg B may now be on A's venue
+    // (each picker then hides the other's venue) or at another date.
+    // Keep B only at A's date; where B has none there, take the
+    // spread over both at A's date (HL-GATE 29 Jan 2027).
+    const b = rowB.tokenId === rowA.tokenId && marketKey(rowB) !== marketKey(rowA) ? rowB : null;
+    const bAt = b ? marketAt(b, rowA.maturity) : null;
+    const spread = b && !bAt ? spreadsOver(rowA, b).find((m) => m.maturity === rowA.maturity && wantSpread(m)) : undefined;
+    if (b && spread) {
+      setBehind({ a: rowA.marketId, b: b.marketId, dirA });
+      setMarketA(spread.marketId);
+      setMarketB(null);
+      setDirA(sameCoin(rowA.venue, spread.spreadVenues?.[0] ?? '') ? dirA : dirA === 'short' ? 'long' : 'short');
+      return;
+    }
+    setMarketB(bAt?.marketId ?? null);
+  };
+  const lastMode = useRef(modeProp);
+  useEffect(() => {
+    if (lastMode.current === modeProp) return;
+    lastMode.current = modeProp;
+    if (modeProp) settleLegsFor(modeProp);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeProp]);
   const pairSpread = !isSpread && mode === 'pair' ? spreadFor(rowA, rowB) : null;
   const spreadOnly =
     mode === 'pair' && onlyLeg === null
-      ? spreadsOver(slotA, slotB).filter((m) => wantSpread(m) && !maturities.includes(m.maturity))
+      ? spreadsOver(slotA, slotB).filter((m) => (wantSpread(m) || m.marketId === marketA) && !maturities.includes(m.maturity))
       : [];
   const chipDates = [...maturities, ...spreadOnly.map((m) => m.maturity)].sort((x, y) => x - y);
   /** Slot A's side: on a spread, the side the singles had when it took over. */
@@ -644,7 +675,10 @@ export function BorosPairTicket({
   useEffect(() => {
     if (mode !== 'pair' || onlyLeg !== null) return;
     if (isSpread) {
-      if (behind && rowA && !wantSpread(rowA)) {
+      // Singles at another date (a spread-only date) would move the trade to
+      // that date unseen; the spread stays, and its close-only line blocks.
+      const backAt = behind && rowA && [behind.a, behind.b].every((id) => byId.get(id)?.maturity === rowA.maturity);
+      if (behind && rowA && backAt && !wantSpread(rowA)) {
         setMarketA(behind.a);
         setMarketB(behind.b);
         setDirA(behind.dirA);
@@ -748,7 +782,8 @@ export function BorosPairTicket({
      * itself") — which also stops it walking either book. So a single-leg
      * ticket borrows a real, eligible partner (same collateral and maturity)
      * purely to satisfy the shape; `onlyLeg: 0` sizes it to zero, so it is
-     * quoted and never traded.
+     * quoted and never traded. A single with no such partner (the HL Jan
+     * singles beside the HL-GATE spread) goes on the wire alone.
      */
     const partnerId =
       mode === 'single'
@@ -763,7 +798,7 @@ export function BorosPairTicket({
     // Two markets sharing no maturity are no pair: nothing to quote.
     if (!address || marketA === null || !sizeOk) return null;
     const hedgeBody = hedgeBase ? { hedge: { base: hedgeBase, longVenue: hedgeLong, shortVenue: hedgeShort } } : {};
-    if (isSpread) {
+    if (isSpread || (mode === 'single' && onlyLeg === null && partnerId === null)) {
       return {
         address,
         legs: [{ marketId: marketA, direction: dirA, slippageApr: aprA, size: sizeNum }],
@@ -870,9 +905,14 @@ export function BorosPairTicket({
 
   // A completion is armed for ONE specific residual; changing the pair or the
   // intent makes it meaningless, so it must not survive into a normal ticket.
+  // The size box holds that residual, sized for the leg that fell short; on
+  // any other trade (Single trades leg A, the leg that filled more) it would
+  // widen the gap, so it clears with the completion.
   useEffect(() => {
+    if (onlyLeg !== null) setSizeStr('');
     setOnlyLeg(null);
-  }, [marketA, marketB, dirA, dirB, intent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, marketA, marketB, dirA, dirB, intent, mode]);
 
   const execute = useExecuteBorosPair();
 
@@ -948,13 +988,28 @@ export function BorosPairTicket({
     !execute.isPending &&
     closeOnlyLeg === null;
 
+  /**
+   * The trade the form shows: wallet, mode, intent and each shown leg's market
+   * and side. Not the size (Complete and Retry set their own) and not Single's
+   * zero-size partner (never traded).
+   */
+  const formKey =
+    marketA === null
+      ? null
+      : [address, mode, intent, `${marketA}:${dirA}`, ...(mode === 'pair' && !isSpread ? [`${marketB}:${dirB}`] : [])].join('|');
+  /** Complete and Retry re-send on the form's markets, so they act only while
+   * the form still shows the trade that part-filled. */
+  const reportFits = report !== null && formKey === reportOf;
+
   const onConfirm = () => {
     if (!request) return;
+    const sentKey = formKey;
     execute.mutate(
       { ...request, legs: request.legs.map((leg, i) => ({ ...leg, clientOrderId: orderIds[i] })) },
       {
         onSuccess: (res) => {
           setReport(res.result);
+          setReportOf(sentKey);
           setReportReplayed(Boolean(res.replayed));
           // A replay is the EARLIER submission's result — it already fired.
           // The server's own pre-trade estimate rides along: its per-leg
@@ -1019,14 +1074,9 @@ export function BorosPairTicket({
           ariaLabel={t('pairTicket.boros.modeAria')}
           value={mode}
           onChange={(next) => {
-            // Single trades leg A alone, so a spread hands back its singles
-            // (leg A is the first); a spread with none behind it clears.
-            if (isSpread) {
-              setMarketA(behind ? behind.a : null);
-              setMarketB(behind ? behind.b : null);
-              if (behind) setDirA(behind.dirA);
-            }
-            setBehind(null);
+            // The toggle also fires on the option already on.
+            if (next === mode) return;
+            settleLegsFor(next);
             setMode(next);
           }}
           fill
@@ -1446,7 +1496,7 @@ export function BorosPairTicket({
           collateral={simulation?.collateral ?? ''}
           legName={legName}
           fee={simulation?.costToCrossSize ?? null}
-          busy={execute.isPending}
+          busy={execute.isPending || !reportFits}
           onComplete={() => {
             // The gap is closed by adding to the leg that filled LESS — which
             // is the OPPOSITE of `unhedgedLeg`, the one carrying the surplus.
@@ -1497,13 +1547,19 @@ export function BorosPairTicket({
              * the replay guard does not cover it.) The size that produced this
              * report has been spent; re-entering one is the point of
              * dismissing rather than using Complete or Retry, which set their
-             * own sizes.
-             *
+             * own sizes. A completion ends with it too, or the next size
+             * typed would trade one market alone.
              */
             setSizeStr('');
+            setOnlyLeg(null);
             setReport(null);
           }}
         />
+      )}
+      {report?.partial && !reportFits && (
+        <p className="text-[11px] leading-relaxed text-ink-300" role="status">
+          {t('pairTicket.boros.reportOtherTrade')}
+        </p>
       )}
 
       {/* --- Confirm ------------------------------------------------------- */}

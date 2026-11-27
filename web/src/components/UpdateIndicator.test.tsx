@@ -297,6 +297,8 @@ describe('UpdateIndicator', () => {
               latestCommit: null,
               updateAvailable: true,
               highlights: [],
+              checkOn: true,
+              freshRead: null,
             }),
           );
         }),

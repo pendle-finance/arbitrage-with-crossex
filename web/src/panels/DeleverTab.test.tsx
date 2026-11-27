@@ -56,7 +56,7 @@ function servePlan(plan: DeleverPlan | { error: string }, twapOverride?: Delever
       const twap = twapOverride ?? twapReply(lead.closeQty, body.twap);
       const sliceQty = twap.plan ? Math.max(Number(twap.plan.sliceQty), Number(twap.plan.lastQty)) : 0;
       const hedged = sliceQty > 0 ? { notHedgedMaxQty: sliceQty, notHedgedMaxUsd: (plan.notHedgedMaxUsd / plan.notHedgedMaxQty) * sliceQty } : {};
-      return HttpResponse.json(env({ ...plan, ...hedged, twap, priceImpact: { whole: null, sliced: 1200 }, twapDefault: null }));
+      return HttpResponse.json(env({ ...plan, ...hedged, twap, priceImpact: { whole: null, sliced: 1200, slicedLegs: [1200] }, twapDefault: null }));
     }),
   );
   return sent;
@@ -359,6 +359,28 @@ describe('DeleverTab plan', () => {
     );
   });
 
+  it('each Boros after row names its market', async () => {
+    const names = ['Hyperliquid BTC 26 Dec 2026', 'Binance BTC 26 Dec 2026'];
+    const plan = deleverPlans.twoBoros;
+    servePlan({ ...plan, boros: plan.boros.map((b, i) => ({ ...b, name: names[i] })) });
+    show(openPairs.btc900);
+    expect(await afterRows()).toEqual(
+      expect.arrayContaining(['Boros · Hyperliquid BTC 26 Dec 2026 500 → 400 YU', 'Boros · Binance BTC 26 Dec 2026 400 → 320 YU']),
+    );
+  });
+
+  it('the Boros step carries the Boros price impact, and the two steps still add up to the total', async () => {
+    const base = deleverPlans.twentyPct;
+    const maker = { ...base.estimates.maker, impactBorosUsd: 1_234 };
+    servePlan({ ...base, estimates: { ...base.estimates, maker } });
+    show(openPairs.btc900);
+    const list = (await screen.findByText('Steps')).closest('div')?.parentElement as HTMLElement;
+    const items = within(list).getAllByRole('listitem').map((li) => li.textContent ?? '');
+    const borosUsd = maker.feeBorosUsd + 1_234;
+    expect(items[1]).toContain(fmtUsd(borosUsd));
+    expect(items[0]).toContain(fmtUsd(maker.totalUsd - borosUsd));
+  });
+
   it('im used is one CrossEx row', async () => {
     servePlan(deleverPlans.twentyPct);
     show(openPairs.btc900);
@@ -451,6 +473,24 @@ describe('DeleverTab plan', () => {
     await turnTwapOn('4h', '5m');
     const orders = await screen.findByRole('radiogroup', { name: 'Orders' });
     await waitFor(() => expect(within(orders).getAllByRole('radio')[0]).toHaveTextContent(/per slice$/));
+  });
+
+  it('with TWAP on at Limit, the Market row shows the market interval, not the Limit one', async () => {
+    const plan = deleverPlans.twentyPct;
+    const twapDefault = { on: false, maker: { durationSec: 14_400, intervalSec: 300 }, market: { durationSec: 3_600, intervalSec: 60 } };
+    server.use(
+      http.post('/api/rebalance/delever/plan', async ({ request }) => {
+        const body = (await request.json()) as DeleverRequest;
+        const twap = body.twap ? twapReply(plan.legs[plan.makerLeg]!.closeQty, body.twap) : null;
+        return HttpResponse.json(env({ ...plan, twap, priceImpact: null, twapDefault }));
+      }),
+    );
+    show(openPairs.btc900);
+    await turnTwapOn('4h', '5m');
+    const orders = await screen.findByRole('radiogroup', { name: 'Orders' });
+    const [limit, market] = within(orders).getAllByRole('radio');
+    await waitFor(() => expect(limit).toHaveTextContent(`${fmtApprox(300)} per slice`));
+    expect(market).toHaveTextContent(`${fmtApprox(60)} per slice`);
   });
 
   it('one order past the book refuses in place of the hold and points at TWAP', async () => {
@@ -588,7 +628,7 @@ describe('DeleverTab TWAP', () => {
     await waitFor(() => expect(starts).toHaveLength(1));
     expect(starts[0]!.delever.twap).toMatchObject({ durationSec: 14_400, intervalSec: 300, repegBehindBp: 5 });
     expect(starts[0]!.delever.twap).not.toHaveProperty('slices');
-    expect(starts[0]!.delever.sliceUsd).toBeUndefined();
+    expect(starts[0]!.delever).not.toHaveProperty('sliceUsd');
   });
 
   it('a twap start sends the slice size the plan was priced with', async () => {
@@ -704,7 +744,7 @@ describe('DeleverTab TWAP', () => {
     await screen.findByText(/^Slices 48/);
     const last = sent[sent.length - 1]!;
     expect(last.twap).toMatchObject({ durationSec: 14_400, intervalSec: 300 });
-    expect(last.sliceUsd).toBeUndefined();
+    expect(last).not.toHaveProperty('sliceUsd');
   });
 
   it('a twap refusal clears the cost box', async () => {

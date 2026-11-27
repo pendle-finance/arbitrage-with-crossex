@@ -197,6 +197,7 @@
     "staleQuote": "报价已过期，正在等待新报价。",
     "loginExpired": "Boros 登录已过期。",
     "completingLeg": "仅补齐市场 {{letter}}：一笔订单，规模为剩余部分。另一个市场不变。",
+    "reportOtherTrade": "当前表单已不是这笔交易，因此再次下单的按钮不可用。请改回原来的钱包、模式、市场和方向，或关闭此结果。",
     "tradeBoth": "改为交易两个市场",
     "loadFailed": "无法加载 Boros 市场",
     "modeAria": "Boros 下单模式",
@@ -260,6 +261,8 @@
     "autoBook": "自动：手续费相同，盘口较薄的一条腿挂单。",
     "hoverRests": "挂限价单 · 挂单手续费 {{bp}} bps（{{pct}}%）",
     "hoverHedges": "每笔成交以市价对冲 · 吃单手续费 {{bp}} bps（{{pct}}%）",
+    "hoverRestsPlain": "挂限价单，收挂单手续费",
+    "hoverHedgesPlain": "每笔成交以市价对冲，收吃单手续费",
     "takerAfter": "转吃单时限",
     "takerChoice": {
       "m5": "5 分钟",
@@ -268,10 +271,12 @@
       "custom": "自定义"
     },
     "takerHover": "仍未成交的部分随后以市价单成交（吃单手续费 {{bp}} bps，{{pct}}%）。",
+    "takerHoverPlain": "仍未成交的部分随后以市价单成交，收吃单手续费。",
     "takerNeverHover": "永不：限价单一直挂到成交。",
     "takerOver": "不得超过间隔的 80%（{{max}}）",
     "customAria": "转吃单时限，自定义时间",
     "customRange": "30 秒到 24 小时",
+    "customReads": "= {{span}}",
     "repeg": "落后时改价",
     "repegChoiceOff": "关",
     "repegHover": "落后到这个幅度时，把限价移到最优价。最多每 5 秒一次。"

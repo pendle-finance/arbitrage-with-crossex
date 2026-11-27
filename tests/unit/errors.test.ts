@@ -38,6 +38,15 @@ describe('classifyGateError label anchoring', () => {
     expect(classifyGateError(gate(400, 'CAN_NOT_DELETE_LARGE_POSITION')).category).toBe('venue-rejected');
   });
 
+  it.each([
+    ['TRADE_REDUCE_ONLY_POSITION_QTY_ERROR', 'Can not place ReduceOnly order when position quantity is zero'],
+    ['TRADE_REDUCE_ONLY_SIDE_ERROR', 'ReduceOnly orders must be in the opposite direction of the position'],
+  ])('the reduce-only refusal Gate CrossEx sends live (%s) is a definite reduce-only violation', (label, message) => {
+    const c = classifyGateError({ response: { status: 400, data: { label, message } } });
+    expect(c.category).toBe('reduce-only-violation');
+    expect(c.retryable).toBe(false);
+  });
+
   it('a CoreError keeps its category; a bare network error is retryable', () => {
     expect(classifyGateError(new CoreError('x', 'leverage')).category).toBe('leverage');
     const net = classifyGateError(Object.assign(new Error('socket'), { code: 'ECONNRESET' }));

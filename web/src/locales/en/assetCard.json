@@ -195,6 +195,7 @@
     "opened": "Opened {{qty}} at {{date}}",
     "openedNote": "Your perps now hedge the new positions. The {{old}} positions stay open, with no perps, until {{old}}.",
     "partial": "Only {{qty}} opened — the rest did not fill. Open the rest from Fixed Rate Pairs.",
+    "openRest": "Open the rest",
     "nothing": "Nothing was opened — the venue refused every order.",
     "notSent": "Open not sent",
     "retryTitle": "Press and hold to send the same open again.",

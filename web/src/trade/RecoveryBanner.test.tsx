@@ -164,6 +164,26 @@ describe('RecoveryBanner', () => {
     expect(alert).not.toHaveTextContent(/deal is still working/i);
   });
 
+  it('a Delever or Realize TWAP halted not hedged or on margin says so, not error', async () => {
+    const legs = twapJob().legs!.map((leg) => ({ ...leg, reduceOnly: true }));
+    const { unmount } = renderTwap(twapJob({ kind: 'delever', status: 'halted', haltKind: 'not-hedged', notHedgedQty: 0.5, legs }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: not hedged · ETH pair close · slice 3/12');
+    unmount();
+    const realize = twapJob({
+      kind: 'realize',
+      status: 'halted',
+      haltKind: 'margin',
+      legs: [],
+      realize: { legs: [{ symbol: 'GATE_FUTURE_BTC_USDT', exchange: 'GATE', base: 'BTC' }] },
+      steps: [],
+    } as unknown as Partial<RebalanceJob>);
+    const second = renderTwap(realize);
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: not enough margin · Realize uPnL · BTC · slice 3/12');
+    second.unmount();
+    renderTwap(twapJob({ kind: 'delever', status: 'halted', haltKind: 'other', notHedgedQty: 0.5, legs }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('TWAP paused: not hedged · ETH pair close · slice 3/12');
+  });
+
   it('a halted plain deal still shows under the TWAP strip', async () => {
     renderTwap(twapJob(), [makeDealView({ pair: { id: 'plain1', mode: 'HALTED' } })]);
     await screen.findByText(/halted — needs you/);

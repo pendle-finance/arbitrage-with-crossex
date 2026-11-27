@@ -57,6 +57,7 @@ export function ClosePairForm({
   allowTwap = false,
   borosUnhedged = null,
   bookedBefore = null,
+  closed = false,
   onSent,
 }: {
   base: string;
@@ -67,7 +68,8 @@ export function ClosePairForm({
   livePositions?: Map<string, CrossexPosition>;
   allowTwap?: boolean;
   borosUnhedged?: { qty: number; coin: string } | null;
-  bookedBefore?: { usd: number; sinceSec: number } | null;
+  bookedBefore?: { usd: number; sinceSec: number; shared?: boolean } | null;
+  closed?: boolean;
   onSent?: () => void;
 }) {
   const { t } = useTranslation();
@@ -112,9 +114,12 @@ export function ClosePairForm({
   const maker = mode === 'maker';
   const twapOn = allowTwap && maker && twap.on;
   const oneSize = maker || !atMax;
-  const lotA = useSymbolDetail(oneSize ? (legs[0]?.symbol ?? null) : null).data?.lotSize;
-  const lotB = useSymbolDetail(oneSize ? (legs[1]?.symbol ?? null) : null).data?.lotSize;
+  const detailA = useSymbolDetail(oneSize ? (legs[0]?.symbol ?? null) : null);
+  const detailB = useSymbolDetail(oneSize ? (legs[1]?.symbol ?? null) : null);
+  const lotA = detailA.data?.lotSize;
+  const lotB = detailB.data?.lotSize;
   const lotsPending = oneSize && (lotA === undefined || lotB === undefined);
+  const lotsMissing = lotsPending && !detailA.isLoading && !detailB.isLoading;
   const matched =
     oneSize && legs.length === 2 && !qtyInvalid
       ? matchedCloseOf(
@@ -222,13 +227,14 @@ export function ClosePairForm({
       <OrdersGroup
         value={mode}
         onChange={setMode}
-        cost={pairModeFees(previews, makerIdx)}
+        cost={pairModeFees(previews, makerIdx, twapOn ? (preview.data?.priceImpact?.slicedLegs ?? null) : null)}
         seconds={{ maker: twapOn ? (plan ? plan.durationSec / Math.max(1, plan.slices) : null) : takerSec, market: MARKET_ORDER_SEC }}
         whole={{ maker: !twapOn, market: true }}
       >
         {maker && (
           <MakerSettings
             legs={legs.map((l) => ({ name: prettyVenue(l.venue), side: sideOf(l.symbol) }))}
+            symbols={legs.map((l) => l.symbol)}
             makerLeg={makerLeg}
             autoPick={autoPick}
             saving={maker ? makerSaving : null}
@@ -336,7 +342,7 @@ export function ClosePairForm({
           decorate={decorate}
           dealOpts={dealOpts}
           twap={twapOn && plan ? { plan, blocked: twapBlocked } : null}
-          extraDisabled={lotsPending || (maker && (makerIdx === null || takerBlocked || twapWait)) || (twapOn && (twapBlocked || !plan))}
+          extraDisabled={closed || lotsPending ||(maker && (makerIdx === null || takerBlocked || twapWait)) || (twapOn && (twapBlocked || !plan))}
           buttonClassName="w-full"
           // The panel above already reviews this close; the hover card would
           // repeat it on top of the dialog. Errors still surface.
@@ -347,6 +353,7 @@ export function ClosePairForm({
           }}
           onExecuted={() => setSentLegs(null)}
         />
+        {lotsMissing && <p className="text-[11px] text-amber-200">{t('accounts.closePair.lotMissing')}</p>}
       </div>
     </div>
   );

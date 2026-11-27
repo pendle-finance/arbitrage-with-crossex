@@ -7,7 +7,7 @@ import { fetchDeepBook, touchOf, type NormalizedBook } from '../core/estimate/bo
 import { sliceQtys, twapSliceQty } from '../core/rebalance/slices';
 import { PREFLIGHT_MARGIN_BUFFER, TAKER_FEE_RESERVE } from '../core/preflight';
 import { takerAfterCapSec } from '../core/twap';
-import type { DealRequest } from '../engine/create';
+import { REPEG_DEFAULT_BP, type DealRequest } from '../engine/create';
 import type { Store } from '../engine/db';
 import { project } from '../engine/decide';
 import { commands, decodeStatus } from '../engine/loop';
@@ -45,10 +45,10 @@ import {
   type SpotDepth,
   type TransferCoin,
 } from '../core/rebalance/plan';
-import { marginPerConvertUsdc, minQtyOf, positiveOf, type PerpRule } from '../core/rebalance/realize';
+import { marginPerConvertUsdc, minQtyOf, positiveOf, realizeFeePerCoin, type PerpRule } from '../core/rebalance/realize';
 import { TTL, type TtlCache } from './cache';
 import { haltWalled, isWalledStop } from './walledStop';
-import { borosShareOf, MAKER_FEE_BP, markOpenGap, runTwap, sliceStepBehind, TAKER_FEE_BP, type TwapRunDeps, unwindTargetOf } from './twapRun';
+import { borosShareOf, MAKER_FEE_BP, markOpenGap, runTwap, sliceStepBehind, TAKER_FEE_BP, twapHedgeOf, type TwapRunDeps, unwindTargetOf } from './twapRun';
 import {
   ADD_BACK_FIRST,
   addBackPartText,
@@ -69,6 +69,7 @@ import {
   convertSteps,
   HALT_TEXT,
   haltReasonFor,
+  hedgeBeforeOf,
   isChildOf,
   pendingStep,
   REOPEN_HALT,
@@ -451,10 +452,25 @@ async function waitEnded(deps: RunnerDeps, store: Store, id: string): Promise<Pa
   }
 }
 
-async function sendOneLeg(deps: RunnerDeps, id: string, leg: ChildLeg, qty: string): Promise<PairRow> {
+const LIMIT_FIX_BAND_PCT = 0.25;
+
+const LIMIT_FIX_REST_SEC = MAKER_REST_MS / 1000;
+
+function limitFixOf(job: Job): Pick<DealRequest, 'execution' | 'pricePolicy' | 'timeoutSec' | 'repegBehindBp' | 'clipBandPct'> {
+  const twap = job.deleverTwap;
+  const timing = twap
+    ? { timeoutSec: twap.takerAfterSec === undefined ? takerAfterCapSec(twap.intervalSec) : twap.takerAfterSec, repegBehindBp: twap.repegBehindBp === undefined ? REPEG_DEFAULT_BP : twap.repegBehindBp }
+    : job.maker
+      ? { timeoutSec: job.maker.takerAfterSec, repegBehindBp: job.maker.repegBehindBp }
+      : { timeoutSec: LIMIT_FIX_REST_SEC, repegBehindBp: REPEG_DEFAULT_BP };
+  const timeoutSec = Math.min(timing.timeoutSec ?? LIMIT_FIX_REST_SEC, LIMIT_FIX_REST_SEC);
+  return { execution: 'maker', pricePolicy: 'touch', clipBandPct: LIMIT_FIX_BAND_PCT, ...timing, timeoutSec };
+}
+
+async function sendOneLeg(deps: RunnerDeps, id: string, leg: ChildLeg, qty: string, limit: Job | null = null): Promise<PairRow> {
   const engine = engineOf(deps);
   if (!engine.store.getPair(id)) {
-    await engine.createChild(oneLegChild(id, leg, qty));
+    await engine.createChild({ ...oneLegChild(id, leg, qty), ...(limit ? limitFixOf(limit) : {}) });
     engine.engineWake();
   }
   return waitEnded(deps, engine.store, id);
@@ -529,6 +545,18 @@ function haltedChildOf(deps: RunnerDeps, job: Job): PairRow | null {
   return pair?.mode === 'HALTED' ? pair : null;
 }
 
+function holdHaltedHedge(deps: RunnerDeps, job: Job): void {
+  const child = haltedChildOf(deps, job);
+  if (child && child.hedgeNotBefore !== HEDGE_HELD) deps.twap?.store.updatePair(child.id, { hedgeNotBefore: HEDGE_HELD });
+}
+
+function feePerCoinOf(job: Job, step: Step, leg: RealizeJobLeg, mark: number): number {
+  const rate = leg.takerRate;
+  if (typeof rate === 'number' && Number.isFinite(rate) && rate >= 0) return realizeFeePerCoin(mark, rate);
+  const bp = job.exec === 'market' || step.cut?.taker === true ? 2 * TAKER_FEE_BP : MAKER_FEE_BP + TAKER_FEE_BP;
+  return (mark * bp) / 10_000;
+}
+
 function skipRetryConverts(deps: RunnerDeps, job: Job): void {
   const step = sliceStepBehind(job);
   if (!step || step === job.steps[job.stepIndex]) return;
@@ -585,11 +613,11 @@ async function heldSettled(deps: RunnerDeps, halted: PairRow): Promise<PairRow> 
   }
 }
 
-async function closeGap(deps: RunnerDeps, job: Job, target: JobFollow, qty: number): Promise<{ done: number; lot: number }> {
+async function closeGap(deps: RunnerDeps, job: Job, target: JobFollow, qty: number, limit = false): Promise<{ done: number; lot: number }> {
   const rule = await sliceRule(deps, target.symbol);
   const lots = lotsDownOf(qty, rule.lot);
   if (lots <= 0) return { done: 0, lot: Number(rule.lot) };
-  const ended = await sendOneLeg(deps, `${job.id}-g${job.tagCount}`, { symbol: target.symbol, side: target.side, reduceOnly: target.reduceOnly }, qtyText(lots, rule.lot));
+  const ended = await sendOneLeg(deps, `${job.id}-g${job.tagCount}`, { symbol: target.symbol, side: target.side, reduceOnly: target.reduceOnly }, qtyText(lots, rule.lot), limit ? job : null);
   job.tagCount += 1;
   return { done: filledOf(engineOf(deps).store, ended).a, lot: Number(rule.lot) };
 }
@@ -616,8 +644,9 @@ async function unwindGap(deps: RunnerDeps, job: Job, halted: PairRow | null): Pr
   if (!step || !leg) throw new CoreError(FIX_UNCONFIRMED, 'validation');
   let gap = job.notHedgedQty;
   let target = job.unwindTarget ?? null;
+  const alone = job.kind === 'realize' && leg.hedge === null;
   if (halted) {
-    if (!unwindTargetOf(job, step, halted, gap)) throw new CoreError(REOPEN_HALT.noHedgePerp, 'validation');
+    if (!alone && !unwindTargetOf(job, step, halted, gap)) throw new CoreError(REOPEN_HALT.noHedgePerp, 'validation');
     const settled = await heldSettled(deps, halted);
     creditSliceChild(job, engine.store, settled);
     const filled = filledOf(engine.store, settled);
@@ -628,10 +657,17 @@ async function unwindGap(deps: RunnerDeps, job: Job, halted: PairRow | null): Pr
     job.unwindTarget = target;
     deps.jobs.write(job);
   }
+  if (alone) {
+    step.qty = addQty(step.qty ?? 0, gap);
+    leg.shrunkQty = addQty(leg.shrunkQty ?? 0, gap);
+    return holdOrPause(deps, job, gap, gap, Number((await sliceRule(deps, leg.symbol)).lot));
+  }
   if (!target) throw new CoreError(REOPEN_HALT.noHedgePerp, 'validation');
   const { done, lot } = await closeGap(deps, job, target, gap);
-  if (job.kind === 'realize') step.qty = addQty(step.qty ?? 0, done);
-  else leg.filledQty = Math.max(0, addQty(leg.filledQty, -done));
+  if (job.kind === 'realize') {
+    step.qty = addQty(step.qty ?? 0, done);
+    leg.shrunkQty = addQty(leg.shrunkQty ?? 0, done);
+  } else leg.filledQty = Math.max(0, addQty(leg.filledQty, -done));
   return holdOrPause(deps, job, gap, done, lot);
 }
 
@@ -646,12 +682,12 @@ function holdOrPause(deps: RunnerDeps, job: Job, gap: number, done: number, lot:
   return job;
 }
 
-async function followGap(deps: RunnerDeps, job: Job): Promise<Job> {
+async function followGap(deps: RunnerDeps, job: Job, limit = false): Promise<Job> {
   const step = job.steps[job.stepIndex];
   const follow = job.follow;
   if (!step || !follow) throw new CoreError(FIX_UNCONFIRMED, 'validation');
   const gap = job.notHedgedQty;
-  const { done, lot } = await closeGap(deps, job, follow, gap);
+  const { done, lot } = await closeGap(deps, job, follow, gap, limit);
   step.qty = addQty(step.qty ?? 0, done);
   if (settleGap(job, gap, done, lot)) resumeRun(job);
   deps.jobs.write(job);
@@ -770,10 +806,21 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction | '
     skipRetryConverts(deps, job);
     if (job.steps[job.stepIndex]?.name !== SLICE_STEP) throw new CoreError(FIX_UNCONFIRMED, 'validation');
     if (action === 'unwind') return unwindGap(deps, job, halted);
-    if (!halted) return followGap(deps, job);
+    if (!halted) return followGap(deps, job, action === 'limit');
+    if (action === 'limit' && job.follow && job.notHedgedQty > 0) {
+      const store = engineOf(deps).store;
+      const settled = await heldSettled(deps, halted);
+      creditSliceChild(job, store, settled);
+      const filled = filledOf(store, settled);
+      job.notHedgedQty = Math.max(0, addQty(filled.a, -filled.b));
+      job.follow = { ...job.follow, qty: job.notHedgedQty };
+      store.updatePair(halted.id, { mode: 'DONE' });
+      deps.jobs.write(job);
+      return followGap(deps, job, true);
+    }
   } else if (!halted) {
-    const rest = job.unwindTarget;
-    return action === 'unwind' && job.twap && rest && job.notHedgedQty > 0 ? unwindRest(deps, job, job.twap, rest) : job;
+    const rest = action === 'unwind' ? job.unwindTarget : action === 'market' ? twapHedgeOf(engineOf(deps).store, job) : null;
+    return job.twap && rest && job.notHedgedQty > 0 ? unwindRest(deps, job, job.twap, rest) : job;
   }
   const engine = engineOf(deps);
   if (action === 'unwind') return unwindChild(deps, job, halted);
@@ -784,7 +831,7 @@ export async function applyFix(deps: RunnerDeps, job: Job, action: FixAction | '
   if (ended.mode === 'HALTED') {
     if (job.kind !== 'twap') markOpenGap(engine.store, job);
     deps.jobs.write(job);
-    const refused = job.kind === 'twap' ? REOPEN_HALT.hedgeRefusedAgain : REOPEN_HALT.noCash;
+    const refused = job.kind === 'twap' ? REOPEN_HALT.hedgeRefusedAgain : REOPEN_HALT.noCash(legFor(job, job.steps[job.stepIndex])?.pool ?? 'CROSSEX');
     throw new CoreError(ended.haltKind === 'hedge-margin' ? refused : FIX_UNCONFIRMED, 'validation');
   }
   resumeRun(job);
@@ -891,7 +938,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const reopenAhead = (reason: string): Step | null => {
     const reopen = reopenOf(job.stepIndex);
     if (!reopen || !legOf(reopen)) return null;
-    return reopen.retry && reason === HALT_TEXT.quotesUsed ? null : reopen;
+    return reopen.retry && (reason === HALT_TEXT.quotesUsed || reason === HALT_TEXT.poorQuote) ? null : reopen;
   };
 
   const hedgeOpen = (): boolean => {
@@ -912,8 +959,15 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const open = reopen && leg ? openOf(leg, reopen) : 0;
     job.status = 'halted';
     job.haltKind = kind ?? (hedgeOpen() ? 'not-hedged' : 'other');
-    job.haltReason = leg && open > 0 && reason === HALT_TEXT.quotesUsed ? REOPEN_HALT.quotesUsedLegOpen(leg, open) : reason;
+    const legOpen = leg && open > 0 ? leg : null;
+    job.haltReason =
+      legOpen && reason === HALT_TEXT.quotesUsed
+        ? REOPEN_HALT.quotesUsedLegOpen(legOpen, open)
+        : legOpen && reason === HALT_TEXT.poorQuote
+          ? REOPEN_HALT.poorQuoteLegOpen(legOpen, open)
+          : reason;
     if (deps.twap) markOpenGap(deps.twap.store, job);
+    holdHaltedHedge(deps, job);
     deps.jobs.write(job);
     deps.onHalt(job);
     deps.onDone?.();
@@ -1496,7 +1550,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const retryConvert = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
     const account = await readAccount(crossEx());
     const cash = floorCents(Math.max(0, account.cash(poolWallet(leg.pool))));
-    if (cash < HYPERLIQUID_MIN_USDC) return halt(REOPEN_HALT.noCash, 'margin');
+    if (cash < HYPERLIQUID_MIN_USDC) return halt(REOPEN_HALT.noCash(leg.pool), 'margin');
     const need = openOf(leg, step) * (await marginPerCoin(leg));
     const whole = ceilCents((need / marginPerConvertUsdc) * RETRY_CONVERT_HEADROOM);
     const convertAmount = Math.min(cash, Math.max(HYPERLIQUID_MIN_USDC, whole));
@@ -1509,26 +1563,24 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
   const retryConvertCapped = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
     if (job.retryConverts >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.convertCap, 'margin');
     const account = await readAccount(crossEx());
-    if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noCash, 'margin');
+    if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noBorrow(leg.pool), 'margin');
     job.retryConverts += 1;
     return retryConvert(step, leg);
   };
-
-  const feeBpOf = (step: Step): number => (job.exec === 'market' || step.cut?.taker === true ? 2 * TAKER_FEE_BP : MAKER_FEE_BP + TAKER_FEE_BP);
 
   let triedQty: number | null = null;
 
   const topUp = async (step: Step, leg: RealizeJobLeg): Promise<void> => {
     if (job.topUpPending) return halt(REOPEN_HALT.marginLow, 'margin');
     if ((job.topUps ?? 0) >= RETRY_CONVERT_CAP) return halt(REOPEN_HALT.convertCap, 'margin');
-    if (triedQty === null) return halt(REOPEN_HALT.noCash, 'margin');
+    if (triedQty === null) return halt(REOPEN_HALT.noCash(leg.pool), 'margin');
     const account = await readAccount(crossEx());
-    if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noCash, 'margin');
+    if (account.borrow(poolWallet(CONVERT_TO[leg.pool])) === 0) return halt(REOPEN_HALT.noBorrow(leg.pool), 'margin');
     const cash = floorCents(Math.max(0, account.cash(poolWallet(leg.pool))));
-    if (cash < HYPERLIQUID_MIN_USDC) return halt(REOPEN_HALT.noCash, 'margin');
+    if (cash < HYPERLIQUID_MIN_USDC) return halt(REOPEN_HALT.noCash(leg.pool), 'margin');
     const mid = (await midOf(deps, leg.symbol)) ?? 0;
     const need = triedQty * ((await marginPerCoin(leg)) * (PREFLIGHT_MARGIN_BUFFER - 1) + 2 * mid * TAKER_FEE_RESERVE);
-    const drain = (Math.max(0, addQty(leg.qty, -leg.filledQty)) * mid * feeBpOf(step)) / 10_000;
+    const drain = Math.max(0, addQty(leg.qty, -leg.filledQty)) * feePerCoinOf(job, step, leg, mid);
     const whole = ceilCents(((Math.max(0, need - account.available) + drain) / marginPerConvertUsdc) * RETRY_CONVERT_HEADROOM);
     const retry = { reason: 'margin' as const, convertAmount: Math.min(cash, Math.max(HYPERLIQUID_MIN_USDC, whole)) };
     job.topUpPending = true;
@@ -1700,9 +1752,69 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
 
   let resumeHalted = job.status === 'running' && Boolean(job.haltKind);
 
+  const reopenOnResume = async (step: Step, leg: RealizeJobLeg, child: PairRow | null): Promise<void> => {
+    resumeHalted = false;
+    const engine = engineOf(deps);
+    const follow = step.follow as StepPerp;
+    if (child) creditSliceChild(job, engine.store, await heldSettled(deps, child));
+    const sent = child ? null : engine.store.getPair(`${job.id}-g${job.tagCount}`);
+    if (sent) {
+      const ended = await waitEnded(deps, engine.store, sent.id);
+      const done = filledOf(engine.store, ended).a;
+      step.qty = addQty(step.qty ?? 0, done);
+      if (ended.a.contract !== follow.symbol || ended.a.side !== follow.side) leg.shrunkQty = addQty(leg.shrunkQty ?? 0, done);
+      job.tagCount += 1;
+      deps.jobs.write(job);
+    }
+    const open = Math.max(0, openOf(leg, step));
+    const shrunk = leg.shrunkQty ?? 0;
+    const lot = Number((await sliceRule(deps, leg.symbol)).lot);
+    const liveLeg = await liveQtyOf(leg.symbol, leg.side);
+    const expectedLeg = Math.max(0, addQty(addQty(leg.positionQty, -open), -shrunk));
+    if (Math.abs(addQty(liveLeg, -expectedLeg)) >= lot / 2) return halt(REOPEN_HALT.sizeChanged(leg, liveLeg, expectedLeg));
+    const hedge = hedgeBeforeOf(job, leg);
+    let byHand = 0;
+    if (hedge) {
+      const hedgeLot = Number((await sliceRule(deps, hedge.symbol)).lot);
+      const liveHedge = await liveQtyOf(hedge.symbol, hedge.side);
+      const expectedHedge = Math.max(0, addQty(hedge.qty, -shrunk));
+      byHand = addQty(expectedHedge, -liveHedge);
+      if (byHand <= -hedgeLot / 2 || byHand >= open + hedgeLot / 2) return halt(REOPEN_HALT.hedgeChanged(leg, hedge, liveHedge, expectedHedge));
+      if (byHand < hedgeLot / 2) byHand = 0;
+    }
+    if (child && byHand === 0) {
+      commands.resumeAfterHalt(engine.store, child.id);
+      engine.engineWake();
+      deps.jobs.write(job);
+      return;
+    }
+    if (child) engine.store.updatePair(child.id, { mode: 'DONE' });
+    if (byHand > 0) {
+      step.qty = addQty(step.qty ?? 0, byHand);
+      leg.shrunkQty = addQty(shrunk, byHand);
+    }
+    const reopen = Math.max(0, addQty(open, -byHand));
+    const target: JobFollow = { symbol: follow.symbol, exchange: follow.exchange, side: follow.side, qty: reopen, reduceOnly: follow.reduceOnly };
+    deps.jobs.write(job);
+    const { done, lot: followLot } = await closeGap(deps, job, target, reopen);
+    step.qty = addQty(step.qty ?? 0, done);
+    job.follow = target;
+    job.unwindTarget = hedge ? { symbol: hedge.symbol, exchange: hedge.exchange, side: hedge.side === 'LONG' ? 'SELL' : 'BUY', qty: reopen, reduceOnly: true } : null;
+    if (!settleGap(job, reopen, done, followLot)) {
+      job.haltReason = REOPEN_HALT.refused(leg, job.notHedgedQty, '');
+      job.haltKind = 'not-hedged';
+      deps.jobs.write(job);
+      deps.onHalt(job);
+      deps.onDone?.();
+      return;
+    }
+    deps.jobs.write(job);
+  };
+
   const onHalted = async (step: Step, leg: RealizeJobLeg, child: PairRow): Promise<void> => {
     const engine = engineOf(deps);
-    if (resumeHalted || (step.retry && job.kind === 'realize' && child.haltKind === 'hedge-margin')) {
+    if (resumeHalted && job.kind === 'realize') return reopenOnResume(step, leg, child);
+    if (resumeHalted ||(step.retry && job.kind === 'realize' && child.haltKind === 'hedge-margin')) {
       resumeHalted = false;
       step.retry = null;
       commands.resumeAfterHalt(engine.store, child.id);
@@ -1800,7 +1912,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     const mark = positiveOf(held?.markPrice) || mid;
     if (!(entry > 0) || !(mark > 0)) return false;
     const perCoin = leg.side === 'SHORT' ? entry - mark : mark - entry;
-    if (perCoin > (mark * feeBpOf(step)) / 10_000) return false;
+    if (perCoin > feePerCoinOf(job, step, leg, mark)) return false;
     const stop = { symbol: leg.symbol, exchange: leg.exchange, base: leg.base, side: leg.side, entry, mark, closedQty: leg.filledQty, plannedQty: leg.qty, at: deps.now() };
     job.profitStops = [...(job.profitStops ?? []), stop];
     trimLegConverts(step, leg);
@@ -1860,6 +1972,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
         if (refusedAsTooSmall(engine.store, child)) return finishSlices(step, leg, follow);
       }
       if (job.status !== 'running') return;
+      if (resumeHalted && job.kind === 'realize' && openOf(leg, step) > 0) return await reopenOnResume(step, leg, null);
       const queued = deps.takeFix?.();
       if (queued) return await applyFix(deps, job, queued.action).then(queued.done, queued.fail);
       if (job.pauseRequested) return pauseNow();
@@ -2049,6 +2162,7 @@ export async function runJob(deps: RunnerDeps): Promise<void> {
     job.haltReason = haltReasonFor(err);
     job.haltKind = hedgeOpen() ? 'not-hedged' : 'other';
     try {
+      holdHaltedHedge(deps, job);
       deps.jobs.write(job);
     } catch {}
     deps.onHalt(job);

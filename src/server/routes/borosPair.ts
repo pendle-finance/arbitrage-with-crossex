@@ -37,6 +37,7 @@ import {
 import { borosInitialMarginUsd, borosTimeToMaturitySec, normalizeUnderlying } from '../../core/boros/opportunities';
 import { isSupportedCoin } from '../../core/coins';
 import { isSpreadMarket, knownRateOf } from '../../core/boros/spread';
+import { normalizeVenue } from '../../core/boros/venue';
 import { readAgentApproval } from '../borosAgentApproval';
 import { isUpdating } from '../updater';
 import {
@@ -85,6 +86,7 @@ import {
   gasTopUpMarketFor,
   lockBorosMarkets,
   pendingBorosExecutions,
+  restingCancelsOn,
   sendBorosPair,
   type BorosCloseDeps,
 } from '../borosClose';
@@ -832,8 +834,10 @@ export function borosPairRoutes(deps: AppDeps) {
               spreadVenues: m.spreadVenues,
       });
       const byName = (x: { name: string }, y: { name: string }): number => x.name.localeCompare(y.name);
-      const spreadMarkets = markets
-        .filter((m) => isSpreadMarket(m) && m.maturity > nowSec && (isSupportedCoin(normalizeUnderlying(m.base)) || holds(m)))
+      const listedSpreads = markets.filter(
+        (m) => isSpreadMarket(m) && m.maturity > nowSec && (isSupportedCoin(normalizeUnderlying(m.base)) || holds(m)),
+      );
+      const spreadMarkets = listedSpreads
         .map((m) => ({ ...toRow(m), closeOnly: m.state !== 'Normal' }))
         .sort(byName);
 
@@ -861,14 +865,24 @@ export function borosPairRoutes(deps: AppDeps) {
          * cross-base "spread" is not a spread — the legs face unrelated
          * funding curves and no CrossEx perp pair can hedge the result.
          */
-        .filter((m, _i, all) =>
-          all.some(
-            (o) =>
-              o.marketId !== m.marketId &&
-              o.tokenId === m.tokenId &&
-              o.maturity === m.maturity &&
-              o.base.toLowerCase() === m.base.toLowerCase(),
-          ),
+        // A listed spread over the market's venue is a partner too: the HL Jan
+        // singles have no Gate Jan single, only the HL-GATE spread.
+        .filter(
+          (m, _i, all) =>
+            all.some(
+              (o) =>
+                o.marketId !== m.marketId &&
+                o.tokenId === m.tokenId &&
+                o.maturity === m.maturity &&
+                o.base.toLowerCase() === m.base.toLowerCase(),
+            ) ||
+            listedSpreads.some(
+              (s) =>
+                s.tokenId === m.tokenId &&
+                s.maturity === m.maturity &&
+                s.base.toLowerCase() === m.base.toLowerCase() &&
+                (s.spreadVenues ?? []).some((v) => normalizeVenue(v) === normalizeVenue(m.venue)),
+            ),
         )
         .map(toRow)
         .sort(byName);
@@ -891,7 +905,7 @@ export function borosPairRoutes(deps: AppDeps) {
 
     /** Price the pair. Called on a short interval while the panel is open. */
     app.post('/boros/pair/simulate', async (req, reply) => {
-      const { simulation, gate, eligibility, simulatedAtMs, gasBalanceUsd } = await priceRequest(
+      const { simulation, gate, eligibility, simulatedAtMs, gasBalanceUsd, intent, account } = await priceRequest(
         req.body as PairBody,
         false,
       );
@@ -901,6 +915,13 @@ export function borosPairRoutes(deps: AppDeps) {
         eligibility,
         simulatedAtMs,
         gasBalanceUsd: gasBalanceUsd ?? null,
+        cancelOrdersOn:
+          intent === 'close'
+            ? restingCancelsOn(
+                account,
+                simulation.legs.filter((l) => l.sizing.deltaSize !== 0 && l.execApr !== null).map((l) => l.marketId),
+              )
+            : [],
       });
     });
 
@@ -997,7 +1018,7 @@ export function borosPairRoutes(deps: AppDeps) {
       // the same batch: one left behind could re-open a leg the roll just moved.
       // The preview cancels the same ones, or an order in a close's path
       // (MarketSelfSwap) blocks a roll the send would pass.
-      const cancelOrdersOn = plan ? [...new Set(plan.closes.map((o) => o.marketId))].filter((id) => account.restingOrderMarkets.has(id)) : [];
+      const cancelOrdersOn = plan ? restingCancelsOn(account, plan.closes.map((o) => o.marketId)) : [];
       const preview = plan ? orders?.simulateRollOver?.(plan.closes, plan.opens, { cancelOrdersOn, fresh }) : undefined;
       const venue = preview
         ? await preview.catch((err: unknown) => {

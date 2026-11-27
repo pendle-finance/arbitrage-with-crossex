@@ -46,7 +46,7 @@ import { SharePositionModal } from '../SharePositionModal';
 import { ClosePairForm } from '../PerpOnlyBox';
 import { ClosePairModal, RollPairModal } from './ClosePairModal';
 import { BorosLogInButton } from '../../trade/BorosAgentSetup';
-import { CloseBorosForm } from '../../trade/CloseBorosForm';
+import { CloseBorosForm, seedBorosSlipPct } from '../../trade/CloseBorosForm';
 import { pickOpenMarkets } from '../../trade/BorosPairTicket';
 import { ClosePopover } from '../../trade/ClosePopover';
 import { useTradeFlowOptional } from '../../trade/TradeFlow';
@@ -127,14 +127,12 @@ import {
   type TimelineAxis,
   pairLockedSpread,
   pairPerpCloseLegs,
-  entryAprOf,
   perpOnlyCloseLegs,
   type BorosOnlyPair,
   sizeIn,
 } from './assetModel';
 import { DUST_USD, sameSize } from './grouping';
 import { daysLeftText, openPairKey, pairKey } from './pairs';
-import { sigFigsDirectional } from '../../lib/ticks';
 import { useRebalanceOpener } from '../rebalanceOpener';
 import { PairTitle } from '../../components/PairTitle';
 import { DropdownMenu } from '../../components/DropdownMenu';
@@ -144,7 +142,26 @@ import { rebatedSettleApr } from '../../lib/rebate';
 import { useDebounced } from '../../lib/useDebounced';
 import { AssetBars } from './AssetBars';
 import { SinceChip } from './SinceChip';
-import { fitAtBand, fitLegsAtBand, maxRollSize, planBatch, suggestedRollSize, type BatchLimit } from './rollSizing';
+import {
+  ROLL_OPPORTUNITY_SHARE,
+  exitLegBodies,
+  exitPnlOf,
+  fitAtBand,
+  fitLegsAtBand,
+  inRollUnits,
+  maxRollSize,
+  pairRollGeometry,
+  planBatch,
+  rollFigures,
+  rollOpportunities,
+  rollPart,
+  rollRebateApr,
+  suggestedRollSize,
+  type BatchLimit,
+  type RollOpportunity,
+  type RollProbeResult,
+  type RollRateInputs,
+} from './rollSizing';
 import { useRollPublisher, useRollSignalsOptional } from '../rollSignal';
 import { localizeServerText } from '../../i18n/serverMessages';
 import { ArrowDown, ChartColumnDecreasing, ChartPie, Check, ChevronDown, MoreHorizontal, RotateCw, Share } from 'lucide-react';
@@ -1356,29 +1373,8 @@ const QUOTE_WAIT_CODES: ReadonlySet<string> = new Set(['no-quote', 'stale-simula
 const ROLL_QUOTE_MAX_AGE_MS = 25_000;
 /** The ticket's cap on the tolerance, in % APR. */
 const ROLL_MAX_SLIP_PCT = 10;
-/** Used when no market on a batch reports a usable deviation cap — the same
- * fallback the close form takes (CloseBorosForm's FALLBACK_SLIPPAGE_PCT). */
-const ROLL_FALLBACK_SLIP_PCT = 1;
-
-/**
- * The tolerance a batch is seeded with, in % APR: half each market's own
- * max rate deviation, averaged over the batch's markets, floored to one
- * significant figure — the same seed the ticket and the close form take
- * (`seedFor` there). The batch's worst case is twice it, i.e. the two legs'
- * combined deviation cap over two. The server's flat `defaultSlippageApr`
- * was 0.25% whatever the market, which on a normal book is tighter than the
- * fill and tripped "slippage past the bound" on rolls that were perfectly
- * fine (his catch 2026-09-18). Markets without a usable cap fall back to
- * the close form's 1%.
- */
 function seedSlipPctFor(markets: ReadonlyArray<BorosPairMarketRow>, ids: number[]): number {
-  const caps = ids
-    .map((id) => markets.find((m) => m.marketId === id)?.maxRateDeviationApr)
-    .filter((c): c is number => typeof c === 'number' && c > 0);
-  if (caps.length === 0) return ROLL_FALLBACK_SLIP_PCT;
-  const meanHalf = caps.reduce((sum, c) => sum + c / 2, 0) / caps.length;
-  const pctVal = sigFigsDirectional(meanHalf * 100, 1, 'down');
-  return pctVal > 0 ? pctVal : ROLL_FALLBACK_SLIP_PCT;
+  return seedBorosSlipPct(ids.map((id) => markets.find((m) => m.marketId === id)?.maxRateDeviationApr));
 }
 
 /**
@@ -1427,87 +1423,6 @@ function rollTargetsFor(
     if (long && short) targets.push({ maturity, longMarketId: long.marketId, shortMarketId: short.marketId });
   }
   return targets;
-}
-
-function pairExposure(pair: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'legs'>): { long: number; short: number } {
-  const sameVenue = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-  let long = 0;
-  let short = 0;
-  for (const l of pair.legs) {
-    if (l.kind !== 'yu') continue;
-    if (l.spreadVenues) {
-      long += l.sizeToken;
-      short += l.sizeToken;
-    } else if (sameVenue(l.venue, pair.longVenue)) long += l.sizeToken;
-    else if (sameVenue(l.venue, pair.shortVenue)) short += l.sizeToken;
-  }
-  return { long, short };
-}
-
-/** What a roll moves and what stays: the rate legs, the size held (the
- * larger venue's Boros exposure) and the perps' margin, which a roll
- * never touches. */
-function pairRollGeometry(pair: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'legs'>): {
-  yuLegs: PairLegDetail[];
-  heldSize: number;
-  exposure: { long: number; short: number };
-  pairPerpImUsd: number;
-} {
-  const yuLegs = pair.legs.filter((l) => l.kind === 'yu');
-  const perpLegs = pair.legs.filter((l) => l.kind === 'perp');
-  const exposure = pairExposure(pair);
-  return {
-    yuLegs,
-    heldSize: Math.max(exposure.long, exposure.short),
-    exposure,
-    pairPerpImUsd: perpLegs.reduce((t, l) => t + l.imUsd, 0),
-  };
-}
-
-/** The share of a pair the roll signal prices: "at least a fifth of the
- * position rolls at a better rate" is what makes an opportunity. */
-const ROLL_OPPORTUNITY_SHARE = 0.2;
-
-/** One maturity's answer from a probe: whether the roll the modal would
- * open on fills inside tolerance, the NET rate it locks, and that size. */
-interface RollProbeResult {
-  ok: boolean;
-  rate: number | null;
-  size: number;
-}
-
-/** The best maturity a pair could roll into at a better rate than it earns
- * today — the banner's reason to shout. */
-export interface RollOpportunity {
-  maturity: number;
-  /** The rate the modal opens on for this maturity: NET of the round trip,
-   * at the size it defaults to. */
-  rate: number;
-  /** What holding still earns: the locked rate on capital, less the
-   * settlement fee, without the fees already paid to open the pair. */
-  current: number;
-  /** When the pair being held settles — the banner reads the two rates with
-   * the days each one runs for, so a bigger number over a shorter term
-   * cannot masquerade as the better deal. */
-  currentMaturity: number;
-  /** The size that rate is quoted at, collateral tokens. */
-  size: number;
-}
-
-function rollOpportunities(
-  probes: Record<number, RollProbeResult>,
-  targets: RollTarget[],
-  current: number | null,
-  currentMaturity: number,
-): RollOpportunity[] {
-  if (current === null) return [];
-  const found: RollOpportunity[] = [];
-  for (const t of targets) {
-    const r = probes[t.maturity];
-    if (!r || !r.ok || r.rate === null || !(r.rate > current)) continue;
-    found.push({ maturity: t.maturity, rate: r.rate, current, currentMaturity, size: r.size });
-  }
-  return found.sort((a, b) => b.rate - a.rate);
 }
 
 /**
@@ -1836,14 +1751,6 @@ function useAcknowledgement(legs: BorosPairLegBody[]): { checked: boolean; set: 
 /** The probe's poll: a signal for a banner, not a quote for an order. */
 const ROLL_PROBE_POLL_MS = 60_000;
 
-interface RollRateInputs {
-  perpExitUsd: number | null;
-  shareOf: (size: number) => number;
-  rebateApr: (marketIds: number[]) => number;
-}
-
-const NO_ROLL_RATE_INPUTS: RollRateInputs = { perpExitUsd: 0, shareOf: () => 0, rebateApr: () => 0 };
-
 function useRollRateInputs(
   pair: PairEstimate,
   markets: ReadonlyArray<BorosPairMarketRow> | undefined,
@@ -1883,218 +1790,8 @@ function useRollRateInputs(
   return {
     perpExitUsd,
     shareOf: (size) => (heldSize > 0 ? size / heldSize : 0),
-    rebateApr: (ids) =>
-      (holdBasis || settings.includeRebate) && rebate ? ids.reduce((sum, id) => sum + settleOf(id) - rebatedSettleApr(settleOf(id), rebate, id), 0) : 0,
+    rebateApr: (ids) => rollRebateApr(settleOf, holdBasis || settings.includeRebate ? rebate : null, ids),
   };
-}
-
-/** Everything one roll option states, from its two quotes. */
-interface RollFigures {
-  /** The APR the roll would earn on the capital it ties up, NET of the
-   * round trip (both batches' fees and the PnL of closing the old legs). */
-  netRate: number | null;
-  spreadApr: number | null;
-  netByMaturityUsd: number | null;
-  grossByMaturityUsd: number | null;
-  totalCostUsd: number | null;
-  exitCostUsd: number | null;
-  entryCostUsd: number | null;
-  exitPnlUsd: number | null;
-  capitalUsd: number | null;
-  newBorosImUsd: number | null;
-}
-
-/**
- * The roll's arithmetic, in ONE place: the option card and the banner's
- * probe both read it, so the rate the banner promises is the rate the
- * modal opens on (his catch 2026-09-20: the banner said 29% gross at a
- * fifth, the modal 20% net at the whole — two figures for one roll).
- */
-function rollFigures({
-  entrySim,
-  exitSim,
-  size,
-  perpImUsd,
-  maturity,
-  heldLegs,
-  nowSec,
-  keepOld = false,
-  rates = NO_ROLL_RATE_INPUTS,
-}: {
-  rates?: RollRateInputs;
-  entrySim: BorosPairSimulation | undefined;
-  exitSim: BorosPairSimulation | undefined;
-  /** The size being rolled, in the collateral token. */
-  size: number;
-  /** The perp margin behind THIS size (the pair's, scaled by the share rolled). */
-  perpImUsd: number;
-  maturity: number;
-  heldLegs: ReadonlyArray<PairLegDetail>;
-  nowSec: number;
-  /** An open-only roll: the old legs stay open, so nothing is paid or
-   * realised closing them — only the new legs' opening fee counts. */
-  keepOld?: boolean;
-}): RollFigures {
-  const termYears = Math.max(0, maturity - nowSec) / SECONDS_IN_YEAR;
-
-  /**
-   * ⚠ Everything the simulation sizes is in COLLATERAL TOKENS, not dollars.
-   * `borosInitialMarginUsd` returns `N × rate × days/365 × kIM` in the units of
-   * N, and `simulateLeg` hands it `sizing.resultingSize` -- "collateral units
-   * in, collateral units out". So `marginRequiredTotal` is a TOKEN quantity
-   * despite the name, exactly as `costToCrossSize` is. Both are converted here
-   * through the simulation's own collateral price; when that price is unknown
-   * nothing is quoted, rather than publishing a figure in the wrong unit.
-   */
-  const px = entrySim?.collateralPriceUsd ?? exitSim?.collateralPriceUsd ?? null;
-  const usdOf = (tokens: number | null | undefined): number | null =>
-    tokens === null || tokens === undefined || px === null || !(px > 0) ? null : tokens * px;
-
-  // The margin this roll ADDS on the new markets, never the whole netted
-  // position's — see addedMarginOf.
-  const newBorosImUsd = usdOf(addedMarginOf(entrySim));
-  const capitalUsd = newBorosImUsd !== null ? perpImUsd + newBorosImUsd : null;
-
-  const exitCostUsd = keepOld ? 0 : usdOf(exitSim?.costToCrossSize);
-  const entryCostUsd = usdOf(entrySim?.costToCrossSize);
-  // Closing the old legs realises their remaining locked spread against
-  // today's book — money the roll makes or costs on day one, counted in
-  // the earnings and the rate alongside the fees (his call 2026-09-17).
-  const exitPnlUsd = keepOld ? 0 : usdOf(exitPnlOf(exitSim, heldLegs, nowSec).total);
-  const totalCostUsd =
-    exitCostUsd !== null && entryCostUsd !== null ? exitCostUsd + entryCostUsd : null;
-  const perpExitUsd = rates.perpExitUsd === null ? null : rates.perpExitUsd * rates.shareOf(size);
-  const allCostUsd = totalCostUsd !== null && perpExitUsd !== null ? totalCostUsd + perpExitUsd : null;
-  const dragApr =
-    allCostUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0
-      ? allCostUsd / capitalUsd / termYears
-      : null;
-
-  /**
-   * The APR this roll would EARN, on the capital it ties up.
-   *
-   * `estSpreadApr` is a rate on NOTIONAL, and the notional being rolled is the
-   * BOROS leg's -- not `pair.notionalUsd`, which is the two PERP legs and runs
-   * several times larger. Scaling by the perp notional inflated the carry by
-   * that ratio before dividing by capital, which is how this read 20.49% while
-   * the card's own 30 Oct pair read 29.77% for the same maturity.
-   *
-   * Carry per year = spread x rolled notional; APR on capital = that / capital,
-   * then less the round-trip drag so the headline is a figure actually earned.
-   */
-  const rolledNotionalUsd = usdOf(size) ?? 0;
-  const spreadApr =
-    entrySim?.estSpreadApr != null ? entrySim.estSpreadApr + rates.rebateApr(entrySim.legs.map((l) => l.marketId)) : null;
-  const carryPerYearUsd =
-    spreadApr !== null && rolledNotionalUsd > 0 ? spreadApr * rolledNotionalUsd : null;
-  const rateOnCapital =
-    carryPerYearUsd !== null && capitalUsd !== null && capitalUsd > 0
-      ? carryPerYearUsd / capitalUsd
-      : null;
-  const exitPnlApr =
-    exitPnlUsd !== null && capitalUsd !== null && capitalUsd > 0 && termYears > 0 ? exitPnlUsd / capitalUsd / termYears : null;
-  const netRate =
-    perpExitUsd === null
-      ? null
-      : rateOnCapital !== null && dragApr !== null && exitPnlApr !== null
-        ? rateOnCapital - dragApr + exitPnlApr
-        : rateOnCapital;
-  /**
-   * What the roll is worth in dollars by the new maturity: the carry it earns
-   * over the term, less the fees paid to get into it. The percentage is the
-   * comparable figure; this is the one that reads as money.
-   */
-  const grossByMaturityUsd = carryPerYearUsd !== null ? carryPerYearUsd * termYears : null;
-  const netByMaturityUsd =
-    grossByMaturityUsd !== null && allCostUsd !== null && exitPnlUsd !== null
-      ? grossByMaturityUsd - allCostUsd + exitPnlUsd
-      : null;
-
-  return {
-    netRate,
-    spreadApr,
-    netByMaturityUsd,
-    grossByMaturityUsd,
-    totalCostUsd,
-    exitCostUsd,
-    entryCostUsd,
-    exitPnlUsd,
-    capitalUsd,
-    newBorosImUsd,
-  };
-}
-
-
-/**
- * The margin a trade ADDS, in collateral tokens — not what the resulting
- * position needs in total.
- *
- * ⚠ Boros nets to ONE position per (account, market), so `marginRequired` is
- * quoted on `sizing.resultingSize`: open 0.4 ETH on a market already holding
- * 42 and it answers for 42.4. Charging that whole figure as the trade's
- * capital made a 13% roll read almost the same capital as a 100% one — the
- * carry scaled with the size, the denominator did not, so the rate collapsed
- * (his catch 2026-09-18, the same class as the perp-margin bug on 09-17).
- *
- * IM is linear in notional at a fixed rate, so the increment is the resulting
- * margin scaled by the share of the position this trade opens. A leg that
- * opens nothing adds nothing; a leg opening its whole position adds all of it.
- */
-function addedMarginOf(sim: BorosPairSimulation | null | undefined): number | null {
-  if (!sim) return null;
-  let total = 0;
-  for (const leg of sim.legs) {
-    if (leg.marginRequired === null) return null;
-    const result = Math.abs(leg.sizing.resultingSize);
-    const delta = Math.abs(leg.sizing.deltaSize);
-    if (!(delta > 0)) continue;
-    total += result > 0 ? leg.marginRequired * Math.min(1, delta / result) : leg.marginRequired;
-  }
-  return total;
-}
-
-/** One leg of the exit as PnL: the rate the position locked against the
- * rate the book would close it at, over what is left of its life. */
-interface ExitPnlLeg {
-  venue: string;
-  side: 'LONG' | 'SHORT';
-  /** The rate the leg was entered at, sign included. */
-  lockedApr: number;
-  execApr: number | null;
-  /** Collateral units, before fees — null without an execution rate. */
-  pnl: number | null;
-}
-
-/**
- * The PnL of closing the pair's rate legs at the simulated rates, the way
- * CloseBorosForm quotes a close: (locked − exec) × size × years to
- * maturity, signed by the side held (a LONG gains when rates rose, a SHORT
- * when they fell), in COLLATERAL units and BEFORE fees — the fee is in
- * costToCrossSize, charged once. `PairLegDetail.lockedApr` is signed by
- * side (SHORT +, LONG −); `entryAprOf` recovers the rate the leg was entered
- * at, sign included — never its magnitude, or a leg entered at a negative
- * rate would be priced against the wrong number.
- */
-function exitPnlOf(
-  sim: BorosPairSimulation | null | undefined,
-  heldLegs: ReadonlyArray<PairLegDetail>,
-  nowSec: number,
-  /** `worst` prices each leg at the bound its order carries (mid ± the
-   * tolerance) instead of the book's estimate — the floor of what the exit
-   * can realise if every leg fills at its limit. */
-  at: 'exec' | 'worst' = 'exec',
-): { legs: ExitPnlLeg[]; total: number | null } {
-  const one = (s: BorosSimulatedLeg | undefined, l: PairLegDetail | undefined): ExitPnlLeg | null => {
-    if (!s || !l || l.lockedApr === null) return null;
-    const locked = entryAprOf(l.side, l.lockedApr);
-    const years = Math.max(0, l.maturity - nowSec) / SECONDS_IN_YEAR;
-    const rate = at === 'worst' ? s.worstApr : s.execApr;
-    const pnl = rate !== null ? (l.side === 'LONG' ? rate - locked : locked - rate) * s.estFillSize * years : null;
-    return { venue: l.venue, side: l.side, lockedApr: locked, execApr: rate, pnl };
-  };
-  const legs = (sim?.legs ?? []).map((s, i) => one(s, heldLegs[i])).filter((x): x is ExitPnlLeg => x !== null);
-  const total = legs.length > 0 && legs.every((x) => x.pnl !== null) ? legs.reduce((a, x) => a + (x.pnl ?? 0), 0) : null;
-  return { legs, total };
 }
 
 /** One roll option's four legs as last quoted; `key` changes only when their
@@ -2111,33 +1808,6 @@ type RollTarget =
 
 const targetMarketIds = (t: RollTarget): number[] =>
   'spreadMarketId' in t ? [t.spreadMarketId] : [t.longMarketId, t.shortMarketId];
-
-const rollPart = (own: number, size: number, heldSize: number): number =>
-  size >= heldSize ? own : size * (own / heldSize);
-
-function exitLegBodies({
-  pair,
-  slippageApr,
-  size,
-}: {
-  pair: Pick<PairEstimate, 'longVenue' | 'shortVenue' | 'legs'>;
-  slippageApr: number;
-  size: number;
-}): BorosPairLegBody[] | null {
-  const { yuLegs, heldSize } = pairRollGeometry(pair);
-  if (!(size > 0) || yuLegs.length === 0) return null;
-  const legs: BorosPairLegBody[] = [];
-  for (const l of yuLegs) {
-    if (l.marketId === undefined) return null;
-    legs.push({
-      marketId: l.marketId,
-      direction: l.side === 'LONG' ? 'short' : 'long',
-      slippageApr,
-      size: rollPart(l.sizeToken, size, heldSize),
-    });
-  }
-  return legs;
-}
 
 function entryLegBodies({
   target,
@@ -2159,14 +1829,6 @@ function entryLegBodies({
     { marketId: target.longMarketId, direction: 'long', slippageApr, size: rollPart(exposure.long, size, heldSize) },
     { marketId: target.shortMarketId, direction: 'short', slippageApr, size: rollPart(exposure.short, size, heldSize) },
   ];
-}
-
-function inRollUnits<L extends BorosSimulatedLeg>(legs: L[], bodies: BorosPairLegBody[] | null, heldSize: number): L[] {
-  return legs.map((l, i) => {
-    const ratio = bodies?.[i] && heldSize > 0 ? bodies[i].size / heldSize : 1;
-    if (!(ratio > 0) || ratio === 1 || !Array.isArray(l.depth)) return l;
-    return { ...l, depth: l.depth.map(([adverse, cum]): [number, number] => [adverse, cum / ratio]) };
-  });
 }
 
 function rollQuoteInUnits(pair: PairEstimate, target: RollTarget, quote: { exit: BorosSimulatedLeg[]; entry: BorosSimulatedLeg[] }) {
@@ -2192,12 +1854,14 @@ export function RollOverModal({
   base,
   nowSec,
   picker = null,
+  onSending,
   onClose,
 }: {
   pair: PairEstimate;
   base: string;
   nowSec: number;
   picker?: ReactNode;
+  onSending?: () => void;
   onClose: () => void;
 }) {
   useTranslation();
@@ -2343,7 +2007,11 @@ export function RollOverModal({
   }, [seedKey, liveExitSeed, liveEntrySeed]);
   const seeds = frozenSeeds?.key === seedKey ? frozenSeeds : null;
 
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusyState] = useState(false);
+  const setBusy = (b: boolean) => {
+    if (b) onSending?.();
+    setBusyState(b);
+  };
   const [sent, setSent] = useState(false);
   const [stepsSlot, setStepsSlot] = useState<HTMLDivElement | null>(null);
 
@@ -3086,6 +2754,7 @@ function OpenOnlyReview({
   stepsSlot,
   onBusy,
   onResult,
+  onClose,
 }: {
   pair: PairEstimate;
   base: string;
@@ -3108,6 +2777,7 @@ function OpenOnlyReview({
   onClose: () => void;
 }) {
   const agent = useBorosAgent();
+  const flow = useTradeFlowOptional();
   const { canTrade, loginLabel } = useActiveWallet();
   const execute = useExecuteBorosPair();
   // One tolerance for the two entry legs — seeded as the pick page settled it,
@@ -3196,6 +2866,23 @@ function OpenOnlyReview({
     // Not after a partial fill: the server keeps that answer for these ids, so a
     // retry would replay it, and fresh ids would resend the full size.
     const retryable = 'error' in out || (result?.filledNothing ?? false);
+    const rest = result?.partial && !result.filledNothing ? Math.max(0, size - result.hedgedSize) : 0;
+    const restPx = simulation?.collateralPriceUsd ?? null;
+    const openRest =
+      flow && rest > 0 && (pair.unit === 'base' || restPx !== null)
+        ? () => {
+            flow.prefillBorosOpen({
+              base,
+              longVenue: pair.longVenue,
+              shortVenue: pair.shortVenue,
+              maturity: target.maturity,
+              size: pair.unit === 'usd' ? rest : rest * (restPx ?? 0),
+              sizeBase: pair.unit === 'base' ? rest : undefined,
+            });
+            flow.openRail();
+            onClose();
+          }
+        : null;
     return (
       <div className="flex flex-col gap-2">
         {result && !result.filledNothing && !result.partial && (
@@ -3212,6 +2899,11 @@ function OpenOnlyReview({
             title={t('assetCard.openOnly.partial', { qty: exactQty(result.hedgedSize, collateral) })}
             rows={[{ label: t('assetCard.openOnly.newLegs'), value: legsCount(result.legs) }]}
           />
+        )}
+        {openRest && (
+          <button type="button" className="btn-link self-start text-[12px]" onClick={openRest}>
+            {t('assetCard.openOnly.openRest')}
+          </button>
         )}
         {result?.filledNothing && <ResultBox tone="stop" title={t('assetCard.openOnly.nothing')} />}
         {'error' in out && <StopBox title={t('assetCard.openOnly.notSent')} lines={[out.error]} />}

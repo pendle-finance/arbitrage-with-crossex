@@ -255,7 +255,7 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
   const legLong = preview.previews?.[0];
   const legShort = preview.previews?.[1];
   const previewData = preview.previews ? preview.data : undefined;
-  const twapWait = useTwapDefault(twap, previewData && previewData.twapDefault, mode, allowTwap && mode === 'maker' && previewData !== undefined && !preview.isPlaceholderData);
+  const twapWait = useTwapDefault(twap, notionalOk ? previewData && previewData.twapDefault : null, mode, allowTwap && mode === 'maker' && previewData !== undefined && !preview.isPlaceholderData);
   const landedTwap = useRef<string | null>(null);
   if (preview.data && !preview.isPlaceholderData && twapSettled) landedTwap.current = twapJson;
   const twapFresh = twapOn && twapSettled && landedTwap.current === twapJson;
@@ -453,13 +453,14 @@ export function PairTicket({ onExecuted, allowTwap = true }: { onExecuted?: () =
           setMode(m);
           setPricePinned(false);
         }}
-        cost={pairModeFees([legLong, legShort], makerLeg !== 'auto' ? (makerLeg === 'a' ? 0 : 1) : autoPick ? (autoPick.auto === 'a' ? 0 : 1) : null)}
+        cost={pairModeFees([legLong, legShort], makerLeg !== 'auto' ? (makerLeg === 'a' ? 0 : 1) : autoPick ? (autoPick.auto === 'a' ? 0 : 1) : null, twapOn ? (previewData?.priceImpact?.slicedLegs ?? null) : null)}
         seconds={{ maker: twapOn ? (twapPlan ? twapPlan.durationSec / Math.max(1, twapPlan.slices) : null) : takerSec, market: MARKET_ORDER_SEC }}
         whole={{ maker: !twapOn, market: true }}
       >
         {mode === 'maker' && (
           <MakerSettings
             legs={legs}
+            symbols={longSym && shortSym ? [longSym, shortSym] : undefined}
             makerLeg={makerLeg}
             autoPick={autoPick ?? null}
             saving={makerSaving}

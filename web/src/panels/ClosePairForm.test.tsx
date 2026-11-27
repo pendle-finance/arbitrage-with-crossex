@@ -312,7 +312,7 @@ describe('ClosePairForm — Limit + hedge close', () => {
       price: '80',
       timeoutSec: 300,
       repegBehindBp: 5,
-      makerLeg: 'auto',
+      makerLeg: 'a',
       clipBandPct: 0.5,
     });
     // $100k slices at $80 = 1,250 HYPE per order.
@@ -427,6 +427,27 @@ describe('ClosePairForm: After card', () => {
     const card = await screen.findByRole('tooltip');
     expect(card).toHaveTextContent(/since the pair opened on 2026-10-16/);
     expect(card).toHaveTextContent(/Realized earlier\s*\+?\$29,530\.00/);
+  });
+
+  it('says on this perp when the earlier closes are shared with another pair', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    const live = new Map([
+      ['BYBIT_FUTURE_HYPE_USDT', { symbol: 'BYBIT_FUTURE_HYPE_USDT', positionQty: '1.89', upnl: '-50500' }],
+      ['HYPERLIQUID_FUTURE_HYPE_USDC', { symbol: 'HYPERLIQUID_FUTURE_HYPE_USDC', positionQty: '-1.89', upnl: '21000' }],
+    ]) as unknown as Map<string, CrossexPosition>;
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} livePositions={live} bookedBefore={{ usd: 29_530, sinceSec: 1_792_108_800, shared: true }} />);
+    const after = await screen.findByRole('region', { name: 'After' });
+    await userEvent.setup().hover(await within(after).findByText('Realized price PnL'));
+    const card = await screen.findByRole('tooltip');
+    expect(card).toHaveTextContent(/Realized earlier on this perp\s*\+?\$29,530\.00/);
+  });
+
+  it('keeps the Close both hold off when the pair is already closed', async () => {
+    server.use(...baseHandlers(), previewSpy([]));
+    renderWithClient(<ClosePairForm base="HYPE" legs={LEGS} closed />);
+    const btn = await screen.findByRole('button', { name: /Close both/ });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(btn).toBeDisabled();
   });
 
   it('a partial size shows what stays open on each leg', async () => {

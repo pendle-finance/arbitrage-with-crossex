@@ -21,8 +21,8 @@ import { useRebalanceOpener } from './rebalanceOpener';
 
 const timeLeft = (seconds: number): string =>
   fmtAbout(seconds)
-    .replace(/(\d+) h\b/, (_all, n: string) => t('accounts.rebalanceSection.hours', { count: Number(n), n }))
-    .replace(/(\d+(?:\.\d+)?) (?:min|m)\b/, (_all, n: string) => t('accounts.rebalanceSection.minutes', { count: Number(n), n }));
+    .replace(/(\d+) ?h\b/, (_all, n: string) => t('accounts.rebalanceSection.hours', { count: Number(n), n }))
+    .replace(/(\d+(?:\.\d+)?) ?(?:min|m)\b/, (_all, n: string) => t('accounts.rebalanceSection.minutes', { count: Number(n), n }));
 
 const isSliced = (job: RebalanceJob): boolean => job.kind === 'realize' || job.kind === 'delever' || job.kind === 'twap';
 

@@ -429,6 +429,16 @@ export function useVersion() {
   });
 }
 
+/** Re-reads GitHub now instead of waiting out the six-hour cache. The answer
+ * goes under `qk.version`, so the header's update pill sees it at once. */
+export function useCheckForUpdate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => fetchJson<UpdateStatus>('/version?fresh=1'),
+    onSuccess: (data) => qc.setQueryData(qk.version, data),
+  });
+}
+
 /**
  * Watches the installed commit while an update runs, so the page can reload
  * onto the new bundle.
@@ -628,20 +638,18 @@ export function useCustomPlan(custom: CustomMove | null) {
 
 export function useRealizeCustom(
   usd: number | null,
-  sliceUsd: number | null = null,
   pool: Pool | null = null,
   twap: { durationSec: number; slices: number } | null = null,
 ) {
   const query = [
     usd !== null && usd > 0 ? `realizeUsd=${usd}` : null,
-    sliceUsd !== null && sliceUsd > 0 ? `sliceUsd=${sliceUsd}` : null,
     pool !== null ? `realizePool=${pool}` : null,
     twap !== null ? `twapDurationSec=${twap.durationSec}&twapSlices=${twap.slices}` : null,
   ]
     .filter((part) => part !== null)
     .join('&');
   return useQuery({
-    queryKey: [...qk.rebalance, 'realize', usd ?? 0, sliceUsd ?? 0, pool ?? '', twap?.durationSec ?? 0, twap?.slices ?? 0] as const,
+    queryKey: [...qk.rebalance, 'realize', usd ?? 0, pool ?? '', twap?.durationSec ?? 0, twap?.slices ?? 0] as const,
     queryFn: () => fetchJson<RebalanceView>(`/rebalance?${query}`),
     enabled: query !== '',
     placeholderData: keepPreviousData,
@@ -664,7 +672,6 @@ export interface StartRebalanceBody extends Partial<CustomMove> {
   goal?: GoalKind;
   route?: RouteName;
   exec?: RealizeExec;
-  sliceUsd?: number;
   realizeUsd?: number;
   realizeTarget?: 'clear-debt' | 'all' | 'custom';
   realizePool?: Pool;

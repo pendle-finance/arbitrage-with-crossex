@@ -3,7 +3,6 @@ import { walkBook } from '../estimate/fill';
 import { DEFAULT_STEP, decimalsOf, floorToStep, roundToStep } from '../numbers';
 import { TWAP_LIMITS } from '../twap';
 
-export const SLICE_SIZES_USD = [25_000, 50_000, 100_000, 250_000] as const;
 export const DEFAULT_SLICE_CHOICES_USD = [25_000, 50_000, 100_000] as const;
 export const SLICE_IMPACT_BP = 5;
 export const MAKER_SLICE_SECONDS = 300;
@@ -80,8 +79,10 @@ export function twapSlicesOf(order: WholeOrder): number {
   return Math.ceil(totalUsd / sliceSizeOf({ book: order.book, side: order.side, mid, totalUsd }) - BP_NOISE);
 }
 
+export const twapCountOf = (slices: number): number => Math.min(TWAP_LIMITS.maxSlices, Math.max(TWAP_LIMITS.minSlices, slices));
+
 export function twapDefaultOf(on: boolean, slices: number): TwapDefault {
-  const count = Math.min(TWAP_LIMITS.maxSlices, Math.max(TWAP_LIMITS.minSlices, slices));
+  const count = twapCountOf(slices);
   const span = (intervalSec: number): TwapSpan => {
     const durationSec = Math.min(TWAP_LIMITS.maxDurationSec, Math.max(TWAP_LIMITS.minDurationSec, count * intervalSec));
     return { durationSec, intervalSec: Math.floor(durationSec / count) };
@@ -175,34 +176,34 @@ export function sliceOptions(input: {
   totalQty: number;
   minQty: number;
   lot: string;
-  customUsd?: number;
   maxUsd?: number;
   reopenSide?: Side;
 }): SliceOption[] {
-  const { book, side, mid, totalQty, minQty, lot, customUsd, reopenSide } = input;
+  const { book, side, mid, totalQty, minQty, lot, reopenSide } = input;
   if (!book || !touchOf(book) || !(mid > 0) || !(totalQty > 0)) return [];
   const maxUsd = input.maxUsd !== undefined && input.maxUsd > 0 ? input.maxUsd : Infinity;
-  const optionFor = (sizeUsd: number, custom: boolean, whole = false): SliceOption | null => {
-    const qtys = sliceQtys(totalQty, Math.min(sizeUsd, maxUsd) / mid, minQty, lot, maxUsd / mid);
-    if (qtys.length === 0) return null;
-    const walksOf = (walkSide: Side): Impact[] | null => {
-      const walked = new Map<number, Impact | null>();
-      const impacts = qtys.map((qty) => {
-        if (!walked.has(qty)) walked.set(qty, impactOf(book, walkSide, mid, qty));
-        return walked.get(qty) ?? null;
-      });
-      return impacts.every((impact) => impact !== null) ? (impacts as Impact[]) : null;
-    };
-    const impacts = walksOf(side);
-    const reopens = reopenSide ? walksOf(reopenSide) : [];
-    const largest = qtys.reduce((max, qty) => Math.max(max, qty), 0);
-    const largestImpact = impactOf(book, side, mid, largest);
-    if (!impacts || !reopens || !largestImpact) return null;
-    const usdOf = (walks: Impact[]): number => walks.reduce((total, impact) => total + impact.usd, 0);
-    return {
+  const sizeUsd = oneOrderUsdOf(maxUsd);
+  const qtys = sliceQtys(totalQty, Math.min(sizeUsd, maxUsd) / mid, minQty, lot, maxUsd / mid);
+  if (qtys.length === 0) return [];
+  const walksOf = (walkSide: Side): Impact[] | null => {
+    const walked = new Map<number, Impact | null>();
+    const impacts = qtys.map((qty) => {
+      if (!walked.has(qty)) walked.set(qty, impactOf(book, walkSide, mid, qty));
+      return walked.get(qty) ?? null;
+    });
+    return impacts.every((impact) => impact !== null) ? (impacts as Impact[]) : null;
+  };
+  const impacts = walksOf(side);
+  const reopens = reopenSide ? walksOf(reopenSide) : [];
+  const largest = qtys.reduce((max, qty) => Math.max(max, qty), 0);
+  const largestImpact = impactOf(book, side, mid, largest);
+  if (!impacts || !reopens || !largestImpact) return [];
+  const usdOf = (walks: Impact[]): number => walks.reduce((total, impact) => total + impact.usd, 0);
+  return [
+    {
       sizeUsd,
-      custom,
-      whole,
+      custom: false,
+      whole: true,
       count: qtys.length,
       impactBp: largestImpact.bp,
       impactUsd: usdOf(impacts),
@@ -211,13 +212,6 @@ export function sliceOptions(input: {
       notHedgedMaxQty: largest,
       notHedgedMaxUsd: largest * mid,
       seconds: { maker: qtys.length * MAKER_SLICE_SECONDS, market: qtys.length * MARKET_SLICE_SECONDS },
-    };
-  };
-  const rows = SLICE_SIZES_USD.map((sizeUsd) => optionFor(sizeUsd, false));
-  if (customUsd !== undefined && Number.isFinite(customUsd)) {
-    const clamped = Math.min(Math.max(customUsd, Math.max(0, minQty) * mid), totalQty * mid, maxUsd);
-    rows.push(optionFor(clamped, true));
-  }
-  rows.push(optionFor(oneOrderUsdOf(maxUsd), false, true));
-  return rows.filter((row): row is SliceOption => row !== null);
+    },
+  ];
 }

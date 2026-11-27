@@ -199,6 +199,7 @@
     "staleQuote": "The quote is out of date — waiting for a fresh one.",
     "loginExpired": "Boros login expired.",
     "completingLeg": "Completing market {{letter}} only — one order, sized to the residual. The other market is untouched.",
+    "reportOtherTrade": "The ticket no longer shows this trade, so the buttons that trade again are off. Set the wallet, mode, markets and sides back, or close this report.",
     "tradeBoth": "Trade both markets instead",
     "loadFailed": "Couldn’t load the Boros markets",
     "modeAria": "Boros ticket mode",
@@ -262,6 +263,8 @@
     "autoBook": "Auto: fees tie, so the thinner book rests.",
     "hoverRests": "Rests the limit order · maker fee {{bp}} bps ({{pct}}%)",
     "hoverHedges": "Hedges each fill at market · taker fee {{bp}} bps ({{pct}}%)",
+    "hoverRestsPlain": "Rests the limit order at the maker fee",
+    "hoverHedgesPlain": "Hedges each fill at market at the taker fee",
     "takerAfter": "Taker after",
     "takerChoice": {
       "m5": "5m",
@@ -270,10 +273,12 @@
       "custom": "Custom"
     },
     "takerHover": "What is still unfilled then goes as a market order ({{bp}} bps, {{pct}}%, taker fee).",
+    "takerHoverPlain": "What is still unfilled then goes as a market order, at the taker fee.",
     "takerNeverHover": "Never: the limit order rests until it fills.",
     "takerOver": "Must be 80% of the interval or less ({{max}})",
     "customAria": "Taker after, custom time",
     "customRange": "30s to 24h",
+    "customReads": "= {{span}}",
     "repeg": "Re-peg if behind",
     "repegChoiceOff": "Off",
     "repegHover": "Moves the limit to the best price once it is this far behind. At most once every 5s."

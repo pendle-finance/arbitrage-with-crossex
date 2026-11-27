@@ -213,6 +213,51 @@ with Limit + hedge for lower fees. The roll-over signal compares against what ho
   different sizes, the headline names each leg.
 - **Chinese:** 55 more server messages show in Chinese, and two joined sentences no longer show
   "。.".
+- **Realize uPnL's limit hold rests a maker order.** "Hold to reopen at limit" rests a post-only
+  order at the best price, follows the book and goes to market after at most 5 minutes, inside
+  0.25% of the price. Before, it sent the same market order as "Hedge at market".
+- **Resume never drops an unhedged gap.** After a part "Close filled" on a TWAP, Resume asks you to
+  close or reopen the gap with a hold first. Realize Resume reads both live legs and stops when one
+  moved.
+- **Close one leg at the Max figure closes the whole position,** even when the figure shown is
+  cut to 4 decimals.
+- **Order choices count price impact.** Limit + hedge and Market show fees plus price impact.
+  With TWAP on, Limit + hedge counts the hedge leg's impact per slice, the Cost card title says
+  "total", and Realize uPnL shows "Price impact X → Y".
+- **Every running rebalance keeps the Mac awake,** not only TWAP runs.
+- **Stop reasons name the right wallet,** and a missing borrow or a poor Convert quote gets its
+  own line.
+- **Pair context keeps the 29 Jan 2027 Hyperliquid ETH and BTC singles** whose only same-date
+  partner is an HL-GATE spread.
+- **Single mode opens a Boros single that has no same-date single partner,** as one order.
+- **Switching Single back to Pair re-settles leg B,** from the ticket toggle or the trade rail. A
+  spread-only date keeps its spread and chip.
+- **Complete and Retry on a part-filled pair act only while the ticket still shows that trade.** A
+  mode or wallet switch, Leave it, Dismiss or a card's Open ends an armed completion.
+- **Settings → About has a Check for updates button.** It reads GitHub now instead of waiting up to
+  6 hours, at most once in 5 minutes. A failed read keeps the last good answer.
+
+## 1.7.10 — 2026-11-27
+
+TLDR: You can open the Jan 2027 Hyperliquid ETH and BTC Boros markets, in Single mode or as a
+Gate + Hyperliquid pair on the HL-GATE spread.
+
+- **Jan 2027 Hyperliquid markets show.** Boros lists Hyperliquid ETH and BTC for 29 Jan 2027,
+  and the HL-GATE spreads for the same date, but no Gate market. Before, the terminal hid a Boros
+  market that had no other market at its date, so both Hyperliquid markets were missing. Now a
+  spread over the market's venue counts as its partner.
+- **Single mode opens them.** Single mode now sends one Boros order on its own when no other
+  market shares its collateral and date. Before, it could only quote a market that had such a
+  partner.
+- **A Gate + Hyperliquid pair offers 29 Jan 2027.** The pair ticket shows a date chip where Boros
+  lists the HL-GATE spread but no Gate market. Picking it sends one order on that spread. Before,
+  the ticket only offered dates where both venues list a market. If that spread stops taking the
+  order, the ticket stays on it and says why, instead of moving to another date.
+- **Switching from Single back to Pair keeps both pickers usable.** Before, a market picked in
+  Single mode on the other leg's venue (Hyperliquid when the pair was Gate + Hyperliquid) left both
+  legs on one venue: each picker hid it, both showed "Select market", and the ticket said "a market
+  cannot offset itself". Now the other leg clears, or moves to the new date, or the pair takes the
+  spread at that date.
 
 ## 1.7.9 — 2026-11-10
 

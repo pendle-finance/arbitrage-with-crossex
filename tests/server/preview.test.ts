@@ -192,6 +192,9 @@ describe('POST /api/preview with twap', () => {
     expect(data.makerLeg).toEqual({ auto: 'a', why: 'book' });
     expect(data.priceImpact?.whole).toBeNull();
     expect(data.priceImpact?.sliced).toBeCloseTo(3, 6);
+    expect(data.priceImpact?.slicedLegs).toHaveLength(2);
+    const [gateLeg, binanceLeg] = data.priceImpact?.slicedLegs ?? [];
+    expect(gateLeg + binanceLeg).toBeCloseTo(3, 6);
     expect(data.twap?.plan).toMatchObject({ slices: 12, sliceQty: '0.24', lastQty: '0.36' });
     expect(data.twap?.refusal).toBeNull();
   });

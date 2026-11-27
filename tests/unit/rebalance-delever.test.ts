@@ -48,7 +48,6 @@ interface Setup {
   boros?: BorosRow[];
   borosAsk?: DeleverRequest['boros'];
   books?: Record<string, NormalizedBook | null>;
-  sliceUsd?: number;
   order?: 'hl-first' | 'gate-first';
   short?: { symbol: string; exchange: string };
 }
@@ -69,7 +68,6 @@ function inputOf(setup: Setup = {}): DeleverInput {
       perps: setup.perps ?? symbols.map((symbol) => ({ symbol, qty: held * 0.2 })),
       boros: setup.borosAsk ?? boros.map((leg) => ({ marketId: leg.marketId, size: Math.abs(leg.size) * 0.2 })),
       exec: 'maker',
-      ...(setup.sliceUsd !== undefined ? { sliceUsd: setup.sliceUsd } : {}),
     },
     positions: [
       { ...short, base: 'BTC', side: 'SHORT', qty: held, markPrice: BTC_MARK, initialMargin: (held * BTC_MARK) / 40 },
@@ -196,6 +194,19 @@ describe('planDelever', () => {
     );
   });
 
+  it('the Boros impact is reported apart and the total does not change', () => {
+    const thin: BorosOrderBook = { ...BOROS_BOOK, bids: [[BOROS_BOOK.bids[0][0], 5]], asks: BOROS_BOOK.asks };
+    const withBook = planDelever(inputOf({ boros: [borosLeg(155, 900, thin)] }));
+    const noBook = planDelever(inputOf({ boros: [borosLeg(155, 900, null)] }));
+    for (const exec of ['maker', 'market'] as const) {
+      const estimate = withBook.estimates[exec];
+      expect(estimate.impactBorosUsd).toBeGreaterThan(0);
+      expect(noBook.estimates[exec].impactBorosUsd).toBe(0);
+      expect(estimate.impactUsd - estimate.impactBorosUsd).toBeCloseTo(noBook.estimates[exec].impactUsd, 6);
+      expect(estimate.totalUsd).toBeCloseTo(estimate.feePerpsUsd + estimate.feeBorosUsd + estimate.impactUsd, 6);
+    }
+  });
+
   it('estimate has perps fee, boros fee and impact from both perp books', () => {
     const plan = planDelever(inputOf());
     const notional = 180 * BTC_MARK;
@@ -275,13 +286,13 @@ describe('planDelever', () => {
   });
 
   it('prices the slices and the not-hedged qty on the follow leg', () => {
-    const plan = planDelever(inputOf({ sliceUsd: 100_000 }));
+    const plan = planDelever(inputOf());
     const mid = touchOf(HL_BTC)?.mid ?? 0;
     const minQty = Math.max(minQtyOf(PERP_RULES[HL], LOT, BTC_MARK), minQtyOf(PERP_RULES[GATE], LOT, BTC_MARK));
-    const qtys = sliceQtys(180, 100_000 / mid, minQty, LOT);
+    const qtys = sliceQtys(180, ONE_ORDER_USD / mid, minQty, LOT);
     expect(plan.notHedgedMaxQty).toBe(Math.max(...qtys));
     expect(plan.notHedgedMaxUsd).toBeCloseTo(plan.notHedgedMaxQty * mid, 6);
-    expect(plan.sliceOptions.some((option) => option.custom && option.sizeUsd === 100_000)).toBe(true);
+    expect(plan.sliceOptions).toEqual([expect.objectContaining({ whole: true })]);
     expect(plan.defaultSliceUsd).toBeGreaterThan(0);
   });
 
@@ -319,32 +330,25 @@ describe('planDelever', () => {
     expect(planDelever(inputOf()).refused).toBeNull();
   });
 
-  it('caps the custom slice at the venue max order size, from $50 to $6M', () => {
+  it('caps the not-hedged qty at the venue max order size, from $50 to $6M', () => {
     const maxCoins = 2;
     const rules = { ...PERP_RULES, [GATE]: { ...PERP_RULES[GATE], maxMarketSize: String(maxCoins) } };
-    const capUsd = maxCoins * BTC_MARK;
-    for (const sliceUsd of LADDER) {
-      const plan = planDelever({ ...inputOf({ sliceUsd }), rules });
-      const custom = plan.sliceOptions.find((option) => option.custom);
-      expect(custom?.sizeUsd).toBeLessThanOrEqual(capUsd);
+    for (const usd of LADDER) {
+      const held = Number(floorToStep((usd * 5) / BTC_MARK, LOT));
+      const plan = planDelever({ ...inputOf({ held }), rules });
       expect(plan.notHedgedMaxQty).toBeLessThanOrEqual(maxCoins);
       for (const option of plan.sliceOptions) expect(option.notHedgedMaxQty).toBeLessThanOrEqual(maxCoins);
     }
-    const free = planDelever(inputOf({ sliceUsd: 50_000_000 }));
+    const free = planDelever(inputOf());
     expect(free.notHedgedMaxQty).toBe(180);
   });
 
-  it('closes in one order when no slice size is sent, for both order modes', () => {
+  it('closes in one order', () => {
     const plan = planDelever(inputOf());
     const whole = plan.sliceOptions.find((option) => option.whole);
     expect(plan.defaultSliceUsd).toBe(ONE_ORDER_USD);
     expect(whole).toMatchObject({ sizeUsd: ONE_ORDER_USD, count: 1, notHedgedMaxQty: 180 });
     expect(plan.notHedgedMaxQty).toBe(180);
-    const sliced = planDelever(inputOf({ sliceUsd: 25_000 }));
-    for (const exec of ['maker', 'market'] as const) {
-      expect(plan.estimates[exec].feePerpsUsd).toBeCloseTo(sliced.estimates[exec].feePerpsUsd, 6);
-      expect(plan.estimates[exec].impactUsd).toBeGreaterThan(sliced.estimates[exec].impactUsd);
-    }
   });
 
   it('one order still splits at the venue max order size', () => {
